@@ -10,13 +10,16 @@ source worktree; изменения source не означают установ�
 полный native tools/list, выбирает summary только по фактической inputSchema и
 записывает fingerprint схем. Старые declarations чата не используются.
 
-Из выбранного checkout, с VIN в stdin:
+Из выбранного checkout, с VIN в stdin; default `--timeout` — 25 секунд на ожидание
+вызова, допустимый диапазон `(0, 60]`. Ни VIN, ни его хеш не передавай через argv.
+Для default timeout внешний process deadline — 65 секунд:
 
 ```bash
-timeout --signal=TERM --kill-after=2s 65s .venv/bin/python scripts/vin-retest.py --output-dir /var/lib/autostop-manager/private/vin-retest-CURRENT
+timeout --signal=TERM --kill-after=2s 65s .venv/bin/python scripts/vin-retest.py --output-dir /var/lib/autostop-manager/private/vin-retest-CURRENT --timeout 25
 ```
 
-Внешний process deadline обязателен: отмена ожидания SDK не доказывает остановку
+При изменении `--timeout` учти внутренний лимит всего процесса `2 × timeout + 10`
+секунд и задай внешний deadline отдельно. Внешний process deadline обязателен: отмена ожидания SDK не доказывает остановку
 сервера или завершение cleanup. После timeout не запускай автоматический повтор;
 сверь технический call_id. VIN нельзя помещать в tracked fixture, shell history,
 публичный поиск или baseline-файл.

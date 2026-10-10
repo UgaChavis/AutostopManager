@@ -11,7 +11,12 @@ import sys
 import pytest
 
 from autostop_manager import diagnostics
-from autostop_manager.document_links import local_document_link_target, parse_local_document_link
+from autostop_manager.document_links import (
+    LocalDocumentLink,
+    local_document_link_target,
+    parse_local_document_link,
+    validate_document_reference,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("file_line_catalogs", ROOT / "scripts/update-instruction-catalogs.py")
@@ -249,6 +254,25 @@ def test_line_references_accept_the_last_line_and_reject_past_eof(navigation_pro
     assert f"document_link_invalid:{module_name}" in report["warnings"]
     with pytest.raises(ValueError, match="document_link_line_out_of_range"):
         catalogs.build_catalogs(navigation_project, navigation_project / "missing-codex")
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\v", "\f", "\x1c", "\x1d", "\x1e"])
+def test_unicode_and_control_separators_do_not_create_source_line_destinations(separator):
+    text = f"first{separator}second\n"
+    validate_document_reference(LocalDocumentLink("source.py", line=1), Path("source.py"), text)
+    with pytest.raises(ValueError, match="document_link_line_out_of_range"):
+        validate_document_reference(LocalDocumentLink("source.py", line=2), Path("source.py"), text)
+
+
+@pytest.mark.parametrize(
+    "text,last_line",
+    [("", 0), ("first", 1), ("first\n", 1), ("first\r", 1), ("first\r\n", 1), ("\n", 1), ("first\n\n", 2)],
+)
+def test_terminal_newline_does_not_create_an_extra_source_line(text, last_line):
+    if last_line:
+        validate_document_reference(LocalDocumentLink("source.py", line=last_line), Path("source.py"), text)
+    with pytest.raises(ValueError, match="document_link_line_out_of_range"):
+        validate_document_reference(LocalDocumentLink("source.py", line=last_line + 1), Path("source.py"), text)
 
 
 def test_fragment_decoding_preserves_custom_anchor_case_and_path_only_compatibility(navigation_project: Path):

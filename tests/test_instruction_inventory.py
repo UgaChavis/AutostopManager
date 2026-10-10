@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import os
 
 import pytest
@@ -11,6 +11,7 @@ from autostop_manager.instruction_inventory import (
     collect_instruction_inventory,
     require_instruction_inventory,
     read_instruction_bytes,
+    retired_instruction,
 )
 
 
@@ -52,6 +53,47 @@ def test_linked_retired_documents_are_rejected_without_reading(tmp_path: Path, t
     assert path not in inventory.paths
     with pytest.raises(ValueError, match="Retired"):
         require_instruction_inventory(inventory)
+
+
+@pytest.mark.parametrize(
+    "path,root,retired",
+    [
+        (Path("/repo/docs/current.md"), Path("/repo"), False),
+        (Path("/repo/docs/drafts/../live.md"), Path("/repo"), True),
+        (Path("/repo/docs/current-draft.md"), Path("/repo"), True),
+        (Path("/repo/docs/agent/references/client-instruction-audit.md"), Path("/repo"), True),
+        (Path("/repo/archives/report.json"), Path("/repo"), True),
+        (Path("/repo/Drafts/current.md"), Path("/repo"), False),
+        (Path("docs/history/report.md"), Path("."), True),
+        (Path("../docs/current.md"), Path(".."), False),
+        (Path("//repo/docs/current.md"), Path("//repo"), False),
+        (PureWindowsPath("C:/REPO/docs/current.md"), PureWindowsPath("c:/repo"), False),
+        (PureWindowsPath("C:/REPO/docs/history/current.md"), PureWindowsPath("c:/repo"), True),
+        (
+            PureWindowsPath("C:/REPO/docs/agent/references/client-instruction-audit.md"),
+            PureWindowsPath("c:/repo"),
+            True,
+        ),
+    ],
+)
+def test_retired_classification_preserves_lexical_path_flavour(path, root, retired):
+    assert retired_instruction(path, root) is retired
+
+
+@pytest.mark.parametrize(
+    "path,root",
+    [
+        (Path("/other/docs/current.md"), Path("/repo")),
+        (Path("/repository/docs/current.md"), Path("/repo")),
+        (Path("//repo/docs/current.md"), Path("/repo")),
+        (Path("/repo/docs/current.md"), Path(".")),
+        (Path("docs/current.md"), Path("/repo")),
+        (PureWindowsPath("D:/repo/docs/current.md"), PureWindowsPath("C:/repo")),
+    ],
+)
+def test_retired_classification_does_not_approve_outside_path_prefixes(path, root):
+    with pytest.raises(ValueError):
+        retired_instruction(path, root)
 
 
 @pytest.mark.parametrize("escape", ["outside", "retired", "loop"])

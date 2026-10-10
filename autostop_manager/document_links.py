@@ -89,9 +89,23 @@ def local_document_link_target(link: str) -> str | None:
     return parsed.path if parsed is not None and parsed.path else None
 
 
+def document_source_lines(text: str) -> list[str]:
+    """Split CR/LF source lines; Unicode separators remain literal content.
+
+    A terminal newline ends the last line without creating an extra destination.
+    This matches CommonMark source maps without importing its parser.
+    """
+    if not text:
+        return []
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines[-1]:
+        lines.pop()
+    return lines
+
+
 def validate_document_reference(link: LocalDocumentLink, target: Path, text: str) -> None:
     """Validate a reference after its consumer has approved and read the file."""
-    if link.line is not None and link.line > len(text.splitlines()):
+    if link.line is not None and link.line > len(document_source_lines(text)):
         raise ValueError("document_link_line_out_of_range")
     if link.fragment and target.suffix.lower() in {".md", ".markdown"}:
         # Keep Markdown dependencies out of the stdlib-only Telegram lane.

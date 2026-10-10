@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
-import shutil
 import sqlite3
 from types import SimpleNamespace
 
@@ -22,21 +21,51 @@ hooks = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hooks)
 
 
-@pytest.fixture
-def docs(tmp_path):
-    names = set(diagnostics.instruction_paths(ROOT))
+@pytest.fixture(scope="module")
+def docs_seed():
+    """Audit the full source once and freeze all instruction and link bytes."""
+    assert diagnostics.audit_documentation(ROOT, check_external_links=False)["ok"]
+    inventory = diagnostics.instruction_inventory_snapshot(ROOT)
+    assert not inventory.issues
+    names = set(diagnostics.inventory_instruction_paths(ROOT, inventory))
     for name in sorted(names):
         document = ROOT / name
-        for link in diagnostics._document_links(document.read_text()):
-            target = diagnostics._local_link_path(link, document, ROOT, check_external_links=False)
+        for link in diagnostics._document_links(inventory.contents[document].decode("utf-8")):
+            target = diagnostics._local_link_path(
+                link, document, ROOT, check_external_links=False, contents=inventory.contents
+            )
             if target is not None and target.is_relative_to(ROOT):
                 names.add(str(target.relative_to(ROOT)))
-    for name in sorted(names):
-        dest = tmp_path / name
+    return tuple(
+        (name, inventory.contents[path] if (path := ROOT / name) in inventory.contents else path.read_bytes())
+        for name in sorted(names)
+    )
+
+
+def _copy_documents(root, seed):
+    for name, content in seed:
+        dest = root / name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / name, dest)
-    assert diagnostics.audit_documentation(tmp_path, check_external_links=False)["ok"]
-    return tmp_path
+        dest.write_bytes(content)
+    return root
+
+
+@pytest.fixture
+def docs(tmp_path, docs_seed):
+    # Each mutation case still audits its full graph; only the repeated audit of
+    # an unchanged source copy is removed. Bytes are immutable and never shared
+    # as mutable files between tests.
+    return _copy_documents(tmp_path, docs_seed)
+
+
+def test_full_document_copies_remain_independent(tmp_path, docs_seed):
+    first = _copy_documents(tmp_path / "first", docs_seed)
+    second = _copy_documents(tmp_path / "second", docs_seed)
+    (first / "AGENTS.md").write_text("[broken](missing.md)\n")
+
+    assert not diagnostics.audit_documentation(first, check_external_links=False)["ok"]
+    assert diagnostics.audit_documentation(second, check_external_links=False)["ok"]
+    assert all((second / name).read_bytes() == content for name, content in docs_seed)
 
 
 def test_documents_fit_budget_and_cover_operational_skills():

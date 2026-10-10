@@ -2,7 +2,8 @@
 
 Only direct inline link tokens count. Image children describe alt text and must
 not be traversed; code, HTML literals and unused reference definitions do not
-create navigation. The parser does not render HTML or access target files.
+create navigation. Leading YAML front matter is metadata, with its source line
+numbers preserved for the body. The parser does not render HTML or access files.
 """
 
 from __future__ import annotations
@@ -14,7 +15,24 @@ import unicodedata
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from .document_links import document_source_lines
+
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
+
+
+def _markdown_body(text: str) -> str:
+    """Hide a closed leading YAML block without shifting CommonMark source maps."""
+    if not text.startswith("---"):
+        return text
+    # Match the parser's newline normalization, keeping Unicode separators in
+    # literal text. YAML is metadata even when its values contain Markdown.
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[0].rstrip(" \t") != "---":
+        return text
+    for index in range(1, len(lines)):
+        if lines[index].rstrip(" \t") == "---":
+            return "\n" * (index + 1) + "\n".join(lines[index + 1 :])
+    return text
 
 
 @lru_cache(maxsize=256)
@@ -22,7 +40,7 @@ def _navigation_metadata(text: str) -> tuple[tuple[str, ...], frozenset[int]]:
     """Cache only pure parsing of exact content; filesystem checks stay fresh."""
     links: list[str] = []
     row_lines: set[int] = set()
-    for token in _MARKDOWN.parse(text):
+    for token in _MARKDOWN.parse(_markdown_body(text)):
         if token.type == "tr_open" and token.map:
             row_lines.add(token.map[0])
         if token.type != "inline":
@@ -73,7 +91,7 @@ def visible_markdown_anchors(text: str) -> frozenset[str]:
     duplicate headings reserve the next unused numbered ID. Custom HTML
     anchors do not affect that numbering.
     """
-    tokens = _MARKDOWN.parse(text)
+    tokens = _MARKDOWN.parse(_markdown_body(text))
     headings: set[str] = set()
     html = _HtmlAnchors()
     for index, token in enumerate(tokens):
@@ -101,8 +119,8 @@ def visible_markdown_anchors(text: str) -> frozenset[str]:
 
 def markdown_section_body(text: str, title: str, *, level: int = 2) -> str | None:
     """Find one rendered section; code examples and duplicate titles cannot pass."""
-    tokens = _MARKDOWN.parse(text)
-    lines = text.splitlines()
+    tokens = _MARKDOWN.parse(_markdown_body(text))
+    lines = document_source_lines(text)
     bodies = []
     for index, token in enumerate(tokens):
         if token.type != "heading_open" or token.tag != f"h{level}" or token.map is None:

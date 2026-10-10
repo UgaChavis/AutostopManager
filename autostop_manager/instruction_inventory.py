@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PosixPath
 import re
 import stat
 
@@ -54,11 +54,22 @@ def read_instruction_bytes(path: Path) -> bytes:
 
 def retired_instruction(path: Path, root: Path) -> bool:
     """Check lexical and resolved paths so an alias cannot reactivate an archive."""
-    parts = path.relative_to(root).parts
+    if (
+        isinstance(path, PosixPath)
+        and isinstance(root, PosixPath)
+        and path.anchor == root.anchor
+        and path.parts[: len(root.parts)] == root.parts
+    ):
+        # POSIX prefix comparison is equivalent to lexical relative_to, without
+        # constructing deep parent paths for every repeated link. Other path
+        # flavours and outside paths retain pathlib's semantics and errors.
+        parts = path.parts[len(root.parts) :]
+    else:
+        parts = path.relative_to(root).parts
     return (
-        bool(set(parts) & BLOCKED_PARTS)
+        any(part in BLOCKED_PARTS for part in parts)
         or path.name.endswith("-draft.md")
-        or path.relative_to(root).as_posix() in HISTORICAL_DOCUMENTS
+        or "/".join(parts) in HISTORICAL_DOCUMENTS
     )
 
 

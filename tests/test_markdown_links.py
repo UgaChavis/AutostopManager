@@ -1,5 +1,10 @@
 """Content changes and caller mutations never stale the documentation parser."""
 
+from pathlib import Path
+
+import pytest
+
+from autostop_manager.document_links import LocalDocumentLink, validate_document_reference
 from autostop_manager.markdown_links import (
     markdown_section_body,
     visible_markdown_anchors,
@@ -66,3 +71,86 @@ def test_section_selection_requires_one_visible_heading():
     text = "```markdown\n## AutoStop Manager\nfake\n```\n\n## AutoStop Manager\nreal\n\n## External\nother\n"
     assert markdown_section_body(text, "AutoStop Manager") == "real"
     assert markdown_section_body(text + "\n## AutoStop Manager\nduplicate\n", "AutoStop Manager") is None
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
+def test_section_offsets_match_commonmark_lines_with_literal_unicode_separators(newline, separator):
+    text = newline.join(
+        [
+            f"Introduction{separator}literal",
+            "",
+            "## AutoStop Manager",
+            f"body{separator}literal",
+            "",
+            "## Other",
+            "other",
+            "",
+        ]
+    )
+    assert markdown_section_body(text, "AutoStop Manager") == f"body{separator}literal"
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("marker", ["---", "---  "])
+def test_skill_frontmatter_is_metadata_with_original_body_line_numbers(newline, marker):
+    text = newline.join(
+        [
+            "---",
+            "name: demo",
+            'description: "[obsolete](missing.md)"',
+            marker,
+            "",
+            "## AutoStop Manager",
+            "[body](body.md:1#body)",
+            "",
+            "| Document |",
+            "| --- |",
+            "| [Body](body.md) |",
+            "",
+        ]
+    )
+
+    assert visible_markdown_links(text) == ["body.md:1#body", "body.md"]
+    assert visible_markdown_anchors(text) == {"autostop-manager"}
+    assert visible_markdown_table_row_lines(text) == {8, 10}
+    assert markdown_section_body(text, "AutoStop Manager") == (
+        "[body](body.md:1#body)\n\n| Document |\n| --- |\n| [Body](body.md) |"
+    )
+    validate_document_reference(LocalDocumentLink("skill.md", fragment="autostop-manager"), Path("skill.md"), text)
+    with pytest.raises(ValueError, match="document_link_anchor_missing"):
+        validate_document_reference(
+            LocalDocumentLink("skill.md", fragment="name-demodescription-obsolete"), Path("skill.md"), text
+        )
+
+
+def test_multiline_frontmatter_cannot_add_sections_tables_or_reference_definitions():
+    text = (
+        "---\nname: demo\ndescription: |\n  ## AutoStop Manager\n"
+        "  | Metadata |\n  | --- |\n  | [obsolete](missing.md) |\n"
+        "---\n\n## AutoStop Manager\n[body](body.md)\n\n"
+        "| Document |\n| --- |\n| [Body](body.md) |\n"
+    )
+    assert visible_markdown_links(text) == ["body.md", "body.md"]
+    assert visible_markdown_anchors(text) == {"autostop-manager"}
+    assert visible_markdown_table_row_lines(text) == {12, 14}
+    assert markdown_section_body(text, "AutoStop Manager") == (
+        "[body](body.md)\n\n| Document |\n| --- |\n| [Body](body.md) |"
+    )
+
+    references = "---\nname: demo\n[hidden]: missing.md\n---\n\n[hidden]\n[real][entry]\n\n[entry]: body.md\n"
+    assert visible_markdown_links(references) == ["body.md"]
+
+
+@pytest.mark.parametrize(
+    "text,anchors,links",
+    [
+        ("---\n\n# Body\n[body](body.md)\n", {"body"}, ["body.md"]),
+        ("Introduction\n\n---\n# Body\n[body](body.md)\n", {"body"}, ["body.md"]),
+        ("Setext heading\n---\n\n[body](body.md)\n", {"setext-heading"}, ["body.md"]),
+        ("```yaml\n---\n[metadata](missing.md)\n---\n```\n# Body\n", {"body"}, []),
+    ],
+)
+def test_only_closed_leading_frontmatter_is_metadata(text, anchors, links):
+    assert visible_markdown_anchors(text) == anchors
+    assert visible_markdown_links(text) == links
