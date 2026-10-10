@@ -33,6 +33,7 @@ jobs:
       - name: Audit knowledge and documentation contracts
         run: |
           python -m autostop_manager.cli doctor --project-only
+          python scripts/update-instruction-catalogs.py --check --project-only
           python scripts/check-automotive-catalog.py
           python scripts/generate-automotive-instructions.py --check
 

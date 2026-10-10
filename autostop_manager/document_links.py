@@ -10,6 +10,7 @@ Consumers retain their existing containment, symlink and external allowlists.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
 from urllib.parse import unquote, urlsplit
@@ -47,15 +48,25 @@ BARE_FILE_LINK_EXTENSIONS = frozenset(
 )
 
 
-def local_document_link_target(link: str) -> str | None:
-    """Return a decoded local path; reject invalid numeric line annotations.
+@dataclass(frozen=True)
+class LocalDocumentLink:
+    path: str
+    line: int | None = None
+    fragment: str = ""
+
+
+def parse_local_document_link(link: str) -> LocalDocumentLink | None:
+    """Keep local file, line and fragment separate; leave external URIs alone.
 
     No filesystem reads or external-resource checks take place here. A
     nonnumeric colon suffix remains an ordinary path or URI, not a line number.
     """
     parsed = urlsplit(link)
-    if parsed.netloc or not parsed.path:
+    if parsed.netloc or (not parsed.path and not parsed.fragment):
         return None
+    fragment = unquote(parsed.fragment)
+    if not parsed.path:
+        return LocalDocumentLink("", fragment=fragment)
     if parsed.scheme:
         basename = link.partition(":")[0]
         line = unquote(parsed.path)
@@ -68,5 +79,23 @@ def local_document_link_target(link: str) -> str | None:
     if separator and re.fullmatch(r"[+-]?\d+", line):
         if not re.fullmatch(r"[0-9]+", line) or not line.strip("0"):
             raise ValueError("document_link_line_invalid")
-        return path
-    return target
+        return LocalDocumentLink(path, int(line.lstrip("0")), fragment)
+    return LocalDocumentLink(target, fragment=fragment)
+
+
+def local_document_link_target(link: str) -> str | None:
+    """Return the local filename, preserving the existing path-only interface."""
+    parsed = parse_local_document_link(link)
+    return parsed.path if parsed is not None and parsed.path else None
+
+
+def validate_document_reference(link: LocalDocumentLink, target: Path, text: str) -> None:
+    """Validate a reference after its consumer has approved and read the file."""
+    if link.line is not None and link.line > len(text.splitlines()):
+        raise ValueError("document_link_line_out_of_range")
+    if link.fragment and target.suffix.lower() in {".md", ".markdown"}:
+        # Keep Markdown dependencies out of the stdlib-only Telegram lane.
+        from .markdown_links import visible_markdown_anchors
+
+        if link.fragment not in visible_markdown_anchors(text):
+            raise ValueError("document_link_anchor_missing")

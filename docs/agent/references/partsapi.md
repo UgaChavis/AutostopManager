@@ -96,7 +96,7 @@ market_price, market_listing либо null. Значение `oem` недопу�
 
 Без подтверждённого VIN выставляется `requires_exact_identifier_confirmation=true`. Поиск кандидатов требует однозначной модификации, независимого контекста, отсутствия выявленных противоречий, положительного carId и согласованного carType. `vin_fitment_confirmed=false`, ручная проверка обязательна, автоматическая запись в CRM запрещена. Transport, auth, quota, empty и unparsed сохраняют отдельные исходы.
 
-`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. `docs/agent/partsapi_category_index.json` хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
+`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. [Исторический category fixture](../partsapi_category_index.json) хранит непроверенные числовые cat hints старого getPartsbyVIN, не активный query path. Его диагностические поиск и проверка не разрешают использовать эти категории в текущем 43-методном контракте.
 
 GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make ID; последующие model/motor IDs — из того же Autonorms catalog. getArticle требует ART_NUM/SUP_ID, media/crosses/criteria — ART_ID. Для getEngine, getPassengerCarInfo и части maintenance методов response tables неполны: parsing provisional до разрешённого live ответа. Generic payload сам не доказывает OEM/fitment.
 

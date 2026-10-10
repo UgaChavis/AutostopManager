@@ -6,6 +6,11 @@
 
 В отдельном worktree запускай `./scripts/release-gates.sh` с одноразовыми данными; минимальная coverage — 82%. Влей актуальный `origin/AutostopManager` в feature branch без переписывания истории, повтори gates, опубликуй и merge зелёного PR. Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python registrar и guarded ledger; они не входят в native Manager MCP.
 
+CI и source release gates используют `scripts/update-instruction-catalogs.py --check --project-only`:
+проектная часть A4/A5 проверяется без локального кеша плагинов Codex. На целевом хосте отдельно
+запусти полный `--check`, сверяющий также установленные выбранные навыки. Оба режима читают;
+обновление каталогов без флагов выполняется до публикации исходников.
+
 Если поручение ограничено готовым PR и зелёным CI, остановись на этой границе: merge,
 установка/включение J1 VIN и серверный выпуск требуют отдельного объёма поручения.
 Исходники новой функции, units/installers и обновлённые инструкции не доказывают работающий runtime.
@@ -35,7 +40,7 @@ VIN-bearing browser URLs остаются запрещены; прежняя bro
 3. Нормальный orchestrator — `/opt/autostopcrm/deploy.sh`. Он до maintenance выполняет [pinned catalog sync](offline-catalogs.md), затем backup релиза/config/DB, Automation hold, work-Telegram pause, immutable Manager activation, проверки и rollback. Не захватывай отдельный hold и не запускай installers поверх coordinated deploy; не переключай `current` вручную.
 4. Native Manager MCP активируется по умолчанию (`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1`). Для static J1 используй `AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`. Browser включается отдельно через `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`: нужны `MemAvailable >=2 GiB`, `SwapFree >=1 GiB`, нулевой swap I/O за 60 секунд и повторная проверка ёмкости внутри deploy. Отказ gate сохраняет static J1; marker вручную не создаётся.
 5. Проверь installed Manager/CRM revisions, bounded MCP/CRM/Store probes, `doctor --integrations` без `--full`, восстановление duty и отсутствие retired integration-audit/watchdog units. Full doctor допустим лишь с одноразовыми CRM/Store. Для J1 нужны active `autostop-j1.service` и probe из [web-research.md](web-research.md).
-6. Сверь установленный `AGENTS.md`, A1, M1/M2 и A4/A5 с опубликованной ревизией; запусти `scripts/update-instruction-catalogs.py --check` из установленного snapshot. Числа A4/A5 относятся к выбранным файлам, а не ко всем включённым навыкам реестра. Обнови числа и ссылки конструктора по этому срезу, независимо перечитай карту и сохрани положение модулей и связи.
+6. Сверь установленный `AGENTS.md`, A1, M1/M2 и A4/A5 с опубликованной ревизией; запусти полный `scripts/update-instruction-catalogs.py --check` из установленного snapshot. Согласуй опубликованный bundle, CRM pin/hash и сохранённые тексты конструктора по [контракту каталога](automotive-tools.md), независимо перечитай результат. Обновление инструкций сохраняет ID, положение, связи и `tool_statuses`; длинный A5 представлен ссылкой на полный указатель без зафиксированных чисел и SHA.
 
 Store выпускается отдельно через его GitHub `Deploy VPS` и текущий `/opt/autostopapp/docs/deploy_rollback.md`. Push/merge в Store `main`, включая docs-only, запускает полный cutover: сначала CI, backup/headroom/network/proxy gates, потом независимый readback. Не объединяй его с CRM cutover без согласованного объёма.
 

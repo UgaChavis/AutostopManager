@@ -80,6 +80,7 @@ json_gate automotive-catalog "$PYTHON" scripts/check-automotive-catalog.py
 "$PYTHON" scripts/generate-automotive-instructions.py --check
 
 json_gate local-checks "$PYTHON" -m autostop_manager.cli doctor
+json_gate project-catalogs "$PYTHON" scripts/update-instruction-catalogs.py --check --project-only
 
 "$PYTHON" -m ruff check .
 "$PYTHON" -m ruff format --check autostop_manager tests

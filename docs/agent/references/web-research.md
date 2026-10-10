@@ -18,7 +18,7 @@ E2/E4 и decoder API. Исключение действует только в е
 Безопасные HTTP/transport причины и upstream `retryable=false` сохраняются до Manager;
 старая generic ошибка остаётся с неизвестной причиной, не предполагаемым404.
 
-Elcats/Japancats имеют зафиксированный robots запрет: E8 и общий CRM HTTP/browser
+Elcats/Japancats имеют зафиксированный robots запрет: [E15](../modules/E15.md) и общий CRM HTTP/browser
 reader блокируют их каталожные страницы до DNS/HTTP. J1 учитывает UTF-8 BOM в robots
 и также прекращает чтение запрещённого источника. Не меняй reader/provider/proxy
 ради обхода такого отказа. Публичные snippets сохраняют область ссылки; ordinary

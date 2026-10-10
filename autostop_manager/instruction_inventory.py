@@ -10,9 +10,12 @@ from pathlib import Path
 import re
 import stat
 
-from .document_links import local_document_link_target
+from .document_links import LocalDocumentLink, parse_local_document_link, validate_document_reference
 
 BLOCKED_PARTS = frozenset({"archive", "archives", "archived", "draft", "drafts", "history", "reports"})
+# This migration report documents an earlier release, not a client process.
+# It remains in Git as history and must never become an operational instruction.
+HISTORICAL_DOCUMENTS = frozenset({"docs/agent/references/client-instruction-audit.md"})
 AUTOMOTIVE_CATALOG = "docs/agent/automotive_tools.json"
 MAX_ISSUES = 64
 MAX_INSTRUCTION_BYTES = 1024 * 1024
@@ -52,7 +55,24 @@ def read_instruction_bytes(path: Path) -> bytes:
 def retired_instruction(path: Path, root: Path) -> bool:
     """Check lexical and resolved paths so an alias cannot reactivate an archive."""
     parts = path.relative_to(root).parts
-    return bool(set(parts) & BLOCKED_PARTS) or path.name.endswith("-draft.md")
+    return (
+        bool(set(parts) & BLOCKED_PARTS)
+        or path.name.endswith("-draft.md")
+        or path.relative_to(root).as_posix() in HISTORICAL_DOCUMENTS
+    )
+
+
+def active_instruction_candidates(root: Path) -> set[Path]:
+    """Inventory active document files independently of navigation coverage."""
+    root = root.resolve()
+    candidates = {root / "AGENTS.md"}
+    for directory in (root / "docs/agent", root / ".agents/skills"):
+        candidates.update(
+            path
+            for path in directory.rglob("*")
+            if path.suffix in {".md", ".json"} and not retired_instruction(path, root)
+        )
+    return candidates
 
 
 def collect_instruction_inventory(
@@ -89,6 +109,7 @@ def collect_instruction_inventory(
     visited: set[Path] = set()
     contents: dict[Path, bytes] = {}
     unavailable: dict[Path, str] = {}
+    references: list[tuple[Path, str, LocalDocumentLink]] = []
     while pending:
         candidate, source = pending.pop()
         if candidate in visited:
@@ -133,12 +154,47 @@ def collect_instruction_inventory(
             unavailable[path] = "too_large" if too_large else "unavailable"
             issue("too_large" if too_large else "unreadable", source, candidate)
             continue
-        pending.extend(_linked_instructions(path, text, root, issue))
+        pending.extend(_linked_instructions(path, text, root, issue, references))
+    _validate_references(root, references, contents, unavailable, issue)
     return InstructionInventory(tuple(sorted(found)), tuple(issues), contents, unavailable)
 
 
+def _validate_references(
+    root: Path,
+    references: list[tuple[Path, str, LocalDocumentLink]],
+    contents: dict[Path, bytes],
+    unavailable: dict[Path, str],
+    issue: Callable[[str, str, Path], None],
+) -> None:
+    for candidate, source, reference in references:
+        try:
+            path = candidate.resolve()
+            if not candidate.is_relative_to(root) or not path.is_relative_to(root):
+                issue("outside", source, candidate)
+                continue
+            if retired_instruction(candidate, root) or retired_instruction(path, root):
+                issue("retired", source, candidate)
+                continue
+            if path in unavailable:
+                continue
+            if not path.is_file():
+                issue("missing", source, candidate)
+                continue
+            if path not in contents:
+                contents[path] = read_instruction_bytes(path)
+            validate_document_reference(reference, path, contents[path].decode("utf-8"))
+        except ValueError as exc:
+            issue(str(exc), source, candidate)
+        except (OSError, RuntimeError, UnicodeError):
+            issue("unreadable", source, candidate)
+
+
 def _linked_instructions(
-    path: Path, text: str, root: Path, issue: Callable[[str, str, Path], None]
+    path: Path,
+    text: str,
+    root: Path,
+    issue: Callable[[str, str, Path], None],
+    references: list[tuple[Path, str, LocalDocumentLink]],
 ) -> list[tuple[Path, str]]:
     # Keep markdown-it out of Telegram's minimal, site-package-free import lane.
     from .markdown_links import visible_markdown_links
@@ -147,18 +203,21 @@ def _linked_instructions(
     targets: list[tuple[Path, str]] = []
     for link in visible_markdown_links(text):
         try:
-            destination = local_document_link_target(link)
+            reference = parse_local_document_link(link)
         except ValueError as exc:
             code = "document_link_line_invalid" if str(exc) == "document_link_line_invalid" else "invalid_link"
             issue(code, source, path)
             continue
-        if destination is None:
+        if reference is None:
             continue
-        target = path.parent / destination
+        destination = reference.path
+        target = path.parent / destination if destination else path
         # Absolute external entrypoints are validated by each consumer's
         # allowlist, but their content is never part of the project graph.
         if Path(destination).is_absolute() and not target.is_relative_to(root):
             continue
+        if reference.line is not None or reference.fragment:
+            references.append((target, source, reference))
         if target.suffix in {".md", ".json"}:
             targets.append((target, source))
     return targets
@@ -185,7 +244,11 @@ def require_instruction_inventory(inventory: InstructionInventory) -> list[Path]
             raise ValueError("Retired instruction is still linked: " + item.target)
         if item.code in {"missing", "outside"}:
             raise ValueError("Missing or outside-project instruction: " + item.target)
-        if item.code == "document_link_line_invalid":
+        if item.code in {
+            "document_link_line_invalid",
+            "document_link_line_out_of_range",
+            "document_link_anchor_missing",
+        }:
             raise ValueError(item.code)
         raise ValueError("Invalid or unreadable instruction: " + item.target)
     return list(inventory.paths)

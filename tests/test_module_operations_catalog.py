@@ -6,7 +6,6 @@ import argparse
 import json
 import re
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -14,6 +13,8 @@ from autostop_manager import cli, telegram_bridge
 from autostop_manager.automation_control import OPERATIONS
 from autostop_manager.automation_registry import AUTOMATION_TEMPLATES
 from autostop_manager.automation_timers import SYSTEM_TIMER_ALLOWLIST
+from autostop_manager.document_links import parse_local_document_link, validate_document_reference
+from autostop_manager.markdown_links import visible_markdown_links
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,14 +42,15 @@ def _operation_documents(start: Path, *, root: Path = ROOT) -> dict[Path, str]:
             continue
         text = path.read_text(encoding="utf-8")
         documents[path] = text
-        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
-            url = urlsplit(target.strip("<>"))
-            if url.scheme or url.netloc or not url.path:
+        for target in visible_markdown_links(text):
+            reference = parse_local_document_link(target)
+            if reference is None:
                 continue
-            linked = (path.parent / unquote(url.path)).resolve()
+            linked = (path.parent / reference.path).resolve() if reference.path else path
             if not linked.is_relative_to(root) or linked.suffix != ".md":
                 continue
             assert linked.is_file(), f"Missing instruction: {linked}"
+            validate_document_reference(reference, linked, linked.read_text(encoding="utf-8"))
             # An index lists files but does not supply their operating contracts.
             if linked.name not in {"A4.md", "A5.md"}:
                 pending.append(linked)
@@ -72,7 +74,7 @@ def test_operation_documents_follow_profile_links_and_command_spans(tmp_path):
     catalog = tmp_path / "A5.md"
     unreachable = tmp_path / "unreachable.md"
     runtime.write_text("[Module](module.md#order) [Catalog](A5.md) [Web](https://example.com/remote.md)")
-    module.write_text("[Runtime](runtime.md) `store_quote_conductor order` and `waiting_payment`")
+    module.write_text("# Order\n\n[Runtime](runtime.md) `store_quote_conductor order` and `waiting_payment`")
     catalog.write_text("[Unused](unreachable.md)")
     unreachable.write_text("`undocumented_tool`")
     documents = _operation_documents(runtime, root=tmp_path)
@@ -86,6 +88,18 @@ def test_operation_documents_reject_broken_profile_links(tmp_path):
     runtime.write_text("[Missing module](missing.md)")
     with pytest.raises(AssertionError, match="Missing instruction"):
         _operation_documents(runtime, root=tmp_path)
+
+
+def test_operation_navigation_uses_reference_links_and_ignores_literal_examples(tmp_path):
+    runtime = tmp_path / "runtime.md"
+    module = tmp_path / "module.md"
+    runtime.write_text(
+        "[Module][selected]\n\n[selected]: module.md:3#order\n\n"
+        "`[Fake](missing-inline.md)`\n\n```markdown\n[Fake](missing-fenced.md)\n```\n\n"
+        "[unused]: missing-unused.md\n"
+    )
+    module.write_text("Intro\n\n# Order\n\n`store_quote_conductor`\n")
+    assert set(_operation_documents(runtime, root=tmp_path)) == {runtime, module}
 
 
 def test_bridge_and_automation_command_names_have_operation_cards():

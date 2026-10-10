@@ -16,10 +16,12 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 
 from autostop_manager.instruction_inventory import (  # noqa: E402
+    active_instruction_candidates,
     collect_instruction_inventory,
     read_instruction_bytes,
     require_instruction_inventory,
 )
+from autostop_manager.markdown_links import markdown_section_body  # noqa: E402
 
 CODEX = Path("/root/.codex")
 PACKAGES = (
@@ -162,10 +164,22 @@ def selected_skills(project, codex):
     return result
 
 
-def build_catalogs(project=PROJECT, codex=CODEX, day=None):
+def project_skill_entries(project):
+    """Canonical repository entries, independent of one host's skill selectors."""
+    boundary = (project / ".agents/skills").resolve()
+    result = []
+    for path in sorted(boundary.glob("*/SKILL.md")):
+        if not path.resolve().is_relative_to(boundary):
+            raise ValueError("Outside-package skill: " + str(path))
+        info = metadata(path)
+        result.append({"group": "AutoStop Manager", "path": path, **info})
+    return result
+
+
+def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False):
     project = project.resolve()
     day = day or datetime.now(UTC).strftime("%Y-%m-%d")
-    skills = selected_skills(project, codex)
+    skills = project_skill_entries(project) if project_only else selected_skills(project, codex)
     inventory = collect_instruction_inventory(project)
     project_paths = require_instruction_inventory(inventory)
     external = [s for s in skills if not s["path"].is_relative_to(project)]
@@ -196,7 +210,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         "",
         "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние входы выбираются по manifest установленного пакета. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
-        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи: `python scripts/update-instruction-catalogs.py --check`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
+        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи на хосте: `python scripts/update-instruction-catalogs.py --check`; переносимая проверка проектной части: `python scripts/update-instruction-catalogs.py --check --project-only`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
         "",
         "## AutoStop Manager",
         "",
@@ -241,10 +255,58 @@ def checked_catalog_day(project):
     return days[0] if days[0] == days[1] else None
 
 
+def check_project_catalogs(project=PROJECT):
+    """Check repository coverage and generated project sections without Codex IO."""
+    project = project.resolve()
+    day = checked_catalog_day(project)
+    a4, a5, summary = build_catalogs(project, day=day, project_only=True)
+    expected_paths = {project / name for name in summary["project_paths"]}
+    candidates = active_instruction_candidates(project)
+    orphaned = sorted(
+        path.relative_to(project).as_posix() for path in candidates if path.resolve() not in expected_paths
+    )
+    mismatches = []
+    for name, expected in (("A4.md", a4), ("A5.md", a5)):
+        path = project / "docs/agent/modules" / name
+        if not path.is_file():
+            mismatches.append(name)
+            continue
+        actual = read_instruction_bytes(path).decode("utf-8")
+        actual_section = markdown_section_body(actual, "AutoStop Manager")
+        if actual_section != markdown_section_body(expected, "AutoStop Manager"):
+            mismatches.append(name)
+        if name == "A5.md":
+            count = re.search(r"(?m)^Срез: \d{4}-\d{2}-\d{2}\. Всего \d+ файлов: (\d+) в AutoStop Manager\b", actual)
+            if count is None or int(count[1]) != summary["project_documents"]:
+                mismatches.append(name)
+    if day is None:
+        mismatches.extend(["A4.md", "A5.md"])
+    return {
+        "ok": not mismatches and not orphaned,
+        "project_only": True,
+        "project_documents": summary["project_documents"],
+        "project_skills": summary["skills"],
+        "active_document_candidates": len(candidates),
+        "orphaned_active_documents": orphaned[:64],
+        "orphaned_active_document_count": len(orphaned),
+        "mismatches": sorted(set(mismatches)),
+        "external_skills_checked": False,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    parser.add_argument(
+        "--project-only", action="store_true", help="Check repository sections without host Codex files"
+    )
     args = parser.parse_args()
+    if args.project_only:
+        if not args.check:
+            parser.error("--project-only requires --check; host catalogs must not be overwritten")
+        summary = check_project_catalogs(PROJECT)
+        print(json.dumps(summary, ensure_ascii=False))
+        return int(not summary["ok"])
     # A read-only check compares content at the recorded cutoff; tomorrow's
     # date alone does not make an unchanged inventory stale.
     day = checked_catalog_day(PROJECT) if args.check else None

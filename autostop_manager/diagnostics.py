@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .document_links import local_document_link_target
+from .document_links import parse_local_document_link, validate_document_reference
 from .instruction_inventory import (
     InstructionInventory,
     InventoryIssue,
@@ -150,11 +150,18 @@ def _document_links(text: str) -> list[str]:
     return visible_markdown_links(text)
 
 
-def _local_link_path(link: str, document: Path, root: Path, *, check_external_links: bool = True) -> Path | None:
-    target = local_document_link_target(link)
-    if target is None:
+def _local_link_path(
+    link: str,
+    document: Path,
+    root: Path,
+    *,
+    check_external_links: bool = True,
+    contents: dict[Path, bytes] | None = None,
+) -> Path | None:
+    reference = parse_local_document_link(link)
+    if reference is None:
         return None
-    candidate = document.parent / target
+    candidate = document.parent / reference.path if reference.path else document
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
         allowed_external = document_name in {
@@ -184,6 +191,11 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
         )
     if not allowed or not resolved.is_file():
         raise ValueError("document_link_invalid")
+    if reference.line is not None or reference.fragment:
+        content = contents.get(resolved) if contents is not None else None
+        if content is None:
+            content = read_instruction_bytes(resolved)
+        validate_document_reference(reference, resolved, content.decode("utf-8"))
     return resolved
 
 
@@ -213,7 +225,15 @@ def _audit_instruction_paths(
     if inventory.issues:
         warnings.append("instruction_inventory_mismatch")
     for item in inventory.issues:
-        if item.code in {"missing", "outside", "retired", "invalid_link", "document_link_line_invalid"}:
+        if item.code in {
+            "missing",
+            "outside",
+            "retired",
+            "invalid_link",
+            "document_link_line_invalid",
+            "document_link_line_out_of_range",
+            "document_link_anchor_missing",
+        }:
             warnings.append(f"document_link_invalid:{item.source}")
         else:
             warnings.append(f"document_unreadable:{item.target}")
@@ -265,7 +285,9 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
             linked_paths[name] = set()
             for link in _document_links(text):
                 try:
-                    resolved = _local_link_path(link, path, root, check_external_links=check_external_links)
+                    resolved = _local_link_path(
+                        link, path, root, check_external_links=check_external_links, contents=inventory.contents
+                    )
                 except (OSError, RuntimeError, ValueError):
                     warnings.append(f"document_link_invalid:{name}")
                 else:

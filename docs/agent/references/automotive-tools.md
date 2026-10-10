@@ -1,6 +1,6 @@
 # Единый автомобильный каталог
 
-Registry: docs/agent/automotive_tools.json; JSON Schema: automotive_tools.schema.json.
+Registry: [automotive_tools.json](../automotive_tools.json); [JSON Schema](../automotive_tools.schema.json).
 Модули имеют устойчивый module_key, инструменты — tool_id. E-code отображает задачу.
 Markdown является текстом правил; inputSchema авторитетна в code/MCP.
 Карточки генерирует scripts/generate-automotive-instructions.py; --check проверяет отсутствие drift.
@@ -20,8 +20,11 @@ invalid_example обязан отвергаться facade inputSchema до ис
 ```bash
 .venv/bin/python scripts/generate-automotive-instructions.py --check
 .venv/bin/python scripts/check-automotive-catalog.py
-.venv/bin/python scripts/update-instruction-catalogs.py --check
+.venv/bin/python scripts/update-instruction-catalogs.py --check --project-only
 ```
+
+На целевом хосте полный `scripts/update-instruction-catalogs.py --check` дополнительно
+сверяет выбранные установленные навыки Codex; CI не требует их локального кеша.
 
 После публикации Manager и подтверждённого exact target SHA:
 
