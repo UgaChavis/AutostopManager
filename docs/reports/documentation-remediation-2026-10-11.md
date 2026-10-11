@@ -129,13 +129,34 @@ legacy migration может дополнить jobs/runtime/controller. Template
 обращения к существующему заданию не открывает registry. Общий checkpoint writer
 и обычные рабочие get/decode пути не меняются.
 
+## Исправления третьего полного прохода
+
+Независимый reviewer после S18/S19 повторно сопоставил весь реестр и все
+70 native tools с их цепочками обработчиков. S20 уточняет одну строку effects:
+`j1_research_start` инициализирует SQLite и ставит job в очередь; публичную сеть
+затем читает worker. Синтетический настоящий старт дал queued/one query/zero
+collected documents без search/prune; следующий worker выполнил один mock search
+и завершился.
+
+S21 согласует верхний абзац VIN-справочника с уже доказанным lifecycle контрактом:
+выключенный флаг запрещает domain writes, но `vin_ephemeral_state_lost` или другая
+lifecycle ошибка может возникнуть до `vin_research_disabled`. Чтение не получает
+новые страницы, однако cleanup/reconciliation и SQLite initialization возможны.
+Новых подтверждённых замечаний в остальном реестре не найдено.
+
+[Комплект выпуска](../agent/references/deployment.md#комплект-для-выпуска-документации)
+дополнен проверкой точной пары исходников, неизменных persistent bindings,
+зависимостей native runtime, не менее 30 GiB, свежего owner graph и ограничений
+отката после новых business writes. Это подготовка следующего выпуска;
+установленные службы, исходные WIP и живая структура сохраняются.
+
 ## Итерации
 
 | Цикл | Полный review | Обязательные проверки | Состояние |
 | --- | --- | --- | --- |
 | 1 | core/docs/code, автомобильные модули/каталоги/skills, все документы CRM | генерация, CommonMark links/anchors/lines, SDK/examples, effects, Manager release-gates, CRM ci и browser | Manager local/hosted PASS ([CI](https://github.com/UgaChavis/AutostopManager/actions/runs/38118760767)); CRM local/hosted PASS ([CI](https://github.com/UgaChavis/AutostopCRM-V1/actions/runs/38122827247)); оба точных SHA перечитаны |
-| 2 | весь реестр Manager; замечания S5–S19 исправлены; CRM проверяется после exact Manager pin | полный обязательный набор, точные producer/consumer pins | предыдущие 5791 локальный тест PASS; после S17–S19 полный набор повторяется перед публикацией, затем exact-SHA CI и независимое перечитывание |
-| 3 | независимый итоговый полный review после последнего исправления | обязательный набор и exact-SHA CI, финальный каталог/инструкция выпуска | следующий проход |
+| 2 | весь реестр Manager; S5–S19 исправлены, S20/S21 переданы третьему циклу; CRM S7/S9 и exact Manager pin | полный обязательный набор, точные producer/consumer pins | Manager [775fdc8](https://github.com/UgaChavis/AutostopManager/commit/775fdc8926202e8dd7cd87262d0e26b98d1dc380): 5818 local PASS, coverage 87%, [exact CI](https://github.com/UgaChavis/AutostopManager/actions/runs/38125740732); CRM публикует согласованный pin после своих gates |
+| 3 | весь реестр заново, независимый итоговый review после S20/S21 и инструкции выпуска | обязательный набор и exact-SHA CI, финальный каталог/инструкция выпуска | Manager публикуется после повторных gates; согласованный CRM pin проходит полный ci и независимое перечитывание |
 
 Если найдено новое замечание, оно исправляется и весь реестр проверяется снова.
 Статус успешной проверки относится к точной ревизии/дереву, не к произвольному

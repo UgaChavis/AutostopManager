@@ -46,6 +46,81 @@ Store выпускается отдельно через его GitHub `Deploy V
 
 При изменении sourcing warning-контракта сначала установи и проверь совместимый Manager consumer, затем публикуй Store producer в `main`: отправка Store запускает выпуск автоматически. Порядок и текущие warning-коды — [store-api.md](store-api.md).
 
+## Комплект для выпуска документации
+
+Эта последовательность дополняет согласованный серверный выпуск для итоговой пары
+Manager/CRM. Подготовка комплекта не устанавливает релиз, не перезапускает службы,
+не меняет duty или живую структуру. Будущий выпуск выполняется в пределах поручения.
+
+1. Закрепи полные SHA основных веток `AutostopManager` и `autostopcrm-v1`, зелёный
+   CI точных SHA, sealed Manager export, CRM committed pin и canonical `content_hash`
+   по [контракту каталога](automotive-tools.md). Подтверди remote SHA. Если main
+   изменился, согласуй новую пару, регенерируй каталог и повтори обязательные проверки;
+   прежний green CI не подтверждает новый checkout.
+2. Сохрани измеренные незакоммиченные изменения `/opt/AutostopManager` и последующие
+   правки с HEAD/status/diff/hashes. Для выпуска подготовь отдельный clean Manager
+   clone на `AutostopManager`, HEAD которого совпадает с итоговым remote SHA;
+   detached archive предназначен для review, не для deploy. Не сбрасывай dirty source.
+   Создай собственную `.venv` нового checkout, установи зависимости его pyproject и
+   выполни release gates и полный host catalog check. Orchestrator выбирает его через
+   `AUTOSTOP_MANAGER_SOURCE_DIR`; `AUTOSTOP_MANAGER_RELEASE_PYTHON` выбирает interpreter
+   preflight. Native MCP по-прежнему использует `/opt/AutostopManager/.venv/bin/python`:
+   отдельно проверь совместимость его зависимостей. Source override не переносит
+   runtime venv, `/opt/AutostopManager/.env`, `.crm-mcp.env` или постоянную Manager DB.
+3. Используй существующий `/opt/autostopcrm` с прежними `.env`, data и compose identity.
+   После проверки clean main выполни fetch/fast-forward до итогового CRM SHA;
+   произвольный clone с default `./data` меняет persistent bindings. До maintenance
+   нужны ≥30 GiB доступного места и дополнительный build/backup/rollback reserve.
+   Согласуй effective settings: CRM `deploy.sh` сначала читает свою `.env`, которая
+   может перекрыть переданные переменные. Значения секретов не выводи. Пример будущего
+   запуска после замены `FINAL_SHA12` выбранным проверенным checkout:
+
+   ```bash
+   env AUTOSTOP_MANAGER_SOURCE_DIR=/opt/autostop-manager-release-source-FINAL_SHA12 \
+     AUTOSTOP_MANAGER_RELEASE_PYTHON=/opt/autostop-manager-release-source-FINAL_SHA12/.venv/bin/python \
+     AUTOSTOP_MIN_FREE_DISK_BYTES=32212254720 \
+     /opt/autostopcrm/deploy.sh
+   ```
+
+   Его preflight требует clean branch HEAD=remote main. Выполни действующий
+   согласованный порядок выше: orchestrator владеет hold, паузой, backup, activation
+   и rollback. Дополнительный hold или standalone installer не запускай. Сохрани
+   текущие J1/browser/VIN settings, API-форматы и роли; выпуск текста их не расширяет.
+4. После activation независимо сверь installed Manager REVISION/MANIFEST/process cwd,
+   CRM OCI SHA и pin/hash, duty/queue, scheduler, timers и отсутствие новых outbox
+   эффектов. Запусти host catalogs и bounded probes из физического installed snapshot.
+   Effectful annotations, включая G1 `readOnlyHint=false/idempotentHint=false`,
+   проверяет probe новой установленной ревизии; старый runtime проверяется своим probe.
+   GitHub push, количество tools и connected сами не подтверждают установку или загрузку
+   скиллов. Проверь фактический skill entrypoint и receipts чтения по smoke ниже.
+5. Получи свежий полный технический owner graph по текущей schema
+   `api:/api/manager_structure`; сохрани исходные JSON-типы чисел. Из exact sealed
+   Manager и final bundle подготовь instruction-only patch вне репозитория:
+
+   ```bash
+   /opt/autostopcrm/.venv/bin/python /opt/autostopcrm/scripts/sync_manager_structure_instructions.py \
+     --graph /ROOT_PRIVATE/fresh-graph.json --manager-root /ROOT_PRIVATE/sealed-manager \
+     --bundle /ROOT_PRIVATE/final-catalog.json --patch-output /ROOT_PRIVATE/instructions.json
+   ```
+
+   Скрипт только готовит файл; preview/apply API не вызывает. Проверь
+   `prepared_from_version`, `unchanged_scope_digest`, IDs и тексты. В порученном
+   обновлении после fresh full read выполни `preview_requests` через owner API,
+   затем exact `apply_requests` с предусмотренными CAS version и UUID/idempotency;
+   после каждой записи независимо перечитай graph. При 409 или неизвестном исходе
+   сначала readback/receipt и новая подготовка, без слепой смены ключа. Сохрани canvas,
+   parent/геометрию, manual paths, связи и `tool_statuses`; E1 layout migration для текста
+   не запускай. В браузере проверь pinned SHA ссылки, относительные переходы, unsafe URL
+   блокировку и owner/viewer права; просмотр не запускает providers или business actions.
+
+Откат выполняет orchestrator по CRM runbook с exact previous coherent tuple и
+проверенным recovery set. До открытия writers protected state возвращается только
+после доказанной остановки кандидатов; failed restore/health сохраняет marker/hold
+и work pause. После снятия marker и новых business writes старую DB не накладывай:
+нужны новое quiet window и backup текущих данных, затем совместимый rollback с их
+сохранением. Current/полный previous, бизнес-тома и M2 сохраняются. Disk policy после
+нового tuple перепроверяется; прежняя цель очистки 20 GB не заменяет ≥30 GiB приёмку.
+
 ## Native MCP и подключённый Codex
 
 Проверь active `autostop-manager-mcp.service`; cwd его `MainPID` должен совпадать с физическим target `/opt/autostop-manager-releases/current`. Probe запускай из `/tmp` с активным `PYTHONPATH`, чтобы checkout не подменил импорт:
