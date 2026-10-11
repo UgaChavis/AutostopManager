@@ -201,7 +201,7 @@ def collect_work_price_evidence(
         "work_items": work_items,
         "deadline_seconds": deadline,
     }
-    missing = [] if observations or aggregate_evidence is not None else ["work_price_evidence"]
+    missing = [] if observations or data["provided_aggregate"] is not None else ["work_price_evidence"]
     return result(
         "collect_work_price_evidence",
         "partial" if missing or warnings else "success",

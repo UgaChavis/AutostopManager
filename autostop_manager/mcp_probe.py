@@ -24,22 +24,58 @@ BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
 # only reads or previews. Check the serialized live annotations as well as the
 # input schemas so an older deployment cannot silently advertise them as reads.
 EFFECTFUL_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
-    "j1_research_document": {
+    "manager_automations": {
         "readOnlyHint": False,
         "destructiveHint": False,
-        "idempotentHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "manager_automation_control": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "j1_research_status": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "j1_research_results": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "j1_research_report": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "j1_research_cancel": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "j1_research_document": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
         "openWorldHint": False,
     },
     "j1_research_vin": {
         "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": True,
+        "destructiveHint": True,
+        "idempotentHint": False,
         "openWorldHint": True,
     },
     "j1_research_record_facts": {
         "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": True,
+        "destructiveHint": True,
+        "idempotentHint": False,
         "openWorldHint": False,
     },
     "j1_research_start": {
@@ -50,7 +86,7 @@ EFFECTFUL_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
     },
     "j1_research_add_queries": {
         "readOnlyHint": False,
-        "destructiveHint": False,
+        "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },

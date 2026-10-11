@@ -1,4 +1,4 @@
-"""Pure lookup policy shared by E4 and its catalog consumers."""
+"""Pure lookup policy shared by E2 and its catalog consumers."""
 
 from __future__ import annotations
 

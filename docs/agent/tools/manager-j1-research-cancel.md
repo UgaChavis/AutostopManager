@@ -27,5 +27,7 @@ Defaults: `{}`.
 - General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.
 - Writes cancellation state for this exact local job; retained corpus is separate from job cancellation.
 - Cancellation request is not proof that an inflight operation has ended; read collection_status/inflight before finalize. Expiry deletes private evidence and forbids further network.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.
 
 Подробный контракт: [справочник](../references/web-research.md).

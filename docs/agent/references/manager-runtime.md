@@ -6,7 +6,7 @@
 
 Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateless Streamable HTTP. `build_server()` регистрирует инструменты и до открытия порта проверяет имена/fingerprint. CRM Gateway — отдельный MCP; его инструменты не входят в Manager manifest. Актуальная input schema берётся из всех страниц живого `tools/list`, а source fingerprint — из manifest; при изменении сигнатуры обновляй оба вместе с кодом.
 
-Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `j1_research_start`, `j1_research_document`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_add_queries`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
+Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `manager_automations`, `manager_automation_control`, `j1_research_start`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_status`, `j1_research_results`, `j1_research_document`, `j1_research_report`, `j1_research_add_queries`, `j1_research_cancel`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
 
 Перед live-операцией разреши `readlink -f /opt/autostop-manager-releases/current`, прочитай `REVISION` и используй документы/manifest этого физического snapshot. Для разработки зафиксируй путь checkout/worktree, `git rev-parse HEAD` и `git status --short`; source-команды используют его собственную `.venv/bin/python`. При смешанной задаче укажи оба корня и ревизии; выбирать инструкции можно абсолютными путями без смены cwd и runtime-копий. Для imports production probe запускается из `/tmp` с `PYTHONSAFEPATH=1` и `PYTHONPATH`, равным выбранному физическому snapshot: cwd не должен подменять installed imports. Сверяй фактический manifest, не историческое число tools.
 
@@ -20,11 +20,16 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Самостоятельный [VIN-режим J1](j1-vin-research.md) использует существующий worker и отдельное
 приватное tmpfs-хранилище; сбор не блокирует MCP до завершения исследования.
-`j1_research_vin`/`j1_research_record_facts` всегда зарегистрированы, оба effectful и idempotent;
-только старт имеет `openWorldHint=true`. Общий J1/E15 VIN не принимает.
+`j1_research_vin`/`j1_research_record_facts` всегда зарегистрированы. Все восемь VIN-aware
+research tools имеют readOnly=false/destructive=true/idempotent=false: VIN entrypaths выполняют
+expiry cleanup, lost-state stub updates и failed-worker reconciliation, также перед отказом
+отключённых VIN-записей. Status/results/report могут создать/мигрировать обычную SQLite, но не
+получают новые страницы. VIN/add_queries имеют openWorld=true, остальные VIN-aware tools — false.
+Общий J1/E15 VIN не принимает; general start сохраняет прежние annotations.
 `j1_research_document` добавляет `page`/`ocr`; у обычной job прежние defaults сохраняются,
-а активные page/OCR отклоняются. OCR ставится в worker-очередь и меняет временные revision/draft,
-поэтому document имеет readOnly=false/idempotent=true/openWorld=false; новая сеть не нужна.
+а активные page/OCR отклоняются. OCR ставится в дедуплицированную worker-очередь и меняет временные
+revision/draft без новой сети. Domain receipts/CAS и selected-page dedup сохраняются, но не
+делают lifecycle housekeeping идемпотентным; start key после expiry может создать новую job.
 Источник данных не может менять job scope или получателей.
 
 Флаг `AUTOSTOP_J1_VIN_RESEARCH_ENABLED=0` — значение по умолчанию. При отдельно порученной активации
@@ -114,7 +119,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 
 Полный список имён — manifest; для задачи читай [A1](../modules/A1.md) и нужный модуль. Не вызывай изменяющий инструмент ради smoke: используй schema, synthetic fixture или явно безопасный dry-run в одноразовой среде.
 
-- `manager_automations` (`status/templates/readiness`) читает техническое состояние; `manager_automation_control` меняет jobs/timers, а `run_now/test_notification` могут отложенно отправить Telegram. `preview` не пишет registry.
+- `manager_automations` читает техническое состояние: default/status/readiness могут инициализировать registry и обновить schema metadata текущей схемы. Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at. `templates` возвращает allowlisted шаблоны без доступа к registry. `manager_automation_control` меняет jobs/timers через guarded операции, а `run_now/test_notification` могут отложенно отправить Telegram. `preview` существующего job также может инициализировать registry, мигрировать технические поля или обновить schema metadata; preview создания из template не обращается к registry. Status/readiness/preview не выполняют предлагаемое guarded действие, не меняют desired_state/revision заданий, не ставят сообщения в очередь и не отправляют их. Native `manager_automations` имеет `readOnlyHint=false` и `idempotentHint=false`: технические SQLite-записи и повторное обновление schema timestamp учитываются для всего инструмента. Native `manager_automation_control` также имеет `idempotentHint=false`: одинаковый preview существующего job повторно обновляет schema timestamp. Guarded mutation keys/CAS/receipts, schemas, выходные форматы и полномочия controller сохраняются.
 - Store `store_digest` читает события и меняет Manager cursor/ack; без кейса не продвигай production checkpoint. `store_management_action`, `store_quote_conductor`, `store_owner_api` различаются по операции и могут писать/публиковать; нужен текущий target, revision, contract, idempotency и readback. `prepare_action_contract` локально проверяет вход и возвращает JSON `ActionContractV2` без сети, записи или guarded token. Полномочия, текущую ревизию и предусмотренные guard/proof проверяет конкретный исполнитель по своему контракту. Подробности: [store-api.md](store-api.md).
 - `download_store_quote_vin_photo` читает точный Store quote и возвращает bounded JPEG preview в `data.content_base64`/`content_type`, без локального файла. `expected_photo_sha256`/`summary.attachment.sha256` относятся к исходному вложению; `preview_sha256` — к возвращённым preview-байтам и может отличаться. Telegram download создаёт приватный временный файл по своему контракту. Фото остаются транзитными; отдельно сохранённый Store preview сверяй по `preview_sha256` и очищай. Подробности: [store-api.md](store-api.md).
 - VIN/PartsAPI/каталоги читают источники и могут расходовать provider quota. Dry-run/configured не доказывает live доступ. OEM и аналоги остаются кандидатами до проверки применимости. Старый PartsAPI category index — fixture, не активный API путь.

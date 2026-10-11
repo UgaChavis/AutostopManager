@@ -207,6 +207,12 @@ def test_probe_classifies_http_failure_without_payload(status, expected):
         "registry",
         "duplicate",
         "annotation",
+        "g1_read_annotation",
+        "g1_idempotent_annotation",
+        "g1_control_idempotent_annotation",
+        "j1_read_annotation",
+        "j1_destructive_annotation",
+        "j1_idempotent_annotation",
         "status",
         "resolver",
         "resolver_private",
@@ -240,11 +246,45 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
             pass
 
         async def list_tools(self, **kw):
-            tool = SimpleNamespace(
-                name="store_digest" if failure == "annotation" else "synthetic",
-                inputSchema={},
-                annotations=(SimpleNamespace(readOnlyHint=True) if failure == "annotation" else None),
-            )
+            if failure in {"g1_read_annotation", "g1_idempotent_annotation"}:
+                tool = SimpleNamespace(
+                    name="manager_automations",
+                    inputSchema={},
+                    annotations=SimpleNamespace(
+                        readOnlyHint=failure == "g1_read_annotation",
+                        destructiveHint=False,
+                        idempotentHint=failure == "g1_idempotent_annotation",
+                        openWorldHint=False,
+                    ),
+                )
+            elif failure in {
+                "g1_control_idempotent_annotation",
+                "j1_read_annotation",
+                "j1_destructive_annotation",
+                "j1_idempotent_annotation",
+            }:
+                name = {
+                    "g1_control_idempotent_annotation": "manager_automation_control",
+                    "j1_read_annotation": "j1_research_status",
+                    "j1_destructive_annotation": "j1_research_document",
+                    "j1_idempotent_annotation": "j1_research_record_facts",
+                }[failure]
+                tool = SimpleNamespace(
+                    name=name,
+                    inputSchema={},
+                    annotations=SimpleNamespace(
+                        readOnlyHint=failure == "j1_read_annotation",
+                        destructiveHint=failure != "j1_destructive_annotation",
+                        idempotentHint=failure in {"g1_control_idempotent_annotation", "j1_idempotent_annotation"},
+                        openWorldHint=False,
+                    ),
+                )
+            else:
+                tool = SimpleNamespace(
+                    name="store_digest" if failure == "annotation" else "synthetic",
+                    inputSchema={},
+                    annotations=(SimpleNamespace(readOnlyHint=True) if failure == "annotation" else None),
+                )
             return SimpleNamespace(tools=[tool, tool] if failure == "duplicate" else [tool], nextCursor=None)
 
     async def call(session, name, arguments, **kw):
@@ -273,9 +313,24 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
     monkeypatch.setattr(probe, "_call", call)
     result = probe.probe_manager_mcp(provider_failure_check=True)
     assert result["ok"] is (failure == "none")
-    if failure == "annotation":
+    if failure in {
+        "annotation",
+        "g1_read_annotation",
+        "g1_idempotent_annotation",
+        "g1_control_idempotent_annotation",
+        "j1_read_annotation",
+        "j1_destructive_annotation",
+        "j1_idempotent_annotation",
+    }:
         assert result["diagnostic"] == "annotation_mismatch"
-        assert result["checks"]["tools_list"]["annotation_mismatch_tools"] == ["store_digest"]
+        expected_tool = {
+            "annotation": "store_digest",
+            "g1_control_idempotent_annotation": "manager_automation_control",
+            "j1_read_annotation": "j1_research_status",
+            "j1_destructive_annotation": "j1_research_document",
+            "j1_idempotent_annotation": "j1_research_record_facts",
+        }.get(failure, "manager_automations")
+        assert result["checks"]["tools_list"]["annotation_mismatch_tools"] == [expected_tool]
     assert probe.SYNTHETIC_IDENTIFIER not in json.dumps(result)
     assert "PRIVATE" not in json.dumps(result)
 

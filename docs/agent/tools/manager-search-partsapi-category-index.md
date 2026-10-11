@@ -22,8 +22,8 @@ Defaults: `{"intent_id":null,"limit":8,"path":null,"query":null}`.
 {"query":[]}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
-Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
+Выход: Flat historical fixture result: ok/schema/version/path/query/intent_id/count/matches/missing/active_for_current_contract. Each match includes category provenance, score and matched_by.; Missing/unreadable/invalid fixture is represented by missing=true and empty matches; this search still returns ok=true. active_for_current_contract=false: a historical match does not select a current PartsAPI method.; Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract..
+Ошибки и неполнота: A missing/unreadable/invalid local fixture yields ok=true, missing=true, count=0 and no matches; this is absence of historical evidence, not an empty/partial outcome field. No live PartsAPI provider is called..
 
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Исторический numeric category fixture не современное дерево TecDoc.

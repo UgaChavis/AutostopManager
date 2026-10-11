@@ -1,4 +1,4 @@
-"""Asynchronous E4 entry points; synchronous consumers keep the same pure builder."""
+"""Asynchronous E2 entry points; synchronous consumers keep the same pure builder."""
 
 from __future__ import annotations
 

@@ -3010,7 +3010,7 @@
       "title": "Точный контекст сущности Store",
       "purpose": "Точный контекст сущности Store",
       "provider_id": "store",
-      "primary_data_source": "AutoStop Store authoritative offer context",
+      "primary_data_source": "AutoStop Store exact entity context (Store agent API; sourcing offers are search-only)",
       "execution_kind": "network_read",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-entity-context.md",
@@ -3027,11 +3027,11 @@
         "page gives has_more/next_cursor/replay_cursor/limit; meta preserves source snapshot/principal context. Errors use summary.error_code/message/details."
       ],
       "errors": [
-        "Unsupported entity or malformed query/filter/cursor/limit returns Store blocked/error envelope; transport/auth and source errors retain summary.error_code and sanitized meta.http_status."
+        "Unsupported entity, lookup-only store_sourcing_offer, missing/oversized entity_id or unsupported detail are rejected before HTTP. full_with_vin_photo is allowed only for store_quote_request. The integration returns a Store blocked/error envelope; transport/auth and source errors retain summary.error_code and sanitized meta.http_status."
       ],
       "limitations": [
         "Private Store read; do not send returned business data to public web or persist it in the general source registry.",
-        "entity is one of store_part/store_order/store_quote_request/store_batch/store_warehouse_operation/store_marketplace_listing/store_state/store_sourcing_offer.",
+        "entity context supports store_part/store_order/store_quote_request/store_batch/store_warehouse_operation/store_marketplace_listing/store_state. store_sourcing_offer is search-only: reread the exact offer through store_search; entity_context rejects it before HTTP.",
         "Use the live Store response for offer/stock/order claims; this operation makes no reservation, order or payment.",
         "Replace the synthetic entity_id with an ID returned by Store; the example does not assert an existing record."
       ],
@@ -3699,7 +3699,10 @@
         "One exact VIN/job/recipient/TTL scope. No E2/E4 prerequisite, automatic decoder fallback, decoder API, CRM/Store or external LLM.",
         "Collection is not analysis; the current agent reads documents and records cited claims before finalize.",
         "12 queries/60 documents/6 de-identified browser pages/12 OCR pages/300 active worker seconds/24h TTL; private state only in checked tmpfs.",
-        "VIN PDF limit: 24 MiB only for explicit server-registry A/B sources; otherwise 8 млн байт. Extracted text is limited to 2 MiB and 1000 pages."
+        "VIN PDF limit: 24 MiB only for explicit server-registry A/B sources; otherwise 8 млн байт. Extracted text is limited to 2 MiB and 1000 pages.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.",
+        "The same start key reuses its live VIN job; after that temporary job expires, repeating the start may create a new job. Expiry cleanup still runs before a disabled start rejects domain work."
       ],
       "example": {
         "vin": "1HGCM82673A000000",
@@ -3745,12 +3748,14 @@
         "ok=false/error.code: vin_research_disabled, evidence/quote/revision/basis/match validation, collection not stopped, idempotency/scope/expiry failures."
       ],
       "limitations": [
-        "Always registered; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0 and rejects this write with vin_research_disabled before recording facts or finalizing analysis. Independent expiry cleanup still applies.",
-        "Effectful temporary-state write, idempotent, no network and no business writes.",
+        "Always registered; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0 and forbids recording facts/finalizing analysis. Independent expiry cleanup and failed-worker reconciliation run first; lifecycle errors such as vin_ephemeral_state_lost can precede vin_research_disabled.",
+        "Effectful temporary-state write; same-job mutation receipts deduplicate exact requests while that job exists. No network or business writes.",
         "Each claim cites a same-job document revision and exact quote; inference requires basis_claim_ids.",
         "vin_specific requires server-derived match_evidence_id before redaction. VIN binding is not semantic or factory truth.",
         "finalize=true requires the collection to have actually stopped and seals the common evidence revision. New documents, claims or OCR invalidate finality.",
-        "support=corroborated requires current basis_claim_ids with matching field/value/unit/relationship and at least two distinct content clusters across the new claim and its matching bases; duplicate_of copies count once. Otherwise fact_corroboration_basis_required; this check does not certify semantic truth or independent data origin."
+        "support=corroborated requires current basis_claim_ids with matching field/value/unit/relationship and at least two distinct content clusters across the new claim and its matching bases; duplicate_of copies count once. Otherwise fact_corroboration_basis_required; this check does not certify semantic truth or independent data origin.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3779,7 +3784,7 @@
       "purpose": "Статус собственного J1 job",
       "provider_id": "public_web",
       "primary_data_source": "primary URL lineage must be preserved",
-      "execution_kind": "job_read",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-j1-research-status.md",
       "input_fields": [
@@ -3799,7 +3804,9 @@
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
         "Reads local job state; this operation itself does not search or fetch pages.",
-        "VIN state exists only in private checked tmpfs; missing state after host reboot is vin_ephemeral_state_lost, never reconstructed from the general stub."
+        "VIN state exists only in private checked tmpfs; missing state after host reboot is vin_ephemeral_state_lost, never reconstructed from the general stub.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -3822,7 +3829,7 @@
       "purpose": "Результаты собственного J1 job",
       "provider_id": "public_web",
       "primary_data_source": "primary URL lineage must be preserved",
-      "execution_kind": "job_read",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-j1-research-results.md",
       "input_fields": [
@@ -3848,7 +3855,9 @@
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
         "Reads/searches the saved local job corpus; cursor pagination does not acquire new public pages.",
-        "Local search does not authorize another network query; use add_queries on the same VIN job and its unchanged budget."
+        "Local search does not authorize another network query; use add_queries on the same VIN job and its unchanged budget.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3902,8 +3911,9 @@
         "job_id/document_id refer to one returned J1 job; synthetic examples demonstrate shape only.",
         "General J1 remains de-identified; the separate VIN job permits only its original scoped VIN. Source URL lineage stays attached.",
         "Default document reads saved text; page/ocr options are VIN-only. OCR queues a deduplicated selected cached PDF page without network and changes document/analysis revision.",
-        "Whole-tool annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true, openWorldHint=false. No factory truth follows from a literal VIN match.",
-        "VIN PDFs: explicit registry A/B sources up to 24 MiB, others up to 8 млн байт. Returned VIN-bearing source URLs are masked; raw originals stay only in private tmpfs for provenance."
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Selected-page OCR is deduplicated, but lifecycle housekeeping can write again. No factory truth follows from a literal VIN match.",
+        "VIN PDFs: explicit registry A/B sources up to 24 MiB, others up to 8 млн байт. Returned VIN-bearing source URLs are masked; raw originals stay only in private tmpfs for provenance.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -3929,7 +3939,7 @@
       "purpose": "Evidence ledger собственного J1 job",
       "provider_id": "public_web",
       "primary_data_source": "primary URL lineage must be preserved",
-      "execution_kind": "job_read",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-j1-research-report.md",
       "input_fields": [
@@ -3948,8 +3958,10 @@
       "limitations": [
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
-        "Read-only report from saved local corpus; hypotheses and source counts are not a fabricated failure frequency or confirmed repair.",
-        "VIN collection completion is not ready analysis; record_facts(finalize=true) seals a quiescent common revision. Later queries, evidence or OCR invalidate finality. Literal VIN match and source counts do not certify factory configuration."
+        "Report from saved local corpus; hypotheses and source counts are not a fabricated failure frequency or confirmed repair.",
+        "VIN collection completion is not ready analysis; record_facts(finalize=true) seals a quiescent common revision. Later queries, evidence or OCR invalidate finality. Literal VIN match and source counts do not certify factory configuration.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -3992,7 +4004,9 @@
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
         "Writes additional de-identified queries to the local job; the worker may then acquire new public pages.",
-        "VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN."
+        "VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000",
@@ -4038,7 +4052,9 @@
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
         "Writes cancellation state for this exact local job; retained corpus is separate from job cancellation.",
-        "Cancellation request is not proof that an inflight operation has ended; read collection_status/inflight before finalize. Expiry deletes private evidence and forbids further network."
+        "Cancellation request is not proof that an inflight operation has ended; read collection_status/inflight before finalize. Expiry deletes private evidence and forbids further network.",
+        "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
+        "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
       ],
       "example": {
         "job_id": "00000000000000000000000000000000"
@@ -5025,7 +5041,8 @@
       "limitations": [
         "Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.",
         "Для подтверждения source: provider/primary_lineage/method/locator/fetched_at(valid ISO с timezone), matching part_number/brand/scope, declares_oem=true и document_kind official_epc/oem_catalog_document/physical_oe_marking.",
-        "exact_identifier требует valid hash binding в vehicle_binding и source.identifier_binding; modification — typed TecDoc reference и source.catalog_ref. OEM confirmation отдельно от fitment."
+        "exact_identifier requires valid hash binding in vehicle_binding and source.identifier_binding. modification requires the same valid catalog ref in vehicle_binding and source.catalog_ref: either typed TecDoc numeric ID/carType, or a native Elcats/Japancats/SsangYong provider/namespace/entry_id/vehicle_context ref. Preserve the native namespace; OEM confirmation remains separate from fitment.",
+        "A public catalog row is not primary OEM evidence. Native catalog refs identify the bound modification and do not themselves make a public provider official_epc; primary document/source metadata and all remaining evidence gates still apply."
       ],
       "example": {
         "part_number": "DEMO-OEM-001",
@@ -5167,8 +5184,9 @@
       "limitations": [
         "Нет явного запрета не означает supported; family не exact_identifier.",
         "Primary source: fitment_assertion=true, official_epc/manufacturer_fitment_catalog, matching part_number/brand/scope и provider/lineage/method/locator/aware ISO fetched_at.",
-        "exact_identifier требует matching valid input_binding; modification требует matching typed TecDoc catalog_ref (numeric ID/carType). evidence.conditions проверяются вместе с criteria; отсутствующее/невалидное условие не supported.",
-        "production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown."
+        "exact_identifier requires matching valid input_binding; modification requires matching typed TecDoc catalog_ref (numeric ID/carType) or matching native Elcats/Japancats/SsangYong refs with their provider/namespace/entry_id/vehicle_context preserved and checked against the vehicle profile. evidence.conditions and inherited/unparsed restrictions are checked with caller criteria; missing/invalid conditions remain unknown.",
+        "production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.",
+        "Native public catalog refs can bind supplied catalog context and restrictions, but public rows do not become primary fitment proof. supported still requires independently supplied matching official_epc/manufacturer_fitment_catalog evidence with fitment_assertion=true; native context/parent/source mismatch remains unresolved."
       ],
       "example": {
         "vehicle": {
@@ -5698,12 +5716,12 @@
         "path": null
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Flat historical fixture explanation: ok/schema/version/path/query/intent_id/count/matches/missing/active_for_current_contract, plus selected_category/historical_match/category_unresolved/explanation.",
+        "active_for_current_contract=false keeps selected_category=null and category_unresolved=true even when historical_match is present; a historical numeric category does not select a current PartsAPI method.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "A missing/unreadable/invalid local fixture still returns ok=true, missing=true, count=0, no matches, historical_match=null and category_unresolved=true. An unknown intent may return missing=false with no matches; neither case is a live PartsAPI provider failure. No generic automotive outcome/data/evidence envelope is added."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -5779,7 +5797,7 @@
       "title": "manager_automation_control",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
       "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
+      "primary_data_source": "Manager Automation Center Unix control socket; scheduler registry, allowlisted templates and system timer state",
       "execution_kind": "business_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-manager-automation-control.md",
@@ -5795,19 +5813,32 @@
         "expected_revision": null
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Успех: ok:true и данные операции на верхнем уровне; общий tool_execution содержит техническую телеметрию вызова.",
+        "preview: target_operation, would_change, proposed, external_effects; current для существующего job/timer, allowed/locked для timer.",
+        "Guarded apply возвращает created/changed/queued/archived и поля конкретной операции: job, system_timer, run_id, outbox_id либо job_id/revision; повтор может включать idempotent_replay."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Отказ: ok:false и error — строковый код controller; при конфликте могут добавляться job_id, revision, expected_revision, current_revision.",
+        "automation_control_unavailable при ошибке транспорта; automation_control_failed при отказе без кода controller.",
+        "Payload/template/job/schedule/permission отказы сохраняют код controller; изменения требуют idempotency key и текущую revision для существующего job.",
+        "automation_revision_conflict, idempotency_key_invalid или idempotency_key_conflict требуют исправить вход и перечитать текущий объект."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
-        "Наличие в общем native inventory не разрешает business action или чтение клиента."
+        "Наличие в общем native inventory не разрешает business action или чтение клиента.",
+        "Preview существующего job может инициализировать registry и обновить schema metadata текущей схемы.",
+        "Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.",
+        "Preview не выполняет предлагаемое guarded действие, не меняет desired_state/revision заданий, не ставит сообщения в очередь и не отправляет их; preview создания из template не обращается к registry.",
+        "Whole-tool idempotentHint=false: identical preview of an existing job can update schema metadata again. Guarded mutation idempotency keys, exact-revision CAS, stored receipts and controller permissions retain their existing guarantees."
       ],
       "example": {
-        "operation": "preview"
+        "operation": "preview",
+        "payload": {
+          "target_operation": "create_from_template",
+          "target_payload": {
+            "template_id": "crm_digest_v1"
+          }
+        }
       },
       "invalid_example": {
         "operation": "__invalid__"
@@ -5826,8 +5857,8 @@
       "title": "manager_automations",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
       "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "primary_data_source": "Manager Automation Center Unix control socket; scheduler registry metadata and timer state",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-manager-automations.md",
       "input_fields": [
@@ -5841,16 +5872,22 @@
         "include_archived": false
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Успех: ok:true и данные операции на верхнем уровне; общий tool_execution содержит техническую телеметрию вызова.",
+        "status/default: generated_at, can_manage, schema_version, controller, global_hold, jobs, system_timers, readiness, templates.",
+        "templates: templates; readiness: ready, checks, warnings, execution_packet."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Отказ: ok:false и error — строковый код controller; могут добавляться job_id, revision, expected_revision, current_revision.",
+        "automation_control_unavailable при ошибке транспорта; automation_control_failed при отказе без кода controller.",
+        "Ошибка job/schema/role возвращается отдельным кодом, например automation_job_not_found или automation_schema_newer_than_runtime."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
-        "Наличие в общем native inventory не разрешает business action или чтение клиента."
+        "Наличие в общем native inventory не разрешает business action или чтение клиента.",
+        "Default/status/readiness могут инициализировать registry и обновить schema metadata текущей схемы.",
+        "Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.",
+        "Status/readiness не меняют desired_state/revision заданий, не выполняют guarded действия, не ставят сообщения в очередь и не отправляют их.",
+        "templates возвращает allowlisted шаблоны без доступа к registry и без записи."
       ],
       "example": {},
       "invalid_example": {
@@ -5870,7 +5907,7 @@
       "title": "parts_store_cards",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
       "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
+      "primary_data_source": "AutoStop CRM parts_store board cards via guarded CRM Gateway; Manager only routes allowed operations and verifies exact card readback",
       "execution_kind": "business_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-parts-store-cards.md",
@@ -5898,12 +5935,12 @@
         "idempotency_key": ""
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Flat result: ok/status/column. list returns items/has_more; get/create/append_note return card. Successful append of an existing exact note may return status=already_present.",
+        "Failures return error/outcome_uncertain; status is blocked or uncertain. Guarded write failures may also return gateway_warning.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Rejected target/column/revision/idempotency/input or Gateway read failure returns ok=false with error/status=blocked/outcome_uncertain=false. An unverified/unknown write result may use status=uncertain/outcome_uncertain=true and gateway_warning; reconcile the exact card before any retry."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -5958,12 +5995,12 @@
         "dry_run": true
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Flat ActionContractV2: ok/format=action_contract_v2/contract_id/correlation_id/run_id/domain/action/target/actor/owner_intent/dry_run/planned_changes/concurrency/idempotency/preflight/execution/verification/compensation/ledger/warnings.",
+        "preflight.blocking_reasons describes missing/unsupported inputs; execution.ready/tool/operation/gateway_arguments selects the executor. The contract builder does not perform or verify a business write.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Blocked/unsupported/missing inputs return ok=false and preflight.blocking_reasons; warnings and execution.ready also describe executor or required-context availability. No generic invalid_input/outcome envelope is returned."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -6008,12 +6045,12 @@
         "limit": 8
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Flat historical fixture result: ok/schema/version/path/query/intent_id/count/matches/missing/active_for_current_contract. Each match includes category provenance, score and matched_by.",
+        "Missing/unreadable/invalid fixture is represented by missing=true and empty matches; this search still returns ok=true. active_for_current_contract=false: a historical match does not select a current PartsAPI method.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "A missing/unreadable/invalid local fixture yields ok=true, missing=true, count=0 and no matches; this is absence of historical evidence, not an empty/partial outcome field. No live PartsAPI provider is called."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -6089,8 +6126,8 @@
       "classification": "outside",
       "title": "store_management_action",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store scoped entities and guarded action responses (Store agent API); Manager ActionContract rules and exact preread/readback",
       "execution_kind": "business_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-management-action.md",
@@ -6109,12 +6146,12 @@
         "mode": "dry_run"
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Store envelope format=store_agent_v1: ok/status/summary/items/changes/page/warnings/meta; fields supplied by the Store response are preserved. Blocked local failures may omit changes/generated_at.",
+        "summary.error_code carries local/provider failure. meta records contract_id/domain/action/mode/pre_state_read/pre_read_revision_mismatch/post_state_read/readback_verified; uncertain apply/readback failures return compensating status and summary.write_applied_unverified.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Unsupported operations/modes, ActionContract/preflight/target/revision failures return a Store envelope with ok=false and summary.error_code; blocked/conflict statuses distinguish refusals. Apply with uncertain outcome or failed exact readback may return compensating; never infer a successful write from transport acceptance."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -6153,8 +6190,8 @@
       "classification": "outside",
       "title": "store_owner_api",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store authenticated OpenAPI/owner API, exact target revision and operation responses; Manager validates contract, dry-run proof and readback",
       "execution_kind": "business_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-owner-api.md",
@@ -6194,12 +6231,12 @@
         "allow_binary_response": false
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Owner envelope format=autostop_store_owner_api_v1: ok/status/summary/meta/data_included; failures add error.code and may summary.error_code. Schema/prepare failures may return a smaller envelope.",
+        "prepare returns status=validated with summary.prepared_for_mode/request_dispatched=false and meta.domain_handler_executed=false; revision/read/dry_run/apply results preserve their operation-specific summary/data/meta, including contract and reread verification details.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Configuration/contract/schema/target/mode/idempotency/revision/dry-run-proof/provider failures return ok=false with error.code, operation-specific status and sanitized metadata; summary.error_code is present in client error envelopes. prepare validates dispatch inputs but does not prove a live operation or successful reread."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -6270,8 +6307,8 @@
       "classification": "outside",
       "title": "store_quote_conductor",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store Admin V2 quote draft/order snapshots and Owner API responses; Manager refs-only workflow ledger and guarded workflow rules",
       "execution_kind": "business_write",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-quote-conductor.md",
@@ -6307,12 +6344,12 @@
         "mode": "apply"
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Agent envelope format=agent_envelope_v2: ok/run_id/status/summary/changes/verification/warnings/next_actions/page/meta. meta.conductor_format=store_quote_conductor_v1 identifies this workflow.",
+        "summary.workflow/phase/state_version/workflow_status carry compact ledger state; failures use summary.error_code/warnings, and verified operation-specific technical review may appear in summary. No generic helper outcome/data/evidence fields are added.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "Invalid operation/run/binding/state/consent/revision or Store execution refusal returns agent_envelope_v2 with ok=false, summary.error_code and warnings; status may be blocked/conflict/compensating. A completed handoff may instead return ok=true/status=handoff with summary.error_code identifying its reason and next_actions requesting human review; this does not confirm a quote/order/payment. No generic invalid_input/outcome wrapper is added."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
@@ -6394,12 +6431,12 @@
         "path": null
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Flat historical fixture validation: ok/schema/version/path/category_count/errors/active_for_current_contract/privacy. errors contains position/code/cat_id validation entries.",
+        "ok=false for missing/unreadable/invalid fixture or invalid category rows; an empty errors list alone does not prove a fixture was read. active_for_current_contract=false.",
+        "Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract."
       ],
       "errors": [
-        "invalid_input сохраняет ошибочный вход как отказ",
-        "empty/partial/unsupported не success",
-        "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
+        "ok=false for missing/unreadable/invalid fixture or row-validation errors; errors entries use invalid_cat_id/duplicate_cat_id/missing_intent_ids/missing_names. Missing fixture can return errors=[]; inspect ok/category_count/path together."
       ],
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",

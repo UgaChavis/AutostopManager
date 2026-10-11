@@ -22,8 +22,8 @@ Defaults: `{"path":null}`.
 {"path":[]}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
-Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
+Выход: Flat historical fixture validation: ok/schema/version/path/category_count/errors/active_for_current_contract/privacy. errors contains position/code/cat_id validation entries.; ok=false for missing/unreadable/invalid fixture or invalid category rows; an empty errors list alone does not prove a fixture was read. active_for_current_contract=false.; Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract..
+Ошибки и неполнота: ok=false for missing/unreadable/invalid fixture or row-validation errors; errors entries use invalid_cat_id/duplicate_cat_id/missing_intent_ids/missing_names. Missing fixture can return errors=[]; inspect ok/category_count/path together..
 
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Исторический numeric category fixture не современное дерево TecDoc.

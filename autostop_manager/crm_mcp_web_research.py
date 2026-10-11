@@ -1,8 +1,8 @@
-"""Safe synchronous E8 calls through the local CRM MCP raw-capability route.
+"""Safe synchronous legacy CRM E8 calls for Manager E15 through the local CRM MCP raw-capability route.
 
 The Manager process owns the optional endpoint and bearer in its own runtime
 environment.  This module never reads CRM configuration files, never follows
-redirects, and exposes only the three read-only E8 capabilities Manager needs.
+redirects, and exposes only the three read-only legacy CRM E8 capabilities Manager needs.
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def _run_sync(factory: Callable[[], Any], *, timeout_seconds: float) -> Any:
 
 
 class LoopbackCrmMcpWebResearchTransport:
-    """A narrow synchronous transport for discovered read-only E8 raw capabilities."""
+    """A narrow synchronous transport for discovered read-only legacy CRM E8 raw capabilities."""
 
     def __init__(
         self,
@@ -253,7 +253,7 @@ class LoopbackCrmMcpWebResearchTransport:
 def build_crm_mcp_web_research_gateway(
     config: CrmMcpConnectionConfig | None = None,
 ) -> WebResearchGateway | None:
-    """Return an installed-capable E8 gateway, or ``None`` for explicit fallback.
+    """Return an installed-capable legacy CRM E8 gateway, or ``None`` for explicit fallback.
 
     A partial or invalid configuration remains a configured route and therefore
     returns a structured failure rather than silently resuming local search.

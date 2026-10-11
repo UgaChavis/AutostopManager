@@ -1310,3 +1310,42 @@ def test_acquired_labor_range_survives_legacy_normalization_and_estimate(monkeyp
     )
     assert estimated["labor_time_range_hours"] == [1, 3]
     assert estimated["operation_estimates"][0]["labor_time_analysis"]["range_hours"] == [1, 3]
+
+
+@pytest.mark.parametrize("sources", [[], ["public_web"]])
+def test_unselected_aggregate_does_not_hide_missing_price_evidence(monkeypatch, forbidden_network, sources):
+    from autostop_manager import work_pricing_research as research
+
+    calls = []
+    monkeypatch.setattr(
+        research, "_ddg_search", lambda query, **options: calls.append((query, options)) or {"results": []}
+    )
+    row = labor.collect_work_price_evidence(
+        ["DEMO работа"], sources=sources, aggregate_evidence={"count": 3}, max_queries=1
+    )
+
+    assert row["outcome"] == "partial"
+    assert row["missing_fields"] == ["work_price_evidence"]
+    assert row["data"]["provided_aggregate"] is None
+    assert row["data"]["observations"] == [] and row["data"]["labor"] == []
+    assert row["execution"]["network_calls"] == len(calls) == (1 if "public_web" in sources else 0)
+
+
+@pytest.mark.parametrize("sources", [["provided_aggregate"], ["provided_aggregate", "public_web"]])
+@pytest.mark.parametrize("aggregate", [{"count": 3}, {}])
+def test_selected_aggregate_preserves_existing_price_evidence_contract(
+    monkeypatch, forbidden_network, sources, aggregate
+):
+    from autostop_manager import work_pricing_research as research
+
+    calls = []
+    monkeypatch.setattr(
+        research, "_ddg_search", lambda query, **options: calls.append((query, options)) or {"results": []}
+    )
+    row = labor.collect_work_price_evidence(
+        ["DEMO работа"], sources=sources, aggregate_evidence=aggregate, max_queries=1
+    )
+
+    assert row["outcome"] == "success" and row["missing_fields"] == []
+    assert row["data"]["provided_aggregate"] == aggregate
+    assert row["execution"]["network_calls"] == len(calls) == (1 if "public_web" in sources else 0)

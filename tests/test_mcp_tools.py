@@ -414,10 +414,15 @@ def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
 
     expected = {
         "j1_research_start": (False, False, True),
-        "j1_research_document": (False, True, False),
-        "j1_research_vin": (False, True, True),
-        "j1_research_record_facts": (False, True, False),
-        "j1_research_add_queries": (False, False, True),
+        "j1_research_document": (True, False, False),
+        "j1_research_vin": (True, False, True),
+        "j1_research_record_facts": (True, False, False),
+        "j1_research_add_queries": (True, False, True),
+        "j1_research_status": (True, False, False),
+        "j1_research_results": (True, False, False),
+        "j1_research_report": (True, False, False),
+        "j1_research_cancel": (True, False, False),
+        "manager_automation_control": (True, False, False),
         "store_digest": (False, False, False),
         "store_management_action": (True, True, False),
         "store_quote_conductor": (True, False, False),
@@ -784,11 +789,15 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
 
     assert set(server.tools) == {"manager_automations", "manager_automation_control"}
     read_annotations = server.options["manager_automations"]["annotations"]
-    assert read_annotations.readOnlyHint is True
+    assert read_annotations.readOnlyHint is False
     assert read_annotations.destructiveHint is False
+    assert read_annotations.idempotentHint is False
+    assert read_annotations.openWorldHint is False
     control_annotations = server.options["manager_automation_control"]["annotations"]
     assert control_annotations.readOnlyHint is False
     assert control_annotations.destructiveHint is True
+    assert control_annotations.idempotentHint is False
+    assert control_annotations.openWorldHint is False
 
     def assert_response(result, expected, tool_name):
         assert {key: value for key, value in result.items() if key != "tool_execution"} == expected

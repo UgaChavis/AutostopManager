@@ -25,11 +25,13 @@ Defaults: `{"finalize":false}`.
 Выход: schema=autostop.j1.vin_research.v1: accepted claims, common revision and analysis_status; conflicts/unknowns retained.; VIN-bearing source_url is masked in returned claims; the raw original stays in private tmpfs for worker provenance..
 Ошибки и неполнота: ok=false/error.code: vin_research_disabled, evidence/quote/revision/basis/match validation, collection not stopped, idempotency/scope/expiry failures..
 
-- Always registered; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0 and rejects this write with vin_research_disabled before recording facts or finalizing analysis. Independent expiry cleanup still applies.
-- Effectful temporary-state write, idempotent, no network and no business writes.
+- Always registered; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0 and forbids recording facts/finalizing analysis. Independent expiry cleanup and failed-worker reconciliation run first; lifecycle errors such as vin_ephemeral_state_lost can precede vin_research_disabled.
+- Effectful temporary-state write; same-job mutation receipts deduplicate exact requests while that job exists. No network or business writes.
 - Each claim cites a same-job document revision and exact quote; inference requires basis_claim_ids.
 - vin_specific requires server-derived match_evidence_id before redaction. VIN binding is not semantic or factory truth.
 - finalize=true requires the collection to have actually stopped and seals the common evidence revision. New documents, claims or OCR invalidate finality.
 - support=corroborated requires current basis_claim_ids with matching field/value/unit/relationship and at least two distinct content clusters across the new claim and its matching bases; duplicate_of copies count once. Otherwise fact_corroboration_basis_required; this check does not certify semantic truth or independent data origin.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.
 
 Подробный контракт: [справочник](../references/j1-vin-research.md).

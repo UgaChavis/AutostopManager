@@ -27,5 +27,7 @@ Defaults: `{}`.
 - General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.
 - Writes additional de-identified queries to the local job; the worker may then acquire new public pages.
 - VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.
 
 Подробный контракт: [справочник](../references/web-research.md).

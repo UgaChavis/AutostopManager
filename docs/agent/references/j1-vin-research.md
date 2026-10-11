@@ -115,8 +115,14 @@ PDF из явно разрешённого серверного реестра �
 `j1_research_results(query=...)` ищет по корпусу, `j1_research_document(page=...)` читает выбранную страницу,
 `ocr=true` ставит её в дедуплицированную worker-очередь; дождись готовности и прочитай страницу снова.
 OCR использует cached PDF без новой сети, меняет документ/revision и снимает финальность анализа.
-Поэтому whole-tool `j1_research_document` объявлен effectful, idempotent и `openWorldHint=false`,
-хотя прежний вызов без OCR остаётся чтением. Смещения и цитаты относятся к версии документа.
+Selected-page OCR дедуплицируется; whole-tool `j1_research_document` имеет readOnly=false,
+destructive=true, idempotent=false, openWorld=false из-за lifecycle housekeeping даже без OCR.
+То же readOnly/destructive/idempotent объявление действует для остальных семи VIN-aware tools:
+перед доменной проверкой они могут удалить истёкшие private jobs, обновить lost-state stub и
+восстановить состояние остановленного worker. Cleanup действует также при отключённых
+VIN-записях. Status/results/report не запускают новую сеть; start key и fact receipts дедуплицируют
+свои live domain operations, но не lifecycle housekeeping. После expiry старый start key может
+создать новую job. Смещения и цитаты относятся к версии документа.
 Для обычного J1 `page` и `ocr` допустимы лишь в прежних no-op defaults: `page=null`, `ocr=false`.
 Ограничение размера/страниц/OCR сохраняется в причинах частичного результата.
 Ответ чтения документа связывает текст, номер версии, страницы и доказательство совпадения

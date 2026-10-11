@@ -50,8 +50,8 @@ def test_vin_tools_are_registered_while_disabled_with_effectful_annotations(nati
     ):
         annotations = tools[name].annotations
         assert annotations.readOnlyHint is False
-        assert annotations.destructiveHint is False
-        assert annotations.idempotentHint is True
+        assert annotations.destructiveHint is True
+        assert annotations.idempotentHint is False
         assert annotations.openWorldHint is open_world
     assert _effectful_annotation_mismatches(list(tools.values())) == []
     assert tools["j1_research_vin"].inputSchema["required"] == ["vin", "idempotency_key"]

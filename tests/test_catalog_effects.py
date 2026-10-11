@@ -5,18 +5,35 @@ from __future__ import annotations
 import base64
 from contextlib import closing
 from copy import deepcopy
+from datetime import UTC, datetime
 import hashlib
 import io
 import json
 from pathlib import Path
 import socket
 import sqlite3
+import tempfile
+from types import SimpleNamespace
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from mcp.server.fastmcp import FastMCP
 import pytest
 
-from autostop_manager import mcp_tools, store_analytics, vehicle_identity_transport
+from autostop_manager import (
+    automation_registry,
+    j1_research,
+    j1_vin_store,
+    mcp_tools,
+    store_analytics,
+    vehicle_identity_transport,
+)
+from autostop_manager.automation_control import (
+    AUTOMATION_CONTROL_PROTOCOL,
+    AutomationControlClient,
+    AutomationControlService,
+)
+from autostop_manager.automation_registry import AutomationStore
 from autostop_manager.storage import StoreState
 from autostop_manager.store_api import StoreApiClient
 
@@ -280,3 +297,329 @@ def test_benchmark_explicit_offline_mode_dispatches_no_http(native_tools, isolat
     assert result["ok"] is True and result["summary"]["count"] == 1
     assert isolated_http == []
     assert _snapshot(store) == before
+
+
+@pytest.fixture
+def g1_native_tools(tmp_path, monkeypatch, isolated_http):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
+    registry = AutomationStore(tmp_path / "g1-registry.sqlite3")
+    service = AutomationControlService(registry, timer_controller=SimpleNamespace(list_status=list))
+    clock = [datetime(2026, 1, 1, tzinfo=UTC)]
+    monkeypatch.setattr(automation_registry, "utc_now", lambda: clock[0])
+    requests = []
+
+    def request(_client, operation, payload=None, **options):
+        requests.append(operation)
+        command = {
+            "protocol": AUTOMATION_CONTROL_PROTOCOL,
+            "request_id": str(uuid4()),
+            "operation": operation,
+            "actor": {"kind": "codex", "id": "synthetic-catalog-review", "is_admin": True},
+            "payload": payload or {},
+        }
+        for field in ("idempotency_key", "expected_revision"):
+            if options.get(field) is not None:
+                command[field] = options[field]
+        return {"ok": True, "data": service.handle(command)}
+
+    monkeypatch.setattr(AutomationControlClient, "request", request)
+    server = FastMCP("g1-catalog-effects-test")
+    mcp_tools.register_manager_tools(
+        server,
+        StoreState(tmp_path / "unused-manager.sqlite3"),
+        include_tools=("manager_automations", "manager_automation_control"),
+    )
+    tools = {name: tool.fn for name, tool in server._tool_manager._tools.items()}
+    annotations = {name: tool.annotations for name, tool in server._tool_manager._tools.items()}
+    return tools, registry, service, clock, requests, annotations
+
+
+def _exercise_g1(operation, g1_native_tools):
+    tools, registry, service, clock, requests, annotations = g1_native_tools
+    registry.initialize()
+    job = None
+    if operation == "preview":
+        command = {
+            "protocol": AUTOMATION_CONTROL_PROTOCOL,
+            "request_id": str(uuid4()),
+            "operation": "create_from_template",
+            "actor": {"kind": "codex", "id": "synthetic-catalog-review", "is_admin": True},
+            "payload": {"template_id": "crm_digest_v1"},
+            "idempotency_key": "synthetic-create-g1-0001",
+        }
+        job = service.handle(command)["job"]
+    before = _snapshot(registry)
+    clock[0] = datetime(2026, 1, 2, tzinfo=UTC)
+    if operation == "preview":
+        result = tools["manager_automation_control"](
+            operation="preview",
+            payload={
+                "target_operation": "set_enabled",
+                "target_payload": {"job_id": job["job_id"], "enabled": True},
+            },
+        )
+    else:
+        result = tools["manager_automations"](operation=operation)
+    assert result["ok"] is True
+    assert requests == [operation]
+    changed = _snapshot(registry) != before
+    assert changed, "native G1 route must demonstrate real registry metadata writes"
+    with closing(sqlite3.connect(registry.path.as_uri() + "?mode=ro", uri=True)) as connection:
+        schema = connection.execute("SELECT upgraded_at FROM manager_automation_schema").fetchone()
+        assert schema == ("2026-01-02T00:00:00Z",)
+        assert connection.execute("SELECT COUNT(*) FROM manager_automation_outbox").fetchone() == (0,)
+        if job is not None:
+            assert connection.execute("SELECT desired_state, revision FROM manager_automations").fetchone() == (
+                "off",
+                job["revision"],
+            )
+    if operation in {"status", "readiness", "preview"}:
+        # Native annotations must cover the observed SQLite writes, including a
+        # repeat with identical arguments after the schema metadata clock advances.
+        tool_name = "manager_automation_control" if operation == "preview" else "manager_automations"
+        hints = annotations[tool_name]
+        assert hints.readOnlyHint is False
+        assert hints.idempotentHint is False
+        assert hints.destructiveHint is (operation == "preview")
+        assert hints.openWorldHint is False
+        first_state = _snapshot(registry)
+        clock[0] = datetime(2026, 1, 3, tzinfo=UTC)
+        repeat_payload = (
+            {"target_operation": "set_enabled", "target_payload": {"job_id": job["job_id"], "enabled": True}}
+            if job is not None
+            else None
+        )
+        repeated = (
+            tools[tool_name](operation=operation, payload=repeat_payload)
+            if job is not None
+            else tools[tool_name](operation=operation)
+        )
+        assert repeated["ok"] is True
+        assert requests == [operation, operation]
+        assert _snapshot(registry) != first_state
+        with closing(sqlite3.connect(registry.path.as_uri() + "?mode=ro", uri=True)) as connection:
+            assert connection.execute("SELECT upgraded_at FROM manager_automation_schema").fetchone() == (
+                "2026-01-03T00:00:00Z",
+            )
+            assert connection.execute("SELECT COUNT(*) FROM manager_automations").fetchone() == (int(job is not None),)
+            if job is not None:
+                assert connection.execute("SELECT desired_state,revision FROM manager_automations").fetchone() == (
+                    "off",
+                    job["revision"],
+                )
+            assert connection.execute("SELECT COUNT(*) FROM manager_automation_runs").fetchone() == (0,)
+            assert connection.execute("SELECT COUNT(*) FROM manager_automation_outbox").fetchone() == (0,)
+    return changed
+
+
+@pytest.mark.parametrize("operation", ["status", "readiness"])
+def test_g1_catalog_declares_actual_native_registry_metadata_writes(operation, g1_native_tools, isolated_http):
+    changed = _exercise_g1(operation, g1_native_tools)
+    assert isolated_http == []
+    row = _catalog_row("manager_automations")
+    assert row["execution_kind"] == "composed"
+    _assert_effects_compatible(row, http_calls=[], state_changed=changed)
+
+
+def test_g1_preview_metadata_writes_do_not_change_job_or_enqueue_outbox(g1_native_tools, isolated_http):
+    changed = _exercise_g1("preview", g1_native_tools)
+    assert isolated_http == []
+    _assert_effects_compatible(_catalog_row("manager_automation_control"), http_calls=[], state_changed=changed)
+
+
+@pytest.mark.parametrize("operation", ["status", "readiness", "preview"])
+@pytest.mark.parametrize("false_kind", ["pure", "local_read", "network_read"])
+def test_g1_effect_gate_rejects_false_read_metadata(operation, false_kind, g1_native_tools, isolated_http):
+    changed = _exercise_g1(operation, g1_native_tools)
+    assert isolated_http == []
+    name = "manager_automation_control" if operation == "preview" else "manager_automations"
+    row = deepcopy(_catalog_row(name))
+    row["execution_kind"] = false_kind
+    with pytest.raises(AssertionError, match="wrote Manager state"):
+        _assert_effects_compatible(row, http_calls=[], state_changed=changed)
+
+
+def test_g1_default_status_initializes_missing_synthetic_registry(g1_native_tools, isolated_http):
+    tools, registry, _, _, requests, _ = g1_native_tools
+    assert not registry.path.exists()
+    assert tools["manager_automations"]()["ok"] is True
+    assert registry.path.is_file() and requests == ["status"]
+    assert isolated_http == []
+
+
+@pytest.mark.parametrize("current_registry", [False, True])
+def test_g1_templates_do_not_create_or_change_registry(current_registry, g1_native_tools, isolated_http):
+    tools, registry, _, clock, requests, _ = g1_native_tools
+    if current_registry:
+        registry.initialize()
+        before = _snapshot(registry)
+    clock[0] = datetime(2026, 1, 2, tzinfo=UTC)
+    assert tools["manager_automations"](operation="templates")["ok"] is True
+    assert requests == ["templates"] and isolated_http == []
+    if current_registry:
+        assert _snapshot(registry) == before
+    else:
+        assert not registry.path.exists()
+
+
+def test_g1_create_template_preview_does_not_create_registry(g1_native_tools, isolated_http):
+    tools, registry, _, _, requests, _ = g1_native_tools
+    assert (
+        tools["manager_automation_control"](
+            operation="preview",
+            payload={"target_operation": "create_from_template", "target_payload": {"template_id": "crm_digest_v1"}},
+        )["ok"]
+        is True
+    )
+    assert requests == ["preview"] and isolated_http == []
+    assert not registry.path.exists()
+
+
+J1_READERS = ("j1_research_status", "j1_research_results", "j1_research_report")
+J1_VIN_FACADES = (
+    "j1_research_vin",
+    "j1_research_record_facts",
+    *J1_READERS,
+    "j1_research_document",
+    "j1_research_add_queries",
+    "j1_research_cancel",
+)
+
+
+@pytest.fixture
+def j1_native_tools(tmp_path, monkeypatch, isolated_http):
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
+    monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path / "general"))
+    monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "1")
+    clock = [datetime(2030, 1, 1, tzinfo=UTC).timestamp()]
+    monkeypatch.setattr(j1_vin_store.time, "time", lambda: clock[0])
+    monkeypatch.setattr(
+        j1_research, "_utcnow", lambda: datetime.fromtimestamp(clock[0], UTC).isoformat(timespec="seconds")
+    )
+    with tempfile.TemporaryDirectory(prefix="catalog-j1-tmpfs-", dir="/dev/shm") as private_root:
+        root = Path(private_root)
+        assert j1_vin_store._is_tmpfs(root) and root.stat().st_mode & 0o777 == 0o700
+        monkeypatch.setenv("AUTOSTOP_J1_VIN_CACHE_DIR", private_root)
+        server = FastMCP("j1-catalog-effects-test")
+        mcp_tools.register_manager_tools(
+            server, StoreState(tmp_path / "unused-manager.sqlite3"), include_tools=J1_VIN_FACADES
+        )
+        yield server._tool_manager._tools, root, clock
+    assert not root.exists()
+
+
+def _j1_arguments(name, job_id):
+    if name == "j1_research_vin":
+        return {"vin": SYNTHETIC_VIN, "idempotency_key": "synthetic-j1-start"}
+    if name == "j1_research_record_facts":
+        return {"job_id": job_id, "expected_revision": 0, "facts": [], "idempotency_key": "synthetic-j1-facts"}
+    if name == "j1_research_document":
+        return {"job_id": job_id, "document_id": "d" * 32}
+    if name == "j1_research_add_queries":
+        return {"job_id": job_id, "queries": ["synthetic public technical references"]}
+    return {"job_id": job_id}
+
+
+def _j1_stub(job_id):
+    with j1_research._db(readonly=True) as connection:
+        return dict(connection.execute("SELECT status,error,updated_at FROM jobs WHERE id=?", (job_id,)).fetchone())
+
+
+@pytest.mark.parametrize("name", J1_READERS)
+def test_j1_reader_native_missing_job_initializes_storage_and_cannot_advertise_read_only(
+    name, j1_native_tools, isolated_http
+):
+    tools, _root, _clock = j1_native_tools
+    database = j1_research._db_path()
+    assert not database.exists()
+    result = tools[name].fn(job_id="0" * 32)
+    assert not result["ok"] and result["error"]["code"] == "job_not_found"
+    assert database.is_file() and database.stat().st_size > 0
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"jobs", "queries", "documents", "documents_fts"}.issubset(tables)
+    _assert_effects_compatible(_catalog_row(name), http_calls=[], state_changed=True)
+    assert tools[name].annotations.readOnlyHint is False
+    assert isolated_http == []
+
+
+@pytest.mark.parametrize("name", J1_VIN_FACADES)
+@pytest.mark.parametrize("scenario", ["expiry", "failed_worker_reconciliation"])
+def test_j1_native_lifecycle_effects_are_covered_by_whole_tool_hints(name, scenario, j1_native_tools, isolated_http):
+    tools, root, clock = j1_native_tools
+    start = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))
+    assert start["ok"]
+    job_id = start["job_id"]
+    private_database = root / job_id / "research.sqlite3"
+    if scenario == "failed_worker_reconciliation":
+        with j1_vin_store.connect(job_id, transaction=True) as connection:
+            current = j1_vin_store.metadata(connection)
+            current.update(collection_status="running", inflight=True, operation_started_at=clock[0] - 20)
+            j1_vin_store.write_metadata(connection, current)
+            connection.execute("UPDATE queries SET status='running'")
+        j1_vin_store.set_stub(job_id, "failed", "synthetic_worker_failed")
+    before_stub = _j1_stub(job_id)
+    before_private = private_database.read_bytes()
+    if scenario == "expiry":
+        clock[0] += j1_vin_store.RETENTION_SECONDS + 2
+    arguments = _j1_arguments(name, job_id)
+    result = tools[name].fn(**arguments)
+    if scenario == "expiry":
+        assert not (root / job_id).exists(), "actual facade must delete this expired temporary corpus"
+        first_stub = _j1_stub(job_id)
+        assert first_stub != before_stub and first_stub["status"] == "failed"
+        assert first_stub["error"] in {"vin_job_expired", "vin_ephemeral_state_lost"}
+        if name == "j1_research_vin":
+            assert result["ok"] and result["job_id"] != job_id
+        else:
+            assert not result["ok"] and result["error"]["code"] == "vin_ephemeral_state_lost"
+            clock[0] += 2
+            assert not tools[name].fn(**arguments)["ok"]
+            assert _j1_stub(job_id) != first_stub, "identical repeat must demonstrate the extra timestamp write"
+    else:
+        assert private_database.read_bytes() != before_private
+        with j1_vin_store.connect(job_id) as connection:
+            current = j1_vin_store.metadata(connection)
+            assert current["collection_status"] in {"failed", "cancelled"}
+            assert not current["inflight"] and current["used_seconds"] == 20
+            assert connection.execute("SELECT COUNT(*) FROM queries WHERE status='running'").fetchone()[0] == 0
+    hints = tools[name].annotations
+    assert hints.readOnlyHint is False
+    assert hints.destructiveHint is True, "whole-tool hint must cover the expiry case, including nominal readers"
+    assert hints.idempotentHint is False, "domain deduplication does not cover lifecycle housekeeping"
+    _assert_effects_compatible(_catalog_row(name), http_calls=[], state_changed=True)
+    assert isolated_http == []
+
+
+@pytest.mark.parametrize("name", ["j1_research_vin", "j1_research_record_facts"])
+def test_j1_disabled_native_writes_still_clean_expired_private_state(name, j1_native_tools, monkeypatch, isolated_http):
+    tools, root, clock = j1_native_tools
+    job_id = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))["job_id"]
+    clock[0] += j1_vin_store.RETENTION_SECONDS + 2
+    monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "0")
+    result = tools[name].fn(**_j1_arguments(name, job_id))
+    expected_error = "vin_research_disabled" if name == "j1_research_vin" else "vin_ephemeral_state_lost"
+    assert not result["ok"] and result["error"]["code"] == expected_error
+    assert not (root / job_id).exists()
+    assert _j1_stub(job_id)["status"] == "failed"
+    assert isolated_http == []
+
+
+@pytest.mark.parametrize("name", ["j1_research_vin", "j1_research_record_facts"])
+def test_j1_scoped_receipts_still_deduplicate_live_domain_operations(name, j1_native_tools, isolated_http):
+    tools, _root, _clock = j1_native_tools
+    job_id = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))["job_id"]
+    arguments = _j1_arguments(name, job_id)
+    first = tools[name].fn(**arguments)
+    assert first["ok"]
+    with j1_vin_store.connect(job_id) as connection:
+        before = tuple(connection.iterdump())
+    stub_before = _j1_stub(job_id)
+    second = tools[name].fn(**arguments)
+    assert {k: v for k, v in first.items() if k != "tool_execution"} == {
+        k: v for k, v in second.items() if k != "tool_execution"
+    }
+    with j1_vin_store.connect(job_id) as connection:
+        assert tuple(connection.iterdump()) == before
+    assert _j1_stub(job_id) == stub_before
+    assert isolated_http == []

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -334,3 +337,154 @@ def test_status_schema_and_row_use_one_snapshot_during_concurrent_wal_commit(mon
         )
     finally:
         writer.close()
+
+
+@pytest.mark.parametrize(
+    "column", ["compact_refs_json", "traversal_refs_json", "pending_refs_json", "pending_page_refs_json"]
+)
+def test_status_invalid_utf8_checkpoint_refs_returns_bounded_error_without_repair(
+    monkeypatch, capsys, tmp_path, column
+):
+    path = tmp_path / "corrupt-row.sqlite3"
+    StoreState(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, updated_at) VALUES (?, ?)",
+            ("store_digest", "2026-10-11T00:00:00Z"),
+        )
+        connection.execute(f"UPDATE store_checkpoints SET {column} = ?", (sqlite3.Binary(b"\xff"),))
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+
+    code, result = _status(monkeypatch, capsys, path)
+
+    assert code == 1
+    assert result == _failure("store_digest", "state")
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before
+
+
+@pytest.mark.parametrize("column", ["cursor", "last_attempt_status", "updated_at", "state_version"])
+def test_status_unserializable_checkpoint_columns_return_bounded_error_without_repair(
+    monkeypatch, capsys, tmp_path, column
+):
+    path = tmp_path / "unserializable-row.sqlite3"
+    StoreState(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, updated_at) VALUES (?, ?)",
+            ("store_digest", "2026-10-11T00:00:00Z"),
+        )
+        connection.execute(f"UPDATE store_checkpoints SET {column} = ?", (sqlite3.Binary(b"\xff"),))
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+
+    code, result = _status(monkeypatch, capsys, path)
+
+    assert code == 1
+    assert result == _failure("store_digest", "state")
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before
+
+
+def test_status_deeply_nested_checkpoint_refs_return_bounded_error_without_repair(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "nested-row.sqlite3"
+    StoreState(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, compact_refs_json, updated_at) VALUES (?, ?, ?)",
+            ("store_digest", "[" * 1200 + "0" + "]" * 1200, "2026-10-11T00:00:00Z"),
+        )
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+
+    code, result = _status(monkeypatch, capsys, path)
+
+    assert code == 1
+    assert result == _failure("store_digest", "state")
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before
+
+
+def test_status_surrogate_checkpoint_refs_return_bounded_utf8_cli_json_without_repair(tmp_path):
+    path = tmp_path / "surrogate-row.sqlite3"
+    StoreState(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, compact_refs_json, updated_at) VALUES (?, ?, ?)",
+            ("store_digest", '["\\ud800"]', "2026-10-11T00:00:00Z"),
+        )
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+    # Exercise the real child CLI encoding, not StringIO's ability to hold a surrogate.
+    result = subprocess.run(
+        [sys.executable, "-m", "autostop_manager.cli", "store-checkpoint-status", "--stream", "store_digest"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "AUTOSTOP_MANAGER_ENV_FILE": "/dev/null",
+            "AUTOSTOP_MANAGER_DB": str(path),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONIOENCODING": "utf-8:strict",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == _failure("store_digest", "state")
+    assert result.stderr == ""
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before
+
+
+@pytest.mark.parametrize("serialized", ["{not valid json", '["\\u0410", {"synthetic": [1, 2]}]'])
+def test_status_serializable_checkpoint_refs_preserve_legacy_fallback_and_shape(
+    monkeypatch, capsys, tmp_path, serialized
+):
+    path = tmp_path / "compatible-row.sqlite3"
+    store = StoreState(path)
+    store.initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, compact_refs_json, updated_at) VALUES (?, ?, ?)",
+            ("store_digest", serialized, "2026-10-11T00:00:00Z"),
+        )
+    expected = store.get_store_checkpoint("store_digest")
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+
+    code, result = _status(monkeypatch, capsys, path)
+
+    assert code == 0
+    assert result == expected
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before
+
+
+@pytest.mark.parametrize("column", ["state_version", "pending_page_limit"])
+@pytest.mark.parametrize("value", [float("inf"), float("-inf")])
+def test_status_nonfinite_checkpoint_scalars_return_bounded_strict_json_without_repair(tmp_path, column, value):
+    path = tmp_path / "nonfinite-row.sqlite3"
+    StoreState(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO store_checkpoints (stream, updated_at) VALUES (?, ?)",
+            ("store_digest", "2026-10-11T00:00:00Z"),
+        )
+        connection.execute(f"UPDATE store_checkpoints SET {column} = ?", (value,))
+    before = path.read_bytes(), _schema(path), set(tmp_path.iterdir())
+    result = subprocess.run(
+        [sys.executable, "-m", "autostop_manager.cli", "store-checkpoint-status", "--stream", "store_digest"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={
+            **os.environ,
+            "AUTOSTOP_MANAGER_ENV_FILE": "/dev/null",
+            "AUTOSTOP_MANAGER_DB": str(path),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONIOENCODING": "utf-8:strict",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    def reject_nonfinite_json(value):
+        raise AssertionError(f"diagnostic emitted nonfinite JSON constant: {value}")
+
+    parsed = json.loads(result.stdout, parse_constant=reject_nonfinite_json)
+    assert result.returncode == 1
+    assert parsed == _failure("store_digest", "state")
+    assert result.stderr == ""
+    assert (path.read_bytes(), _schema(path), set(tmp_path.iterdir())) == before

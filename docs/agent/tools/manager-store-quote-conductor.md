@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: business_write.
+Источник: store; первичная база: AutoStop Store Admin V2 quote draft/order snapshots and Owner API responses; Manager refs-only workflow ledger and guarded workflow rules. Исполнение: business_write.
 
 Вызов: native Manager MCP `store_quote_conductor`.
 
@@ -22,8 +22,8 @@ Defaults: `{"consent_context_hash":"","correlation_id":"","coverage":null,"custo
 {"operation":[]}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
-Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
+Выход: Agent envelope format=agent_envelope_v2: ok/run_id/status/summary/changes/verification/warnings/next_actions/page/meta. meta.conductor_format=store_quote_conductor_v1 identifies this workflow.; summary.workflow/phase/state_version/workflow_status carry compact ledger state; failures use summary.error_code/warnings, and verified operation-specific technical review may appear in summary. No generic helper outcome/data/evidence fields are added.; Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract..
+Ошибки и неполнота: Invalid operation/run/binding/state/consent/revision or Store execution refusal returns agent_envelope_v2 with ok=false, summary.error_code and warnings; status may be blocked/conflict/compensating. A completed handoff may instead return ok=true/status=handoff with summary.error_code identifying its reason and next_actions requesting human review; this does not confirm a quote/order/payment. No generic invalid_input/outcome wrapper is added..
 
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.

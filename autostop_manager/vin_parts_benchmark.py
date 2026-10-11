@@ -61,7 +61,7 @@ def _canonical_identity_input(item: Any) -> dict[str, Any]:
 
 
 def _item_redaction_identifiers(item: dict[str, Any], prepared: dict[str, Any]) -> set[str]:
-    # Mask original aliases even when only one identifier is selected for E4/E5.
+    # Mask original aliases even when only one identifier is selected for E2/E4.
     identifiers = {prepared["identifier"], prepared["_raw_identifier"]}
     sources = [item, _as_mapping(item.get("crm_context"))]
     for source in tuple(sources):

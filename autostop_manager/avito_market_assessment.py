@@ -159,7 +159,7 @@ def assess_avito_price_sample(
     """Summarize supplied Avito listing leads without fetching or confirming offers.
 
     The median, when available, describes this one provider's sample only.
-    It is never the independent-source market median from E9.
+    It is never the independent-source market median from E11.
     """
 
     raw_part = _compact(part_number, limit=80)

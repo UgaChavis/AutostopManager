@@ -52,23 +52,89 @@ fallback. Missing/unreadable, incomplete/legacy и corrupt/read-failure сост
 Постоянная [SDK-проверка](../../tests/test_automotive_catalog.py) проверяет модели
 без invocation, сети или рабочей базы.
 
-При подготовке независимого второго прохода подтверждено отдельное P2:
-карточка `store_entity_context` ещё перечисляет `store_sourcing_offer` как exact
-context, хотя реализация отклоняет его до HTTP. Вторая итерация исправляет
-limitations/errors через source JSON и регенерацию; E9/F3 уже направляют в повторный
-`store_search`. Эта запись первой итерации сохраняет открытый статус замечания.
+## Исправления второго полного прохода
 
-Второй проход также подтвердил P2 в `collect_work_price_evidence`: невыбранный
-`aggregate_evidence` снимал `missing_fields`, хотя возвращённый `provided_aggregate`
-оставался null. Исправление selection/outcome и синтетический контрпример входят
-во вторую итерацию; формат ответа и явный выбранный aggregate сохраняются.
+Весь реестр повторно прочитан по опубликованному Manager
+`0df106dae6779657f2c01bf200f1cdbf9dab468e`: 177 автомобильных материалов и
+64 core/config/history/skill материала с пересечениями дают все 222 записи;
+32 внешних входа проверены отдельно. Помимо схем использованы настоящие native
+обработчики с синтетическими входами, mock transport и временными SQLite.
+
+| Замечание | Исправление | Проверка |
+| --- | --- | --- |
+| S5, P2: offer объявлялся exact entity context | source JSON и карточка исключают `store_sourcing_offer`; данные предложения повторно читаются через search | отказ до HTTP; остальные семь exact context сохраняются |
+| S6, P2: невыбранный aggregate скрывал неполноту | missing fields вычисляются по возвращённому `provided_aggregate` | два контрпримера и четыре контроля, включая явный пустой aggregate; формат API сохранён |
+| S7, P3: старые номера E-модулей в пояснениях реализации | E2/E4/E6/E11/E15 согласованы с текущей картой; legacy CRM E8 явно отделён | имена API, constants и native schemas не меняются |
+| S8, P2: повреждённые checkpoint поля роняли CLI | reader ограничивает Unicode/type/depth/serialization ошибки как state failure | 16 регрессий; strict JSON без Infinity/NaN и UTF-8 stdout, legacy fallback и корректный Unicode, без SQL-записей |
+| S9, P2: G1 status/preview описывался как чистое чтение | composed classification, SQLite initialization/migration и native outputs/errors отражены в источнике | 16 native effect тестов и legacy migration proof; jobs/runtime/controller backfills отделены от business actions |
+| S10, P3: восемь legacy карточек обещали общий helper envelope | outputs/errors описывают фактические flat/Store/owner/conductor ответы | 17 native сценариев без сети; completed handoff не означает успешную бизнес-запись |
+
+Дополнительный независимый проход до публикации проверил оставшиеся крайние
+случаи и ссылки на реализацию. S11 расширяет S8: реальные CLI-контрпримеры
+`state_version/pending_page_limit=±Infinity` выдавали JSON, непринимаемый строгим
+parser; reader теперь ограничивает и эту ошибку. S12 исправляет старую фразу
+«preview не меняет registry» в Telegram-справочнике. S13 убирает безусловное
+`not deployed` из статического source manifest: наличие runtime подтверждается
+отдельным installed readback. S10 также включает исторический explain-category
+helper; отсутствие fixture сохраняет `ok=true/missing=true/count=0`.
+
+S14 исправляет soft metadata native `manager_automations`: описание явно
+перечисляет initialization/migration, `readOnlyHint` и `idempotentHint` становятся
+false. Настоящий status/readiness повторно меняет `upgraded_at`; новые hints
+консервативно отражают эффект. `destructiveHint/openWorldHint` остаются false.
+Probe проверяет девять effectful инструментов и отвергает старые G1 hints;
+эта проверка предназначена для новой установленной ревизии. Входные/выходные
+форматы, controller peer UID/roles, job intent/revision и runs/outbox не меняются.
+
+S15 уточняет происхождение данных четырёх outside business инструментов:
+CRM parts_store cards читаются через CRM Gateway, Store management/owner API
+и conductor используют Store endpoints и отдельные Manager contracts/ledger.
+`provider_id` у трёх Store entries указывает Store; у CRM router остаётся Manager.
+Классификация business_write, входы, ответы и guarded полномочия не меняются.
+
+S16 устраняет ограничение «только typed TecDoc» в двух OEM-карточках.
+Контекст modification также допускает валидный родной Elcats/Japancats/SsangYong
+reference; `official_epc` подтверждается отдельным доверенным первичным
+источником. Публичная каталожная строка сама не становится primary evidence.
+Два native контрпримера прошли с отдельным manufacturer source, без HTTP.
+
+S17 учитывает изменение окружения во время проверки: установленный Visualize
+сменился с 1.0.47 на 1.0.49, прежний каталог пакета
+исчез. A4/A5 повторно сгенерированы по текущему единственному manifest;
+37 навыков, 212 проектных материалов и 32 внешних входа сохраняются.
+Host-specific проверка выполняется отдельно от переносимой проверки CI.
+
+S18 исправляет весь набор J1 lifecycle metadata. Три status/results/report
+обработчика создают или мигрируют общий SQLite cache; восемь VIN entrypaths
+выполняют prune/reconciliation до domain checks, включая выключенную VIN-запись.
+Истёкший private corpus удаляется, queue stub и stopped-worker state меняются;
+повтор потерянной job снова меняет updated_at. Whole-tool hints этих восьми
+вызовов: readOnly=false, destructive=true, idempotent=false; openWorld зависит
+от способности. Start general job сохраняет прежние hints: capacity prune
+выполняет worker, а не этот native вызов. VIN receipt ограничен сроком хранения:
+тот же start key после expiry может создать новую job. J1/E15, источник JSON,
+карточки и runtime справочники согласованы с этими наблюдениями.
+
+S19 уточняет whole-tool idempotentHint у manager_automation_control: false.
+Повтор идентичного preview меняет schema upgraded_at; jobs intent/revision и
+outbox сохраняются. Backend idempotency/CAS для guarded mutations не меняется.
+Probe проверяет 14 effectful declarations, отдельно от input fingerprints.
+Синтетические native SQLite/tmpfs и отрицательные probe-сценарии: 65 passed;
+26 прежних контрпримеров падали до исправления. Все тесты изолируют оба J1 cache.
+
+Все 122 карточки заново сгенерированы из source JSON. Набор входных схем,
+stable IDs/defaults и права сохранены; изменения native hints — S14/S18/S19. S9/S14/S19 не меняют действия контроллера G1: текущий status
+не отправляет сообщений и не ставит действия в очередь, но инициализирует БД;
+legacy migration может дополнить jobs/runtime/controller. Template preview без
+обращения к существующему заданию не открывает registry. Общий checkpoint writer
+и обычные рабочие get/decode пути не меняются.
 
 ## Итерации
 
 | Цикл | Полный review | Обязательные проверки | Состояние |
 | --- | --- | --- | --- |
-| 1 | core/docs/code, автомобильные модули/каталоги/skills, все документы CRM | генерация, CommonMark links/anchors/lines, SDK/examples, effects, Manager release-gates, CRM ci и browser | Manager local PASS; CRM pin/ci и exact-SHA CI проверяются после публикации |
-| 2 | повторная сверка всего реестра другими reviewer по коду/схемам | полный обязательный набор, точные producer/consumer pins | следующий проход |
+| 1 | core/docs/code, автомобильные модули/каталоги/skills, все документы CRM | генерация, CommonMark links/anchors/lines, SDK/examples, effects, Manager release-gates, CRM ci и browser | Manager local/hosted PASS ([CI](https://github.com/UgaChavis/AutostopManager/actions/runs/38118760767)); CRM local/hosted PASS ([CI](https://github.com/UgaChavis/AutostopCRM-V1/actions/runs/38122827247)); оба точных SHA перечитаны |
+| 2 | весь реестр Manager; замечания S5–S19 исправлены; CRM проверяется после exact Manager pin | полный обязательный набор, точные producer/consumer pins | предыдущие 5791 локальный тест PASS; после S17–S19 полный набор повторяется перед публикацией, затем exact-SHA CI и независимое перечитывание |
 | 3 | независимый итоговый полный review после последнего исправления | обязательный набор и exact-SHA CI, финальный каталог/инструкция выпуска | следующий проход |
 
 Если найдено новое замечание, оно исправляется и весь реестр проверяется снова.
@@ -81,7 +147,20 @@ Ruff, форматирование 234 файлов, mypy 96 source файлов
 проверки прошли. Сохраняется прежнее предупреждение fork-теста Python 3.12;
 тест проходит. Предыдущий полный запуск выявил устаревший assert старой grouped
 media help; проверка обеих настоящих command branches исправлена и весь набор
-успешно повторён. Новый открытый S5/S6 относится к исправлениям второго цикла.
+успешно повторён. S5/S6 закрыты во втором цикле вместе с S7–S16.
+
+Первый CRM результат опубликован обычным push:
+[`d70b187`](https://github.com/UgaChavis/AutostopCRM-V1/commit/d70b187cb72fca18c13c1835500938be66d34cc7).
+Повторный полный `run_checks.ps1 -Profile ci` прошёл: 3 065 runtime тестов за
+1 495,497 s, 36 backup/retention за 6,877 s, coverage ratchet 13/13;
+global coverage 82,11%. Browser/core/temp probe и Stage1 прошли: change-feed
+read p95 10,9 ms при лимите 50 ms, replay 0,7 ms при лимите 20 ms.
+Ранний full run и первый isolated rerun не прошли feed threshold; их результаты
+сохранены. Пороги и измеряемый код не менялись, exact baseline прошёл на том же
+хосте. Повторный полный результат имеет direct exit 0 и неизменный source hash.
+Единственный локальный skip — opt-in Docker packaging: он закрывается отдельным
+обязательным hosted job для точного SHA
+([CRM CI](https://github.com/UgaChavis/AutostopCRM-V1/actions/runs/38122827247)).
 
 ## Публикация и выпуск
 

@@ -1605,8 +1605,12 @@ class StoreState:
             row = connection.execute(
                 "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
             ).fetchone()
-            return _store_checkpoint_result(row, normalized_stream)
-        except (OSError, sqlite3.Error):
+            result = _store_checkpoint_result(row, normalized_stream)
+            # Match the diagnostic CLI's JSON and UTF-8 output contract without
+            # imposing a new field schema or changing writer parsing semantics.
+            json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
+            return result
+        except (OSError, sqlite3.Error, UnicodeError, TypeError, ValueError, RecursionError):
             return unavailable("state")
         finally:
             connection.close()

@@ -1,6 +1,6 @@
 {
   "format": "mcp_surface_manifest_v1",
-  "source": "Native AutoStopManager MCP source registration; CRM Gateway is a separate CRM-only surface and must not advertise this registry; fingerprint=sha256(canonical sorted [{name,inputSchema}]); not deployed",
+  "source": "Native AutoStopManager MCP source registration; CRM Gateway is a separate CRM-only surface and must not advertise this registry; fingerprint=sha256(canonical sorted [{name,inputSchema}])",
   "expected_tool_count": 70,
   "expected_tool_names": [
     "assess_avito_price_sample",

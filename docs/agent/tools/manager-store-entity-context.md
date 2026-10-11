@@ -2,7 +2,7 @@
 
 Основной модуль: [E9](../modules/E9.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
-Источник: store; первичная база: AutoStop Store authoritative offer context. Исполнение: network_read.
+Источник: store; первичная база: AutoStop Store exact entity context (Store agent API; sourcing offers are search-only). Исполнение: network_read.
 
 Вызов: native Manager MCP `store_entity_context`.
 
@@ -21,10 +21,10 @@ Defaults: `{"detail":"summary"}`.
 ```
 
 Выход: Store envelope format=store_agent_v1: ok/status/summary/items/changes/page/warnings/meta/generated_at.; page gives has_more/next_cursor/replay_cursor/limit; meta preserves source snapshot/principal context. Errors use summary.error_code/message/details..
-Ошибки и неполнота: Unsupported entity or malformed query/filter/cursor/limit returns Store blocked/error envelope; transport/auth and source errors retain summary.error_code and sanitized meta.http_status..
+Ошибки и неполнота: Unsupported entity, lookup-only store_sourcing_offer, missing/oversized entity_id or unsupported detail are rejected before HTTP. full_with_vin_photo is allowed only for store_quote_request. The integration returns a Store blocked/error envelope; transport/auth and source errors retain summary.error_code and sanitized meta.http_status..
 
 - Private Store read; do not send returned business data to public web or persist it in the general source registry.
-- entity is one of store_part/store_order/store_quote_request/store_batch/store_warehouse_operation/store_marketplace_listing/store_state/store_sourcing_offer.
+- entity context supports store_part/store_order/store_quote_request/store_batch/store_warehouse_operation/store_marketplace_listing/store_state. store_sourcing_offer is search-only: reread the exact offer through store_search; entity_context rejects it before HTTP.
 - Use the live Store response for offer/stock/order claims; this operation makes no reservation, order or payment.
 - Replace the synthetic entity_id with an ID returned by Store; the example does not assert an existing record.
 

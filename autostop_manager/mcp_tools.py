@@ -178,14 +178,16 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="manager_automations",
         description=(
-            "READ_ONLY: Inspect the Manager Automation Center status, allowlisted templates or readiness. "
-            "Returns only technical state; it does not read CRM records or Telegram messages."
+            "Inspect the Manager Automation Center status, allowlisted templates or readiness. "
+            "Status/readiness may initialize or migrate the technical registry and update schema metadata. "
+            "It does not execute guarded actions, enqueue messages, read CRM records or Telegram messages. "
+            "Templates returns allowlisted metadata without opening the registry."
         ),
         annotations=ToolAnnotations(
             title="Manager Automations",
-            readOnlyHint=True,
+            readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
@@ -207,13 +209,16 @@ def register_manager_tools(  # noqa: C901
             "CONTROL: Preview or change one allowlisted Manager automation through the local controller. "
             "Mutations require an idempotency key; existing-job changes also require the exact revision. "
             "Creating crm_digest_v1 is singleton and starts OFF. Allowlisted system timers use timer_id; "
-            "read-only timers reject changes. Test notification only queues an outbox intent."
+            "read-only timers reject changes. Test notification only queues an outbox intent. "
+            "Existing-job preview may initialize or migrate the registry and update schema metadata "
+            "again on an identical repeat, without executing the proposed guarded action. "
+            "Mutation idempotency keys and exact-revision checks retain their existing guarantees."
         ),
         annotations=ToolAnnotations(
             title="Manager Automation Control",
             readOnlyHint=False,
             destructiveHint=True,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
@@ -1277,8 +1282,12 @@ def register_manager_tools(  # noqa: C901
             "and VIN-bearing browser URLs remain blocked. Read status and documents, extract claims as the "
             "current agent, then record facts with citations and finalize the analysis. Collection completion "
             "is not analysis readiness; matching a VIN is not factory truth or confirmed fitment."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
     )
     def j1_research_vin_tool(vin: str, idempotency_key: str) -> dict[str, Any]:
         return j1_research_vin(vin=vin, idempotency_key=idempotency_key)
@@ -1293,9 +1302,13 @@ def register_manager_tools(  # noqa: C901
             "quotes, not semantic truth; family specifications do not prove this VIN's factory configuration. "
             "finalize=true atomically seals the evidence revision only after collection has stopped; conflicts "
             "and unknown fields remain visible. Does not search, call decoder APIs or write business records."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
         ),
     )
     def j1_research_record_facts_tool(
@@ -1318,8 +1331,14 @@ def register_manager_tools(  # noqa: C901
         description=(
             "Read J1 job progress, partial failures and source counts without page bodies. VIN jobs expose "
             "separate collection_status/analysis_status, revision, budget and expiry; collected is not analyzed."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_status_tool(job_id: str) -> dict[str, Any]:
         return research_status(job_id=job_id)
@@ -1329,8 +1348,14 @@ def register_manager_tools(  # noqa: C901
         description=(
             "Page through J1 sources or search the collected full-text corpus. Results contain source links "
             "and retrieval metadata; search matches and snippets are not proof of factual claims."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_results_tool(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
         return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit)
@@ -1343,9 +1368,13 @@ def register_manager_tools(  # noqa: C901
             "(one-based PDF page) and ocr (queue deduplicated selected-page OCR of a cached PDF, without network). "
             "OCR changes temporary document/analysis state; general jobs reject non-default page/ocr. "
             "Use the returned document revision and exact quote when recording facts; preserve VIN match metadata."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
         ),
     )
     def j1_research_document_tool(
@@ -1363,13 +1392,19 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="j1_research_report",
         description=(
-            "Build a compact read-only J1 evidence ledger: source tiers, literal context overlap, confidence, "
+            "Build a compact J1 evidence ledger: source tiers, literal context overlap, confidence, "
             "source-reported frequency measurements, duplicates, unavailable pages and limitations. It does not "
             "make a diagnosis, confirm fitment or write CRM records. VIN jobs return autostop.j1.vin_report.v1 "
             "with cited claims, VIN-specific versus family evidence, conflicts and unknowns; a draft is not ready "
             "until record_facts(finalize=true) seals its revision."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_report_tool(job_id: str) -> dict[str, Any]:
         return research_report(job_id=job_id)
@@ -1380,18 +1415,28 @@ def register_manager_tools(  # noqa: C901
             "Expand an existing public-web research job with de-identified queries, within its original budget. "
             "A VIN job may include only its exact original VIN and inherits its recipients, expiry and cumulative "
             "budget; adding queries invalidates finalized analysis. The worker never writes CRM records."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
-        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
     )
     def j1_research_add_queries_tool(job_id: str, queries: list[str]) -> dict[str, Any]:
         return research_add_queries(job_id=job_id, queries=queries)
 
     @server.tool(
         name="j1_research_cancel",
-        description="Cancel a queued or running J1 research job; collected temporary evidence expires normally.",
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+        description=(
+            "Cancel a queued or running J1 research job; collected temporary evidence expires normally."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_cancel_tool(job_id: str) -> dict[str, Any]:
         return research_cancel(job_id=job_id)

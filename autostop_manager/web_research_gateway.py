@@ -1,6 +1,6 @@
-"""Read-only Manager adapter for the shared E8 Web Research Gateway contract.
+"""Read-only Manager E15 adapter for the shared legacy CRM E8 Web Research Gateway contract.
 
-A composed, authenticated E8 client can be installed without changing the
+A composed, authenticated CRM client can be installed without changing the
 public Manager MCP schema.  Until then the explicit local DuckDuckGo adapter
 is a bounded fallback.  Both routes normalize to one compact V1 result and
 remove VIN-like values before any provider invocation.
@@ -134,7 +134,7 @@ _SOURCE_TYPES = frozenset({"oem_catalog", "price_catalog"})
 
 
 class WebResearchGateway(Protocol):
-    """Read-only E8 surface for public search, pages, and E7 evidence."""
+    """Read-only CRM surface for public search, pages, and Manager E6 evidence."""
 
     def search_web_multi(
         self,
@@ -445,7 +445,7 @@ def normalize_web_research_response(
     capability: str = SEARCH_WEB_MULTI_CAPABILITY,
     vin_redacted: bool = False,
 ) -> dict[str, Any]:
-    """Normalize plain E8 data or an ``invoke_web_research`` envelope to V1."""
+    """Normalize plain CRM Web Research Gateway data or an ``invoke_web_research`` envelope to V1."""
 
     safe_query, removed = _sanitize_query(query)
     normalized_domains = _normalize_domains(allowed_domains)
@@ -534,7 +534,7 @@ def _page_failure(capability: str, *, code: str, retryable: bool = False) -> dic
 
 
 def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_chars: int) -> dict[str, Any]:
-    """Return only bounded, public page evidence from a CRM E8 raw result."""
+    """Return only bounded, public page evidence from a legacy CRM E8 raw result."""
 
     safe_url = _public_page_url(url)
     if not safe_url:
@@ -653,7 +653,7 @@ def normalize_web_page_response(payload: Any, *, capability: str, url: str, max_
 
 
 class CapabilityWebResearchGatewayAdapter:
-    """Injectable client for E8 capabilities; it does not create a transport."""
+    """Injectable client for legacy CRM E8 capabilities; it does not create a transport."""
 
     def __init__(self, invoke: Callable[[str, dict[str, Any]], Any]) -> None:
         self._invoke = invoke
@@ -849,7 +849,7 @@ class CapabilityWebResearchGatewayAdapter:
 
 
 class DuckDuckGoWebResearchGateway:
-    """Explicit local fallback while no authenticated E8 client is installed."""
+    """Explicit local fallback while no authenticated CRM client is installed."""
 
     def __init__(self, search: Callable[..., dict[str, Any]] = _ddg_search) -> None:
         self._search = search
@@ -963,7 +963,7 @@ _DEFAULT_GATEWAY: WebResearchGateway = DuckDuckGoWebResearchGateway()
 
 
 def install_web_research_gateway(gateway: WebResearchGateway | None) -> None:
-    """Install an authenticated E8 client during process composition only."""
+    """Install an authenticated CRM client during process composition only."""
 
     global _DEFAULT_GATEWAY
     _DEFAULT_GATEWAY = gateway if gateway is not None else DuckDuckGoWebResearchGateway()
@@ -1029,7 +1029,7 @@ def search_web_multi(
     providers: Sequence[str] | None = None,
     timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Call generic E8 search through the installed read-only adapter."""
+    """Call generic CRM Web Research Gateway search through the installed read-only adapter."""
 
     if _contains_private_contact(query):
         return _contact_query_failure(capability=SEARCH_WEB_MULTI_CAPABILITY, adapter="gateway_boundary")
@@ -1097,7 +1097,7 @@ def _fetch_public_page(*, capability: str, url: str, max_chars: int, wait_ms: in
 
 
 def fetch_page_excerpt(*, url: str, max_chars: int = 2500) -> dict[str, Any]:
-    """Read one bounded public page through the installed CRM E8 adapter."""
+    """Read one bounded public page through the installed legacy CRM E8 adapter."""
 
     return _fetch_public_page(capability=FETCH_PAGE_EXCERPT_CAPABILITY, url=url, max_chars=max_chars)
 
@@ -1160,7 +1160,7 @@ def research_part_public_evidence(
     max_pages: int = 1,
     timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Prefer E8 part evidence; use generic search only for a legacy adapter."""
+    """Prefer CRM Web Research Gateway part evidence; use generic search only for a legacy adapter."""
 
     if _contains_private_contact(query):
         return _contact_query_failure(capability=RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY, adapter="gateway_boundary")

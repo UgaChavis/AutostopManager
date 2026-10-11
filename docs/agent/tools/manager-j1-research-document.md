@@ -26,7 +26,8 @@ Defaults: `{"max_chars":8000,"ocr":false,"offset":0,"page":null}`.
 - job_id/document_id refer to one returned J1 job; synthetic examples demonstrate shape only.
 - General J1 remains de-identified; the separate VIN job permits only its original scoped VIN. Source URL lineage stays attached.
 - Default document reads saved text; page/ocr options are VIN-only. OCR queues a deduplicated selected cached PDF page without network and changes document/analysis revision.
-- Whole-tool annotations: readOnlyHint=false, destructiveHint=false, idempotentHint=true, openWorldHint=false. No factory truth follows from a literal VIN match.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Selected-page OCR is deduplicated, but lifecycle housekeeping can write again. No factory truth follows from a literal VIN match.
 - VIN PDFs: explicit registry A/B sources up to 24 MiB, others up to 8 млн байт. Returned VIN-bearing source URLs are masked; raw originals stay only in private tmpfs for provenance.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
 
 Подробный контракт: [справочник](../references/web-research.md).

@@ -25,6 +25,7 @@ Defaults: `{"brand":null,"vehicle_binding":null}`.
 
 - Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.
 - Для подтверждения source: provider/primary_lineage/method/locator/fetched_at(valid ISO с timezone), matching part_number/brand/scope, declares_oem=true и document_kind official_epc/oem_catalog_document/physical_oe_marking.
-- exact_identifier требует valid hash binding в vehicle_binding и source.identifier_binding; modification — typed TecDoc reference и source.catalog_ref. OEM confirmation отдельно от fitment.
+- exact_identifier requires valid hash binding in vehicle_binding and source.identifier_binding. modification requires the same valid catalog ref in vehicle_binding and source.catalog_ref: either typed TecDoc numeric ID/carType, or a native Elcats/Japancats/SsangYong provider/namespace/entry_id/vehicle_context ref. Preserve the native namespace; OEM confirmation remains separate from fitment.
+- A public catalog row is not primary OEM evidence. Native catalog refs identify the bound modification and do not themselves make a public provider official_epc; primary document/source metadata and all remaining evidence gates still apply.
 
 Подробный контракт: [справочник](../references/partsapi.md).

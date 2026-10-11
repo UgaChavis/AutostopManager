@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: business_write.
+Источник: store; первичная база: AutoStop Store authenticated OpenAPI/owner API, exact target revision and operation responses; Manager validates contract, dry-run proof and readback. Исполнение: business_write.
 
 Вызов: native Manager MCP `store_owner_api`.
 
@@ -22,8 +22,8 @@ Defaults: `{"allow_binary_response":false,"body":null,"correlation_id":"","dry_r
 {"operation_id":null}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
-Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
+Выход: Owner envelope format=autostop_store_owner_api_v1: ok/status/summary/meta/data_included; failures add error.code and may summary.error_code. Schema/prepare failures may return a smaller envelope.; prepare returns status=validated with summary.prepared_for_mode/request_dispatched=false and meta.domain_handler_executed=false; revision/read/dry_run/apply results preserve their operation-specific summary/data/meta, including contract and reread verification details.; Native Manager telemetry may additionally include top-level tool_execution; it is described by the shared Manager runtime contract..
+Ошибки и неполнота: Configuration/contract/schema/target/mode/idempotency/revision/dry-run-proof/provider failures return ok=false with error.code, operation-specific status and sanitized metadata; summary.error_code is present in client error envelopes. prepare validates dispatch inputs but does not prove a live operation or successful reread..
 
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.

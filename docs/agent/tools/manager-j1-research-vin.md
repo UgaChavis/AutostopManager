@@ -30,5 +30,8 @@ Defaults: `{}`.
 - Collection is not analysis; the current agent reads documents and records cited claims before finalize.
 - 12 queries/60 documents/6 de-identified browser pages/12 OCR pages/300 active worker seconds/24h TTL; private state only in checked tmpfs.
 - VIN PDF limit: 24 MiB only for explicit server-registry A/B sources; otherwise 8 млн байт. Extracted text is limited to 2 MiB and 1000 pages.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.
+- The same start key reuses its live VIN job; after that temporary job expires, repeating the start may create a new job. Expiry cleanup still runs before a disabled start rejects domain work.
 
 Подробный контракт: [справочник](../references/j1-vin-research.md).

@@ -2,7 +2,7 @@
 
 Основной модуль: [E15](../modules/E15.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
-Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_read.
+Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
 Вызов: native Manager MCP `j1_research_status`.
 
@@ -27,5 +27,7 @@ Defaults: `{}`.
 - General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.
 - Reads local job state; this operation itself does not search or fetch pages.
 - VIN state exists only in private checked tmpfs; missing state after host reboot is vin_ephemeral_state_lost, never reconstructed from the general stub.
+- Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
+- Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.
 
 Подробный контракт: [справочник](../references/web-research.md).

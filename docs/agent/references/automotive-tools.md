@@ -17,10 +17,22 @@ invalid_example обязан отвергаться facade inputSchema до ис
 `local_read` читает локальные источники; обе категории исключают HTTP и сохранение состояния операции.
 `network_read` допускает удалённое чтение, даже если default или тёплый кеш обходятся без сети.
 `composed` объединяет этапы обработки/получения данных или включает сохранение технического состояния:
-benchmark сочетает локальные правила с vPIC/явно включённым PartsAPI, а Store digest читает HTTP и пишет checkpoint.
+benchmark сочетает локальные правила с vPIC/явно включённым PartsAPI, Store digest читает HTTP и пишет checkpoint,
+а G1 status/readiness и preview существующего job могут инициализировать registry и обновлять schema metadata.
+Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.
+Status/readiness/preview не выполняют предлагаемое guarded действие, не меняют desired_state/revision заданий,
+не ставят сообщения в очередь и не отправляют их; templates и preview создания из template не обращаются к registry.
 Условия default/cache/live и записи перечислены в `limitations` каждой карточки.
 `provider_id` и `primary_data_source` указывают происхождение данных; `outside`/`diagnostic` определяют место в workflow
-и не скрывают эффекты. Эта metadata дополняет native MCP annotations, не меняет их и не выдаёт полномочия.
+и не скрывают эффекты. Эта metadata дополняет native MCP annotations и не выдаёт полномочия.
+Native G1 `manager_automations` имеет readOnlyHint=false/idempotentHint=false из-за технических SQLite-записей
+и повторного обновления schema timestamp. Native `manager_automation_control` имеет idempotentHint=false:
+одинаковый preview существующего job повторно обновляет технический timestamp; guarded mutation
+keys/CAS/receipts, входы, выходные форматы и права controller сохраняются.
+J1 status/results/report имеют `execution_kind=composed`: обычная SQLite может создаваться/мигрировать,
+а VIN-пути могут удалять истёкшие private jobs, обновлять lost-state stubs и восстанавливать worker state.
+Все восемь VIN-aware tools имеют readOnly=false/destructive=true/idempotent=false; scoped domain
+deduplication/receipts остаются в силе, но не делают lifecycle housekeeping идемпотентным.
 
 ## Проверка и экспорт
 
