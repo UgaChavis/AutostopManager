@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "store-conductor-release-gate":
             result = store.store_quote_conductor_release_readiness()
         elif args.command == "store-checkpoint-status":
-            result = store.get_store_checkpoint(args.stream)
+            result = store.read_store_checkpoint(args.stream)
         else:
             result = store.reset_store_checkpoint_for_rebaseline(
                 stream=args.stream,

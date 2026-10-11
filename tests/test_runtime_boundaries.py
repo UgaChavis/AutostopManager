@@ -116,7 +116,7 @@ def test_cli_dispatches_store_operations_and_probe_without_live_effects(monkeypa
             seen.append("gate")
             return {"ok": True}
 
-        def get_store_checkpoint(self, stream):
+        def read_store_checkpoint(self, stream):
             seen.append(stream)
             return {"ok": True}
 

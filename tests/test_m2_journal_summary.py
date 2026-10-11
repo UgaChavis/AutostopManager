@@ -1,13 +1,90 @@
 from datetime import datetime, UTC
 import importlib.util
+import json
 from pathlib import Path
 from uuid import UUID
+
+from jsonschema import Draft202012Validator
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("m2_journal_summary", ROOT / "scripts/m2-journal.py")
 assert SPEC and SPEC.loader
 journal = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(journal)
+
+
+def synthetic_record(git_sha=None):
+    return {
+        "id": str(UUID(int=1)),
+        "task": "synthetic",
+        "before": "synthetic",
+        "actions": "synthetic",
+        "checks": "synthetic",
+        "result": "synthetic",
+        "git_sha": git_sha,
+        "release_required": False,
+        "state": "synthetic source ready; release pending",
+    }
+
+
+@pytest.mark.parametrize(
+    ("git_sha", "accepted"),
+    [
+        (None, True),
+        ("0" * 40, True),
+        ("0123456789abcdef" * 2 + "01234567", True),
+        (int("1" * 40), False),
+        (True, False),
+        (1.0, False),
+        ({"sha": "a" * 40}, False),
+        (["a" * 40], False),
+        ("", False),
+        ("a" * 39, False),
+        ("a" * 41, False),
+        ("A" * 40, False),
+        ("g" * 40, False),
+        ("a" * 40 + "\n", False),
+    ],
+)
+def test_sha_type_and_format_agree_with_documented_schema(git_sha, accepted):
+    schema = json.loads((ROOT / "docs/agent/references/m2-journal-record.schema.json").read_text())
+    record = synthetic_record(git_sha)
+    assert Draft202012Validator(schema).is_valid(record) is accepted
+    if accepted:
+        journal.validate(record)
+    else:
+        with pytest.raises(ValueError, match=r"^journal_record_sha$"):
+            journal.validate(record)
+
+
+def test_invalid_append_does_not_create_journal_parent(tmp_path):
+    root = tmp_path / "missing-parent" / "M2"
+    with pytest.raises(ValueError, match=r"^journal_record_sha$"):
+        journal.run(root, synthetic_record(int("1" * 40)), datetime(2026, 10, 1, tzinfo=UTC))
+    assert not root.parent.exists()
+
+
+def test_invalid_append_does_not_recover_or_change_existing_pending(tmp_path):
+    root = tmp_path / "M2"
+    root.mkdir()
+    pending = root / ".pending-record.json"
+    pending.write_text(json.dumps({**synthetic_record(), "at": "2026-10-01T00:00:00+00:00"}))
+    (root / "current-state.md").write_text("existing technical state")
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    with pytest.raises(ValueError, match=r"^journal_record_sha$"):
+        journal.run(root, synthetic_record("A" * 40), datetime(2026, 10, 1, tzinfo=UTC))
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_numeric_pending_is_rejected_without_rewriting_history(tmp_path):
+    pending = tmp_path / ".pending-record.json"
+    pending.write_text(json.dumps({**synthetic_record(int("1" * 40)), "at": "2026-10-01T00:00:00+00:00"}))
+    (tmp_path / "current-state.md").write_text("existing technical state")
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    with pytest.raises(ValueError, match=r"^journal_record_sha$"):
+        journal.recover(tmp_path)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
 
 
 def test_weekly_summary_is_bounded_but_statistics_cover_all_records(tmp_path):

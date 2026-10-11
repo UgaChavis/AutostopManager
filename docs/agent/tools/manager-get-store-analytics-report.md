@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
+Источник: store; первичная база: AutoStop Store aggregate analytics (Store analytics API). Исполнение: network_read.
 
 Вызов: native Manager MCP `get_store_analytics_report`.
 
@@ -22,10 +22,12 @@ Defaults: `{"date_from":null,"date_to":null,"period":"auto","query":"","top_limi
 {"query":null}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
+Выход: Обезличенный aggregate-only отчёт: period/previousPeriod, summary, funnel, topPages/topProducts/clicks, comparison и meta..
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
+- Выполняет HTTP POST для чтения агрегатов указанного периода; метод POST здесь не означает бизнес-запись.
+- Raw events, VIN, контакты и пользовательские идентификаторы не возвращаются; отчёт требует отдельно порученного bounded периода.
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 
-Подробный контракт: [справочник](../references/manager-runtime.md).
+Подробный контракт: [справочник](../references/store-api.md).

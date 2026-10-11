@@ -13,6 +13,15 @@ invalid_example обязан отвергаться facade inputSchema до ис
 Проверка этих примеров использует JSON Schema без вызова tools/providers. Доменные отказы проверяют отдельные unit tests;
 не запускай подряд примеры job_write/business_write или составных инструментов с acquisition defaults.
 
+`execution_kind` описывает допустимые эффекты всех ветвей инструмента: `pure` вычисляет по переданным данным,
+`local_read` читает локальные источники; обе категории исключают HTTP и сохранение состояния операции.
+`network_read` допускает удалённое чтение, даже если default или тёплый кеш обходятся без сети.
+`composed` объединяет этапы обработки/получения данных или включает сохранение технического состояния:
+benchmark сочетает локальные правила с vPIC/явно включённым PartsAPI, а Store digest читает HTTP и пишет checkpoint.
+Условия default/cache/live и записи перечислены в `limitations` каждой карточки.
+`provider_id` и `primary_data_source` указывают происхождение данных; `outside`/`diagnostic` определяют место в workflow
+и не скрывают эффекты. Эта metadata дополняет native MCP annotations, не меняет их и не выдаёт полномочия.
+
 ## Проверка и экспорт
 
 В isolated source worktree с отдельной venv и disposable state:

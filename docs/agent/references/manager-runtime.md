@@ -64,9 +64,15 @@ cleanup удерживает слот после timeout; `provider_transport_bu
 | `knowledge-sync`, `knowledge-audit` | Read-only аудит документов; название sync не означает запись. `--project-only` проверяет проект без наличия локально установленных файлов Codex. Требуются `ok=true`, отсутствие warnings. |
 | `doctor` | Локальная диагностика; `--project-only` проверяет проект без внешних файлов Codex, `--integrations` читает live dependencies. `--full` создаёт тестовый workflow и требует одноразовых CRM/Store, не рабочую среду. |
 | `store-conductor-release-gate` | Read-only проверка постоянного Store conductor state; disposable DB не заменяет этот gate перед выпуском. |
-| `store-checkpoint-status` | Read-only checkpoint: `--stream store_digest|store_bootstrap`. |
+| `store-checkpoint-status` | `--stream store_digest|store_bootstrap`; читает существующую SQLite через `mode=ro`/`query_only`, без initialize/migration/repair. Current schema: exit 0, отсутствие строки — `exists:false`. Missing/unreadable DB, legacy/incomplete schema или corrupt state: диагностический JSON, exit 1. |
 | `store-checkpoint-reset` | Запись: `--stream`, `--expected-state-version`, `--confirm-rebaseline`, `--reason cursor_generation_mismatch|cursor_ahead_after_store_restore|operator_verified_rebaseline`. Сначала сверка Store/state, потом независимый status. |
 | `mcp-probe` | Handshake, manifest, annotations и bounded проверки. `--url`, `--timeout` (0..90], `--provider-failure-check`, `--store-check`, `--browser-check`; браузер читает example.com без сохранения текста в отчёт. |
+
+`store-checkpoint-status` читает schema и строку в одной SQLite read transaction, включая последний committed WAL.
+Ошибки возвращают `ok:false`, `read_only:true`, `stream` и `error`: `store_checkpoint_database_unavailable`
+для missing/unreadable DB, `store_checkpoint_schema_unavailable` для отсутствующей/неполной checkpoint schema,
+`store_checkpoint_state_unavailable` для corrupt DB или отказа чтения. Исправление schema выполняется отдельным writer.
+Read-only означает отсутствие SQL-записей и изменений основной БД; SQLite может создавать/обновлять служебные WAL/SHM sidecars.
 
 ### Независимые VIN-команды
 
@@ -110,7 +116,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 
 - `manager_automations` (`status/templates/readiness`) читает техническое состояние; `manager_automation_control` меняет jobs/timers, а `run_now/test_notification` могут отложенно отправить Telegram. `preview` не пишет registry.
 - Store `store_digest` читает события и меняет Manager cursor/ack; без кейса не продвигай production checkpoint. `store_management_action`, `store_quote_conductor`, `store_owner_api` различаются по операции и могут писать/публиковать; нужен текущий target, revision, contract, idempotency и readback. `prepare_action_contract` локально проверяет вход и возвращает JSON `ActionContractV2` без сети, записи или guarded token. Полномочия, текущую ревизию и предусмотренные guard/proof проверяет конкретный исполнитель по своему контракту. Подробности: [store-api.md](store-api.md).
-- `download_store_quote_vin_photo` и Telegram download создают приватный временный файл: только точный разрешённый target, сверка SHA и очистка. Обычный read-only не означает отсутствие приватных данных.
+- `download_store_quote_vin_photo` читает точный Store quote и возвращает bounded JPEG preview в `data.content_base64`/`content_type`, без локального файла. `expected_photo_sha256`/`summary.attachment.sha256` относятся к исходному вложению; `preview_sha256` — к возвращённым preview-байтам и может отличаться. Telegram download создаёт приватный временный файл по своему контракту. Фото остаются транзитными; отдельно сохранённый Store preview сверяй по `preview_sha256` и очищай. Подробности: [store-api.md](store-api.md).
 - VIN/PartsAPI/каталоги читают источники и могут расходовать provider quota. Dry-run/configured не доказывает live доступ. OEM и аналоги остаются кандидатами до проверки применимости. Старый PartsAPI category index — fixture, не активный API путь.
 - `elcats_catalog_query` — independent E4 operation на готовом профиле: default-disabled, page_budget=12/max24 и общий deadline45s. Robots/redirect/images входят в тот же бюджет; per-brand matrix и partial OCR evidence — [Elcats](elcats.md). Provider status показывает локальные возможности без probe; рабочая навигация и подтверждение номера различаются.
 - Служебные VIN/каталожные методы: `benchmark_vin_parts_lookup` проверяет пачку идентификаторов, по умолчанию может читать vPIC; PartsAPI live-вызовы включаются отдельными флагами, отчёт скрывает исходные идентификаторы. `recommend_automotive_sources` выбирает технические источники без копирования лицензированных материалов; `lookup_public_automotive_evidence` читает публичные model-level recalls/TSB и маршруты по жидкостям, не подтверждает VIN-кампании или применимость. Сценарий — [E1](../modules/E1.md), контракты — текущие schemas и [mcp_tools.py](../../../autostop_manager/mcp_tools.py).
@@ -153,7 +159,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
 | `scripts/set-work-telegram-duty.sh` | `--status` read-only; `--enable|--disable` меняют duty. |
-| `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe|preview --file EXACT_FILE [--language ru] [--delete-after]` или `self-check`. |
+| `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe --file EXACT_FILE [--language ru] [--delete-after]`, `preview --file EXACT_FILE [--delete-after]` или `self-check`; `--language` доступен только `transcribe`. |
 | `scripts/run-work-telegram-monitor-voice.sh` | Текущий event: `telegram_monitor_voice --event-id ... [--language ru]`, затем очистка. |
 | `scripts/import_offline_parts_catalogs.py` | `--verify-only` read-only; иначе импорт `--archive ZIP --cache-root PATH`. |
 | `scripts/ocr_offline_parts_catalogs.py` | `--verify-only` read-only; иначе OCR `--cache-root PATH`. |

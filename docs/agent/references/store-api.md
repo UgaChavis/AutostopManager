@@ -10,16 +10,24 @@ Codex → native Manager MCP (`:41931/mcp`) → adapter → loopback `AUTOSTOP_S
 
 | Инструмент / маршрут | Вход и результат | Эффект |
 | --- | --- | --- |
-| `store_runtime_status` → `/runtime-status`, `/bootstrap-snapshot` | `live`, `bootstrap_snapshot`; redacted readiness | Чтение; сверяй ok/format/circuit. |
-| `store_digest` → `/digest` | `baseline`, `since`, `cursor`, `ack_token`, `limit`, `stream`; bounded page | Читает Store, пишет Manager checkpoint; без кейса не продвигай production cursor. |
+| `store_runtime_status` → `/runtime-status`, `/bootstrap-snapshot` | `live`, `bootstrap_snapshot`; redacted readiness | Default читает локальную готовность/circuit. `live=true` читает HTTP runtime; `bootstrap_snapshot=true` читает HTTP snapshot и имеет приоритет. Checkpoint не меняет. |
+| `store_digest` → `/digest` | `baseline`, `since`, `cursor`, `ack_token`, `limit`, `stream`; bounded page | Читает Store по HTTP, пишет Manager baseline/pending/cursor/ack и состояние отказа; первый вызов может создать baseline. Без кейса не продвигай production checkpoint. |
 | `store_search` → `/search` | Entity/query/filters/cursor/limit; redacted matches | Чтение с bounded scope. |
 | `store_entity_context` → `/entities/{entity}/{id}` | Точные entity/id/detail; один объект | Приватное чтение текущего кейса. |
-| `download_store_quote_vin_photo` | Quote ID, expected SHA-256; bounded JPEG | Приватный временный файл, после сверки очистка. |
-| `get_store_analytics_report` | Период/query; обезличенные агрегаты | Чтение по запросу отчёта. |
-| `store_owner_capabilities` | Query/operation ID; input contract/schema_hash | Читает права/OpenAPI без бизнес-данных. |
+| `download_store_quote_vin_photo` | Quote ID, expected SHA-256 исходного вложения; bounded JPEG preview | HTTP-чтение; возвращает `data.content_base64`/`content_type` в памяти, локальный файл не создаёт. |
+| `get_store_analytics_report` | Период/query; обезличенные агрегаты | HTTP POST читает aggregate-only отчёт; бизнес-запись не выполняет. |
+| `store_owner_capabilities` | Query/operation ID; input contract/schema_hash | Холодный/просроченный кеш читает owner-scoped OpenAPI по HTTP; тёплый in-memory cache обходится без сети. Бизнес-данные не возвращает. |
 | `store_management_action` → `/actions` | Exact target/revision/changes | Guarded запись: current read → contract → dry-run → fresh key apply → readback. |
 | `store_quote_conductor` → owner Admin V2 | `start/status/evidence/draft/publish/reopen/order/handoff/decline`; quote/run/revision | Status читает; остальные шаги могут писать/публиковать. |
 | `store_owner_api` → `/api/v1` | Текущий operation_id, typed path/query/body, mode, target/revision/contract/proof | GET читает; prepare проверяет input, dry_run — metadata, apply — запись. High-risk нужен dry-run proof/readback. |
+
+Фото запрашивается только для точного разрешённого quote с scoped quote credential.
+`expected_photo_sha256` — SHA-256 исходного вложения из свежего чтения quote; Store использует его как guard текущего фото.
+Manager возвращает этот SHA в `summary.attachment.sha256`, а SHA полученных preview-байтов вычисляет отдельно
+в `summary.attachment.preview_sha256`. Preview может отличаться от исходного фото; эти хеши не обязаны совпадать.
+`data.content_base64` содержит bounded JPEG, `data.content_type` — `image/jpeg`; содержимое остаётся транзитным.
+При stale attachment перечитай точный quote. Если вызывающая сторона отдельно сохранила preview в приватный файл,
+проверь его по `preview_sha256` и очисти после использования. Telegram download имеет отдельный файловый контракт.
 
 Allowlisted management actions: `assign_quote_request`, `set_quote_request_status`, `update_quote_request_comment`, `set_batch_storage_location`, `mark_order_ready`, `set_order_payment_status`, `add_quote_request_note`. Изменение оплаты требует отдельного текущего поручения владельца, scope `store:write:order_payment` и `owner_intent="owner_finance: <описание поручения>"`; автоматическое предоставление scope не выполняется. При uncertain apply сначала читай exact target/receipt, не повторяй запрос вслепую. HTTP 200/readiness не доказывают запись. Store search и public web не подтверждают применимость детали.
 

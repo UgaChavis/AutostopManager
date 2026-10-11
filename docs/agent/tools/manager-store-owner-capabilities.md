@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
+Источник: store; первичная база: AutoStop Store owner-scoped OpenAPI operations and input contracts (with in-memory cache). Исполнение: network_read.
 
 Вызов: native Manager MCP `store_owner_capabilities`.
 
@@ -22,10 +22,12 @@ Defaults: `{"limit":200,"operation_id":"","query":""}`.
 {"query":null}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
+Выход: Owner-scoped operations или точный input_contract/schema_hash; data_included=false, без бизнес-данных..
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
+- При холодном/просроченном кеше читает Store OpenAPI по HTTP с owner credential; тёплый in-memory cache может вернуть результат без сети.
+- Список операций или input contract не выдаёт полномочия на бизнес-действие; полномочия и prerequisites проверяет конкретный исполнитель.
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 
-Подробный контракт: [справочник](../references/manager-runtime.md).
+Подробный контракт: [справочник](../references/store-api.md).

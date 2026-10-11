@@ -4,8 +4,10 @@ import ast
 from copy import deepcopy
 import json
 from pathlib import Path
+import socket
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import ValidationError
 import pytest
 
 from autostop_manager import automotive_identity, automotive_labor, automotive_parts, elcats_catalog
@@ -25,6 +27,31 @@ def catalog(tmp_path):
     schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
     registry = json.loads((ROOT / "docs/agent/automotive_tools.json").read_text())
     return registry, schemas
+
+
+def test_all_executable_examples_match_actual_sdk_argument_models_without_tool_calls(tmp_path, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("network is forbidden during SDK argument-model validation")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
+    server = FastMCP("catalog-argument-model-test")
+    register_manager_tools(server, StoreState(tmp_path / "argument-models.sqlite3"))
+    tools = server._tool_manager._tools
+    registry = json.loads((ROOT / "docs/agent/automotive_tools.json").read_text())
+    checked = 0
+    for row in registry["tools"]:
+        if row["invocation"] is None:
+            assert row["implementation_state"] == "planned"
+            continue
+        model = tools[row["invocation"]["tool_name"]].fn_metadata.arg_model
+        model.model_validate(row["example"])
+        with pytest.raises(ValidationError):
+            model.model_validate(row["invalid_example"])
+        checked += 1
+    assert checked == sum(row["implementation_state"] != "planned" for row in registry["tools"])
 
 
 def test_actual_registration_matches_independent_ast_and_all_provider_methods(catalog):

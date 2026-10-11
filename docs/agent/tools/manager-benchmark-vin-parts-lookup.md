@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: diagnostic. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
+Источник: manager; первичная база: AutoStop identity/part-intent rules and supplied context; NHTSA vPIC by default; PartsAPI only with explicit live flags. Исполнение: composed.
 
 Вызов: native Manager MCP `benchmark_vin_parts_lookup`.
 
@@ -22,9 +22,12 @@ Defaults: `{"city":"Красноярск","include_partsapi_dry_run":true,"live_
 {"items":null,"requested_part":"передние колодки 1 комплект"}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
+Выход: Обезличенный контрольный отчёт: mode, summary, items; identity/part-intent, prepared/live calls, warnings и readiness отдельно..
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
+- По умолчанию live_vpic=true: подходящий VIN/WMI может вызвать публичный HTTP vPIC; live_vpic=false отключает этот acquisition.
+- PartsAPI live identity/OEM требуют явных live_partsapi_identity/live_partsapi_oem; include_partsapi_dry_run готовит план, не подтверждая доступ или применимость.
+- Составляет локальные правила, переданный контекст и разрешённые acquisition stages; не пишет CRM/Store, отчёт скрывает исходные идентификаторы.
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 

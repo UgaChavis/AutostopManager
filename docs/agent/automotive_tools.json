@@ -5569,8 +5569,8 @@
       "title": "benchmark_vin_parts_lookup",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
       "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "primary_data_source": "AutoStop identity/part-intent rules and supplied context; NHTSA vPIC by default; PartsAPI only with explicit live flags",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-benchmark-vin-parts-lookup.md",
       "input_fields": [
@@ -5602,7 +5602,7 @@
         "partsapi_timeout": 20.0
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Обезличенный контрольный отчёт: mode, summary, items; identity/part-intent, prepared/live calls, warnings и readiness отдельно."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -5610,6 +5610,9 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "По умолчанию live_vpic=true: подходящий VIN/WMI может вызвать публичный HTTP vPIC; live_vpic=false отключает этот acquisition.",
+        "PartsAPI live identity/OEM требуют явных live_partsapi_identity/live_partsapi_oem; include_partsapi_dry_run готовит план, не подтверждая доступ или применимость.",
+        "Составляет локальные правила, переданный контекст и разрешённые acquisition stages; не пишет CRM/Store, отчёт скрывает исходные идентификаторы.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
@@ -5634,9 +5637,9 @@
       "classification": "outside",
       "title": "download_store_quote_vin_photo",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store scoped quote VIN attachment preview (Store agent API)",
+      "execution_kind": "network_read",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-download-store-quote-vin-photo.md",
       "input_fields": [
@@ -5645,7 +5648,7 @@
       ],
       "defaults": {},
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "data.content_base64 и data.content_type=image/jpeg; summary.attachment: sha256 исходного вложения, preview_sha256 и byte_size полученного preview."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -5653,18 +5656,21 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "HTTP-чтение одного точного quote с scoped quote credential; expected_photo_sha256 связывает запрос с текущим исходным вложением.",
+        "Возвращает bounded JPEG preview в Base64 в памяти; инструмент не создаёт локальный файл. Preview SHA-256 вычисляется по возвращённым байтам и может отличаться от SHA исходного фото.",
+        "Сохраняй фото только транзитно в рамках разрешённого кейса; если вызывающая сторона отдельно создала приватный файл, очисти его после использования.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
       "example": {
-        "quote_request_id": "DEMO",
-        "expected_photo_sha256": "DEMO"
+        "quote_request_id": "synthetic-quote",
+        "expected_photo_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       },
       "invalid_example": {
         "quote_request_id": null,
-        "expected_photo_sha256": "DEMO"
+        "expected_photo_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       },
-      "reference": "docs/agent/references/manager-runtime.md",
+      "reference": "docs/agent/references/store-api.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "download_store_quote_vin_photo"
@@ -5722,9 +5728,9 @@
       "classification": "outside",
       "title": "get_store_analytics_report",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store aggregate analytics (Store analytics API)",
+      "execution_kind": "network_read",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-get-store-analytics-report.md",
       "input_fields": [
@@ -5742,7 +5748,7 @@
         "top_limit": 10
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Обезличенный aggregate-only отчёт: period/previousPeriod, summary, funnel, topPages/topProducts/clicks, comparison и meta."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -5750,6 +5756,8 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "Выполняет HTTP POST для чтения агрегатов указанного периода; метод POST здесь не означает бизнес-запись.",
+        "Raw events, VIN, контакты и пользовательские идентификаторы не возвращаются; отчёт требует отдельно порученного bounded периода.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
@@ -5757,7 +5765,7 @@
       "invalid_example": {
         "query": null
       },
-      "reference": "docs/agent/references/manager-runtime.md",
+      "reference": "docs/agent/references/store-api.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "get_store_analytics_report"
@@ -6028,9 +6036,9 @@
       "classification": "outside",
       "title": "store_digest",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store change feed plus Manager cursor/ack checkpoint (Store agent API and local SQLite)",
+      "execution_kind": "composed",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-digest.md",
       "input_fields": [
@@ -6050,7 +6058,7 @@
         "stream": "store_digest"
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Bounded page/summary/items/changes; meta сообщает stream, baseline, checkpoint/delivery/ack и advancement."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -6058,6 +6066,9 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "Читает Store по HTTP и пишет локальный Manager checkpoint: baseline, pending delivery, cursor/ack и диагностическое состояние отказа.",
+        "Первый успешный вызов может создать baseline без явного baseline=true; отсутствие бизнес-записи не делает операцию read-only.",
+        "Без порученного кейса не вызывай production digest и не продвигай checkpoint ради smoke; raw provider payload не сохраняется.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
@@ -6065,7 +6076,7 @@
       "invalid_example": {
         "baseline": null
       },
-      "reference": "docs/agent/references/manager-runtime.md",
+      "reference": "docs/agent/references/store-api.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "store_digest"
@@ -6213,9 +6224,9 @@
       "classification": "outside",
       "title": "store_owner_capabilities",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "provider_id": "store",
+      "primary_data_source": "AutoStop Store owner-scoped OpenAPI operations and input contracts (with in-memory cache)",
+      "execution_kind": "network_read",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-owner-capabilities.md",
       "input_fields": [
@@ -6229,7 +6240,7 @@
         "operation_id": ""
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Owner-scoped operations или точный input_contract/schema_hash; data_included=false, без бизнес-данных."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -6237,6 +6248,8 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "При холодном/просроченном кеше читает Store OpenAPI по HTTP с owner credential; тёплый in-memory cache может вернуть результат без сети.",
+        "Список операций или input contract не выдаёт полномочия на бизнес-действие; полномочия и prerequisites проверяет конкретный исполнитель.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
@@ -6244,7 +6257,7 @@
       "invalid_example": {
         "query": null
       },
-      "reference": "docs/agent/references/manager-runtime.md",
+      "reference": "docs/agent/references/store-api.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "store_owner_capabilities"
@@ -6324,9 +6337,9 @@
       "classification": "outside",
       "title": "store_runtime_status",
       "purpose": "Справочный/отдельный контур; не automotive workflow",
-      "provider_id": "manager",
-      "primary_data_source": "AutoStop versioned rules or explicit supplied inputs",
-      "execution_kind": "local_read",
+      "provider_id": "store",
+      "primary_data_source": "Manager adapter configuration/circuit state; optional Store runtime health or bootstrap snapshot",
+      "execution_kind": "network_read",
       "implementation_state": "implemented",
       "instruction_ref": "docs/agent/tools/manager-store-runtime-status.md",
       "input_fields": [
@@ -6338,7 +6351,7 @@
         "bootstrap_snapshot": false
       },
       "outputs": [
-        "outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются"
+        "Redacted readiness/summary и circuit state; meta.live_check для runtime, отдельный bootstrap snapshot при его запросе."
       ],
       "errors": [
         "invalid_input сохраняет ошибочный вход как отказ",
@@ -6346,6 +6359,9 @@
         "configuration/auth/quota/provider/parse ошибки различаются для сетевого источника"
       ],
       "limitations": [
+        "По умолчанию live=false и bootstrap_snapshot=false: читает только локальную конфигурацию/готовность/circuit адаптера без HTTP.",
+        "live=true читает Store /runtime-status; bootstrap_snapshot=true читает /bootstrap-snapshot и имеет приоритет над live.",
+        "Runtime/bootstrap чтение не продвигает digest checkpoint; локальная готовность не доказывает доступность или бизнес-результат Store.",
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента."
       ],
@@ -6353,7 +6369,7 @@
       "invalid_example": {
         "live": null
       },
-      "reference": "docs/agent/references/manager-runtime.md",
+      "reference": "docs/agent/references/store-api.md",
       "invocation": {
         "transport": "manager_mcp",
         "tool_name": "store_runtime_status"

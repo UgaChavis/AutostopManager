@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
+Источник: store; первичная база: AutoStop Store change feed plus Manager cursor/ack checkpoint (Store agent API and local SQLite). Исполнение: composed.
 
 Вызов: native Manager MCP `store_digest`.
 
@@ -22,10 +22,13 @@ Defaults: `{"ack_token":null,"baseline":false,"cursor":null,"limit":25,"since":n
 {"baseline":null}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
+Выход: Bounded page/summary/items/changes; meta сообщает stream, baseline, checkpoint/delivery/ack и advancement..
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
+- Читает Store по HTTP и пишет локальный Manager checkpoint: baseline, pending delivery, cursor/ack и диагностическое состояние отказа.
+- Первый успешный вызов может создать baseline без явного baseline=true; отсутствие бизнес-записи не делает операцию read-only.
+- Без порученного кейса не вызывай production digest и не продвигай checkpoint ради smoke; raw provider payload не сохраняется.
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 
-Подробный контракт: [справочник](../references/manager-runtime.md).
+Подробный контракт: [справочник](../references/store-api.md).

@@ -4,7 +4,7 @@
 
 Основной модуль: outside; другие модули: нет.
 Классификация: outside. Состояние реализации: implemented.
-Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
+Источник: store; первичная база: Manager adapter configuration/circuit state; optional Store runtime health or bootstrap snapshot. Исполнение: network_read.
 
 Вызов: native Manager MCP `store_runtime_status`.
 
@@ -22,10 +22,13 @@ Defaults: `{"bootstrap_snapshot":false,"live":false}`.
 {"live":null}
 ```
 
-Выход: outcome/data/evidence/missing_fields/conflicts/warnings/execution (новые helpers); legacy поля сохраняются.
+Выход: Redacted readiness/summary и circuit state; meta.live_check для runtime, отдельный bootstrap snapshot при его запросе..
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
+- По умолчанию live=false и bootstrap_snapshot=false: читает только локальную конфигурацию/готовность/circuit адаптера без HTTP.
+- live=true читает Store /runtime-status; bootstrap_snapshot=true читает /bootstrap-snapshot и имеет приоритет над live.
+- Runtime/bootstrap чтение не продвигает digest checkpoint; локальная готовность не доказывает доступность или бизнес-результат Store.
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
 
-Подробный контракт: [справочник](../references/manager-runtime.md).
+Подробный контракт: [справочник](../references/store-api.md).
