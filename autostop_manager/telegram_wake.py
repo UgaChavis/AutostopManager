@@ -760,12 +760,19 @@ class AppServer:
                     if not self.connected:
                         raise TransportLost("codex_disconnected")
                     turn_generation = self.generation
+                    turn_archive_sequence = self.thread_archive_sequence
                     if before_start is not None:
                         await before_start()
                         self.outcome_unknown = True
                         # If the connection changes while the intent is committed, do not guess
                         # whether start is still safe. The durable job requires reconciliation.
-                        if turn_generation != self.generation or not self.connected:
+                        if self.worker_archived or turn_archive_sequence != self.thread_archive_sequence:
+                            raise WakeError("codex_thread_archived")
+                        if (
+                            turn_generation != self.generation
+                            or not self.connected
+                            or (self.managed and not self.ready_event.is_set())
+                        ):
                             raise TransportLost("codex_start_connection_changed")
                         if self.blocked:
                             raise WakeError(self.recovery_error or "codex_recovery_blocked")

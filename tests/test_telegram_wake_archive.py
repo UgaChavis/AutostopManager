@@ -9,7 +9,7 @@ import pytest
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_wake as wake
-from test_telegram_wake_durable import REVISION
+from test_telegram_wake_durable import REVISION, FakeJobs, new_inbox
 from test_telegram_wake_durable import bundle as bundle
 from telegram_wake_fakes import THREAD, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
@@ -139,6 +139,58 @@ def test_archive_notification_racing_idle_response_cannot_authorize_start(tmp_pa
                 assert "turn/start" not in server.methods()
             finally:
                 await app.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", ["archive", "readiness"])
+def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tmp_path, bundle, cause):
+    async def scenario():
+        server = ArchiveServer(archived=False)
+        path = tmp_path / "app.sock"
+        inbox, event = new_inbox(tmp_path)
+        job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+        app = wake.AppServer(config(path, bundle))
+
+        class IntentInterruptionJobs(FakeJobs):
+            async def request(self, operation, **arguments):
+                result = await super().request(operation, **arguments)
+                if operation == "job_start_intent":
+                    if cause == "archive":
+                        sequence = app.thread_archive_sequence
+                        server.archived = True
+                        await server.sockets[-1].send(
+                            json.dumps({"method": "thread/archived", "params": {"threadId": THREAD}})
+                        )
+                        await until(lambda: app.thread_archive_sequence > sequence)
+                    else:
+                        app.ready_event.clear()
+                return result
+
+        jobs = IntentInterruptionJobs(inbox)
+        dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+        app.managed = True
+        async with unix_serve(server.handle, str(path), compression=None):
+            try:
+                await app.connect()
+                app.ready_event.set()
+                generation = app.generation
+                await dispatcher._execute(job)
+                held = inbox.read_job(job["job_id"])
+                assert held["state"] == "needs_review"
+                assert held["thread_id"] == THREAD and held["turn_id"] is None
+                assert held["effects"] == [] and inbox.event_state(event) == "open"
+                assert app.generation == generation and app.connected
+                assert app.outcome_unknown and app.active_turn is None
+                assert server.methods().count("turn/start") == 0
+                assert "thread/unarchive" not in server.methods()
+                assert held["reason_code"] == (
+                    "codex_thread_archived" if cause == "archive" else "codex_start_connection_changed"
+                )
+                assert dispatcher.failed == 1 and dispatcher.completed == 0
+            finally:
+                await app.close()
+                inbox.close()
 
     asyncio.run(scenario())
 
