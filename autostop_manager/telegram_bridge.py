@@ -24,7 +24,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from autostop_manager.telegram_owner import (
     OwnerConfigError,
@@ -500,6 +500,15 @@ class DurableInboundMonitor(InboundMonitor):
         self.automation_coordinator: Any | None = None
         self.failure_event = asyncio.Event()
         self.failure_code: str | None = None
+        self.reconciliation_fence: tuple[int, int, int] | None = None
+        self.reconciliation_restarts = 0
+        self.reconciliation_stopped = False
+
+    def request_reconciliation(self) -> None:
+        """Give one external recovery signal a finite retry budget."""
+        self.reconciliation_restarts = 0
+        self.reconciliation_stopped = False
+        self.reconcile_requested.set()
 
     def changed(self) -> None:
         generation = self.inbox.generation
@@ -2319,7 +2328,9 @@ async def _prepare_job_media(
     if not isinstance(monitor, DurableInboundMonitor):
         return None, idempotency_key, 0
     if not request.get("job_id"):
-        raise BridgeError("job_binding_required")
+        if request.get("reply_to_message_id"):
+            raise BridgeError("job_binding_required")
+        return None, idempotency_key, 0
     reply_to = request.get("reply_to_message_id")
     if type(reply_to) is not int or reply_to < 1:
         raise BridgeError("job_effect_target_invalid")
@@ -2384,10 +2395,14 @@ async def _bind_job_send(
     target: dict[str, Any],
     text: str,
     reply_to_message_id: int,
+    *,
+    allow_handoff: bool = False,
 ) -> dict[str, Any]:
     """Refresh exact incoming locators before accepting a job-bound send intent."""
     if request.get("kind") not in {"ack", "result", "clarification", "handoff"}:
         raise BridgeError("job_effect_kind_invalid")
+    if request.get("kind") == "handoff" and not allow_handoff:
+        raise BridgeError("job_handoff_required")
     # This catches an update already present in Telegram before dry-run whose
     # event handler has not yet run.  Bodies are used transiently, never stored.
     recent = await client.get_messages(entity, limit=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
@@ -3133,6 +3148,40 @@ def _job_string_list(request: dict[str, Any], key: str) -> list[str]:
     return values
 
 
+def _require_job_handoff_receipts(config: TelegramConfig, inbox: TelegramInbox, request: dict[str, Any]) -> None:
+    """A client reply from an older bridge cannot become an owner handoff."""
+    job = inbox.read_job(str(request.get("job_id") or ""))
+    receipt_keys = _job_string_list(request, "receipt_keys")
+    handoffs = [
+        effect
+        for effect in job["effects"]
+        if effect["kind"] == "handoff" and effect["verified"] and effect["receipt_key"] in receipt_keys
+    ]
+    if not handoffs:
+        return  # The normal result contract reports a missing receipt.
+    ledger = _load_idempotency(config.state_dir / "idempotency.json")
+    for effect in handoffs:
+        previous = ledger.get(effect["receipt_key"])
+        if (
+            previous is None
+            or previous.get("operation") != "send_owner_notification"
+            or previous.get("target_role") != "owner"
+            or previous.get("readback_verified") is not True
+            or previous.get("message_id") != effect["sent_message_id"]
+            or previous.get("text_sha256") != effect["text_sha256"]
+        ):
+            raise BridgeError("job_handoff_receipt_required")
+        owner_id = _owner_peer_id(config, required=True)
+        binding = hmac.new(
+            _ensure_private_key(config.state_dir / "contract.key"),
+            f"owner\0{owner_id}".encode(),
+            hashlib.sha256,
+        ).digest()
+        fingerprint = f"{int.from_bytes(binding[:8], 'big') or 1:016x}"
+        if previous.get("target_fingerprint") != fingerprint:
+            raise BridgeError("job_handoff_receipt_required")
+
+
 async def _handle_job_operation(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any]:
@@ -3158,6 +3207,8 @@ async def _handle_job_operation(
     elif operation == "job_refresh":
         job = inbox.refresh_job(**_job_arguments(request), event_ids=request.get("event_ids"))
     elif operation == "job_result":
+        if request.get("outcome") == "handoff":
+            _require_job_handoff_receipts(config, inbox, request)
         job = inbox.result(
             **_job_arguments(request),
             outcome=str(request.get("outcome") or ""),
@@ -3165,14 +3216,14 @@ async def _handle_job_operation(
             receipt_keys=_job_string_list(request, "receipt_keys"),
             reason_code=request.get("reason_code"),
         )
-        monitor.reconcile_requested.set()
+        monitor.request_reconciliation()
     elif operation == "job_resolve":
         job = inbox.resolve_job(
             **_job_arguments(request),
             decision=str(request.get("decision") or ""),
             effects_reviewed=request.get("effects_reviewed") is True,
         )
-        monitor.reconcile_requested.set()
+        monitor.request_reconciliation()
     else:
         raise BridgeError("operation_not_supported")
     monitor.changed()
@@ -3187,7 +3238,18 @@ async def _handle_job_control(
     if operation == "job_status":
         return {"ok": True, "status": inbox.status() | {"health": inbox.health()}}
     if operation == "job_active":
-        return {"ok": True, "jobs": inbox.active_jobs()}
+        return {
+            "ok": True,
+            **inbox.active_job_page(limit=request.get("limit", 50), after_job_id=request.get("after_job_id")),
+        }
+    if operation == "job_execution_set":
+        if type(request.get("paused")) is not bool:
+            raise BridgeError("job_execution_paused_invalid")
+        inbox.set_execution_paused(
+            paused=request["paused"], expected_revision=_job_revision(request.get("expected_revision"))
+        )
+        monitor.changed()
+        return {"ok": True, "status": inbox.status()}
     if operation == "job_import_legacy":
         references = request.get("events")
         if not isinstance(references, list) or len(references) > 10000:
@@ -3217,7 +3279,7 @@ async def _handle_job_control(
         monitor.capture_enabled = request["enabled"]
         monitor.changed()
         if monitor.capture_enabled:
-            monitor.reconcile_requested.set()
+            monitor.request_reconciliation()
         return {"ok": True, "monitor": monitor.status()}
     if operation == "job_health":
         inbox.set_health(
@@ -3252,6 +3314,7 @@ async def _handle_job_handoff(
         target,
         text,
         request.get("reply_to_message_id", 0),
+        allow_handoff=True,
     )
     key = effect["effect_key"]
     if request.get("mode") == "apply" and request.get("idempotency_key") != key:
@@ -3620,6 +3683,16 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     if isinstance(monitor, DurableInboundMonitor):
         # Subscribers observe a committed locator.  A missed notification is
         # harmless: reconnecting always reads the current durable registry.
+        if (
+            monitor.reconciliation_stopped
+            and monitor.capture_enabled
+            and bool(getattr(event, "is_private", False))
+            and type(getattr(event, "chat_id", None)) is int
+            and event.chat_id > 0
+            and type(getattr(event, "id", None)) is int
+            and event.id > 0
+        ):
+            monitor.request_reconciliation()
         return
     if event_id is not None and wake_socket:
         try:
@@ -3792,7 +3865,7 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
                 automation_coordinator=automation_coordinator,
             )
 
-        client.add_event_handler(capture, events.NewMessage(incoming=True))
+        client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
     try:
         await client.connect()
         if not await client.is_user_authorized():
@@ -3806,7 +3879,7 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
     if isinstance(inbound_monitor, DurableInboundMonitor):
         inbound_monitor.transport_ready = True
         inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
-        inbound_monitor.reconcile_requested.set()
+        inbound_monitor.request_reconciliation()
     server = await asyncio.start_unix_server(
         lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
         path=str(config.socket_path),
@@ -3854,6 +3927,7 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
             try:
                 await _reconcile_incoming_history(client, monitor)
             except Exception:  # noqa: BLE001 - preserve every checkpoint after any partial transport failure.
+                monitor.reconciliation_fence = None
                 monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
                 monitor.changed()
         await _deliver_incident_notifications(client, config, monitor)
@@ -3870,7 +3944,7 @@ def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> No
         try:
             await original()
         finally:
-            monitor.reconcile_requested.set()
+            monitor.request_reconciliation()
 
     sender._auto_reconnect_callback = reconnect
 
@@ -3901,6 +3975,25 @@ def _configure_durable_instructions(inbox: TelegramInbox) -> None:
 async def _await_intake_failure(monitor: DurableInboundMonitor) -> None:
     await monitor.failure_event.wait()
     raise BridgeError(monitor.failure_code or "inbound_storage_unavailable")
+
+
+def _load_reconciliation_state_request() -> Any:
+    try:
+        from telethon.tl.functions.updates import GetStateRequest
+    except ImportError as exc:
+        raise BridgeError("telegram_reconciliation_contract_unavailable") from exc
+    return GetStateRequest()
+
+
+async def _reconciliation_state_fence(client: Any) -> tuple[int, int, int]:
+    """Fence the account update sequence across a paginated dialog sweep."""
+    if not callable(client):
+        raise BridgeError("telegram_reconciliation_contract_unavailable")
+    state = await client(_load_reconciliation_state_request())
+    values = tuple(getattr(state, field, None) for field in ("pts", "qts", "seq"))
+    if any(type(value) is not int or not 0 <= value <= 0x7FFFFFFF for value in values):
+        raise BridgeError("history_state_invalid")
+    return cast(tuple[int, int, int], values)
 
 
 async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) -> dict[str, Any]:
@@ -3976,6 +4069,13 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
     windows = monitor.inbox.recovery_windows()
     if not windows:
         return
+    if monitor.reconciliation_stopped:
+        return
+    if monitor.reconciliation_fence is None:
+        # An offset alone cannot prove that dialogs stayed below it while the
+        # process was absent. Replay the prefix from its existing checkpoints.
+        monitor.inbox.clear_reconciliation_cursor()
+        monitor.reconciliation_fence = await _reconciliation_state_fence(client)
     # Telegram dates have whole-second precision.  Include the opening second
     # so its ambiguous refs can be held, rather than silently excluding a chat.
     first_start = min(datetime.fromisoformat(window["opened_at"]) for window in windows).replace(microsecond=0)
@@ -4010,10 +4110,27 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
                 break
         last_cursor = {"peer_id": peer_id, "message_id": latest_id, "received_at": latest_date.isoformat()}
     if complete:
+        if await _reconciliation_state_fence(client) != monitor.reconciliation_fence:
+            # Telegram orders dialogs by their latest message. Any update can
+            # move an unvisited dialog above our cursor, including before its
+            # event callback arrives. One full rescan is finite; a second
+            # unstable sweep waits for a new external recovery signal.
+            monitor.inbox.clear_reconciliation_cursor()
+            monitor.reconciliation_fence = None
+            monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
+            if monitor.reconciliation_restarts == 0:
+                monitor.reconciliation_restarts = 1
+                monitor.reconcile_requested.set()
+            else:
+                monitor.reconciliation_stopped = True
+            monitor.changed()
+            return
         monitor.inbox.clear_reconciliation_cursor()
         for window in windows:
             if window["closed_at"] is not None:
                 monitor.inbox.mark_window_recovered(window["window_id"])
+        monitor.reconciliation_fence = None
+        monitor.reconciliation_restarts = 0
     elif last_cursor is not None and last_cursor != prior_cursor:
         monitor.inbox.set_reconciliation_cursor(**last_cursor)
     elif dialogue_count > MAX_RECONCILE_DIALOGS:
@@ -4186,7 +4303,9 @@ def build_parser() -> argparse.ArgumentParser:
     duty_mode.add_argument("--enabled", action="store_true")
     duty_mode.add_argument("--disabled", action="store_true")
     subparsers.add_parser("job-status")
-    subparsers.add_parser("job-active")
+    active = subparsers.add_parser("job-active")
+    active.add_argument("--limit", type=int, default=50)
+    active.add_argument("--after-job-id", default=None)
     subparsers.add_parser("job-subscribe")
     claim = subparsers.add_parser("job-claim")
     claim.add_argument("--instruction-root", required=True)
@@ -4368,6 +4487,8 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "mode",
         "contract_token",
         "idempotency_key",
+        "limit",
+        "after_job_id",
     ):
         if hasattr(args, name):
             request[name] = getattr(args, name)

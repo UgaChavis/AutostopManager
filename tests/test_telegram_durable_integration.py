@@ -502,3 +502,108 @@ def test_nonroot_ipc_control_rejection_is_structured_and_connection_closes(tmp_p
                 await writer.wait_closed()
 
     asyncio.run(scenario())
+
+
+def test_two_prepared_sends_cannot_bypass_a_lost_remote_receipt(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            ref = runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            first = await send(runtime, job, kind="result", text="Synthetic first answer", slot=0)
+            second = await send(runtime, job, kind="result", text="Synthetic second answer", slot=1)
+            runtime.client.lose_send_response = True
+            with pytest.raises(wake.WakeError):
+                await send(runtime, job, kind="result", text="Synthetic first answer", slot=0, dry=first)
+            runtime.client.lose_send_response = False
+            assert runtime.client.sent == 1
+            assert len([message for message in runtime.client.messages.values() if message.out]) == 1
+            with pytest.raises(wake.WakeError, match=r"^inbox_effect_outcome_unknown$"):
+                await send(runtime, job, kind="result", text="Synthetic second answer", slot=1)
+            with pytest.raises(wake.WakeError, match=r"^inbox_effect_outcome_unknown$"):
+                await send(runtime, job, kind="result", text="Synthetic second answer", slot=1, dry=second)
+            effect = runtime.inbox.read_effect(first["idempotency_key"])
+            assert effect["attempted"] == 1 and effect["verified"] == 0
+            assert runtime.client.sent == 1 and runtime.inbox.event_state(ref) == "open"
+
+    asyncio.run(scenario())
+
+
+def test_customer_receipt_cannot_impersonate_a_human_handoff(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            ref = runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            with pytest.raises(wake.WakeError, match=r"^job_handoff_required$"):
+                await send(runtime, job, kind="handoff", text="Synthetic acknowledgement to the customer")
+            with pytest.raises(wake.WakeError, match=r"^inbox_result_receipt_required$"):
+                await runtime.jobs.request(
+                    "job_result", **binding(job), outcome="handoff", event_ids=[ref], receipt_keys=[]
+                )
+            assert runtime.client.sent == 0 and runtime.inbox.event_state(ref) == "open"
+
+    asyncio.run(scenario())
+
+
+def test_held_job_pages_fit_real_bridge_and_legacy_cli_limits(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            count = 300
+            runtime.inbox.import_references(
+                [
+                    {
+                        "event_id": f"inbound-{index}",
+                        "peer_id": 1000 + index,
+                        "message_id": index,
+                        "received_at": "2026-10-12T00:00:00+00:00",
+                        "state": "open",
+                    }
+                    for index in range(1, count + 1)
+                ],
+                instruction_root=str(bundle),
+                instruction_revision=REVISION,
+            )
+            initial = await asyncio.to_thread(
+                bridge.send_local_request, runtime.config.socket_path, {"operation": "job_active"}
+            )
+            assert initial["ok"] is True and len(initial["jobs"]) == 50
+            seen = set()
+            cursor = None
+            while True:
+                page = await runtime.jobs.request("job_active", limit=50, after_job_id=cursor)
+                assert len(json.dumps(page).encode()) < 128 * 1024
+                assert len(page["jobs"]) <= 50
+                for job in page["jobs"]:
+                    assert job["state"] == "needs_review" and "effects" not in job
+                    assert job["job_id"] not in seen
+                    seen.add(job["job_id"])
+                cursor = page["next_job_id"]
+                if cursor is None:
+                    break
+            assert len(seen) == count and runtime.inbox.status()["open_events"] == count
+            assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
+
+
+def test_explicit_pause_survives_a_worker_restart_with_pending_intake(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            server = MockServer(complete=False)
+            async with worker(runtime, tmp_path, bundle, server) as dispatcher:
+                await until(lambda: dispatcher.status()["ready"])
+                await dispatcher.pause()
+                ref = runtime.monitor.record(runtime.client.inbound(100))
+                assert runtime.inbox.status()["execution_paused"] is True
+                assert runtime.inbox.event_state(ref) == "open" and server.counter == 0
+            runtime.jobs = wake.BridgeJobs(os.geteuid(), runtime.config.socket_path)
+            async with worker(runtime, tmp_path, bundle, server) as restarted:
+                await until(lambda: restarted.execution_state == "paused" and restarted.app.connected)
+                assert restarted.status()["ready"] is False
+                assert runtime.inbox.event_state(ref) == "open" and server.counter == 0
+                await restarted.resume_execution()
+                await until(lambda: server.started.is_set())
+                assert runtime.inbox.status()["execution_paused"] is False
+                assert server.counter == 1
+                assert runtime.inbox.active_jobs()[0]["event_ids"] == [ref]
+
+    asyncio.run(scenario())

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from test_telegram_bridge import _minimal_pdf
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 
 
 REVISION = "a" * 40
+
+
+@pytest.fixture(autouse=True)
+def synthetic_state_request(monkeypatch):
+    monkeypatch.setattr(bridge, "_load_reconciliation_state_request", object)
 
 
 def _message(identifier: int, *, peer: int = 42, out: bool = False, text: str = "request", at=None, reply=0):
@@ -39,6 +47,10 @@ class Client:
         self.messages = {message.id: message for message in messages}
         self.sent = 0
         self.fail_send = False
+        self.update_revision = 1
+
+    async def __call__(self, _request):
+        return SimpleNamespace(pts=self.update_revision, qts=0, seq=self.update_revision)
 
     async def get_messages(self, _entity, *, ids=None, limit=None):
         if ids is not None:
@@ -53,6 +65,7 @@ class Client:
         identifier = max(self.messages, default=0) + 1
         result = _message(identifier, peer=entity, out=True, text=text, reply=kwargs.get("reply_to", 0))
         self.messages[identifier] = result
+        self.update_revision += 1
         return result
 
     async def iter_dialogs(self, *, limit, **kwargs):
@@ -74,6 +87,49 @@ class Client:
         )
         for message in rows[:limit]:
             yield message
+
+
+class DateOrderedClient(Client):
+    def __init__(self, messages):
+        super().__init__(messages)
+        self.dialog_calls = []
+
+    async def iter_dialogs(self, *, limit, **kwargs):
+        latest = {
+            peer: max(
+                (message for message in self.messages.values() if message.chat_id == peer), key=lambda row: row.id
+            )
+            for peer in {message.chat_id for message in self.messages.values()}
+        }
+        peers = sorted(latest, key=lambda peer: (latest[peer].date, latest[peer].id), reverse=True)
+        if kwargs.get("offset_date") is not None:
+            peers = [
+                peer
+                for peer in peers
+                if (latest[peer].date, latest[peer].id) < (kwargs["offset_date"], kwargs["offset_id"])
+            ]
+        self.dialog_calls.append(peers[:limit])
+        for peer in peers[:limit]:
+            yield SimpleNamespace(id=peer, is_user=True, entity=peer, message=latest[peer])
+
+
+class MediaClient(Client):
+    async def send_file(self, entity, upload, *, caption, **kwargs):
+        content = upload.read()
+        message = await self.send_message(entity, caption, reply_to=kwargs.get("reply_to", 0))
+        message.media = SimpleNamespace()
+        message.file = SimpleNamespace(
+            name=upload.name,
+            mime_type="application/pdf" if kwargs.get("force_document") else "image/jpeg",
+            size=len(content),
+        )
+        message.document = SimpleNamespace(attributes=[])
+        message.synthetic_content = content
+        return message
+
+    async def download_media(self, message, *, file):
+        assert file is bytes
+        return message.synthetic_content
 
 
 def _runtime(tmp_path, *, max_events=10000):
@@ -190,6 +246,166 @@ def test_exact_result_receipt_finishes_all_covered_events(tmp_path):
     assert result["job"]["state"] == "completed"
     assert monitor.status()["open_events"] == 0
     assert client.sent == 1
+    monitor.inbox.close()
+
+
+def test_client_send_cannot_forge_handoff_receipt(tmp_path):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = Client([source])
+    with pytest.raises(bridge.BridgeError, match="job_handoff_required"):
+        asyncio.run(_send(client, config, monitor, job, kind="handoff", text="A human will handle it"))
+    assert client.sent == 0
+    assert monitor.inbox.read_job(job["job_id"])["effects"] == []
+    with pytest.raises(InboxError, match="inbox_result_receipt_required"):
+        monitor.inbox.result(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            outcome="handoff",
+            event_ids=job["event_ids"],
+            receipt_keys=[],
+        )
+    assert monitor.status()["open_events"] == 1
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("mismatch", ["client_reply", "wrong_owner", "wrong_digest"])
+def test_old_verified_handoff_effect_requires_exact_native_owner_ledger(tmp_path, monkeypatch, mismatch):
+    config, monitor = _runtime(tmp_path)
+    monitor.record(_message(100))
+    job = _job(monitor)
+    digest = hashlib.sha256(b"Synthetic handoff").hexdigest()
+    effect_key = monitor.inbox.reserve_effect(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        kind="handoff",
+        text_sha256=digest,
+        peer_id=42,
+        reply_to_message_id=100,
+    )
+    monitor.inbox.verify_effect(effect_key=effect_key, receipt_key=effect_key, message_id=101)
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 84)
+    key = bridge._ensure_private_key(config.state_dir / "contract.key")
+    delivered_peer = 85 if mismatch == "wrong_owner" else 84
+    binding = hmac.new(key, f"owner\0{delivered_peer}".encode(), hashlib.sha256).digest()
+    entry = {
+        "operation": "send_owner_notification",
+        "target_role": "owner",
+        "target_fingerprint": f"{int.from_bytes(binding[:8], 'big') or 1:016x}",
+        "message_id": 101,
+        "text_sha256": digest,
+        "readback_verified": True,
+    }
+    if mismatch == "client_reply":
+        entry.update(operation="send_text", peer_id=42, reply_to_message_id=100)
+    elif mismatch == "wrong_digest":
+        entry["text_sha256"] = hashlib.sha256(b"A different handoff").hexdigest()
+    bridge._save_idempotency(config.state_dir / "idempotency.json", {effect_key: entry})
+    request = {
+        "operation": "job_result",
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "expected_revision": job["revision"],
+        "outcome": "handoff",
+        "event_ids": job["event_ids"],
+        "receipt_keys": [effect_key],
+    }
+    with pytest.raises(bridge.BridgeError, match="job_handoff_receipt_required"):
+        asyncio.run(bridge._handle_operation(object(), config, request, inbound_monitor=monitor))
+    assert monitor.inbox.read_job(job["job_id"])["state"] == "running"
+    assert monitor.inbox.event_state(job["event_ids"][0]) == "open"
+    monitor.inbox.close()
+
+
+def _media_request(config, operation):
+    outbox = config.socket_path.parent / "outbox"
+    outbox.mkdir(mode=0o700)
+    suffix = ".pdf" if operation == "send_document" else ".jpg"
+    path = outbox / ("synthetic" + suffix)
+    path.write_bytes(_minimal_pdf() if suffix == ".pdf" else b"\xff\xd8synthetic\xff\xd9")
+    path.chmod(0o600)
+    return {
+        "operation": operation,
+        "peer": "42",
+        "document" if suffix == ".pdf" else "photo": str(path),
+        "caption": "Synthetic attachment",
+        "mode": "dry_run",
+    }
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_direct_owner_media_without_inbound_job_preserves_send_policy(tmp_path, monkeypatch, operation, enabled):
+    config, monitor = _runtime(tmp_path)
+    if not enabled:
+        monitor.inbox.duty_set(False)
+        monitor.capture_enabled = False
+    client = MediaClient([_message(100, out=True)])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    request = _media_request(config, operation)
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    apply = request | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": "owner-media"}
+    sent = asyncio.run(bridge._handle_operation(client, config, apply, inbound_monitor=monitor))
+    repeated = asyncio.run(bridge._handle_operation(client, config, apply, inbound_monitor=monitor))
+    assert sent["verified"] and repeated["replayed"] and client.sent == 1
+    assert "receipt_key" not in sent and monitor.inbox.active_jobs() == []
+    assert monitor.status()["open_events"] == 0
+    with pytest.raises(bridge.BridgeError, match="job_binding_required"):
+        asyncio.run(
+            bridge._handle_operation(client, config, request | {"reply_to_message_id": 100}, inbound_monitor=monitor)
+        )
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+def test_job_media_verifies_result_but_cannot_forge_handoff(tmp_path, monkeypatch, operation):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = MediaClient([source])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    request = _media_request(config, operation) | {
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+        "kind": "handoff",
+        "reply_to_message_id": 100,
+    }
+    with pytest.raises(bridge.BridgeError, match="job_handoff_required"):
+        asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    assert client.sent == 0 and monitor.inbox.read_job(job["job_id"])["effects"] == []
+    request["kind"] = "result"
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    apply = request | {
+        "mode": "apply",
+        "contract_token": dry["contract_token"],
+        "idempotency_key": dry["idempotency_key"],
+    }
+    sent = asyncio.run(bridge._handle_operation(client, config, apply, inbound_monitor=monitor))
+    replay = asyncio.run(bridge._handle_operation(client, config, apply, inbound_monitor=monitor))
+    assert sent["receipt_key"] == replay["receipt_key"] and client.sent == 1
+    completed = monitor.inbox.result(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        outcome="answered",
+        event_ids=job["event_ids"],
+        receipt_keys=[sent["receipt_key"]],
+    )
+    assert completed["state"] == "completed" and monitor.status()["open_events"] == 0
     monitor.inbox.close()
 
 
@@ -328,20 +544,154 @@ def test_history_duty_opening_second_is_held_without_replay(tmp_path):
 
 
 def test_dialogue_cursor_resumes_past_bounded_page(tmp_path, monkeypatch):
-    config, monitor = _runtime(tmp_path)
+    _config, monitor = _runtime(tmp_path)
     monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
     client = Client([_message(100, peer=42), _message(101, peer=43), _message(102, peer=44)])
     asyncio.run(bridge._reconcile_incoming_history(client, monitor))
     cursor = monitor.inbox.reconciliation_cursor()
     assert cursor["peer_id"] == 43
     assert monitor.status()["open_events"] == 2
+    asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+    assert monitor.status()["open_events"] == 3
+    assert monitor.inbox.reconciliation_cursor() is None
+    assert monitor.inbox.health()["intake"]["state"] == "ready"
     monitor.inbox.close()
+
+
+def _moving_history_runtime(tmp_path):
+    config, monitor = _runtime(tmp_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    monitor.inbox.duty_set(True, at=(now - timedelta(minutes=5)).isoformat())
+    client = DateOrderedClient(
+        [
+            _message(200, peer=42, out=True, at=now - timedelta(minutes=10)),
+            _message(190, peer=43, out=True, at=now - timedelta(minutes=15)),
+            _message(100, peer=44, at=now - timedelta(minutes=45)),
+            _message(180, peer=44, out=True, at=now - timedelta(minutes=20)),
+        ]
+    )
+    return config, monitor, client, now
+
+
+def test_moved_dialogue_rescans_prefix_before_ready_or_recovering_window(tmp_path, monkeypatch):
+    _config, monitor, client, now = _moving_history_runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+
+    async def sweep():
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+
+    async def scenario():
+        await sweep()
+        assert monitor.inbox.reconciliation_cursor()["peer_id"] == 43
+        assert monitor.inbox.events() == []
+        client.messages[300] = _message(300, peer=44, out=True, at=now - timedelta(minutes=1))
+        client.update_revision += 1
+        await sweep()
+        assert client.dialog_calls[1] == []
+        assert monitor.inbox.events() == []
+        assert monitor.inbox.health()["intake"] == {
+            "state": "held",
+            "error_code": "history_reconciliation_changed",
+        }
+        assert monitor.inbox.duty_windows()[0]["recovered_at"] is None
+        assert monitor.inbox.reconciliation_cursor() is None and monitor.reconcile_requested.is_set()
+        await sweep()
+        assert monitor.inbox.resolve(monitor.inbox.events()[0]["event_id"]).message_id == 100
+        assert monitor.inbox.duty_windows()[0]["recovered_at"] is None
+        await sweep()
+        assert monitor.inbox.health()["intake"]["state"] == "ready"
+        assert monitor.inbox.duty_windows()[0]["recovered_at"] is not None
+        assert not monitor.reconcile_requested.is_set()
+
+    asyncio.run(scenario())
+    monitor.inbox.close()
+
+
+def test_restart_discards_unfenced_cursor_preserving_peer_checkpoints(tmp_path, monkeypatch):
+    config, monitor, client, now = _moving_history_runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+    assert monitor.inbox.checkpoint(42) == 200
+    assert monitor.inbox.reconciliation_cursor()["peer_id"] == 43
+    monitor.inbox.close()
+    client.messages[300] = _message(300, peer=44, out=True, at=now - timedelta(minutes=1))
+    client.update_revision += 1
     restarted = bridge.DurableInboundMonitor(TelegramInbox(config.state_dir / "inbound.sqlite3"), enabled=True)
     asyncio.run(bridge._reconcile_incoming_history(client, restarted))
-    assert restarted.status()["open_events"] == 3
-    assert restarted.inbox.reconciliation_cursor() is None
+    assert client.dialog_calls[1][0] == 44
+    assert restarted.inbox.resolve(restarted.inbox.events()[0]["event_id"]).message_id == 100
+    assert restarted.inbox.checkpoint(42) == 200
+    assert restarted.inbox.health()["intake"]["state"] == "held"
+    restarted.reconcile_requested.clear()
+    asyncio.run(bridge._reconcile_incoming_history(client, restarted))
     assert restarted.inbox.health()["intake"]["state"] == "ready"
+    assert restarted.inbox.reconciliation_cursor() is None
     restarted.inbox.close()
+
+
+def test_continuously_changing_history_stops_after_one_rescan_until_new_event(tmp_path):
+    _config, monitor = _runtime(tmp_path)
+
+    class ChangingClient(DateOrderedClient):
+        async def __call__(self, request):
+            self.update_revision += 1
+            return await super().__call__(request)
+
+    client = ChangingClient([_message(100)])
+
+    async def scenario():
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.reconcile_requested.is_set()
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.reconciliation_stopped and not monitor.reconcile_requested.is_set()
+        before = client.update_revision
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert client.update_revision == before and len(client.dialog_calls) == 2
+        assert monitor.inbox.health()["intake"]["state"] == "held"
+        new_event = _message(101, out=True)
+        client.messages[101] = new_event
+        await bridge._capture_incoming_event(monitor, new_event)
+        assert monitor.reconcile_requested.is_set() and not monitor.reconciliation_stopped
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert len(client.dialog_calls) == 3 and monitor.reconciliation_restarts == 1
+
+    asyncio.run(scenario())
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("value", [True, -1, 0x80000000, "1", None])
+def test_history_fence_rejects_malformed_update_state(value):
+    async def client(_request):
+        return SimpleNamespace(pts=value, qts=0, seq=0)
+
+    with pytest.raises(bridge.BridgeError, match="history_state_invalid"):
+        asyncio.run(bridge._reconciliation_state_fence(client))
+
+
+def test_history_contract_failure_holds_without_automatic_retry(tmp_path):
+    config, monitor = _runtime(tmp_path)
+
+    async def scenario():
+        monitor.request_reconciliation()
+        task = asyncio.create_task(bridge._reconcile_incoming_loop(object(), config, monitor))
+        try:
+            await asyncio.sleep(0)
+            assert monitor.inbox.health()["intake"] == {
+                "state": "held",
+                "error_code": "history_reconciliation_failed",
+            }
+            assert monitor.reconciliation_fence is None and not monitor.reconcile_requested.is_set()
+            assert monitor.inbox.events() == []
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+    monitor.inbox.close()
 
 
 def test_message_budget_replays_remaining_prefix(tmp_path, monkeypatch):
@@ -382,6 +732,84 @@ def test_subscription_actual_socket_snapshot_changes_and_denial(tmp_path, monkey
         await server.wait_closed()
 
     asyncio.run(scenario())
+    monitor.inbox.close()
+
+
+def test_job_active_ipc_pages_large_held_queue_without_instruction_bodies(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    long_root = "/test/snapshot/" + "a" * 3900
+    monitor.inbox.import_references(
+        [
+            {
+                "event_id": f"inbound-{index + 1}",
+                "peer_id": index + 1,
+                "message_id": index + 1,
+                "received_at": datetime.now(UTC).isoformat(),
+                "state": "open",
+            }
+            for index in range(200)
+        ],
+        instruction_root=long_root,
+        instruction_revision=REVISION,
+    )
+    monkeypatch.setattr(bridge, "_require_root_client", lambda _writer: None)
+
+    async def scenario():
+        server = await asyncio.start_unix_server(
+            lambda reader, writer: bridge._serve_client(object(), config, reader, writer, inbound_monitor=monitor),
+            path=str(config.socket_path),
+        )
+        seen = []
+        cursor = None
+        async with server:
+            while True:
+                reader, writer = await asyncio.open_unix_connection(str(config.socket_path))
+                writer.write(bridge._canonical_json({"operation": "job_active", "after_job_id": cursor}) + b"\n")
+                await writer.drain()
+                payload = await reader.readline()
+                response = json.loads(payload)
+                assert response["ok"] is True and len(response["jobs"]) == 50
+                assert len(payload) < bridge.MAX_REQUEST_BYTES and long_root.encode() not in payload
+                assert all("instruction_root" not in row and "effects" not in row for row in response["jobs"])
+                assert all(row["state"] == "needs_review" for row in response["jobs"])
+                seen.extend(row["job_id"] for row in response["jobs"])
+                cursor = response["next_job_id"]
+                writer.close()
+                await writer.wait_closed()
+                if cursor is None:
+                    break
+        assert len(seen) == 200 and len(set(seen)) == 200
+
+    asyncio.run(scenario())
+    monitor.inbox.close()
+
+
+def test_job_active_cli_preserves_page_arguments():
+    args = bridge.build_parser().parse_args(
+        ["--account", "work", "job-active", "--limit", "2", "--after-job-id", "job-" + "a" * 32]
+    )
+    assert bridge._job_cli_request(args) == {
+        "operation": "job_active",
+        "limit": 2,
+        "after_job_id": "job-" + "a" * 32,
+    }
+
+
+def test_execution_pause_rpc_uses_separate_revision_after_new_intake(tmp_path):
+    config, monitor = _runtime(tmp_path)
+    status = monitor.inbox.status()
+    revision = status["execution_revision"]
+    monitor.record(_message(100))
+    request = {"operation": "job_execution_set", "paused": True, "expected_revision": revision}
+    response = asyncio.run(bridge._handle_operation(object(), config, request, inbound_monitor=monitor))
+    assert response["status"]["execution_paused"] is True
+    assert response["status"]["execution_revision"] == revision + 1
+    assert monitor.generation == monitor.inbox.generation
+    with pytest.raises(InboxError, match="inbox_execution_revision_conflict"):
+        asyncio.run(bridge._handle_operation(object(), config, request | {"paused": False}, inbound_monitor=monitor))
+    with pytest.raises(bridge.BridgeError, match="job_execution_paused_invalid"):
+        asyncio.run(bridge._handle_operation(object(), config, request | {"paused": 1}, inbound_monitor=monitor))
+    assert monitor.inbox.status()["execution_paused"] is True
     monitor.inbox.close()
 
 

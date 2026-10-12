@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -173,6 +174,7 @@ def test_whole_second_boundaries_do_not_create_false_ambiguity(tmp_path: Path, c
         assert queue.duty_classification(clock.value.isoformat(), timestamp_precision="second") == "excluded"
         event_id = queue.record(1, 1, start.isoformat(), timestamp_precision="second")
         assert event_id
+        queue.duty_set(True)
         assert claim(queue)["event_ids"] == [event_id]
 
 
@@ -235,6 +237,95 @@ def test_configured_owner_is_unbatched(inbox: TelegramInbox) -> None:
     inbox.record(7, 2)
     job = claim(inbox, unbatched_peer_id=7)
     assert job["event_ids"] == [first]
+
+
+def test_disabled_duty_retains_pending_event_until_explicit_enable(inbox: TelegramInbox, clock: Clock) -> None:
+    event = inbox.record(1, 1)
+    clock.advance(1)
+    inbox.duty_set(False)
+    generation = inbox.generation
+    assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+    assert inbox.generation == generation and inbox.require_open(event)
+    assert inbox.record(1, 2) is None
+    inbox.duty_set(True)
+    assert claim(inbox)["event_ids"] == [event]
+
+
+def test_explicit_executor_pause_survives_restart_and_preserves_intake(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    with TelegramInbox(path, clock=clock) as first:
+        first.duty_set(True)
+        original = first.record(1, 1)
+        assert first.status()["execution_paused"] is False
+        assert first.status()["execution_revision"] == 1
+        paused = first.set_execution_paused(paused=True, expected_revision=1)
+        assert paused["execution_paused"] is True and paused["execution_revision"] == 2
+        later = first.record(1, 2)
+        assert later and first.status()["open_events"] == 2
+        assert first.status()["execution_revision"] == 2
+    with TelegramInbox(path, clock=clock) as restored:
+        restored.recover_on_startup()
+        status = restored.status()
+        assert status["enabled"] and status["execution_paused"] and status["execution_revision"] == 2
+        assert restored.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+        assert restored.require_open(original) and restored.require_open(later)
+        # Changing intake duty does not implicitly clear an explicit pause.
+        restored.duty_set(False)
+        restored.duty_set(True)
+        assert restored.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+        restored.set_execution_paused(paused=False, expected_revision=2)
+        assert claim(restored)["event_ids"] == [original, later]
+
+
+def test_executor_revision_is_independent_of_incoming_events(inbox: TelegramInbox) -> None:
+    generation = inbox.generation
+    inbox.record(1, 1)
+    assert inbox.generation > generation and inbox.status()["execution_revision"] == 1
+    inbox.set_execution_paused(paused=True, expected_revision=1)
+    generation = inbox.generation
+    inbox.record(1, 2)
+    assert inbox.generation > generation and inbox.status()["execution_revision"] == 2
+    resumed = inbox.set_execution_paused(paused=False, expected_revision=2)
+    assert resumed["execution_paused"] is False and resumed["execution_revision"] == 3
+
+
+def test_executor_control_validates_stale_cas_even_when_desired_state_matches(inbox: TelegramInbox) -> None:
+    initial = inbox.set_execution_paused(paused=False, expected_revision=1)
+    assert initial["execution_revision"] == 1
+    paused = inbox.set_execution_paused(paused=True, expected_revision=1)
+    generation = inbox.generation
+    for desired in (False, True):
+        with pytest.raises(InboxError, match="inbox_execution_revision_conflict"):
+            inbox.set_execution_paused(paused=desired, expected_revision=1)
+    same = inbox.set_execution_paused(paused=True, expected_revision=2)
+    assert same == paused and inbox.generation == generation
+    assert inbox.status()["execution_paused"] is True
+
+
+@pytest.mark.parametrize("paused", [0, 1, "true", None, []])
+def test_executor_control_requires_boolean_pause(inbox: TelegramInbox, paused: Any) -> None:
+    with pytest.raises(InboxError, match="inbox_execution_invalid"):
+        inbox.set_execution_paused(paused=paused, expected_revision=1)
+    assert inbox.status()["execution_revision"] == 1
+
+
+@pytest.mark.parametrize("revision", [True, 0, -1, "1", None])
+def test_executor_control_requires_positive_integer_revision(inbox: TelegramInbox, revision: Any) -> None:
+    with pytest.raises(InboxError, match="inbox_execution_revision_invalid"):
+        inbox.set_execution_paused(paused=True, expected_revision=revision)
+    assert inbox.status()["execution_paused"] is False
+
+
+def test_executor_pause_and_revision_roll_back_together_on_storage_failure(inbox: TelegramInbox) -> None:
+    before = inbox.status()
+    inbox._db.execute(
+        "CREATE TRIGGER fail_pause BEFORE UPDATE ON metadata WHEN NEW.key='execution_revision' "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic'); END"
+    )
+    inbox._db.commit()
+    with pytest.raises(InboxError, match="inbox_storage_failed"):
+        inbox.set_execution_paused(paused=True, expected_revision=1)
+    assert inbox.status() == before
 
 
 def test_claim_lease_and_revision_prevent_stale_or_unauthorized_transition(inbox: TelegramInbox) -> None:
@@ -341,16 +432,15 @@ def test_completion_rejects_wrong_coverage_and_foreign_receipts(inbox: TelegramI
         inbox.result(**guard(job), outcome="answered", event_ids=job["event_ids"], receipt_keys=["foreign-receipt"])
 
 
-def test_no_reply_requires_fixed_reason_not_free_text(inbox: TelegramInbox) -> None:
+@pytest.mark.parametrize("reason", ["duplicate", "spam", "reaction_only", "already_answered", "not_actionable"])
+def test_no_reply_requires_fixed_reason_not_free_text(inbox: TelegramInbox, reason: str) -> None:
     event = inbox.record(1, 1)
     job = running(inbox)
     with pytest.raises(InboxError, match="inbox_no_reply_reason_invalid"):
         inbox.result(
             **guard(job), outcome="no_reply_needed", event_ids=[event], receipt_keys=[], reason_code="client said hello"
         )
-    done = inbox.result(
-        **guard(job), outcome="no_reply_needed", event_ids=[event], receipt_keys=[], reason_code="reaction_only"
-    )
+    done = inbox.result(**guard(job), outcome="no_reply_needed", event_ids=[event], receipt_keys=[], reason_code=reason)
     assert done["outcome"] == "no_reply_needed"
     assert inbox.event_state(event) == "no_reply_needed"
 
@@ -455,6 +545,84 @@ def test_unknown_effect_cannot_be_bypassed_by_slot_or_new_context(inbox: Telegra
             reply_to_message_id=1,
         )
     assert len(inbox.read_job(job["job_id"])["effects"]) == 1
+
+
+def test_two_prepared_slots_cannot_bypass_unknown_effect_at_reservation_or_attempt(inbox: TelegramInbox) -> None:
+    inbox.record(1, 1)
+    job = running(inbox)
+    first = inbox.reserve_effect(**guard(job), kind="result", text_sha256="a" * 64, peer_id=1, reply_to_message_id=1)
+    second = inbox.reserve_effect(
+        **guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1, effect_slot=1
+    )
+    inbox.mark_effect_intent(first)
+    generation = inbox.generation
+    # Reconcile the original key; neither its identity nor its attempt changes.
+    assert (
+        inbox.reserve_effect(**guard(job), kind="result", text_sha256="a" * 64, peer_id=1, reply_to_message_id=1)
+        == first
+    )
+    inbox.mark_effect_intent(first)
+    with pytest.raises(InboxError, match="inbox_effect_outcome_unknown"):
+        inbox.reserve_effect(
+            **guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1, effect_slot=1
+        )
+    with pytest.raises(InboxError, match="inbox_effect_outcome_unknown"):
+        inbox.mark_effect_intent(second)
+    assert inbox.generation == generation
+    assert inbox.read_effect(second)["attempted"] == 0
+    inbox.verify_effect(effect_key=first, receipt_key=first, message_id=101)
+    assert (
+        inbox.reserve_effect(
+            **guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1, effect_slot=1
+        )
+        == second
+    )
+    assert inbox.mark_effect_intent(second)["attempted"] == 1
+
+
+@pytest.mark.parametrize(
+    "outcome,kind",
+    [("answered", "result"), ("awaiting_client", "clarification"), ("handoff", "handoff"), ("no_reply_needed", None)],
+)
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "synthetic customer body +12345",
+        "syntheticcustomerpayload",
+        "a" * 17,
+        "business_result_verified",
+        "arbitrary\nbody",
+        "x" * 97,
+        {},
+        42,
+        True,
+    ],
+)
+def test_terminal_result_rejects_non_code_reasons_without_persisting(
+    inbox: TelegramInbox, outcome: str, kind: str | None, reason: Any
+) -> None:
+    event = inbox.record(1, 1)
+    job = running(inbox)
+    keys = [] if kind is None else [receipt(inbox, job, kind)]
+    generation = inbox.generation
+    error = "inbox_no_reply_reason_invalid" if outcome == "no_reply_needed" else "inbox_reason_invalid"
+    with pytest.raises(InboxError, match=error):
+        inbox.result(**guard(job), outcome=outcome, event_ids=[event], receipt_keys=keys, reason_code=reason)
+    actual = inbox.read_job(job["job_id"])
+    assert actual["state"] == "running" and actual["reason_code"] is None
+    assert inbox.event_state(event) == "open"
+    assert inbox.generation == generation
+
+
+@pytest.mark.parametrize(
+    "outcome,kind", [("answered", "result"), ("awaiting_client", "clarification"), ("handoff", "handoff")]
+)
+def test_terminal_result_accepts_only_no_reason(inbox: TelegramInbox, outcome: str, kind: str) -> None:
+    event = inbox.record(1, 1)
+    job = running(inbox)
+    key = receipt(inbox, job, kind)
+    done = inbox.result(**guard(job), outcome=outcome, event_ids=[event], receipt_keys=[key], reason_code=None)
+    assert done["state"] == "completed" and done["reason_code"] is None
 
 
 def test_context_always_contains_anchor_after_many_recent_predecessors(inbox: TelegramInbox, clock: Clock) -> None:
@@ -639,6 +807,130 @@ def test_manual_recovery_does_not_retry_unknown_actions(inbox: TelegramInbox) ->
     resumed = inbox.resolve_job(**guard(job), decision="continue_bound_turn", effects_reviewed=True)
     assert resumed["state"] == "running"
     assert resumed["turn_id"] == "turn-1"
+
+
+def test_explicitly_reviewed_retry_releases_only_harmless_preparations(inbox: TelegramInbox) -> None:
+    event = inbox.record(1, 1)
+    job = running(inbox)
+    key = inbox.reserve_effect(**guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1)
+    job = inbox.needs_review(**guard(job), reason_code="codex_turn_failed")
+    with pytest.raises(InboxError, match="inbox_resolution_review_required"):
+        inbox.resolve_job(**guard(job), decision="retry_no_effects")
+    assert inbox.read_effect(key)["attempted"] == 0
+    released = inbox.resolve_job(**guard(job), decision="retry_no_effects", effects_reviewed=True)
+    assert released["state"] == "released" and released["effects"] == []
+    assert inbox.require_open(event)
+    with pytest.raises(InboxError, match="inbox_effect_unavailable"):
+        inbox.read_effect(key)
+    retried = claim(inbox)
+    assert retried["event_ids"] == [event] and retried["job_id"] != job["job_id"]
+
+
+@pytest.mark.parametrize("verified", [False, True])
+def test_reviewed_retry_retains_unknown_or_verified_external_effects(inbox: TelegramInbox, verified: bool) -> None:
+    inbox.record(1, 1)
+    job = running(inbox)
+    key = inbox.reserve_effect(**guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1)
+    inbox.mark_effect_intent(key)
+    if verified:
+        inbox.verify_effect(effect_key=key, receipt_key=key, message_id=101)
+    job = inbox.needs_review(**guard(job), reason_code="codex_turn_failed")
+    generation = inbox.generation
+    with pytest.raises(InboxError, match="inbox_retry_effects_present"):
+        inbox.resolve_job(**guard(job), decision="retry_no_effects", effects_reviewed=True)
+    assert inbox.read_job(job["job_id"])["state"] == "needs_review"
+    assert inbox.read_effect(key)["attempted"] == 1
+    assert inbox.generation == generation
+
+
+def test_active_job_pages_cover_2000_holds_without_full_payloads(tmp_path: Path, clock: Clock) -> None:
+    with TelegramInbox(tmp_path / "inbox" / "inbound.sqlite3", clock=clock) as queue:
+        # A long valid physical path must never multiply the IPC page size.
+        root = "/" + "r" * 4095
+        queue.configure_instructions(root, REVISION)
+        queue.duty_set(True)
+        references = [
+            {
+                "event_id": f"inbound-{number}",
+                "peer_id": number,
+                "message_id": number,
+                "received_at": clock.value.isoformat(),
+                "state": "open",
+            }
+            for number in range(1, 2001)
+        ]
+        imported = queue.import_references(references, instruction_root=root, instruction_revision=REVISION)
+        expected = imported["review_job_ids"]
+        actual: list[str] = []
+        cursor = None
+        pages = 0
+        while True:
+            page = queue.active_job_page(limit=100, after_job_id=cursor)
+            assert 0 < len(page["jobs"]) <= 100
+            assert len(json.dumps({"ok": True, **page}).encode()) < 128 * 1024
+            for summary in page["jobs"]:
+                assert "effects" not in summary and "instruction_root" not in summary
+                assert summary["state"] == "needs_review"
+                assert summary["event_ids"] and summary["lease"] and summary["revision"] == 1
+                actual.append(summary["job_id"])
+            pages += 1
+            cursor = page["next_job_id"]
+            if cursor is None:
+                break
+            assert cursor == page["jobs"][-1]["job_id"]
+        assert pages == 20 and actual == expected and len(set(actual)) == 2000
+        # Internal recovery helpers retain their full details and old semantics.
+        assert queue.active_jobs()[0]["instruction_root"] == root
+
+
+def test_active_job_summary_excludes_effect_history(inbox: TelegramInbox) -> None:
+    inbox.record(1, 1)
+    job = running(inbox)
+    for slot in range(32):
+        key = inbox.reserve_effect(
+            **guard(job), kind="ack", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1, effect_slot=slot
+        )
+        inbox.verify_effect(effect_key=key, receipt_key=key, message_id=101 + slot)
+    full = inbox.read_job(job["job_id"])
+    summary = inbox.active_job_page()["jobs"][0]
+    assert len(full["effects"]) == 32 and "effects" not in summary
+    assert len(json.dumps(summary)) < len(json.dumps(full)) / 10
+    for field in ("job_id", "lease", "revision", "event_ids", "state", "thread_id", "turn_id", "reason_code"):
+        assert summary[field] == full[field]
+
+
+def test_active_job_cursor_survives_previous_job_leaving_active_state(inbox: TelegramInbox, clock: Clock) -> None:
+    inbox.configure_instructions(ROOT, REVISION)
+    clock.value += timedelta(microseconds=500000)
+    inbox.duty_set(False)
+    stamp = clock.value.replace(microsecond=0).isoformat()
+    for peer in range(1, 4):
+        inbox.record(peer, 1, stamp, timestamp_precision="second")
+    first = inbox.active_job_page(limit=1)
+    cursor = first["next_job_id"]
+    assert cursor == first["jobs"][0]["job_id"]
+    job = inbox.read_job(cursor)
+    inbox.resolve_job(**guard(job), decision="retry_no_effects", effects_reviewed=True)
+    remaining = inbox.active_job_page(limit=100, after_job_id=cursor)
+    assert len(remaining["jobs"]) == 2 and remaining["next_job_id"] is None
+    assert cursor not in {item["job_id"] for item in remaining["jobs"]}
+
+
+@pytest.mark.parametrize("limit", [True, 0, 101, "50", None])
+def test_active_job_page_rejects_invalid_limits(inbox: TelegramInbox, limit: Any) -> None:
+    with pytest.raises(InboxError, match="inbox_page_limit_invalid"):
+        inbox.active_job_page(limit=limit)
+
+
+def test_active_job_page_validates_cursor_and_handles_empty_tail(inbox: TelegramInbox) -> None:
+    assert inbox.active_job_page() == {"jobs": [], "next_job_id": None}
+    with pytest.raises(InboxError, match="inbox_job_cursor_invalid"):
+        inbox.active_job_page(after_job_id="arbitrary body")
+    with pytest.raises(InboxError, match="inbox_job_cursor_unavailable"):
+        inbox.active_job_page(after_job_id="job-" + "f" * 32)
+    inbox.record(1, 1)
+    job = claim(inbox)
+    assert inbox.active_job_page(after_job_id=job["job_id"]) == {"jobs": [], "next_job_id": None}
 
 
 def test_incident_and_recovery_notifications_survive_restart_once(tmp_path: Path, clock: Clock) -> None:

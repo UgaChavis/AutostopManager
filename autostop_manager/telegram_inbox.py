@@ -152,6 +152,8 @@ class TelegramInbox:
             INSERT OR IGNORE INTO metadata VALUES ('schema_version', '1');
             INSERT OR IGNORE INTO metadata VALUES ('generation', '0');
             INSERT OR IGNORE INTO metadata VALUES ('duty_enabled', '0');
+            INSERT OR IGNORE INTO metadata VALUES ('execution_paused', '0');
+            INSERT OR IGNORE INTO metadata VALUES ('execution_revision', '1');
             INSERT OR IGNORE INTO metadata VALUES ('rejected_events', '0');
             CREATE TABLE IF NOT EXISTS peers (
                 peer_id INTEGER PRIMARY KEY, context_revision INTEGER NOT NULL DEFAULT 0
@@ -500,6 +502,8 @@ class TelegramInbox:
         )
         return {
             "enabled": self._meta("duty_enabled") == "1",
+            "execution_paused": self._meta("execution_paused") == "1",
+            "execution_revision": int(self._meta("execution_revision")),
             "generation": self.generation,
             "retention": "protected_sqlite",
             "pending_events": counts.get("open", 0),
@@ -598,8 +602,12 @@ class TelegramInbox:
         self._instruction(instruction_root, instruction_revision)
         if unbatched_peer_id is not None:
             _positive(unbatched_peer_id, "inbound_peer_invalid")
+        if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
+            return None
         self._promote_boundary_holds(instruction_root, instruction_revision)
-        if self.active_jobs():
+        if self._db.execute(
+            "SELECT 1 FROM jobs WHERE state IN ('claimed','start_intent','running','needs_review') LIMIT 1"
+        ).fetchone():
             return None
         first = self._db.execute(
             "SELECT * FROM events WHERE state='open' AND job_id IS NULL ORDER BY received_at,rowid LIMIT 1"
@@ -646,17 +654,20 @@ class TelegramInbox:
 
     def read_job(self, job_id: str) -> dict[str, Any]:
         result = dict(self._job_row(job_id))
-        result["event_ids"] = [
-            f"inbound-{row[0]}"
-            for row in self._db.execute(
-                "SELECT sequence FROM events WHERE job_id=? ORDER BY received_at,rowid", (job_id,)
-            )
-        ]
+        result["event_ids"] = self._job_event_ids(job_id)
         result["effects"] = [
             dict(row)
             for row in self._db.execute("SELECT * FROM effects WHERE job_id=? ORDER BY created_at,rowid", (job_id,))
         ]
         return result
+
+    def _job_event_ids(self, job_id: str) -> list[str]:
+        return [
+            f"inbound-{row[0]}"
+            for row in self._db.execute(
+                "SELECT sequence FROM events WHERE job_id=? ORDER BY received_at,rowid", (job_id,)
+            )
+        ]
 
     def active_jobs(self) -> list[dict[str, Any]]:
         return [
@@ -666,6 +677,36 @@ class TelegramInbox:
                 "ORDER BY created_at,rowid"
             )
         ]
+
+    def active_job_page(self, *, limit: int = 50, after_job_id: str | None = None) -> dict[str, Any]:
+        """Bounded IPC summaries in stable insertion order, excluding large payloads.
+
+        A cursor still resolves after its job completes or releases. Full effects
+        and the instruction path remain available through an exact ``read_job``.
+        """
+
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise InboxError("inbox_page_limit_invalid")
+        cursor = 0
+        if after_job_id is not None:
+            if not isinstance(after_job_id, str) or JOB_PATTERN.fullmatch(after_job_id) is None:
+                raise InboxError("inbox_job_cursor_invalid")
+            row = self._db.execute("SELECT rowid FROM jobs WHERE job_id=?", (after_job_id,)).fetchone()
+            if row is None:
+                raise InboxError("inbox_job_cursor_unavailable")
+            cursor = row[0]
+        rows = list(
+            self._db.execute(
+                "SELECT job_id,peer_id,state,revision,lease,context_revision,instruction_revision,"
+                "thread_id,turn_id,reason_code FROM jobs "
+                "WHERE rowid>? AND state IN ('claimed','start_intent','running','needs_review') "
+                "ORDER BY rowid LIMIT ?",
+                (cursor, limit + 1),
+            )
+        )
+        has_more = len(rows) > limit
+        jobs = [{**dict(row), "event_ids": self._job_event_ids(row["job_id"])} for row in rows[:limit]]
+        return {"jobs": jobs, "next_job_id": jobs[-1]["job_id"] if has_more else None}
 
     def _lease(self, job_id: str, lease: str, expected_revision: int) -> sqlite3.Row:
         _token(lease, "inbox_lease_invalid")
@@ -680,6 +721,8 @@ class TelegramInbox:
         return job
 
     def _transition(self, job_id: str, state: str, *, reason_code: str | None = None) -> None:
+        if reason_code is not None:
+            _code(reason_code)
         self._db.execute(
             "UPDATE jobs SET state=?,revision=revision+1,updated_at=?,reason_code=? WHERE job_id=?",
             (state, self._now(), reason_code, job_id),
@@ -828,11 +871,9 @@ class TelegramInbox:
                 reply_to_message_id,
             ):
                 raise InboxError("inbox_effect_conflict")
+            self._require_no_other_unknown_effects(job_id, str(old["effect_key"]))
             return str(old["effect_key"])
-        if self._db.execute(
-            "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND verified=0 LIMIT 1", (job_id,)
-        ).fetchone():
-            raise InboxError("inbox_effect_outcome_unknown")
+        self._require_no_other_unknown_effects(job_id)
         key = "tgjob-" + hashlib.sha256(f"{job_id}:{kind}:{job['context_revision']}:{effect_slot}".encode()).hexdigest()
         with self._write():
             self._db.execute(
@@ -852,8 +893,17 @@ class TelegramInbox:
             )
         return key
 
+    def _require_no_other_unknown_effects(self, job_id: str, effect_key: str | None = None) -> None:
+        if self._db.execute(
+            "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND verified=0 "
+            "AND (? IS NULL OR effect_key<>?) LIMIT 1",
+            (job_id, effect_key, effect_key),
+        ).fetchone():
+            raise InboxError("inbox_effect_outcome_unknown")
+
     def mark_effect_intent(self, effect_key: str) -> dict[str, Any]:
         effect = self.read_effect(effect_key)
+        self._require_no_other_unknown_effects(effect["job_id"], effect_key)
         if effect["attempted"]:
             return effect
         with self._write():
@@ -933,8 +983,11 @@ class TelegramInbox:
         if outcome == "no_reply_needed":
             if not isinstance(reason_code, str) or reason_code not in NO_REPLY_REASONS:
                 raise InboxError("inbox_no_reply_reason_invalid")
-        elif expected[outcome] not in kinds:
-            raise InboxError("inbox_result_receipt_required")
+        else:
+            if reason_code is not None:
+                raise InboxError("inbox_reason_invalid")
+            if expected[outcome] not in kinds:
+                raise InboxError("inbox_result_receipt_required")
         if outcome != "no_reply_needed" and job["context_revision"] != self._peer_revision(job["peer_id"]):
             raise InboxError("inbox_context_stale")
         with self._write():
@@ -968,12 +1021,15 @@ class TelegramInbox:
                 raise InboxError("inbox_turn_unavailable")
             state = "running"
         else:
-            if self.read_job(job_id)["effects"]:
+            if self._db.execute(
+                "SELECT 1 FROM effects WHERE job_id=? AND (attempted=1 OR verified=1) LIMIT 1", (job_id,)
+            ).fetchone():
                 raise InboxError("inbox_retry_effects_present")
             state = "released"
         with self._write():
             self._transition(job_id, state)
             if state == "released":
+                self._db.execute("DELETE FROM effects WHERE job_id=? AND attempted=0 AND verified=0", (job_id,))
                 self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job_id,))
         return self.read_job(job_id)
 
@@ -989,6 +1045,21 @@ class TelegramInbox:
             else:
                 self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (now,))
             self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
+        return self.status()
+
+    def set_execution_paused(self, *, paused: bool, expected_revision: int) -> dict[str, Any]:
+        """Persist explicit executor control with a revision independent of intake."""
+
+        if type(paused) is not bool:
+            raise InboxError("inbox_execution_invalid")
+        _positive(expected_revision, "inbox_execution_revision_invalid")
+        if int(self._meta("execution_revision")) != expected_revision:
+            raise InboxError("inbox_execution_revision_conflict")
+        if paused == (self._meta("execution_paused") == "1"):
+            return self.status()
+        with self._write():
+            self._db.execute("UPDATE metadata SET value=? WHERE key='execution_paused'", ("1" if paused else "0",))
+            self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='execution_revision'")
         return self.status()
 
     def duty_windows(self) -> list[dict[str, Any]]:

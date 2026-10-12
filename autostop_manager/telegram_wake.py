@@ -41,6 +41,9 @@ HEARTBEAT_INTERVAL = 20
 HEARTBEAT_TIMEOUT = 20
 FAILED_RECOVERY_TIMEOUT = 20
 MAX_TURN_NOTIFICATIONS = 32
+MAX_JOB_RESPONSE_BYTES = 1024 * 1024
+ACTIVE_JOB_PAGE_SIZE = 50
+MAX_ACTIVE_JOB_PAGES = 201
 WAKE_INSTRUCTION = (
     "$manage-owner-telegram Новое событие рабочего Telegram: {event_id}; режим включён владельцем. "
     "Прочитай AGENTS.md: актуальные правила этого запуска заменяют устаревшие правила истории. "
@@ -993,11 +996,12 @@ class BridgeJobs:
         self.listener: asyncio.Task[None] | None = None
         self.stopping = False
         self.last_error: str | None = None
+        self.subscription_writer: asyncio.StreamWriter | None = None
 
     async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         if os.geteuid() != 0:
             raise WakeError("wake_job_sender_denied")
-        reader, writer = await asyncio.open_unix_connection(str(self.path), limit=1024 * 1024)
+        reader, writer = await asyncio.open_unix_connection(str(self.path), limit=MAX_JOB_RESPONSE_BYTES)
         sock = writer.get_extra_info("socket")
         uid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
         if uid != self.bridge_uid:
@@ -1006,13 +1010,30 @@ class BridgeJobs:
             raise WakeError("wake_bridge_target_invalid")
         return reader, writer
 
+    def _transport_lost(self) -> None:
+        self.connected = False
+        self.changed.set()
+        # Reconnect the subscription even when only the independent RPC socket
+        # lost its response. Its next snapshot authorizes a fresh ledger read.
+        if self.subscription_writer is not None:
+            self.subscription_writer.close()
+
     async def request(self, operation: str, **params: Any) -> dict[str, Any]:
-        reader, writer = await self._connect()
+        writer: asyncio.StreamWriter | None = None
         try:
+            reader, writer = await self._connect()
             writer.write(json.dumps({"operation": operation, **params}).encode() + b"\n")
             await writer.drain()
-            raw = await asyncio.wait_for(reader.readline(), 45)
-            response = json.loads(raw)
+            try:
+                raw = await asyncio.wait_for(reader.readline(), 45)
+            except ValueError as exc:
+                raise WakeError("wake_job_response_too_large") from exc
+            if not raw or not raw.endswith(b"\n"):
+                raise TransportLost("wake_bridge_disconnected")
+            try:
+                response = json.loads(raw)
+            except (ValueError, TypeError) as exc:
+                raise WakeError("wake_job_response_invalid") from exc
             if not isinstance(response, dict) or response.get("ok") is not True:
                 error = response.get("error") if isinstance(response, dict) else None
                 if (
@@ -1026,10 +1047,14 @@ class BridgeJobs:
                     raise WakeError(error)
                 raise WakeError("wake_job_response_invalid")
             return response
+        except (OSError, TimeoutError, TransportLost):
+            self._transport_lost()
+            raise
         finally:
-            writer.close()
-            with suppress(OSError):
-                await writer.wait_closed()
+            if writer is not None:
+                writer.close()
+                with suppress(OSError):
+                    await writer.wait_closed()
 
     async def subscribe(self) -> None:
         attempt = 0
@@ -1037,6 +1062,7 @@ class BridgeJobs:
             writer: asyncio.StreamWriter | None = None
             try:
                 reader, writer = await self._connect()
+                self.subscription_writer = writer
                 writer.write(
                     json.dumps({"operation": "job_subscribe", "after_generation": self.generation}).encode() + b"\n"
                 )
@@ -1068,6 +1094,7 @@ class BridgeJobs:
                 self.changed.set()
                 return
             finally:
+                self.subscription_writer = None
                 if writer is not None:
                     writer.close()
                     with suppress(OSError):
@@ -1105,6 +1132,32 @@ def _job_entity(response: dict[str, Any]) -> dict[str, Any] | None:
     ):
         raise WakeError("wake_job_response_invalid")
     return job
+
+
+async def _active_job_page(
+    jobs: BridgeJobs, *, after_job_id: str | None = None, limit: int = ACTIVE_JOB_PAGE_SIZE
+) -> tuple[list[dict[str, Any]], str | None]:
+    response = await jobs.request("job_active", limit=limit, after_job_id=after_job_id)
+    rows = response.get("jobs")
+    cursor = response.get("next_job_id")
+    if (
+        not isinstance(rows, list)
+        or len(rows) > limit
+        or "next_job_id" not in response
+        or (cursor is not None and (not rows or not isinstance(cursor, str) or cursor == after_job_id))
+    ):
+        raise WakeError("wake_job_status_invalid")
+    page: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in rows:
+        job = _job_entity({"job": raw})
+        if job is None or job["job_id"] in seen:
+            raise WakeError("wake_job_status_invalid")
+        page.append(job)
+        seen.add(job["job_id"])
+    if cursor is not None and cursor != page[-1]["job_id"]:
+        raise WakeError("wake_job_status_invalid")
+    return page, cursor
 
 
 def job_instruction(job: dict[str, Any]) -> str:
@@ -1158,6 +1211,8 @@ class DurableWakeDispatcher:
         self.last_health: tuple[str, str | None] | None = None
         self.health_lock = asyncio.Lock()
         self.lifecycle_monitor: asyncio.Task[None] | None = None
+        self.worker_monitor: asyncio.Task[None] | None = None
+        self.execution_error: str | None = None
 
     def status(self) -> dict[str, Any]:
         status = self.inbox_status
@@ -1165,12 +1220,17 @@ class DurableWakeDispatcher:
             "ok": True,
             "enabled": self.enabled,
             "ready": self.enabled
+            and self.worker is not None
+            and not self.worker.done()
+            and self.execution_error is None
             and self.jobs.connected
             and self.app.connected
             and self.app.ready_event.is_set()
             and not self.app.blocked
             and self.execution_state in {"ready", "waiting_thread", "running"},
             "intake_enabled": status.get("enabled", status.get("intake_enabled", False)),
+            "execution_paused": status.get("execution_paused", False),
+            "execution_revision": status.get("execution_revision"),
             "bridge_connected": self.jobs.connected,
             "connected": self.app.connected,
             "execution_state": self.execution_state,
@@ -1200,8 +1260,25 @@ class DurableWakeDispatcher:
         self.app.managed = True
         self.supervisor = asyncio.create_task(self.app.supervise())
         self.jobs.start()
-        self.worker = asyncio.create_task(self.work())
+        self._start_worker()
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
+
+    def _start_worker(self) -> None:
+        self.worker = asyncio.create_task(self.work())
+        self.worker_monitor = asyncio.create_task(self.observe_worker(self.worker))
+
+    async def observe_worker(self, worker: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            if not worker.cancelled():
+                raise
+        except Exception:  # noqa: BLE001 - consume private failures and stop execution until explicit resume.
+            pass
+        if self.enabled and self.worker is worker:
+            self.execution_error = self.last_error = "wake_worker_failed"
+            self.failed += 1
+            await self._health("held", self.execution_error)
 
     async def observe_lifecycle(self) -> None:
         while self.enabled:
@@ -1225,13 +1302,18 @@ class DurableWakeDispatcher:
         if update_execution:
             self.execution_state = state
         async with self.health_lock:
-            if state != "paused" and self.app.blocked:
+            if state != "paused" and self.execution_error is not None:
+                state, error = "held", self.execution_error
+                self.execution_state = "held"
+            elif state != "paused" and self.app.blocked:
                 state, error = "held", self.app.recovery_error or "codex_recovery_blocked"
             elif state in {"ready", "running", "waiting_thread"} and not self.app.ready_event.is_set():
                 # Initial startup is neither a verified recovery nor an incident.
                 # The supervisor reports a concrete failure or completed handshake.
                 return
             if (state, error) == self.last_health:
+                return
+            if not self.jobs.connected:
                 return
             try:
                 await self.jobs.request("job_health", component="codex", state=state, error_code=error)
@@ -1251,6 +1333,22 @@ class DurableWakeDispatcher:
         if result is None or result["job_id"] != job["job_id"] or result["lease"] != job["lease"]:
             raise WakeError("wake_job_binding_mismatch")
         return result
+
+    async def _set_execution_paused(self, paused: bool) -> None:
+        await self._read_status()
+        revision = self.inbox_status.get("execution_revision")
+        if type(revision) is not int or revision < 1 or type(self.inbox_status.get("execution_paused")) is not bool:
+            raise WakeError("wake_job_status_invalid")
+        response = await self.jobs.request("job_execution_set", paused=paused, expected_revision=revision)
+        status = response.get("status")
+        if (
+            not isinstance(status, dict)
+            or status.get("execution_paused") is not paused
+            or type(status.get("execution_revision")) is not int
+            or status["execution_revision"] < revision
+        ):
+            raise WakeError("wake_job_status_invalid")
+        self.inbox_status = status
 
     async def _review(self, job: dict[str, Any], code: str) -> None:
         # Binding may have committed while its response was lost: always reread.
@@ -1365,52 +1463,59 @@ class DurableWakeDispatcher:
             self.current_job = None
 
     async def _reconcile_active(self) -> None:
-        response = await self.jobs.request("job_active")
-        active = response.get("jobs")
-        if not isinstance(active, list):
-            raise WakeError("wake_job_status_invalid")
-        for raw in active:
-            job = _job_entity({"job": raw})
-            if job is None:
-                continue
-            if job.get("state") == "claimed":
-                await self.jobs.request(
-                    "job_release", job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"]
-                )
-                continue
-            if job.get("state") not in {"started", "start_intent", "running", "needs_review"}:
-                continue
-            turn_id = job.get("turn_id")
-            if not isinstance(turn_id, str) or not turn_id or job.get("thread_id") != self.app.config.thread_id:
-                await self._review(job, "codex_turn_outcome_unknown")
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _page in range(MAX_ACTIVE_JOB_PAGES):
+            active, following = await _active_job_page(self.jobs, after_job_id=cursor)
+            for job in active:
+                if job.get("state") == "claimed":
+                    await self.jobs.request(
+                        "job_release", job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"]
+                    )
+                    continue
+                if job.get("state") not in {"started", "start_intent", "running", "needs_review"}:
+                    raise WakeError("wake_job_status_invalid")
+                await self._reconcile_job(job)
                 return
-            await self.app.ensure_ready()
-            status = await self.app._turn_metadata(turn_id)
-            if status != "inProgress":
-                # A terminal model state proves only execution, not customer result.
-                await self._review(job, "codex_job_requires_review")
+            if following is None:
                 return
-            self.active = True
-            self.current_job = job
-            self.app.active_turn = turn_id
-            self.app.active_event_id = job["event_ids"][0]
-            self.app.outcome_unknown = True
-            self.app.last_turn_started = False
-            try:
-                await self._health("running")
-                await self.app._wait_turn(self.app.generation - 1, notification_only=True)
-                current = await self._read_job(job)
-                if current.get("state") in {"completed", "done"}:
-                    self.completed += 1
-                else:
-                    await self._review(current, "codex_completed_without_job_result")
-            except Exception as exc:  # noqa: BLE001 - recovery uses exact metadata, never replays.
-                code = str(exc) if isinstance(exc, WakeError) else "codex_transport_failed_or_unknown"
-                await self._review(job, code)
-            finally:
-                self.active = False
-                self.current_job = None
+            if following in seen:
+                raise WakeError("wake_job_status_invalid")
+            seen.add(following)
+            cursor = following
+        raise WakeError("wake_job_pages_exceeded")
+
+    async def _reconcile_job(self, job: dict[str, Any]) -> None:
+        turn_id = job.get("turn_id")
+        if not isinstance(turn_id, str) or not turn_id or job.get("thread_id") != self.app.config.thread_id:
+            await self._review(job, "codex_turn_outcome_unknown")
             return
+        await self.app.ensure_ready()
+        status = await self.app._turn_metadata(turn_id)
+        if status != "inProgress":
+            # A terminal model state proves only execution, not customer result.
+            await self._review(job, "codex_job_requires_review")
+            return
+        self.active = True
+        self.current_job = job
+        self.app.active_turn = turn_id
+        self.app.active_event_id = job["event_ids"][0]
+        self.app.outcome_unknown = True
+        self.app.last_turn_started = False
+        try:
+            await self._health("running")
+            await self.app._wait_turn(self.app.generation - 1, notification_only=True)
+            current = await self._read_job(job)
+            if current.get("state") in {"completed", "done"}:
+                self.completed += 1
+            else:
+                await self._review(current, "codex_completed_without_job_result")
+        except Exception as exc:  # noqa: BLE001 - recovery uses exact metadata, never replays.
+            code = str(exc) if isinstance(exc, WakeError) else "codex_transport_failed_or_unknown"
+            await self._review(job, code)
+        finally:
+            self.active = False
+            self.current_job = None
 
     async def work(self) -> None:
         try:
@@ -1418,6 +1523,9 @@ class DurableWakeDispatcher:
                 await self.jobs.changed.wait()
                 self.jobs.changed.clear()
                 if not self.enabled:
+                    continue
+                if self.execution_error is not None:
+                    await self._health("held", self.execution_error)
                     continue
                 if not self.jobs.connected:
                     code = self.jobs.last_error or "wake_bridge_disconnected"
@@ -1430,6 +1538,15 @@ class DurableWakeDispatcher:
                         raise WakeError("wake_instruction_bundle_required")
                     validate_instruction_bundle(root, revision)
                     await self._read_status()
+                    intake_enabled = self.inbox_status.get("enabled", self.inbox_status.get("intake_enabled"))
+                    if type(intake_enabled) is not bool:
+                        raise WakeError("wake_job_status_invalid")
+                    execution_paused = self.inbox_status.get("execution_paused")
+                    if type(execution_paused) is not bool:
+                        raise WakeError("wake_job_status_invalid")
+                    if not intake_enabled or execution_paused:
+                        await self._health("paused")
+                        continue
                     await self._reconcile_active()
                     await self._read_status()
                     if self.inbox_status.get("needs_review", self.inbox_status.get("needs_review_jobs", 0)):
@@ -1457,32 +1574,90 @@ class DurableWakeDispatcher:
                         await self._read_status()
                         if self.execution_state == "held":
                             break
-                except (OSError, TimeoutError):
+                except (OSError, TimeoutError, TransportLost):
+                    self.last_error = "wake_bridge_disconnected"
                     await self._health("offline", "wake_bridge_disconnected")
                 except WakeError as exc:
-                    self.last_error = str(exc)
+                    self.execution_error = self.last_error = str(exc)
                     await self._health("held", str(exc))
         finally:
             self.active = False
 
-    async def pause(self) -> None:
+    async def pause(self, *, persist: bool = True) -> None:
         async with self.control_lock:
             self.enabled = False
+            job = self.current_job
             await _cancel_task(self.lifecycle_monitor)
-            await self._health("paused")
-            await _cancel_task(self.worker)
-            # Do not interrupt an unknown or unrelated manual turn. Its persisted
-            # exact binding prevents overlap and allows a later metadata read.
+            try:
+                async with asyncio.timeout(FAILED_RECOVERY_TIMEOUT):
+                    persistence_error: Exception | None = None
+                    if persist:
+                        try:
+                            async with asyncio.timeout(5):
+                                await self._set_execution_paused(True)
+                        except (OSError, TimeoutError, WakeError) as exc:
+                            persistence_error = exc
+                    if self.worker is not None and self.worker.done():
+                        if not self.worker.cancelled():
+                            self.worker.exception()
+                    else:
+                        await _cancel_task(self.worker)
+                    if job is not None:
+                        await self._pause_owned_turn(job)
+                    if persistence_error is not None:
+                        raise WakeError("wake_pause_outcome_unknown") from persistence_error
+            except (OSError, TimeoutError, WakeError) as exc:
+                self.last_error = "wake_pause_outcome_unknown"
+                self.execution_state = "held"
+                raise WakeError("wake_pause_outcome_unknown") from exc
+            finally:
+                await _cancel_task(self.worker_monitor)
+            # Health publication is optional; the exact stop/readback above is
+            # bounded independently of an unavailable bridge notification.
+            with suppress(OSError, TimeoutError, WakeError):
+                async with asyncio.timeout(2):
+                    await self._health("paused")
+            self.execution_state = "paused"
+
+    async def _pause_owned_turn(self, job: dict[str, Any]) -> None:
+        if self.app.active_turn is None and not self.app.outcome_unknown:
+            return
+        current = await self._read_job(job)
+        await self._review(current, "codex_execution_stopped")
+        turn_id = self.app.active_turn
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        if current.get("thread_id") != self.app.config.thread_id or current.get("turn_id") != turn_id:
+            # A start intent without a committed exact binding never authorizes
+            # interruption of the turn currently visible in the selected chat.
+            return
+        status = await self.app._turn_metadata(turn_id)
+        if status == "inProgress":
+            await self.app.interrupt()
+            status = await self.app._turn_metadata(turn_id)
+            while status == "inProgress":
+                message = await self.app.events.get()
+                if message.get("method") == "connection_lost":
+                    raise WakeError("wake_pause_outcome_unknown")
+                turn = message.get("params", {}).get("turn", {})
+                if message.get("method") == "turn/completed" and turn.get("id") == turn_id:
+                    # Notification is a hint; reread exact terminal metadata.
+                    status = await self.app._turn_metadata(turn_id)
+        if status not in {"completed", "failed", "interrupted"}:
+            raise WakeError("wake_pause_outcome_unknown")
+        self.app.active_turn = None
+        self.app.active_event_id = None
+        self.app.outcome_unknown = False
+        self.app._clear_events()
+        self.app.recovery_state = "paused"
 
     async def resume_execution(self) -> None:
         async with self.control_lock:
             if self.active:
                 raise WakeError("wake_execution_active")
             if self.app.blocked:
-                active = await self.jobs.request("job_active")
-                if not isinstance(active.get("jobs"), list):
-                    raise WakeError("wake_job_status_invalid")
-                if active["jobs"]:
+                active, _cursor = await _active_job_page(self.jobs, limit=1)
+                if active:
                     # Resume execution may coexist with held intake, but it cannot
                     # clear unknown effects or a running model via a status toggle.
                     self.execution_state = "held"
@@ -1500,6 +1675,7 @@ class DurableWakeDispatcher:
                         }:
                             raise WakeError("wake_recovery_turn_not_terminal")
                     self.app.blocked = False
+                    self.app.pausing = False
                     self.app.recovery_error = None
                     self.app.failed_turn = None
                     self.app.active_turn = None
@@ -1510,12 +1686,21 @@ class DurableWakeDispatcher:
                     self.app.ready_event.clear()
                     self.app.disconnected.set()
                     self.supervisor = asyncio.create_task(self.app.supervise())
+            elif self.app.pausing:
+                await _cancel_task(self.supervisor)
+                self.app.pausing = False
+                self.app.ready_event.clear()
+                self.app.disconnected.set()
+                self.supervisor = asyncio.create_task(self.app.supervise())
+            await self._set_execution_paused(False)
             self.enabled = True
+            self.execution_error = None
             if self.jobs.listener is not None and self.jobs.listener.done():
                 self.jobs.last_error = None
                 self.jobs.start()
             if self.worker is None or self.worker.done():
-                self.worker = asyncio.create_task(self.work())
+                await _cancel_task(self.worker_monitor)
+                self._start_worker()
             if self.lifecycle_monitor is None or self.lifecycle_monitor.done():
                 self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
             self.jobs.changed.set()
@@ -1550,7 +1735,7 @@ class DurableWakeDispatcher:
                 await writer.wait_closed()
 
     async def close(self) -> None:
-        await self.pause()
+        await self.pause(persist=False)
         await self.jobs.close()
         await _cancel_task(self.supervisor)
 
@@ -1589,7 +1774,7 @@ async def daemon(config: WakeConfig) -> None:
                 ready.sendall(b"READY=1")
         async with server:
             await stopping.wait()
-            await dispatcher.pause()
+            await dispatcher.pause(persist=False)
     finally:
         await dispatcher.close()
         await app.close()
@@ -1667,8 +1852,8 @@ async def select_worker(
     ):
         raise WakeError("wake_worker_selection_not_paused")
     jobs = BridgeJobs(pwd.getpwnam("autostop-work-telegram").pw_uid)
-    active = await jobs.request("job_active")
-    if not isinstance(active.get("jobs"), list) or active["jobs"]:
+    active, _cursor = await _active_job_page(jobs, limit=1)
+    if active:
         raise WakeError("wake_worker_selection_jobs_active")
     app = AppServer(old_config)
     try:

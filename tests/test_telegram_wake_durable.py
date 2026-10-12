@@ -89,12 +89,14 @@ class FakeJobs:
         if operation == "job_status":
             return {"ok": True, "status": self.inbox.status()}
         if operation == "job_active":
-            return {"ok": True, "jobs": self.inbox.active_jobs()}
+            return {"ok": True, **self.inbox.active_job_page(**arguments)}
         if operation == "job_read":
             return {"ok": True, "job": self.inbox.read_job(arguments["job_id"])}
         if operation == "job_health":
             self.health.append(arguments)
             return {"ok": True}
+        if operation == "job_execution_set":
+            return {"ok": True, "status": self.inbox.set_execution_paused(**arguments)}
         if operation == "job_owner_control":
             return {"ok": True, "handled": False, "job": self.inbox.read_job(arguments["job_id"])}
         functions = {
@@ -543,9 +545,10 @@ def test_selected_worker_config_is_atomic_pinned_and_keeps_owner_thread(
         def __init__(self, _uid):
             pass
 
-        async def request(self, operation):
+        async def request(self, operation, **arguments):
             assert operation == "job_active"
-            return {"ok": True, "jobs": []}
+            assert arguments == {"limit": 1, "after_job_id": None}
+            return {"ok": True, "jobs": [], "next_job_id": None}
 
     monkeypatch.setattr(wake, "AppServer", FakeApp)
     monkeypatch.setattr(wake, "BridgeJobs", EmptyJobs)
