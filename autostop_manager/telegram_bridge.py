@@ -13,7 +13,9 @@ import os
 import re
 import secrets
 import socket
+import sqlite3
 import stat
+import struct
 import sys
 import time
 from collections import deque
@@ -30,6 +32,7 @@ from autostop_manager.telegram_owner import (
     configure_owner_peer_id,
     load_owner_peer_id,
 )
+from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 
 
 DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
@@ -66,6 +69,9 @@ OWNER_NOTIFICATION_HISTORY_LIMIT = 20
 OWNER_NOTIFICATION_HISTORY_SECONDS = 24 * 60 * 60
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
+WORK_DURABLE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX"
+MAX_RECONCILE_DIALOGS = 1000
+MAX_RECONCILE_MESSAGES = 10000
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
@@ -478,6 +484,83 @@ class InboundMonitor:
         end = min(len(peer_events), start + limit)
         start = max(0, end - limit)
         return peer_events[start:end]
+
+
+class DurableInboundMonitor(InboundMonitor):
+    """Bridge-owned durable locators, with voice files and subscribers kept transient."""
+
+    def __init__(self, inbox: TelegramInbox, *, enabled: bool) -> None:
+        super().__init__()
+        self.inbox = inbox
+        self.capture_enabled = enabled
+        self.subscribers: set[asyncio.Event] = set()
+        self.generation = inbox.generation
+        self.reconcile_requested = asyncio.Event()
+        self.transport_ready = False
+        self.automation_coordinator: Any | None = None
+        self.failure_event = asyncio.Event()
+        self.failure_code: str | None = None
+
+    def changed(self) -> None:
+        generation = self.inbox.generation
+        if generation == self.generation:
+            return
+        self.generation = generation
+        for subscriber in tuple(self.subscribers):
+            subscriber.set()
+
+    def _state(self, event: InboundMonitorEvent) -> str:
+        return self.inbox.event_state(self._event_id(event))
+
+    def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
+        del preserve_open
+        if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
+            return None
+        peer_id, message_id = getattr(event, "chat_id", None), getattr(event, "id", None)
+        if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
+            return None
+        received_at = getattr(event, "date", None)
+        if received_at is None:
+            received_at = getattr(getattr(event, "message", None), "date", None)
+        stamp = received_at.isoformat() if isinstance(received_at, datetime) else datetime.now(UTC).isoformat()
+        precision = "second" if isinstance(received_at, datetime) else "exact"
+        if (
+            not self.capture_enabled
+            and self.inbox.duty_classification(stamp, timestamp_precision=precision) == "excluded"
+        ):
+            return None
+        previous_generation = self.inbox.generation
+        event_id = self.inbox.record(peer_id, message_id, received_at=stamp, timestamp_precision=precision)
+        if self.inbox.generation != previous_generation:
+            self.changed()
+        return event_id
+
+    def resolve(self, event_id: str) -> InboundMonitorEvent:
+        ref = self.inbox.resolve(event_id)
+        return InboundMonitorEvent(ref.sequence, ref.peer_id, ref.message_id, ref.received_at)
+
+    def status(self) -> dict[str, Any]:
+        return self.inbox.status() | {
+            "enabled": self.capture_enabled,
+            "started_at": self.started_at,
+            "retention": "durable_refs",
+            "generation": self.generation,
+        }
+
+    def events(self) -> list[dict[str, Any]]:
+        return self.inbox.events()
+
+    def context(self, event_id: str, *, limit: int) -> list[InboundMonitorEvent]:
+        return [self.resolve(ref["event_id"]) for ref in self.inbox.context(event_id, limit=limit)]
+
+    def mark_reply_verified(self, *, peer_id: int, message_id: int) -> bool:
+        # Sending any reply, including an acknowledgement, cannot finish a job.
+        del peer_id, message_id
+        return False
+
+    def mark_no_reply_needed(self, event_id: str) -> dict[str, str]:
+        self.require_open(event_id)
+        raise BridgeError("job_result_required")
 
 
 def _config_for_account(account: str) -> TelegramConfig:
@@ -1698,7 +1781,9 @@ async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[
     }
 
 
-async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+async def _handle_send_photo(
+    client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
+) -> dict[str, Any]:
     peer, photo, caption, mode, idempotency_key = validate_photo_request(request)
     photo_path, photo_sha256, photo_bytes, photo_content = _load_validated_photo_file(
         photo,
@@ -1707,11 +1792,14 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
     entity, target = await _resolve_peer(client, peer)
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
+    effect, idempotency_key, reply_to = await _prepare_job_media(
+        client, entity, inbound_monitor, request, target, caption, photo_sha256, mode, idempotency_key
+    )
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
     if mode == "dry_run":
-        return {
+        response = {
             "ok": True,
             "mode": "dry_run",
             "target": target,
@@ -1728,6 +1816,7 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
                 last_message_id=last_message_id,
             ),
         }
+        return _job_send_response(response, request, effect, idempotency_key)
 
     contract_token = str(request.get("contract_token") or "")
     if not contract_token:
@@ -1742,12 +1831,14 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
+    _require_job_effect_ledger(inbound_monitor, effect, previous)
     if previous is not None:
         if (
             previous.get("operation") != "send_photo"
             or previous.get("peer_id") != target["id"]
             or previous.get("caption_sha256") != caption_sha256
             or previous.get("photo_sha256") != photo_sha256
+            or previous.get("reply_to_message_id", 0) != reply_to
         ):
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
@@ -1755,25 +1846,35 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_photo",
             "message_id": 0,
             "peer_id": target["id"],
             "caption_sha256": caption_sha256,
             "photo_sha256": photo_sha256,
+            "reply_to_message_id": reply_to,
+            "readback_verified": False,
         }
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
         upload = io.BytesIO(photo_content)
         upload.name = photo_path.name
-        sent = await client.send_file(entity, upload, caption=caption, force_document=False)
+        sent = await client.send_file(
+            entity, upload, caption=caption, force_document=False, **({"reply_to": reply_to} if reply_to else {})
+        )
         entry["message_id"] = int(sent.id)
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
     if readback is None or str(readback.message or "") != caption or readback.media is None:
         raise BridgeError("send_readback_failed")
-    return {
+    if effect is not None and _message_reply_to_id(readback) != reply_to:
+        raise BridgeError("send_readback_failed")
+    idempotency[idempotency_key]["readback_verified"] = True
+    _save_idempotency(idempotency_path, idempotency)
+    _record_job_send_receipt(inbound_monitor, effect, idempotency_key, message_id)
+    response = {
         "ok": True,
         "mode": "apply",
         "replayed": previous is not None,
@@ -1781,9 +1882,12 @@ async def _handle_send_photo(client: Any, config: TelegramConfig, request: dict[
         "message_id": message_id,
         "verified": True,
     }
+    return _job_send_response(response, request, effect, idempotency_key)
 
 
-async def _handle_send_document(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+async def _handle_send_document(
+    client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
+) -> dict[str, Any]:
     peer, document, caption, mode, idempotency_key = validate_document_request(request)
     document_path, document_sha256, document_bytes, document_content = _load_validated_document_file(
         document,
@@ -1792,11 +1896,14 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
     entity, target = await _resolve_peer(client, peer)
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
+    effect, idempotency_key, reply_to = await _prepare_job_media(
+        client, entity, inbound_monitor, request, target, caption, document_sha256, mode, idempotency_key
+    )
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
     if mode == "dry_run":
-        return {
+        response = {
             "ok": True,
             "mode": "dry_run",
             "target": target,
@@ -1816,6 +1923,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
                 last_message_id=last_message_id,
             ),
         }
+        return _job_send_response(response, request, effect, idempotency_key)
 
     contract_token = str(request.get("contract_token") or "")
     if not contract_token:
@@ -1832,6 +1940,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
+    _require_job_effect_ledger(inbound_monitor, effect, previous)
     if previous is not None:
         if (
             previous.get("operation") != "send_document"
@@ -1840,6 +1949,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
             or previous.get("document_sha256") != document_sha256
             or previous.get("document_bytes") != document_bytes
             or previous.get("document_name") != document_path.name
+            or previous.get("reply_to_message_id", 0) != reply_to
         ):
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
@@ -1847,6 +1957,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_document",
             "message_id": 0,
@@ -1856,6 +1967,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
             "document_bytes": document_bytes,
             "document_name": document_path.name,
             "readback_verified": False,
+            "reply_to_message_id": reply_to,
         }
         # Persist the exact intent before the network call. If the process dies
         # after Telegram accepts the document, this key blocks a blind resend.
@@ -1869,6 +1981,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
             caption=caption,
             force_document=True,
             mime_type="application/pdf",
+            **({"reply_to": reply_to} if reply_to else {}),
         )
         entry["message_id"] = int(sent.id)
         _save_idempotency(idempotency_path, idempotency)
@@ -1889,9 +2002,12 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
         raise BridgeError("send_document_readback_failed")
     if len(readback_content) != document_bytes or hashlib.sha256(readback_content).hexdigest() != document_sha256:
         raise BridgeError("send_document_readback_failed")
+    if effect is not None and _message_reply_to_id(readback) != reply_to:
+        raise BridgeError("send_document_readback_failed")
     idempotency[idempotency_key]["readback_verified"] = True
     _save_idempotency(idempotency_path, idempotency)
-    return {
+    _record_job_send_receipt(inbound_monitor, effect, idempotency_key, message_id)
+    response = {
         "ok": True,
         "mode": "apply",
         "replayed": previous is not None,
@@ -1901,6 +2017,7 @@ async def _handle_send_document(client: Any, config: TelegramConfig, request: di
         "document_sha256": document_sha256,
         "verified": True,
     }
+    return _job_send_response(response, request, effect, idempotency_key)
 
 
 async def _handle_download(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
@@ -2026,9 +2143,24 @@ async def _handle_send_text_to_entity(
     contract_target_role: str | None = None,
     owner_notification: bool = False,
     known_message_id: int = 0,
+    bound_effect: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
         raise BridgeError("private_peer_required")
+    job_effect, idempotency_key = await _prepare_job_send(
+        client,
+        entity,
+        inbound_monitor,
+        request,
+        target,
+        text,
+        reply_to_message_id,
+        mode,
+        idempotency_key,
+        owner_notification,
+    )
+    if bound_effect is not None:
+        job_effect = bound_effect
     reply_source = await _load_reply_source(client, entity, reply_to_message_id)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     last_message_id = await _last_message_id(client, entity)
@@ -2043,7 +2175,7 @@ async def _handle_send_text_to_entity(
         contract_peer_id = int.from_bytes(binding[:8], "big") or 1
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if mode == "dry_run":
-        return {
+        response = {
             "ok": True,
             "mode": "dry_run",
             "target": target,
@@ -2060,6 +2192,7 @@ async def _handle_send_text_to_entity(
                 reply_message_sha256=reply_message_sha256,
             ),
         }
+        return _job_send_response(response, request, job_effect, idempotency_key)
 
     contract_token = str(request.get("contract_token") or "")
     if not contract_token:
@@ -2076,6 +2209,7 @@ async def _handle_send_text_to_entity(
     idempotency = _load_idempotency(idempotency_path)
     previous = idempotency.get(idempotency_key)
     target_binding = dict(idempotency_target or {"peer_id": target["id"]})
+    _require_job_effect_ledger(inbound_monitor, job_effect, previous)
     if contract_target_role is not None:
         target_binding["target_fingerprint"] = f"{contract_peer_id:016x}"
     allowed_previous_operations: set[str | None] = {idempotency_operation}
@@ -2099,6 +2233,7 @@ async def _handle_send_text_to_entity(
     else:
         if not known_message_id and contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
             "message_id": known_message_id,
@@ -2126,6 +2261,7 @@ async def _handle_send_text_to_entity(
         raise BridgeError("send_readback_failed")
     idempotency[idempotency_key]["readback_verified"] = True
     _save_idempotency(idempotency_path, idempotency)
+    _record_job_send_receipt(inbound_monitor, job_effect, idempotency_key, message_id)
     monitor_event_closed: bool | None = None
     if reply_to_message_id and inbound_monitor is not None:
         monitor_event_closed = inbound_monitor.mark_reply_verified(
@@ -2143,7 +2279,133 @@ async def _handle_send_text_to_entity(
     }
     if monitor_event_closed is not None:
         response["monitor_event_closed"] = monitor_event_closed
+    return _job_send_response(response, request, job_effect, idempotency_key)
+
+
+async def _prepare_job_send(
+    client: Any,
+    entity: Any,
+    monitor: InboundMonitor | None,
+    request: dict[str, Any],
+    target: dict[str, Any],
+    text: str,
+    reply_to_message_id: int,
+    mode: str,
+    idempotency_key: str,
+    owner_notification: bool,
+) -> tuple[dict[str, Any] | None, str]:
+    if isinstance(monitor, DurableInboundMonitor) and request.get("job_id"):
+        effect = await _bind_job_send(client, entity, monitor, request, target, text, reply_to_message_id)
+        key = str(effect["effect_key"])
+        if mode == "apply" and idempotency_key != key:
+            raise BridgeError("job_effect_key_required")
+        return effect, key
+    if isinstance(monitor, DurableInboundMonitor) and reply_to_message_id and not owner_notification:
+        raise BridgeError("job_binding_required")
+    return None, idempotency_key
+
+
+async def _prepare_job_media(
+    client: Any,
+    entity: Any,
+    monitor: InboundMonitor | None,
+    request: dict[str, Any],
+    target: dict[str, Any],
+    caption: str,
+    media_sha256: str,
+    mode: str,
+    idempotency_key: str,
+) -> tuple[dict[str, Any] | None, str, int]:
+    if not isinstance(monitor, DurableInboundMonitor):
+        return None, idempotency_key, 0
+    if not request.get("job_id"):
+        raise BridgeError("job_binding_required")
+    reply_to = request.get("reply_to_message_id")
+    if type(reply_to) is not int or reply_to < 1:
+        raise BridgeError("job_effect_target_invalid")
+    payload = json.dumps({"media_sha256": media_sha256, "caption": caption}, sort_keys=True, ensure_ascii=False)
+    effect, key = await _prepare_job_send(
+        client, entity, monitor, request, target, payload, reply_to, mode, idempotency_key, False
+    )
+    return effect, key, int(reply_to)
+
+
+def _mark_job_effect_intent(monitor: InboundMonitor | None, effect: dict[str, Any] | None) -> None:
+    if effect is not None and isinstance(monitor, DurableInboundMonitor):
+        monitor.inbox.mark_effect_intent(str(effect["effect_key"]))
+        monitor.changed()
+
+
+def _require_job_effect_ledger(
+    monitor: InboundMonitor | None, effect: dict[str, Any] | None, previous: dict[str, Any] | None
+) -> None:
+    if previous is not None or effect is None or not isinstance(monitor, DurableInboundMonitor):
+        return
+    stored = monitor.inbox.read_effect(str(effect["effect_key"]))
+    if not stored["attempted"]:
+        return
+    job = monitor.inbox.read_job(stored["job_id"])
+    if job["state"] != "needs_review":
+        monitor.inbox.needs_review(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            reason_code="send_ledger_unavailable",
+        )
+        monitor.changed()
+    raise BridgeError("send_outcome_uncertain")
+
+
+def _job_send_response(
+    response: dict[str, Any], request: dict[str, Any], effect: dict[str, Any] | None, key: str
+) -> dict[str, Any]:
+    if effect is not None:
+        response.update({"job_id": request.get("job_id") or effect.get("job_id"), "idempotency_key": key})
+        if response.get("mode") == "apply":
+            response["receipt_key"] = key
     return response
+
+
+def _record_job_send_receipt(
+    monitor: InboundMonitor | None, effect: dict[str, Any] | None, key: str, message_id: int
+) -> None:
+    if effect is not None and isinstance(monitor, DurableInboundMonitor):
+        monitor.inbox.verify_effect(
+            effect_key=str(effect["effect_key"]), receipt_key=key, message_id=message_id, verified=True
+        )
+        monitor.changed()
+
+
+async def _bind_job_send(
+    client: Any,
+    entity: Any,
+    monitor: DurableInboundMonitor,
+    request: dict[str, Any],
+    target: dict[str, Any],
+    text: str,
+    reply_to_message_id: int,
+) -> dict[str, Any]:
+    """Refresh exact incoming locators before accepting a job-bound send intent."""
+    if request.get("kind") not in {"ack", "result", "clarification", "handoff"}:
+        raise BridgeError("job_effect_kind_invalid")
+    # This catches an update already present in Telegram before dry-run whose
+    # event handler has not yet run.  Bodies are used transiently, never stored.
+    recent = await client.get_messages(entity, limit=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
+    for message in reversed(list(recent or [])):
+        if int(getattr(message, "chat_id", 0) or 0) != int(target["id"]):
+            continue
+        monitor.record(message)
+    effect_key = monitor.inbox.reserve_effect(
+        job_id=str(request.get("job_id") or ""),
+        lease=str(request.get("lease") or ""),
+        expected_revision=_job_revision(request.get("revision")),
+        kind=str(request["kind"]),
+        effect_slot=request.get("effect_slot", 0),
+        text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        peer_id=int(target["id"]),
+        reply_to_message_id=reply_to_message_id,
+    )
+    return {"effect_key": effect_key}
 
 
 def _owner_peer_id(config: TelegramConfig, *, required: bool = False) -> int | None:
@@ -2238,6 +2500,7 @@ async def _handle_owner_notification(
     request: dict[str, Any],
     *,
     inbound_monitor: InboundMonitor | None = None,
+    bound_effect: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     owner_peer_id = _owner_peer_id(config, required=True)
     _peer, text, mode, idempotency_key, reply_to_message_id = validate_owner_notification_request(
@@ -2267,6 +2530,7 @@ async def _handle_owner_notification(
         idempotency_target={"target_role": "owner"},
         contract_target_role="owner",
         owner_notification=True,
+        bound_effect=bound_effect,
         known_message_id=known_message_id,
     )
     response["target"] = _owner_target_summary(target)
@@ -2651,6 +2915,20 @@ async def _handle_monitor_operation(
     if operation == "monitor_status":
         return {"ok": True, "monitor": inbound_monitor.status()}
     if operation == "monitor_events":
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            limit = request.get("limit", 100)
+            if type(limit) is not int or not 1 <= limit <= 255:
+                raise BridgeError("inbound_events_limit_invalid")
+            rows = inbound_monitor.inbox.events(limit=limit + 1, after_event_id=request.get("after_event_id"))
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            return {
+                "ok": True,
+                "monitor": inbound_monitor.status(),
+                "events": rows,
+                "has_more": has_more,
+                "next_after_event_id": rows[-1]["event_id"] if has_more else None,
+            }
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
     if operation == "monitor_target":
         return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""), config=config)
@@ -2690,6 +2968,10 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
     inbound_monitor: InboundMonitor | None = None,
 ) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
+    if operation.startswith("job_") or operation == "duty_set":
+        if not isinstance(inbound_monitor, DurableInboundMonitor):
+            raise BridgeError("durable_inbox_disabled")
+        return await _handle_job_operation(client, config, request, inbound_monitor)
     if operation == "probe":
         return {"ok": True, "authorized": bool(await client.get_me())}
 
@@ -2706,8 +2988,14 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
         return {
             "ok": True,
             "authorized": bool(me),
-            "transport_ready": True,
-            "inbound_enabled": inbound_monitor is not None,
+            "transport_ready": (
+                inbound_monitor.transport_ready if isinstance(inbound_monitor, DurableInboundMonitor) else True
+            ),
+            "inbound_enabled": (
+                inbound_monitor.capture_enabled
+                if isinstance(inbound_monitor, DurableInboundMonitor)
+                else inbound_monitor is not None
+            ),
             "owner_notification_configured": _owner_peer_id(config) is not None,
             "account": {
                 "id": int(getattr(me, "id", 0) or 0),
@@ -2807,10 +3095,10 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
         )
 
     if operation == "send_photo":
-        return await _handle_send_photo(client, config, request)
+        return await _handle_send_photo(client, config, request, inbound_monitor=inbound_monitor)
 
     if operation == "send_document":
-        return await _handle_send_document(client, config, request)
+        return await _handle_send_document(client, config, request, inbound_monitor=inbound_monitor)
 
     if operation == "download":
         return await _handle_download(client, config, request)
@@ -2823,24 +3111,374 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
     raise BridgeError("operation_not_supported")
 
 
+def _job_arguments(request: dict[str, Any]) -> dict[str, Any]:
+    revision = _job_revision(request.get("expected_revision"))
+    return {
+        "job_id": str(request.get("job_id") or ""),
+        "lease": str(request.get("lease") or ""),
+        "expected_revision": revision,
+    }
+
+
+def _job_revision(revision: Any) -> int:
+    if type(revision) is not int or revision < 1:
+        raise BridgeError("job_revision_invalid")
+    return int(revision)
+
+
+def _job_string_list(request: dict[str, Any], key: str) -> list[str]:
+    values = request.get(key)
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise BridgeError("job_request_invalid")
+    return values
+
+
+async def _handle_job_operation(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any]:
+    operation = str(request["operation"])
+    inbox = monitor.inbox
+    control = await _handle_job_control(client, config, request, monitor)
+    if control is not None:
+        return control
+    if operation == "job_claim":
+        job = inbox.claim(
+            instruction_root=str(request.get("instruction_root") or ""),
+            instruction_revision=str(request.get("instruction_revision") or ""),
+            unbatched_peer_id=_owner_peer_id(config),
+        )
+    elif operation == "job_start_intent":
+        job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
+    elif operation == "job_turn_bound":
+        job = inbox.bind_turn(**_job_arguments(request), turn_id=str(request.get("turn_id") or ""))
+    elif operation == "job_release":
+        job = inbox.release_job(**_job_arguments(request))
+    elif operation == "job_needs_review":
+        job = inbox.needs_review(**_job_arguments(request), reason_code=str(request.get("reason_code") or ""))
+    elif operation == "job_refresh":
+        job = inbox.refresh_job(**_job_arguments(request), event_ids=request.get("event_ids"))
+    elif operation == "job_result":
+        job = inbox.result(
+            **_job_arguments(request),
+            outcome=str(request.get("outcome") or ""),
+            event_ids=_job_string_list(request, "event_ids"),
+            receipt_keys=_job_string_list(request, "receipt_keys"),
+            reason_code=request.get("reason_code"),
+        )
+        monitor.reconcile_requested.set()
+    elif operation == "job_resolve":
+        job = inbox.resolve_job(
+            **_job_arguments(request),
+            decision=str(request.get("decision") or ""),
+            effects_reviewed=request.get("effects_reviewed") is True,
+        )
+        monitor.reconcile_requested.set()
+    else:
+        raise BridgeError("operation_not_supported")
+    monitor.changed()
+    return {"ok": True, "job": job}
+
+
+async def _handle_job_control(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any] | None:
+    operation = str(request["operation"])
+    inbox = monitor.inbox
+    if operation == "job_status":
+        return {"ok": True, "status": inbox.status() | {"health": inbox.health()}}
+    if operation == "job_active":
+        return {"ok": True, "jobs": inbox.active_jobs()}
+    if operation == "job_import_legacy":
+        references = request.get("events")
+        if not isinstance(references, list) or len(references) > 10000:
+            raise BridgeError("legacy_references_invalid")
+        for reference in references:
+            if not isinstance(reference, dict) or set(reference) != {
+                "event_id",
+                "peer_id",
+                "message_id",
+                "received_at",
+                "state",
+            }:
+                raise BridgeError("legacy_references_invalid")
+        imported = inbox.import_references(
+            references,
+            instruction_root=str(request.get("instruction_root") or ""),
+            instruction_revision=str(request.get("instruction_revision") or ""),
+        )
+        monitor.changed()
+        return {"ok": True, **imported, "status": inbox.job_status()}
+    if operation == "job_read":
+        return {"ok": True, "job": inbox.read_job(str(request.get("job_id") or ""))}
+    if operation == "duty_set":
+        if type(request.get("enabled")) is not bool:
+            raise BridgeError("duty_enabled_invalid")
+        inbox.duty_set(enabled=request["enabled"])
+        monitor.capture_enabled = request["enabled"]
+        monitor.changed()
+        if monitor.capture_enabled:
+            monitor.reconcile_requested.set()
+        return {"ok": True, "monitor": monitor.status()}
+    if operation == "job_health":
+        inbox.set_health(
+            component=str(request.get("component") or ""),
+            state=str(request.get("state") or ""),
+            error_code=request.get("error_code"),
+        )
+        monitor.changed()
+        await _deliver_incident_notifications(client, config, monitor, mutation_locked=True)
+        return {"ok": True, "status": inbox.job_status()}
+    if operation == "job_owner_control":
+        return await _handle_job_owner_control(client, config, request, monitor)
+    if operation == "job_handoff":
+        return await _handle_job_handoff(client, config, request, monitor)
+    return None
+
+
+async def _handle_job_handoff(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any]:
+    arguments = _job_arguments(request)
+    job = monitor.inbox.read_job(arguments["job_id"])
+    entity, target = await _resolve_peer(client, str(job["peer_id"]))
+    text = request.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE_CHARS:
+        raise BridgeError("message_text_invalid")
+    effect = await _bind_job_send(
+        client,
+        entity,
+        monitor,
+        request | {"revision": arguments["expected_revision"], "kind": "handoff"},
+        target,
+        text,
+        request.get("reply_to_message_id", 0),
+    )
+    key = effect["effect_key"]
+    if request.get("mode") == "apply" and request.get("idempotency_key") != key:
+        raise BridgeError("job_effect_key_required")
+    owner_request = {
+        "operation": "send_owner_notification",
+        "text": text,
+        "mode": request.get("mode", "dry_run"),
+        "contract_token": request.get("contract_token", ""),
+        "idempotency_key": key,
+    }
+    effect["job_id"] = job["job_id"]
+    response = await _handle_owner_notification(
+        client, config, owner_request, inbound_monitor=monitor, bound_effect=effect
+    )
+    return _job_send_response(response, request, effect, key)
+
+
+async def _deliver_incident_notifications(
+    client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, *, mutation_locked: bool = False
+) -> None:
+    if mutation_locked:
+        await _deliver_incident_notifications_locked(client, config, monitor)
+    else:
+        async with _MUTATION_LOCK:
+            await _deliver_incident_notifications_locked(client, config, monitor)
+
+
+async def _deliver_incident_notifications_locked(
+    client: Any, config: TelegramConfig, monitor: DurableInboundMonitor
+) -> None:
+    if not monitor.transport_ready or _owner_peer_id(config) is None:
+        return
+    for _attempt in range(32):
+        pending = monitor.inbox.pending_notifications()
+        if not pending:
+            return
+        notification = pending[0]
+        recovered = notification["opened_receipt"] is not None
+        notification_id = str(notification["incident_id"]) + (":recovery" if recovered else ":incident")
+        code = str(notification.get("reason_code") or "ready")
+        text = (
+            "Рабочий Telegram: соединение восстановлено. Проверьте очередь и задания, требующие проверки."
+            if recovered
+            else f"Рабочий Telegram: обработка приостановлена ({code}). Входящие сохраняются."
+        )
+        request = {
+            "operation": "notify_owner",
+            "kind": "completion" if recovered else "error",
+            "notification_key": f"telegram-incident:{notification_id}",
+            "text": text,
+            "mode": "dry_run",
+        }
+        try:
+            dry = await _handle_notify_owner(client, config, request)
+            applied = await _handle_notify_owner(
+                client, config, request | {"mode": "apply", "contract_token": dry["contract_token"]}
+            )
+        except Exception:  # noqa: BLE001 - keep an intent for recovery, never repeat a business action.
+            return
+        if applied.get("verified") is not True:
+            return
+        monitor.inbox.mark_notification(
+            incident_id=str(notification["incident_id"]),
+            recovery=recovered,
+            receipt_key=f"owner-{applied['message_id']}",
+        )
+
+
+def _owner_control_recognized(text: str) -> bool:
+    from autostop_manager import telegram_automation_control as controls
+
+    stripped = text.strip()
+    if (
+        not stripped
+        or len(stripped) > controls.MAX_COMMAND_CHARS
+        or any(ord(char) < 32 and char != "\t" for char in stripped)
+    ):
+        return False
+    return controls._normalized(stripped) in controls._STATUS_COMMANDS or any(
+        pattern.fullmatch(stripped) is not None
+        for pattern in (
+            controls._CONFIRM_PATTERN,
+            controls._CANCEL_PATTERN,
+            controls._TOGGLE_PATTERN,
+            controls._SCHEDULE_PATTERN,
+            controls._TIMEZONE_PATTERN,
+            controls._ACTIVE_WINDOW_PATTERN,
+            controls._CREATE_PATTERN,
+        )
+    )
+
+
+async def _handle_job_owner_control(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any]:
+    arguments = _job_arguments(request)
+    job = monitor.inbox.read_job(arguments["job_id"])
+    if (
+        job["lease"] != arguments["lease"]
+        or job["revision"] != arguments["expected_revision"]
+        or job["state"] != "claimed"
+    ):
+        raise BridgeError("job_owner_control_state_invalid")
+    coordinator = monitor.automation_coordinator
+    if coordinator is None or len(job["event_ids"]) != 1 or job["peer_id"] != _owner_peer_id(config):
+        return {"ok": True, "handled": False, "job": job}
+    ref = monitor.resolve(job["event_ids"][0])
+    source = (await _load_inbound_monitor_context_messages(client, [ref]))[0]
+    message = _automation_message_from_event(source)
+    if message is None or not _owner_control_recognized(message.text):
+        return {"ok": True, "handled": False, "job": job}
+    job = monitor.inbox.start_intent(**arguments, thread_id="owner-control")
+    job = monitor.inbox.bind_turn(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        turn_id=f"owner-control-{job['job_id']}",
+    )
+    mutation_key = monitor.inbox.reserve_effect(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        kind="mutation",
+        text_sha256=hashlib.sha256(message.text.encode()).hexdigest(),
+        peer_id=ref.peer_id,
+        reply_to_message_id=ref.message_id,
+    )
+    monitor.inbox.mark_effect_intent(mutation_key)
+    monitor.changed()
+    try:
+        # The existing owner adapter retains its grammar, authorization,
+        # confirmation and exact readback.  Durable intent replaces RAM replay.
+        async with coordinator._route_lock:
+            result = await asyncio.to_thread(coordinator.adapter.handle, message)
+        if not result.handled:
+            raise BridgeError("owner_control_outcome_uncertain")
+        if result.ok is not True:
+            failure_request = {"operation": "send_owner_notification", "text": result.reply_text, "mode": "dry_run"}
+            failure_dry = await _handle_owner_notification(client, config, failure_request)
+            await _handle_owner_notification(
+                client,
+                config,
+                failure_request
+                | {
+                    "mode": "apply",
+                    "contract_token": failure_dry["contract_token"],
+                    "idempotency_key": f"owner-control-failure-{job['job_id']}",
+                },
+            )
+            raise BridgeError("owner_control_readback_unverified")
+        monitor.inbox.verify_effect(effect_key=mutation_key, receipt_key=mutation_key, message_id=ref.message_id)
+        entity, target = await _resolve_owner_target(client, config)
+        send_request = {
+            "job_id": job["job_id"],
+            "lease": job["lease"],
+            "revision": job["revision"],
+            "kind": "result",
+        }
+        dry = await _handle_send_text_to_entity(
+            client,
+            config,
+            send_request,
+            entity=entity,
+            target=target,
+            text=result.reply_text,
+            mode="dry_run",
+            idempotency_key="",
+            reply_to_message_id=ref.message_id,
+            inbound_monitor=monitor,
+        )
+        applied = await _handle_send_text_to_entity(
+            client,
+            config,
+            send_request | {"contract_token": dry["contract_token"]},
+            entity=entity,
+            target=target,
+            text=result.reply_text,
+            mode="apply",
+            idempotency_key=dry["idempotency_key"],
+            reply_to_message_id=ref.message_id,
+            inbound_monitor=monitor,
+        )
+        job = monitor.inbox.result(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            outcome="answered",
+            event_ids=job["event_ids"],
+            receipt_keys=[mutation_key, applied["receipt_key"]],
+        )
+    except Exception:  # noqa: BLE001 - an attempted command never falls through into a second execution.
+        current = monitor.inbox.read_job(job["job_id"])
+        job = monitor.inbox.needs_review(
+            job_id=current["job_id"],
+            lease=current["lease"],
+            expected_revision=current["revision"],
+            reason_code="owner_control_outcome_uncertain",
+        )
+    monitor.changed()
+    return {"ok": True, "handled": True, "job": job}
+
+
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
     return (
-        operation
+        str(operation).startswith("job_")
+        or operation == "duty_set"
+        or (
+            operation
+            in {
+                "send",
+                "send_owner_notification",
+                "send_photo",
+                "send_document",
+                "download",
+                "notify_owner",
+            }
+            and request.get("mode") == "apply"
+        )
+        or operation
         in {
-            "send",
-            "send_owner_notification",
-            "send_photo",
-            "send_document",
-            "download",
-            "notify_owner",
+            "discard_download",
+            "monitor_mark",
+            "owner_notification_idempotency_readback",
         }
-        and request.get("mode") == "apply"
-    ) or operation in {
-        "discard_download",
-        "monitor_mark",
-        "owner_notification_idempotency_readback",
-    }
+    )
 
 
 def _requires_monitor_voice_lock(request: dict[str, Any]) -> bool:
@@ -2858,6 +3496,24 @@ async def _serve_client(
     *,
     inbound_monitor: InboundMonitor | None = None,
 ) -> None:
+    try:
+        await _serve_client_request(client, config, reader, writer, inbound_monitor=inbound_monitor)
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        writer.close()
+        with suppress(ConnectionError, OSError):
+            await writer.wait_closed()
+
+
+async def _serve_client_request(
+    client: Any,
+    config: TelegramConfig,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    inbound_monitor: InboundMonitor | None = None,
+) -> None:
     response: dict[str, Any]
     try:
         raw = await reader.readline()
@@ -2866,6 +3522,17 @@ async def _serve_client(
         request = json.loads(raw)
         if not isinstance(request, dict):
             raise BridgeError("request_invalid")
+        if (
+            str(request.get("operation") or "").startswith("job_")
+            or request.get("operation") == "duty_set"
+            or request.get("job_id")
+        ):
+            _require_root_client(writer)
+        if request.get("operation") == "job_subscribe":
+            if not isinstance(inbound_monitor, DurableInboundMonitor):
+                raise BridgeError("durable_inbox_disabled")
+            await _serve_job_subscription(reader, writer, inbound_monitor)
+            return
         if _requires_mutation_lock(request):
             async with _MUTATION_LOCK:
                 response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
@@ -2876,25 +3543,83 @@ async def _serve_client(
             response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
     except BridgeError as exc:
         response = {"ok": False, "error": exc.code}
+    except InboxError as exc:
+        response = {"ok": False, "error": str(exc)}
     except (json.JSONDecodeError, UnicodeError, ValueError):
         response = {"ok": False, "error": "request_invalid"}
     except Exception:  # noqa: BLE001 - RPC boundary must not leak Telegram or transport details.
         response = {"ok": False, "error": "telegram_operation_failed"}
-    writer.write(_canonical_json(response) + b"\n")
-    await writer.drain()
-    writer.close()
-    await writer.wait_closed()
+    try:
+        writer.write(_canonical_json(response) + b"\n")
+        await writer.drain()
+    finally:
+        writer.close()
+        with suppress(OSError, ConnectionError):
+            await writer.wait_closed()
+
+
+def _require_root_client(writer: asyncio.StreamWriter) -> None:
+    connection = writer.get_extra_info("socket")
+    if connection is None:
+        raise BridgeError("job_control_permission_denied")
+    _pid, uid, _gid = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+    if uid != 0:
+        raise BridgeError("job_control_permission_denied")
+
+
+async def _serve_job_subscription(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, monitor: DurableInboundMonitor
+) -> None:
+    subscriber = asyncio.Event()
+    monitor.subscribers.add(subscriber)
+    disconnected = asyncio.create_task(reader.read(1))
+    try:
+        while True:
+            subscriber.clear()
+            writer.write(_canonical_json({"ok": True, "generation": monitor.generation}) + b"\n")
+            await writer.drain()
+            changed = asyncio.create_task(subscriber.wait())
+            done, _pending = await asyncio.wait((changed, disconnected), return_when=asyncio.FIRST_COMPLETED)
+            if disconnected in done:
+                changed.cancel()
+                with suppress(asyncio.CancelledError):
+                    await changed
+                return
+            await changed
+    finally:
+        monitor.subscribers.discard(subscriber)
+        disconnected.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnected
+        writer.close()
+        with suppress(OSError, ConnectionError):
+            await writer.wait_closed()
 
 
 async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
     try:
         event_id = monitor.record(event, preserve_open=bool(wake_socket))
+    except InboxError as exc:
+        if isinstance(monitor, DurableInboundMonitor):
+            monitor.changed()
+        print(f"work_telegram_inbox_error={exc}", file=sys.stderr, flush=True)
+        return
+    except (sqlite3.Error, OSError):
+        if isinstance(monitor, DurableInboundMonitor):
+            monitor.failure_code = "inbound_storage_unavailable"
+            monitor.failure_event.set()
+        print("work_telegram_inbox_error=inbound_storage_unavailable", file=sys.stderr, flush=True)
+        return
     except BridgeError as exc:
         if str(exc) == "inbound_monitor_full":
             print("work_telegram_monitor_full=true", file=sys.stderr, flush=True)
         return
     except Exception:  # noqa: BLE001 - one malformed provider update must not stop the bridge.
+        return
+    if isinstance(monitor, DurableInboundMonitor):
+        # Subscribers observe a committed locator.  A missed notification is
+        # harmless: reconnecting always reads the current durable registry.
         return
     if event_id is not None and wake_socket:
         try:
@@ -2978,6 +3703,12 @@ async def _route_or_capture_incoming_event(
     *,
     automation_coordinator: Any | None,
 ) -> None:
+    if isinstance(monitor, DurableInboundMonitor):
+        # Every accepted update first enters the durable registry.  Owner
+        # automation must subsequently use the same lease/receipt path; running
+        # it here could duplicate an action after process interruption.
+        await _capture_incoming_event(monitor, event)
+        return
     if automation_coordinator is not None:
         message = _automation_message_from_event(event)
         if message is not None and message.peer_id == _owner_peer_id(config):
@@ -3009,8 +3740,28 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
     inbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
     config.socket_path.unlink(missing_ok=True)
-    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=False)
-    inbound_monitor = InboundMonitor() if monitor_incoming else None
+    durable = (
+        os.environ.get(WORK_DURABLE_ENVIRONMENT, "").strip() == "1"
+        and config.owner_config_path == WORK_OWNER_CONFIG_PATH
+    )
+    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
+    inbound_monitor: InboundMonitor | None
+    if durable:
+        inbox = TelegramInbox(config.state_dir / "inbound.sqlite3")
+        try:
+            _configure_durable_instructions(inbox)
+        except BridgeError:
+            inbox.close()
+            raise
+        inbox.duty_set(enabled=monitor_incoming)
+        inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
+        try:
+            _install_reconnect_signal(client, inbound_monitor)
+        except BridgeError:
+            inbox.close()
+            raise
+    else:
+        inbound_monitor = InboundMonitor() if monitor_incoming else None
     automation_coordinator: Any | None = None
     if inbound_monitor is not None:
         # Telethon otherwise persists entity names, phones and usernames while processing updates.
@@ -3029,6 +3780,8 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
                     idempotency_secret=_ensure_private_key(config.state_dir / "contract.key"),
                 )
             )
+            if isinstance(inbound_monitor, DurableInboundMonitor):
+                inbound_monitor.automation_coordinator = automation_coordinator
 
         async def capture(event: Any) -> None:
             await _route_or_capture_incoming_event(
@@ -3040,21 +3793,241 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
             )
 
         client.add_event_handler(capture, events.NewMessage(incoming=True))
-    await client.connect()
-    if not await client.is_user_authorized():
-        await client.disconnect()
-        raise BridgeError("account_not_authorized")
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise BridgeError("account_not_authorized")
+    except BaseException:
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            inbound_monitor.inbox.close()
+        with suppress(Exception):
+            await client.disconnect()
+        raise
+    if isinstance(inbound_monitor, DurableInboundMonitor):
+        inbound_monitor.transport_ready = True
+        inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+        inbound_monitor.reconcile_requested.set()
     server = await asyncio.start_unix_server(
         lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
         path=str(config.socket_path),
     )
     os.chmod(config.socket_path, 0o600)
+    tasks: list[asyncio.Task[Any]] = []
     try:
         async with server:
-            await server.serve_forever()
+            tasks.append(asyncio.create_task(server.serve_forever()))
+            if isinstance(inbound_monitor, DurableInboundMonitor):
+                tasks.append(asyncio.create_task(_reconcile_incoming_loop(client, config, inbound_monitor)))
+                tasks.append(asyncio.create_task(_await_intake_failure(inbound_monitor)))
+            disconnected = getattr(client, "disconnected", None)
+            if disconnected is not None:
+                tasks.append(asyncio.ensure_future(asyncio.shield(disconnected)))
+                done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for finished in done:
+                    await finished
+                raise BridgeError("telegram_transport_disconnected")
+            await tasks[0]
     finally:
-        await client.disconnect()
-        config.socket_path.unlink(missing_ok=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            inbound_monitor.transport_ready = False
+            try:
+                with suppress(sqlite3.Error, InboxError, OSError):
+                    inbound_monitor.inbox.set_health(
+                        component="telegram", state="offline", error_code="telegram_transport_disconnected"
+                    )
+            finally:
+                inbound_monitor.inbox.close()
+        try:
+            await client.disconnect()
+        finally:
+            config.socket_path.unlink(missing_ok=True)
+
+
+async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
+    while True:
+        await monitor.reconcile_requested.wait()
+        monitor.reconcile_requested.clear()
+        if monitor.capture_enabled:
+            try:
+                await _reconcile_incoming_history(client, monitor)
+            except Exception:  # noqa: BLE001 - preserve every checkpoint after any partial transport failure.
+                monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
+                monitor.changed()
+        await _deliver_incident_notifications(client, config, monitor)
+
+
+def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> None:
+    """Preserve Telethon's reconnect callback and add one event-driven sweep."""
+    sender = getattr(client, "_sender", None)
+    original = getattr(sender, "_auto_reconnect_callback", None)
+    if sender is None or not callable(original):
+        raise BridgeError("telegram_reconnect_contract_unavailable")
+
+    async def reconnect() -> None:
+        try:
+            await original()
+        finally:
+            monitor.reconcile_requested.set()
+
+    sender._auto_reconnect_callback = reconnect
+
+
+def _configure_durable_instructions(inbox: TelegramInbox) -> None:
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "AGENTS.md",
+        "docs/agent/modules/B2.md",
+        "docs/agent/modules/B4.md",
+        ".agents/skills/manage-owner-telegram/SKILL.md",
+        ".agents/skills/manage-autostop-client/SKILL.md",
+    ):
+        if not (root / relative).is_file():
+            raise BridgeError("durable_instruction_bundle_unavailable")
+    try:
+        revision = (root / "REVISION").read_text().strip()
+    except OSError as exc:
+        raise BridgeError("durable_instruction_bundle_unavailable") from exc
+    if re.fullmatch(r"[a-f0-9]{40}", revision) is None:
+        raise BridgeError("durable_instruction_bundle_invalid")
+    try:
+        inbox.configure_instructions(str(root), revision)
+    except InboxError as exc:
+        raise BridgeError("durable_instruction_bundle_invalid") from exc
+
+
+async def _await_intake_failure(monitor: DurableInboundMonitor) -> None:
+    await monitor.failure_event.wait()
+    raise BridgeError(monitor.failure_code or "inbound_storage_unavailable")
+
+
+async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) -> dict[str, Any]:
+    cursor = monitor.inbox.reconciliation_cursor()
+    if cursor is None:
+        return {}
+    source = await client.get_messages(None, ids=cursor["message_id"])
+    if (
+        source is None
+        or int(getattr(source, "id", 0) or 0) != cursor["message_id"]
+        or int(getattr(source, "chat_id", 0) or 0) != cursor["peer_id"]
+        or not bool(getattr(source, "is_private", False))
+    ):
+        raise BridgeError("reconciliation_cursor_unavailable")
+    input_peer = await source.get_input_chat()
+    if input_peer is None:
+        raise BridgeError("reconciliation_cursor_unavailable")
+    return {
+        "offset_peer": input_peer,
+        "offset_id": cursor["message_id"],
+        "offset_date": datetime.fromisoformat(cursor["received_at"]),
+        "ignore_pinned": True,
+    }
+
+
+async def _reconcile_peer_history(
+    client: Any, entity: Any, peer_id: int, monitor: DurableInboundMonitor, budget: int
+) -> tuple[int, bool, bool]:
+    checkpoint = int(monitor.inbox.checkpoint(peer_id) or 0)
+    committed = checkpoint
+    consumed = 0
+    complete = True
+    capacity_blocked = False
+    async for message in client.iter_messages(entity, min_id=checkpoint, reverse=True, limit=budget + 1):
+        message_id = getattr(message, "id", None)
+        stamp = getattr(message, "date", None)
+        if type(message_id) is not int or message_id <= 0 or not isinstance(stamp, datetime):
+            raise BridgeError("history_message_invalid")
+        if consumed >= budget:
+            complete = False
+            break
+        consumed += 1
+        if not bool(getattr(message, "out", False)) and monitor.inbox.recovery_allowed(
+            stamp.isoformat(), timestamp_precision="second"
+        ):
+            if not bool(getattr(message, "is_private", False)) or int(getattr(message, "chat_id", 0) or 0) != peer_id:
+                raise BridgeError("history_peer_invalid")
+            try:
+                monitor.inbox.record(peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second")
+            except InboxError:
+                complete = False
+                capacity_blocked = True
+                break
+        committed = max(committed, message_id)
+    # Only the successfully committed prefix advances across a partial scan.
+    if committed > checkpoint:
+        monitor.inbox.advance_checkpoint(peer_id, committed)
+    if complete:
+        if committed:
+            monitor.inbox.clear_gap(peer_id=peer_id, through_message_id=committed)
+    else:
+        monitor.inbox.mark_gap(
+            peer_id=peer_id,
+            message_id=committed + 1,
+            received_at=datetime.now(UTC).isoformat(),
+            reason_code="history_reconciliation_incomplete",
+        )
+    return consumed, complete, capacity_blocked
+
+
+async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:
+    """Bounded, resumable replay from persisted enabled-duty intervals."""
+    windows = monitor.inbox.recovery_windows()
+    if not windows:
+        return
+    # Telegram dates have whole-second precision.  Include the opening second
+    # so its ambiguous refs can be held, rather than silently excluding a chat.
+    first_start = min(datetime.fromisoformat(window["opened_at"]) for window in windows).replace(microsecond=0)
+    offset = await _reconcile_dialog_offset(client, monitor)
+    prior_cursor = monitor.inbox.reconciliation_cursor()
+    last_cursor = prior_cursor
+    total_messages = 0
+    complete = True
+    capacity_blocked = False
+    dialogue_count = 0
+    async for dialog in client.iter_dialogs(limit=MAX_RECONCILE_DIALOGS + 1, **offset):
+        dialogue_count += 1
+        if dialogue_count > MAX_RECONCILE_DIALOGS:
+            complete = False
+            break
+        entity = getattr(dialog, "entity", None)
+        peer_id = getattr(dialog, "id", None)
+        if getattr(dialog, "is_user", False) is not True or type(peer_id) is not int or peer_id <= 0:
+            continue
+        latest = getattr(dialog, "message", None)
+        latest_date = getattr(latest, "date", None)
+        latest_id = getattr(latest, "id", None)
+        if not isinstance(latest_date, datetime) or type(latest_id) is not int or latest_id <= 0:
+            raise BridgeError("history_message_invalid")
+        if latest_date >= first_start:
+            consumed, peer_complete, capacity_blocked = await _reconcile_peer_history(
+                client, entity, peer_id, monitor, MAX_RECONCILE_MESSAGES - total_messages
+            )
+            total_messages += consumed
+            if not peer_complete:
+                complete = False
+                break
+        last_cursor = {"peer_id": peer_id, "message_id": latest_id, "received_at": latest_date.isoformat()}
+    if complete:
+        monitor.inbox.clear_reconciliation_cursor()
+        for window in windows:
+            if window["closed_at"] is not None:
+                monitor.inbox.mark_window_recovered(window["window_id"])
+    elif last_cursor is not None and last_cursor != prior_cursor:
+        monitor.inbox.set_reconciliation_cursor(**last_cursor)
+    elif dialogue_count > MAX_RECONCILE_DIALOGS:
+        raise BridgeError("reconciliation_cursor_unavailable")
+    monitor.inbox.set_health(
+        component="intake",
+        state="ready" if complete else "held",
+        error_code=None if complete else "history_reconciliation_incomplete",
+    )
+    monitor.changed()
+    # Continue a finite backlog by task notification, never by interval polling.
+    # Capacity failures resume only after a job-result/resolve frees room.
+    if not complete and not capacity_blocked:
+        monitor.reconcile_requested.set()
 
 
 async def run_code_login(
@@ -3195,7 +4168,9 @@ def build_parser() -> argparse.ArgumentParser:
     notify_owner.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     notify_owner.add_argument("--contract-token", default="")
     subparsers.add_parser("monitor-status")
-    subparsers.add_parser("monitor-events")
+    monitor_events = subparsers.add_parser("monitor-events")
+    monitor_events.add_argument("--limit", type=int, default=100)
+    monitor_events.add_argument("--after-event-id", default=None)
     monitor_read = subparsers.add_parser("monitor-read")
     monitor_read.add_argument("--event-id", required=True)
     monitor_target = subparsers.add_parser("monitor-target")
@@ -3206,6 +4181,67 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_mark = subparsers.add_parser("monitor-mark")
     monitor_mark.add_argument("--event-id", required=True)
     monitor_mark.add_argument("--disposition", choices=[INBOUND_EVENT_NO_REPLY_NEEDED], required=True)
+    duty = subparsers.add_parser("duty-set")
+    duty_mode = duty.add_mutually_exclusive_group(required=True)
+    duty_mode.add_argument("--enabled", action="store_true")
+    duty_mode.add_argument("--disabled", action="store_true")
+    subparsers.add_parser("job-status")
+    subparsers.add_parser("job-active")
+    subparsers.add_parser("job-subscribe")
+    claim = subparsers.add_parser("job-claim")
+    claim.add_argument("--instruction-root", required=True)
+    claim.add_argument("--instruction-revision", required=True)
+    job_read = subparsers.add_parser("job-read")
+    job_read.add_argument("--job-id", required=True)
+    legacy = subparsers.add_parser("job-import-legacy")
+    legacy.add_argument("--file", type=Path, required=True)
+    legacy.add_argument("--instruction-root", required=True)
+    legacy.add_argument("--instruction-revision", required=True)
+    health = subparsers.add_parser("job-health")
+    health.add_argument("--component", choices=["codex", "telegram", "intake"], required=True)
+    health.add_argument(
+        "--state", choices=["running", "ready", "waiting_thread", "held", "paused", "offline"], required=True
+    )
+    health.add_argument("--error-code", default=None)
+    for command in (
+        "job-start-intent",
+        "job-turn-bound",
+        "job-result",
+        "job-resolve",
+        "job-release",
+        "job-needs-review",
+        "job-refresh",
+        "job-owner-control",
+        "job-handoff",
+    ):
+        job_command = subparsers.add_parser(command)
+        job_command.add_argument("--job-id", required=True)
+        job_command.add_argument("--lease", required=True)
+        job_command.add_argument("--expected-revision", type=int, required=True)
+        if command == "job-start-intent":
+            job_command.add_argument("--thread-id", required=True)
+        elif command == "job-turn-bound":
+            job_command.add_argument("--turn-id", required=True)
+        elif command == "job-result":
+            job_command.add_argument(
+                "--outcome", choices=["answered", "awaiting_client", "handoff", "no_reply_needed"], required=True
+            )
+            job_command.add_argument("--event-id", action="append", required=True)
+            job_command.add_argument("--receipt-key", action="append", default=[])
+            job_command.add_argument("--reason-code", default=None)
+        elif command == "job-resolve":
+            job_command.add_argument("--decision", choices=["retry_no_effects", "continue_bound_turn"], required=True)
+            job_command.add_argument("--effects-reviewed", action="store_true", required=True)
+        elif command == "job-needs-review":
+            job_command.add_argument("--reason-code", required=True)
+        elif command == "job-refresh":
+            job_command.add_argument("--event-id", action="append", default=None)
+        elif command == "job-handoff":
+            job_command.add_argument("--text", required=True)
+            job_command.add_argument("--reply-to-message-id", type=int, required=True)
+            job_command.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+            job_command.add_argument("--contract-token", default="")
+            job_command.add_argument("--idempotency-key", default="")
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     search = subparsers.add_parser("search")
@@ -3223,6 +4259,11 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--contract-token", default="")
     send.add_argument("--idempotency-key", default="")
     send.add_argument("--reply-to-message-id", type=int, default=0)
+    send.add_argument("--job-id", default="")
+    send.add_argument("--lease", default="")
+    send.add_argument("--revision", type=int, default=None)
+    send.add_argument("--kind", choices=["ack", "result", "clarification", "handoff"], default=None)
+    send.add_argument("--effect-slot", type=int, default=0)
     send_owner_notification = subparsers.add_parser("send-owner-notification")
     send_owner_notification.add_argument("--text", required=True)
     send_owner_notification.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
@@ -3248,6 +4289,13 @@ def build_parser() -> argparse.ArgumentParser:
     send_document.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send_document.add_argument("--contract-token", default="")
     send_document.add_argument("--idempotency-key", default="")
+    for media_send in (send_photo, send_document):
+        media_send.add_argument("--job-id", default="")
+        media_send.add_argument("--lease", default="")
+        media_send.add_argument("--revision", type=int, default=None)
+        media_send.add_argument("--kind", choices=["ack", "result", "clarification", "handoff"], default=None)
+        media_send.add_argument("--effect-slot", type=int, default=0)
+        media_send.add_argument("--reply-to-message-id", type=int, default=0)
     download = subparsers.add_parser("download")
     download.add_argument("--peer", required=True)
     download.add_argument("--message-id", required=True, type=int)
@@ -3275,6 +4323,79 @@ def _configure_owner_from_args(args: Any) -> dict[str, Any]:
     return {"ok": True, "owner_configured": True, "verified": True}
 
 
+def _read_legacy_references(path: Path) -> list[dict[str, Any]]:
+    if not path.is_absolute():
+        raise BridgeError("legacy_references_invalid")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise BridgeError("legacy_references_permissions_invalid")
+            raw = os.read(descriptor, 2 * 1024 * 1024 + 1)
+        finally:
+            os.close(descriptor)
+        if len(raw) > 2 * 1024 * 1024:
+            raise BridgeError("legacy_references_invalid")
+        payload = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        raise BridgeError("legacy_references_invalid") from exc
+    rows = payload.get("events") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or len(rows) > 10000:
+        raise BridgeError("legacy_references_invalid")
+    return rows
+
+
+def _job_cli_request(args: Any) -> dict[str, Any]:
+    request = {"operation": args.command.replace("-", "_")}
+    for name in (
+        "job_id",
+        "lease",
+        "expected_revision",
+        "instruction_root",
+        "instruction_revision",
+        "thread_id",
+        "turn_id",
+        "outcome",
+        "reason_code",
+        "decision",
+        "effects_reviewed",
+        "component",
+        "state",
+        "error_code",
+        "text",
+        "reply_to_message_id",
+        "mode",
+        "contract_token",
+        "idempotency_key",
+    ):
+        if hasattr(args, name):
+            request[name] = getattr(args, name)
+    if hasattr(args, "event_id"):
+        request["event_ids"] = args.event_id
+    if hasattr(args, "receipt_key"):
+        request["receipt_keys"] = args.receipt_key
+    if args.command == "job-import-legacy":
+        request["events"] = _read_legacy_references(args.file)
+    if args.command == "duty-set":
+        request["enabled"] = args.enabled
+    return request
+
+
+def _print_job_subscription(socket_path: Path) -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.connect(str(socket_path))
+        connection.sendall(_canonical_json({"operation": "job_subscribe"}) + b"\n")
+        with connection.makefile("rb") as stream:
+            for raw in stream:
+                if len(raw) > MAX_REQUEST_BYTES:
+                    raise BridgeError("response_size_invalid")
+                response = json.loads(raw)
+                print(json.dumps(response, ensure_ascii=False), flush=True)
+                if response.get("ok") is not True:
+                    raise BridgeError(str(response.get("error") or "subscription_failed"))
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-RPC adapter
     args = build_parser().parse_args(argv)
     try:
@@ -3282,14 +4403,24 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
             config = _config_from_args(args)
             asyncio.run(run_daemon(config, monitor_incoming=_monitor_incoming_from_args(args)))
             return 0
+        if args.command == "job-subscribe":
+            try:
+                _print_job_subscription(_socket_from_args(args))
+            except KeyboardInterrupt:
+                return 0
+            return 0
         if args.command == "code-login":
             payload = asyncio.run(run_code_login(_config_from_args(args)))
         elif args.command == "owner-configure":
             payload = _configure_owner_from_args(args)
         else:
             request: dict[str, Any] = {"operation": args.command}
-            if args.command in {"owner-status", "owner-target", "monitor-status", "monitor-events"}:
+            if args.command.startswith("job-") or args.command == "duty-set":
+                request = _job_cli_request(args)
+            elif args.command in {"owner-status", "owner-target", "monitor-status", "monitor-events"}:
                 request["operation"] = args.command.replace("-", "_")
+                if args.command == "monitor-events" and (args.limit != 100 or args.after_event_id is not None):
+                    request.update({"limit": args.limit, "after_event_id": args.after_event_id})
             elif args.command == "notify-owner":
                 request.update(
                     {
@@ -3334,6 +4465,16 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
+                if args.job_id:
+                    request.update(
+                        {
+                            "job_id": args.job_id,
+                            "lease": args.lease,
+                            "revision": args.revision,
+                            "kind": args.kind,
+                            "effect_slot": args.effect_slot,
+                        }
+                    )
             elif args.command == "send-owner-notification":
                 request.update(
                     {
@@ -3398,6 +4539,17 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                 )
             elif args.command == "discard-download":
                 request.update({"operation": "discard_download", "path": str(args.file)})
+            if args.command in {"send-photo", "send-document"} and args.job_id:
+                request.update(
+                    {
+                        "job_id": args.job_id,
+                        "lease": args.lease,
+                        "revision": args.revision,
+                        "kind": args.kind,
+                        "effect_slot": args.effect_slot,
+                        "reply_to_message_id": args.reply_to_message_id,
+                    }
+                )
             payload = send_local_request(_socket_from_args(args), request)
     except BridgeError as exc:
         payload = {"ok": False, "error": exc.code}

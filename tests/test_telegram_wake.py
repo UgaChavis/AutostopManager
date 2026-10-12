@@ -412,6 +412,7 @@ def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupt
             return result
 
         monkeypatch.setattr(wake, "SOCKET_PATH", wake_socket)
+        monkeypatch.setattr(wake.BridgeJobs, "_connect", AsyncMock(side_effect=OSError("offline")))
         monkeypatch.setattr(
             wake.pwd, "getpwnam", lambda _name: SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
         )
@@ -429,7 +430,7 @@ def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupt
                 async with asyncio.timeout(2):
                     while True:
                         status = await wake.local_request({"operation": "status"}, path=wake_socket)
-                        if status["ready"]:
+                        if status["connected"]:
                             break
                         await asyncio.sleep(0.001)
                 status = await wake.local_request({"operation": "status"}, path=wake_socket)
@@ -521,7 +522,8 @@ def test_service_and_instructions_are_event_only():
     unit = (ROOT / "deploy/systemd/autostop-codex-wake.service").read_text()
     assert "RestrictAddressFamilies=AF_UNIX" in unit
     assert "Type=notify" in unit
-    assert "Restart=" not in unit
+    assert "Restart=on-failure" in unit
+    assert "RestartSec=5s" in unit
     assert "autostop-codex-start.service" in unit
     assert "Group=autostop-work-telegram" in unit
     for relative in (

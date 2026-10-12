@@ -303,6 +303,7 @@ if ! backup_initial_release_assets; then
 fi
 install -d -o root -g root -m 0755 "${staging_dir}"
 git -C "${SOURCE_DIR}" archive --format=tar "${revision}" | tar -xf - -C "${staging_dir}"
+printf '%s\n' "${revision}" > "${staging_dir}/REVISION"
 chown -R root:root "${staging_dir}"
 find "${staging_dir}" -type d -exec chmod 0755 {} +
 find "${staging_dir}" -type f -exec chmod 0644 {} +
@@ -380,6 +381,13 @@ restore_media_wrapper() {
 
 restore_previous_release_assets() {
   local rollback_link current_target
+  # An older RAM-only bridge cannot reconcile or preserve newly accepted jobs.
+  # Keep the current registry and release rather than silently rolling it back.
+  if [[ "${account}" == "work" && -e /var/lib/autostop-work-telegram/inbound.sqlite3 \
+    && -n "${previous_release}" && ! -f "${previous_release}/autostop_manager/telegram_inbox.py" ]]; then
+    echo "durable_inbox_rollback_incompatible=true" >&2
+    return 1
+  fi
   restore_work_runtime || return 1
   if [[ -z "${previous_release}" ]]; then
     current_target="$(readlink -f "${current_link}" 2>/dev/null || true)"
@@ -436,6 +444,11 @@ activate_new_release_assets() {
 
 rollback() {
   if [[ "${account}" == "work" ]]; then
+    if [[ -e /var/lib/autostop-work-telegram/inbound.sqlite3 \
+      && -n "${previous_release}" && ! -f "${previous_release}/autostop_manager/telegram_inbox.py" ]]; then
+      echo "durable_inbox_rollback_incompatible=true" >&2
+      return 1
+    fi
     systemctl stop "${service_unit}" || return 1
   fi
   restore_previous_release_assets || return 1

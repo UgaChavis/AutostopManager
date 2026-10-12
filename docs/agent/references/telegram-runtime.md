@@ -4,60 +4,42 @@
 
 ## Bridge и wake
 
-Work bridge принимает личное входящее при включённом duty → `InboundMonitor` держит bounded event только в памяти → wake принимает `operation=event` через Unix socket с UID bridge → существующий видимый чат Codex получает новый ход → агент выполняет текущий skill через bridge/CRM/Store. Wake не опрашивает Telegram. Неизвестный результат не воспроизводится автоматически. Personal bridge — отдельные account/session/release.
+При включённом duty work bridge сохраняет входящие в защищённый реестр `/var/lib/autostop-work-telegram/inbound.sqlite3` → отдельный видимый worker Codex получает задание → проходит B2 и выбранный скилл → bridge проверяет действия и явный результат. Personal account/session/release остаются отдельными. Содержимое сообщений и медиа в реестр и технические журналы не копируется; история Codex-чата имеет собственное хранение.
 
-Wake восстанавливает транспорт внутри процесса, сохраняя прежние chat/config и FIFO событий в памяти (до 32 ожидающих событий). Во время `starting`/`reconnecting`/`reconciling` при включённом режиме он принимает события без запуска модели; переполнение отклоняется явно. Очередь не переживает перезапуск самого wake; устаревшие события не заменяются новыми адресатами.
+Bridge — единственный писатель SQLite (WAL, synchronous=FULL, каталог 0700, файлы 0600). Ссылка на событие сохраняется после перезапуска и никогда не перепривязывается. Приём подтверждается после commit, независимо от готовности модели. До 10 000 незавершённых событий; завершённые ссылки хранятся семь дней, незавершённые автоматически не удаляются. При переполнении/ошибке хранения сохраняется граница пропуска и состояние ухудшения приёма.
 
-Внутренняя очередь уведомлений хода тоже ограничена 32 записями: только ID и статус ожидаемого или активного хода, без items; ручные и посторонние ходы не накапливаются. Уведомление, пришедшее раньше ответа `turn/start`, сохраняется. Переполнение блокирует обработку с `codex_turn_notifications_full`, сохраняя неизвестный исход без повторного запуска. Сигнал обрыва относится к своему поколению соединения: уже сверенный обрыв не вызывает новую проверку следующего хода. После завершения хода остаточные уведомления удаляются.
+Wake подписывается на изменения реестра через root-only Unix RPC, после подключения перечитывает задания. Уведомления не являются второй очередью. Уже поступившие входящие одного адресата объединяются до пяти сообщений в пятиминутном окне без ожидания по таймеру. Busy означает ожидание завершения хода, а не выключение приёма; перед запуском проверяется свободное состояние точного worker. Неоднозначные сообщения граничной секунды duty сохраняются для ручной сверки: Telegram не передаёт микросекунды, поэтому они не отбрасываются и не запускаются автоматически.
 
-При настроенном wake bridge сохраняет открытые ссылки: его общий буфер — 32 события, включая активное и ожидающие. Когда весь буфер открыт, новое событие отклоняется до передачи wake с техническим `work_telegram_monitor_full=true` и счётчиком `rejected_events`; ранее принятые события не вытесняются. После подтверждённого закрытия события его место может занять новое. В режиме монитора без wake сохраняется прежнее поведение ограниченного скользящего буфера.
+Перед `turn/start` сохраняется намерение, после ответа — точный turn ID. После обрыва известный ход сверяется; неизвестный запуск или эффект остаётся `needs_review` без повтора. Heartbeat и существующее транспортное восстановление относятся к службе, не к агентским целям/таймерам. Не добавляется постоянный опрос Telegram/Store. Восстановление пропущенного ввода выполняется при запуске, переподключении и освобождении ёмкости по сохранённым границам только внутри разрешённых duty-окон; старые тесты и выключенные периоды не воспроизводятся.
 
-Heartbeat WebSocket — 20 секунд, таймаут ответа — 20 секунд. После транспортного обрыва повторяются подключение к актуальному сокету, `initialize`, `initialized`, `thread/resume` с `excludeTurns=true`: задержки 1, 2, 4, 8, 16, затем 30 секунд; таймаут подключения и инициализации — 20 секунд. Новое соединение не наследует ответы/уведомления старого. Локальный управляющий сокет и systemd READY доступны независимо от готовности Codex.
+Проверенное подтверждение (`kind=ack`) не закрывает событие. Задание завершается явно: `answered`, `awaiting_client`, `handoff`, `no_reply_needed`. Bridge проверяет сохранённые receipts и точные покрытые события; отправка и завершение модели сами по себе не доказывают результат запроса. Существующий idempotency ledger связывается с заданием: неизвестную отправку нельзя обходить сменой ключа. Перед итогом проверяется версия реально обработанного контекста, включая уточнения до dry-run. Голос и другие временные медиа очищаются при успехе и ошибке.
 
-Открытый транспорт ещё не разрешает запросы обработки: сверка хода ждёт полного завершения `initialize`/`thread/resume`. Проверка idle перед `turn/start` действительна только для того соединения, которое вернуло её результат; после смены соединения она повторяется. Пауза останавливает проверки метаданных и их таймер, сохраняя ожидание подтверждения прерывания известного хода.
+Work CLI: пользователь `autostop-work-telegram`, `PYTHONPATH=/opt/autostop-work-telegram-releases/current`, `/opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work <command>`. Управляющие job/duty операции запускаются root и не читают credentials. Проверяй `<command> --help`; для installed проверок cwd=/tmp и PYTHONSAFEPATH=1.
 
-Транспортный обрыв при отправке отказа на неподдерживаемый запрос App Server также запускает восстановление. Повреждённый RPC frame блокирует обработку; ожидание готовности сразу замечает блокировку или паузу даже при сброшенном сигнале, поэтому worker завершает ошибку и освобождает счётчик активности без повторного запуска.
-
-До попытки отправки `turn/start` событие сохраняется для обработки после восстановления. При известном ID начатого хода wake сверяет только его метаданные: `thread/turns/list`, `itemsView=notLoaded`, `sortDirection=desc`, страницы по 20, максимум пять страниц. `completed` завершает ход без повтора; `inProgress` ожидает уведомление и проверку статуса каждые 15 секунд только во время восстановления. Статус хода не заменяет подтверждение отправки в bridge.
-
-Потеря ответа запуска без ID, `interrupted`, отсутствие точного ID, ошибка схемы или RPC rejection блокируют очередь до ручной сверки; ход не угадывается по последней записи. Обрыв при чтении метаданных снова восстанавливает транспорт. Пауза отменяет восстановление и запрещает новые запуски.
-
-Известный `failed` хранит в памяти только точные ID события и хода, блокирует очередь и никогда не воспроизводится. После проверки возможных внешних эффектов оператор может сверить этот же ход и idle-состояние чата командами ниже, чтобы продолжить только оставшуюся FIFO-очередь.
-
-Work CLI: пользователь `autostop-work-telegram`, `PYTHONPATH=/opt/autostop-work-telegram-releases/current`, `/opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work <command>`. Аргументы уточняй через `<command> --help`. В installed проверках запускай из `/tmp` с `PYTHONSAFEPATH=1`; source checkout не должен подменять runtime.
-
-| Команда bridge | Эффект и условия |
+| Команда bridge | Назначение |
 | --- | --- |
-| `probe`, `status`, `owner-status` | Читают auth/config; в техническом отчёте только flags, без account identity. |
-| `monitor-status`, `monitor-events` | Content-free состояние/счётчики. `dropped_open_events>0` или новый `started_at` требуют проверки непрерывности, без автоматического replay. |
-| `monitor-read`, `monitor-target`, `monitor-context` | Читают текущий event, адресата и переписку; только авторизованный сценарий, не readiness. |
-| `dialogs`, `search`, `resolve-phone`, `read` | Читают личные данные/переписку по поручению. |
-| `monitor-mark` | Меняет disposition точного event ID только при установленном `no_reply_needed`. |
-| `owner-target`, `owner-configure` | Разрешают текущего владельца / сохраняют его числовой ID. Configure требует поручения и readback. |
-| `send`, `send-photo`, `send-document` | Отправляют точному адресату: dry-run, contract token, idempotency, независимый readback; файл photo/document предварительно проверяется в outbox. |
-| `notify-owner` | Предпочтительное уведомление владельца: `--kind`, `--notification-key`, dry-run/apply и contract token, затем delivery check. |
-| `send-owner-notification`, `owner-notification-readback`, `owner-notification-idempotency-readback` | Raw отправка/readback по точному message/key; обычно используй notify-owner. |
-| `download`, `discard-download` | Приватный временный файл: текущий target, dry-run/apply, обязательная очистка и readback. |
-| `daemon`, `code-login` | Запуск bridge/авторизации со служебной записью; только systemd/setup, не smoke. Session/credentials напрямую не читай. |
+| `status`, `monitor-status`, `monitor-events` | Content-free состояние транспорта, приёма, очереди и ошибок. |
+| `owner-status`, `owner-configure` | Проверить привязку владельца; configure меняет её только по поручению и с readback. |
+| `dialogs`, `search`, `resolve-phone` | Разрешённый поиск диалога; не заменяет адресата рабочего события. |
+| `monitor-target`, `monitor-read`, `monitor-context`, `read` | Точный адресат, роль и разрешённый контекст; context не заменяет исходящие в read. |
+| `send`, `send-photo`, `send-document` | Dry-run/apply, исходный ключ, независимый readback; рабочий ответ связан с заданием и версией. |
+| `job-read`, `job-refresh`, `job-result`, `job-handoff` | Прочитать/обновить контекст, завершить задание проверенным результатом или передать точному владельцу; job/lease/revision не публикуются клиенту. |
+| `job-claim`, `job-start-intent`, `job-turn-bound`, `job-subscribe` | Контракт исполнителя: получение, durable запуск, привязка и уведомления. |
+| `job-status`, `job-active`, `job-health`, `job-owner-control` | Состояние заданий, публикация здоровья и существующие команды владельца внутри lease. |
+| `job-needs-review`, `job-resolve`, `job-release`, `job-import-legacy` | Сверка, ручное разрешение, безопасное освобождение до запуска и точный импорт старых ссылок. |
+| `duty-set` | Открыть/закрыть разрешённое окно приёма; обычное управление — duty-script ниже. |
+| `owner-target`, `notify-owner` | Точная привязка владельца, dry-run/apply и проверка уведомления. Один ключ на инцидент и один на восстановление; при отключённом транспорте намерение сохраняется. |
+| `send-owner-notification`, `owner-notification-readback`, `owner-notification-idempotency-readback` | Raw owner-контракт и точная сверка; обычно используй notify-owner. |
+| `download`, `discard-download` | Приватные временные медиа; обязательная очистка и её проверка. |
+| `monitor-mark`, `code-login` | Legacy disposition / интерактивная авторизация; не заменяют завершение durable задания. |
 
-Wake CLI `python -m autostop_manager.telegram_wake --help`: `daemon`, `status`, `pause`, `setup`, `probe`, `failed-context`, `recover-failed`. `status` показывает connected/enabled/queued/failed без контента, а также `ready`, `recovery_state`, reconnect-метаданные, `outcome_unknown` и `recoverable_failure`. `connected` показывает транспорт, `ready` — разрешённую обработку после полной инициализации и проверки target. Журнал содержит только технические времена и фиксированные коды; payload и произвольные WebSocket close reason не публикуются.
+Wake CLI: `daemon`, `status`, `pause`, `resume`, `setup`, `select-worker`, `probe`, а также legacy recovery-команды по текущему `--help`. `pause` останавливает исполнение, сохраняя реестр; `resume` не снимает неопределённые исходы. `select-worker` — отдельно порученное переключение root с ожидаемой конфигурацией и закреплёнными физическим корнем инструкций/REVISION; старый чат и история сохраняются. Setup/probe не применяются как ежедневный readiness-тест.
 
-`failed-context` выводит только ID известного failed-события и хода, требует root. После ручной проверки текущего чата и внешних эффектов этого события команда `recover-failed --event-id ID --turn-id ID --effects-reviewed` сверяет точный статус `failed` и idle-состояние чата, затем продолжает оставшуюся очередь без повтора завершившегося события. Проверка ограничена 20 секундами. Эти команды не разблокируют неизвестный, interrupted, несовпавший или несовместимый ход. `pause` меняет duty и прерывает ход; `setup` создаёт постоянный чат/config; `probe` создаёт и архивирует тестовый чат. Последние три не подходят для ежедневной диагностики.
+Статус различает доступность приёма, соединения и исполнителя, pending/needs_review и возраст старейшего задания. Systemd READY означает готовность локального управления. Логическая остановка может существовать при active-процессе. Wake Restart=on-failure восстанавливает процесс, но не снимает сохранённую проверку; общий Codex daemon ради Telegram автоматически не перезапускается. Повреждённая схема, auth и quota требуют устранения причины, а не бесконечных повторов.
 
-После RPC rejection или неразрешённого неизвестного исхода `WakeDispatcher` отключает новые события; systemd может оставаться active. При `enabled=false`/`recovery_state=blocked` проверь текущий чат и event, прежде чем включать duty. Автоматический systemd restart не используется для обхода этой блокировки. Root-only `/etc/autostop-work-telegram/wake.json` хранит thread ID: не публикуй его и не заменяй другим чатом. `instruction_sha256` подтверждает загруженный prompt, не весь runtime. Восстановление метаданных рассчитано на протокол Codex 0.160.0; несовместимая схема не разрешает повтор запуска.
+Duty: `scripts/set-work-telegram-duty.sh --enable|--disable|--status [--expected-release-dir DIR]`. Выключение закрывает приём, сохраняет ранее принятые задания и останавливает исполнение; включение открывает новое окно и продолжает разрешённую работу без сброса неизвестности. Поля статуса проверяются независимо; включение приёма не означает, что удержанное задание разрешено повторить.
 
-Управление duty: `scripts/set-work-telegram-duty.sh --enable|--disable|--status [--expected-release-dir DIR]`. `--status` читает состояние: отдельно `wake_active` (процесс), `wake_connected`, `wake_ready`, `wake_recovery_state`. `--enable` и `--disable` меняют рабочий режим только по поручению владельца. Повторный `--enable` в восстановлении сохраняет очередь без перезапуска служб; заблокированный wake не сбрасывается автоматически, а неудачное повторное включение сохраняет действующий режим и очередь. После изменения перечитай состояние bridge/wake и проверь непрерывность очереди.
-
-Безопасная техническая проверка, без чтения сообщений:
-
-```bash
-sudo -u autostop-work-telegram env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-work-telegram-releases/current /opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work monitor-status
-sudo /opt/AutostopManager/scripts/set-work-telegram-duty.sh --status
-env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-work-telegram-releases/current /usr/bin/python3 -m autostop_manager.telegram_wake status
-systemctl is-active autostop-work-telegram.service autostop-codex-wake.service
-```
-
-Сверяй target current snapshot и хеши bridge файлов с опубликованным commit; у Manager дополнительно REVISION. `scripts/run-work-telegram-media.sh self-check` выполняет VAD/inference, monitor-voice wrapper проверяется своим `--self-check`. Эти проверки не доказывают доставку клиенту; отчёт содержит flags/counts, без IDs и account identity.
+Техническая проверка без чтения переписки: installed `set-work-telegram-duty.sh --status`, bridge `status`/`monitor-status` и wake `status`. Авторизация, команды runtime, media/voice, MCP и конкретный клиентский сценарий проверяются отдельно. Тест с аккаунта владельца подтверждает только owner-маршрут B2.
 
 ## Automation Center
 
@@ -84,7 +66,11 @@ env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /usr/bin/
 
 Согласованный выпуск выполняет [deployment.md](deployment.md); ниже только отдельно порученное standalone восстановление.
 
-Work Telegram: останови duty → `scripts/install-telegram-bridge.sh --account work --revision <commit>` → `scripts/provision-telegram-transcription-model.sh --account work --revision <commit>` → `scripts/deploy_telegram_bridge.sh --account work --no-start <commit>` → `scripts/install-codex-wake.sh` из active snapshot. Не переключай current вручную. До enable проверь CRM/MCP, voice, systemd и версии без клиентских отправок. Personal session сохраняется отдельно.
+Первый переход с RAM-only: до остановки сохрани точные ссылки через `python scripts/export-work-telegram-inbox.py --output PRIVATE_NEW_FILE` в root-owned каталоге 0700; helper читает текущий монитор и не публикует идентификаторы. Сверь текущий ход и эффекты, объяви окно переключения. Старый disable теряет RAM-ссылки, поэтому экспорт выполняется первым; переписку целиком не воспроизводи.
+
+Work Telegram: приостанови исполнение и duty → `scripts/install-telegram-bridge.sh --account work --revision <commit>` → provisioning модели → `scripts/deploy_telegram_bridge.sh --account work --no-start <commit>` → `scripts/install-codex-wake.sh` из active snapshot. Новый snapshot содержит REVISION. Импортируй сохранённые ссылки через `job-import-legacy --file PRIVATE_FILE --instruction-root PHYSICAL --instruction-revision SHA`: они сохраняют ID и удерживаются для проверки. Затем явно выбери отдельный worker через `select-worker` с ожидаемыми старым thread/config hash и новым root/revision по `--help`; перезапусти wake только в согласованном выпуске. Узко проверь входящие на границе окна переключения.
+
+До enable проверь MCP, voice, systemd, версии и root/revision без клиентских отправок. Personal session сохраняется отдельно. Current вручную не переключай. Откат не подменяет накопленный реестр старой копией; RAM-only релиз поверх существующего реестра запрещён, исполнение удерживается до совместимого восстановления.
 
 Automation использует один `--release-attempt-key ATTEMPT` для `hold`, `prepare-held`, `seed`, `adopt-current`, `release-hold`; все меняют состояние:
 

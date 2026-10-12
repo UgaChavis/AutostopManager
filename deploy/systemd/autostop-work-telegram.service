@@ -11,6 +11,7 @@ SupplementaryGroups=autostop-automation
 WorkingDirectory=/opt/autostop-work-telegram-releases/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
+Environment=AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX=1
 # The file is absent by default: inbound monitoring stays off unless the owner
 # explicitly enables the persistent event-driven work mode.
 EnvironmentFile=-/etc/autostop-work-telegram/monitor.env

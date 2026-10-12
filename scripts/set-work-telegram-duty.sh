@@ -61,6 +61,14 @@ bridge_status() {
     "${venv_python}" -m autostop_manager.telegram_bridge --account work status
 }
 
+durable_release() {
+  [[ -f "${release_link}/autostop_manager/telegram_inbox.py" ]]
+}
+
+bridge_control() {
+  PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work "$@"
+}
+
 wait_for_outbound_only() {
   local status
   for _attempt in {1..15}; do
@@ -77,6 +85,9 @@ wait_for_outbound_only() {
 
 disable_duty() {
   local workers load_state
+  if durable_release && systemctl is-active --quiet "${service_unit}"; then
+    bridge_control duty-set --disabled >/dev/null || return 1
+  fi
   if [[ -f "${wake_config}" ]]; then
     if systemctl is-active --quiet "${wake_unit}"; then
       PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake pause || return 1
@@ -112,6 +123,12 @@ enable_duty() {
     systemctl start autostop-codex-start.service || return 1
     systemctl enable --now "${wake_unit}" || return 1
     for _attempt in {1..15}; do
+      if durable_release; then
+        # Intake and execution are independent. A held job must not prevent
+        # intake being enabled, and enable must never erase the held outcome.
+        wake_ready=1
+        break
+      fi
       if PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status \
         | "${venv_python}" -c '
 import json,sys
@@ -146,7 +163,13 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
     if systemctl is-active --quiet "${service_unit}" \
       && monitor_status="$(sudo -u "${service_user}" env PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" \
       && grep -Eq '"enabled": true' <<<"${monitor_status}" \
-      && grep -Eq '"retention": "memory_only"' <<<"${monitor_status}"; then
+      && grep -Eq '"retention":[[:space:]]*"(memory_only|durable_refs)"' <<<"${monitor_status}"; then
+      if durable_release; then
+        bridge_control duty-set --enabled >/dev/null || return 1
+        if [[ -f "${wake_config}" ]]; then
+          PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake resume >/dev/null || return 1
+        fi
+      fi
       return 0
     fi
     sleep 1
@@ -185,8 +208,11 @@ inbound=bool(s.get("inbound_enabled"))
 connected=bool(w.get("ok") and w.get("connected"))
 ready=bool(w.get("ok") and w.get("enabled") and w.get("ready", connected))
 recovery_state=w.get("recovery_state", "ready" if ready else "unavailable")
-if recovery_state not in {"starting", "ready", "reconnecting", "reconciling", "blocked", "paused", "unavailable"}:
+if not isinstance(recovery_state, str) or recovery_state not in {"starting", "ready", "reconnecting", "reconciling", "blocked", "paused", "unavailable", "waiting_thread", "waiting_bridge", "held", "running"}:
   recovery_state="unavailable"
+execution_state=w.get("execution_state", recovery_state)
+if not isinstance(execution_state, str) or execution_state not in {"starting", "ready", "reconnecting", "reconciling", "blocked", "paused", "unavailable", "waiting_thread", "waiting_bridge", "held", "running", "idle"}:
+  execution_state="unavailable"
 print(json.dumps({
   "ok": bool(s.get("ok")),
   "transport_ready": bool(s.get("transport_ready")),
@@ -196,6 +222,9 @@ print(json.dumps({
   "wake_connected": connected,
   "wake_ready": ready,
   "wake_recovery_state": recovery_state,
+  "execution_state": execution_state,
+  "pending": w.get("pending", w.get("queued", 0)) if type(w.get("pending", w.get("queued", 0))) is int else 0,
+  "needs_review": w.get("needs_review", 0) if type(w.get("needs_review", 0)) is int else 0,
   "state": "inbound_enabled" if inbound else "outbound_only",
   "polling": False,
 }, separators=(",", ":"), sort_keys=True))'
@@ -213,7 +242,11 @@ print(json.dumps({
     trap cleanup_incomplete_duty EXIT
     enable_duty || { echo "work_telegram_duty_enable_failed=true" >&2; exit 1; }
     trap - EXIT
-    printf '%s\n' "work_telegram_duty=enabled" "monitoring=enabled" "retention=memory_only"
+    if durable_release; then
+      printf '%s\n' "work_telegram_duty=enabled" "monitoring=enabled" "retention=durable_refs"
+    else
+      printf '%s\n' "work_telegram_duty=enabled" "monitoring=enabled" "retention=memory_only"
+    fi
     ;;
   *)
     usage; exit 2
