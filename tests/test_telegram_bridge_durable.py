@@ -132,6 +132,32 @@ class MediaClient(Client):
         return message.synthetic_content
 
 
+class MarkdownDefaultClient(MediaClient):
+    """Emulate the SDK's default rendering unless explicitly disabled."""
+
+    @staticmethod
+    def rendered(text, kwargs):
+        return text if kwargs.get("parse_mode", "markdown") is None else text.strip().replace("**", "").replace("_", "")
+
+    async def send_message(self, entity, text, **kwargs):
+        return await Client.send_message(self, entity, self.rendered(text, kwargs), **kwargs)
+
+    async def send_file(self, entity, upload, *, caption, **kwargs):
+        content = upload.read()
+        message = await Client.send_message(
+            self, entity, self.rendered(caption, kwargs), reply_to=kwargs.get("reply_to", 0)
+        )
+        message.media = SimpleNamespace()
+        message.file = SimpleNamespace(
+            name=upload.name,
+            mime_type="application/pdf" if kwargs.get("force_document") else "image/jpeg",
+            size=len(content),
+        )
+        message.document = SimpleNamespace(attributes=[])
+        message.synthetic_content = content
+        return message
+
+
 class ReadbackClient(MediaClient):
     def __init__(self, messages):
         super().__init__(messages)
@@ -388,6 +414,92 @@ def _media_request(config, operation):
         "caption": "Synthetic attachment",
         "mode": "dry_run",
     }
+
+
+def test_raw_markdown_text_keeps_verified_job_receipt(tmp_path):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = MarkdownDefaultClient([source])
+    text = "  **literal** _text_\n "
+    assert MarkdownDefaultClient.rendered(text, {}) != text
+    dry = asyncio.run(_send(client, config, monitor, job, kind="result", text=text))
+    sent = asyncio.run(_send(client, config, monitor, job, kind="result", text=text, mode="apply", dry=dry))
+    assert sent["verified"] is True and client.messages[sent["message_id"]].message == text
+    effect = monitor.inbox.read_job(job["job_id"])["effects"][0]
+    assert effect["verified"] == 1 and effect["effect_key"] == sent["receipt_key"]
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+def test_raw_markdown_caption_keeps_verified_job_media_receipt(tmp_path, monkeypatch, operation):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = MarkdownDefaultClient([source])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    caption = "  **literal** _caption_\n "
+    request = _media_request(config, operation) | {
+        "caption": caption,
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+        "kind": "result",
+        "reply_to_message_id": 100,
+    }
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    sent = asyncio.run(
+        bridge._handle_operation(
+            client,
+            config,
+            request
+            | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]},
+            inbound_monitor=monitor,
+        )
+    )
+    assert sent["verified"] is True and client.messages[sent["message_id"]].message == caption
+    assert monitor.inbox.read_job(job["job_id"])["effects"][0]["verified"] == 1
+    monitor.inbox.close()
+
+
+def test_raw_markdown_owner_notification_keeps_verified_native_receipt(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    client = MarkdownDefaultClient([])
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 84)
+
+    async def owner(_client, _config):
+        return 84, {"id": 84, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_owner_target", owner)
+    text = "  **literal** _owner_\n "
+    request = {
+        "operation": "notify_owner",
+        "kind": "completion",
+        "notification_key": "raw-owner",
+        "text": text,
+        "mode": "dry_run",
+    }
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    sent = asyncio.run(
+        bridge._handle_operation(
+            client,
+            config,
+            request | {"mode": "apply", "contract_token": dry["contract_token"]},
+            inbound_monitor=monitor,
+        )
+    )
+    assert sent["verified"] is True and client.messages[sent["message_id"]].message == text
+    assert (
+        next(iter(bridge._load_idempotency(config.state_dir / "idempotency.json").values()))["readback_verified"]
+        is True
+    )
+    monitor.inbox.close()
 
 
 @pytest.mark.parametrize("operation", ["send_photo", "send_document"])
@@ -1305,10 +1417,98 @@ def test_storage_failure_triggers_fatal_intake_signal(tmp_path, monkeypatch):
         raise sqlite3.OperationalError("disk full")
 
     monkeypatch.setattr(monitor.inbox, "record", fail)
+    monitor.transport_ready = True
     asyncio.run(bridge._capture_incoming_event(monitor, _message(100)))
     assert monitor.failure_event.is_set() is True
+    assert monitor.transport_ready is False
     with pytest.raises(bridge.BridgeError, match="inbound_storage_unavailable"):
         asyncio.run(bridge._await_intake_failure(monitor))
+    monitor.inbox.close()
+
+
+def test_real_sqlite_wrapped_storage_failure_is_fatal_and_accepts_nothing(tmp_path, capsys):
+    _config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    monitor.inbox._db.execute("PRAGMA query_only=ON")
+    asyncio.run(bridge._capture_incoming_event(monitor, _message(100)))
+    assert monitor.failure_event.is_set() is True
+    assert monitor.failure_code == "inbound_storage_unavailable"
+    assert monitor.transport_ready is False
+    assert monitor.status()["open_events"] == 0
+    assert monitor.inbox.events() == []
+    assert "work_telegram_inbox_error=inbound_storage_unavailable" in capsys.readouterr().err
+    with pytest.raises(bridge.BridgeError, match="inbound_storage_unavailable"):
+        asyncio.run(bridge._await_intake_failure(monitor))
+    monitor.inbox.close()
+
+
+def test_capacity_gap_sends_one_incident_then_recovers_after_room_is_freed(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path, max_events=1)
+    monitor.transport_ready = True
+    source, missing = _message(100), _message(101)
+    client = Client([source, missing])
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 84)
+
+    async def owner(_client, _config):
+        return 84, {"id": 84, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_owner_target", owner)
+
+    async def scenario():
+        await bridge._capture_incoming_event(monitor, source)
+        await bridge._capture_incoming_event(monitor, missing)
+        assert monitor.failure_event.is_set() is False and monitor.transport_ready is True
+        assert monitor.status()["open_events"] == 1 and monitor.status()["gap_count"] == 1
+        assert monitor.inbox.health()["intake"]["error_code"] == "inbound_monitor_full"
+        assert monitor.reconcile_requested.is_set() is True
+        assert len(monitor.inbox.pending_notifications()) == 1
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        await bridge._deliver_incident_notifications(client, config, monitor)
+        assert monitor.reconcile_requested.is_set() is False
+        assert monitor.inbox.health()["intake"]["error_code"] == "inbound_monitor_full"
+        assert client.sent == 1 and monitor.inbox.pending_notifications() == []
+        incident = client.messages[102]
+        assert incident.chat_id == 84 and "требуется проверка (intake_inbound_monitor_full)" in incident.message
+        assert "Входящие сохраняются" not in incident.message
+        await bridge._capture_incoming_event(monitor, missing)
+        await bridge._deliver_incident_notifications(client, config, monitor)
+        assert monitor.reconcile_requested.is_set() is False and client.sent == 1
+        job = _job(monitor)
+        result = await bridge._handle_job_operation(
+            client,
+            config,
+            {
+                "operation": "job_result",
+                "job_id": job["job_id"],
+                "lease": job["lease"],
+                "expected_revision": job["revision"],
+                "outcome": "no_reply_needed",
+                "reason_code": "not_actionable",
+                "event_ids": job["event_ids"],
+                "receipt_keys": [],
+            },
+            monitor,
+        )
+        assert result["job"]["state"] == "completed" and monitor.reconcile_requested.is_set() is True
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        await bridge._deliver_incident_notifications(client, config, monitor)
+        assert monitor.inbox.health()["intake"]["state"] == "ready"
+        assert monitor.status()["gap_count"] == 0 and monitor.status()["open_events"] == 1
+        assert monitor.inbox.checkpoint(42) == 101 and client.sent == 2
+        recovery = client.messages[103]
+        assert recovery.chat_id == 84 and "сбой устранён (intake_inbound_monitor_full)" in recovery.message
+        assert "соединение восстановлено" not in recovery.message
+        ledger = bridge._load_idempotency(config.state_dir / "idempotency.json")
+        assert len(ledger) == 2 and all(entry["readback_verified"] for entry in ledger.values())
+        assert monitor.inbox.pending_notifications() == []
+        await bridge._reconcile_incoming_history(client, monitor)
+        await bridge._deliver_incident_notifications(client, config, monitor)
+        assert client.sent == 2 and monitor.reconcile_requested.is_set() is False
+
+    monkeypatch.setattr(bridge, "_MUTATION_LOCK", asyncio.Lock())
+    asyncio.run(scenario())
     monitor.inbox.close()
 
 

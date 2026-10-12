@@ -338,6 +338,52 @@ def test_completed_model_without_job_result_holds_execution_but_preserves_intake
     asyncio.run(scenario())
 
 
+def test_warm_thread_failure_holds_acknowledged_job_without_replay(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            initial = runtime.monitor.record(runtime.client.inbound(100))
+            server = MockServer(complete=False)
+            async with worker(runtime, tmp_path, bundle, server) as dispatcher:
+                await until(
+                    lambda: runtime.inbox.active_jobs() and runtime.inbox.active_jobs()[0]["state"] == "running"
+                )
+                job = runtime.inbox.active_jobs()[0]
+                dry = await send(runtime, job, kind="ack", text="Synthetic acknowledgement")
+                receipt = await send(runtime, job, kind="ack", text="Synthetic acknowledgement", dry=dry)
+                server.turn_statuses[job["turn_id"]] = "failed"
+                failure = json.dumps(
+                    {
+                        "method": "thread/status/changed",
+                        "params": {"threadId": THREAD, "status": {"type": "systemError"}},
+                    }
+                )
+                await server.sockets[-1].send(failure)
+                await until(lambda: not dispatcher.active and dispatcher.execution_state == "held")
+                held = runtime.inbox.read_job(job["job_id"])
+                assert held["state"] == "needs_review" and held["turn_id"] == job["turn_id"]
+                assert held["reason_code"] == "codex_thread_system_error"
+                assert held["effects"][0]["receipt_key"] == receipt["receipt_key"]
+                assert not dispatcher.status()["ready"] and dispatcher.completed == 0
+                newer = runtime.monitor.record(runtime.client.inbound(110, peer=OTHER))
+                await server.sockets[-1].send(failure)
+                await until(lambda: runtime.jobs.generation == runtime.inbox.generation)
+                await dispatcher.resume_execution()
+                await asyncio.sleep(0.02)
+                assert server.counter == 1 and runtime.client.sent == 1
+                assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "open"
+                assert runtime.inbox.status()["enabled"] and runtime.inbox.status()["needs_review_jobs"] == 1
+                assert not dispatcher.status()["ready"]
+            # A new executor connection may be healthy; the saved job still
+            # requires review and cannot replay either its model or its ack.
+            async with worker(runtime, tmp_path, bundle, server) as replacement:
+                await until(lambda: replacement.execution_state == "held" and not replacement.active)
+                assert server.counter == 1 and runtime.client.sent == 1
+                assert runtime.inbox.read_job(job["job_id"])["turn_id"] == job["turn_id"]
+                assert runtime.inbox.status()["open_events"] == 2
+
+    asyncio.run(scenario())
+
+
 def test_new_telegram_update_before_handler_rejects_stale_dryrun(tmp_path, bundle):
     async def scenario():
         async with bridge_runtime(tmp_path) as runtime:
@@ -659,5 +705,77 @@ def test_old_send_readback_after_new_inbound_does_not_replay_or_close_new_contex
             )
             assert finished["job"]["state"] == "completed" and runtime.client.sent == 2
             assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "reply_verified"
+
+    asyncio.run(scenario())
+
+
+def test_paused_operator_finishes_terminal_job_with_verified_effect_and_new_context(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            initial = runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            dry = await send(runtime, job, kind="result", text="Synthetic original answer")
+            get_messages = runtime.client.get_messages
+            lost = False
+
+            async def lose_first_readback(entity, *, ids=None, limit=None):
+                nonlocal lost
+                if ids == 101 and not lost:
+                    lost = True
+                    return None
+                return await get_messages(entity, ids=ids, limit=limit)
+
+            runtime.client.get_messages = lose_first_readback
+            with pytest.raises(wake.WakeError, match=r"^send_readback_failed$"):
+                await send(runtime, job, kind="result", text="Synthetic original answer", dry=dry)
+            newer = runtime.monitor.record(runtime.client.inbound(102, text="Synthetic clarification"))
+            job = (
+                await runtime.jobs.request(
+                    "job_needs_review", **binding(job), reason_code="codex_completed_without_job_result"
+                )
+            )["job"]
+            await runtime.jobs.request("job_execution_set", paused=True, expected_revision=1)
+            server = MockServer(complete=False)
+            server.turn_statuses[job["turn_id"]] = "completed"
+            async with worker(runtime, tmp_path, bundle, server) as dispatcher:
+                await until(lambda: dispatcher.execution_state == "paused" and dispatcher.app.connected)
+                proof = await runtime.jobs.request(
+                    "job_effect_readback", **binding(job), effect_key=dry["idempotency_key"]
+                )
+                assert proof["verified"] and runtime.client.sent == 1
+                with pytest.raises(wake.WakeError, match=r"^inbox_retry_effects_present$"):
+                    await runtime.jobs.request(
+                        "job_resolve", **binding(job), decision="retry_no_effects", effects_reviewed=True
+                    )
+                job = (
+                    await runtime.jobs.request(
+                        "job_resolve", **binding(job), decision="continue_bound_turn", effects_reviewed=True
+                    )
+                )["job"]
+                job = (await runtime.jobs.request("job_refresh", **binding(job), event_ids=[initial, newer]))["job"]
+                with pytest.raises(wake.WakeError, match=r"^inbox_result_receipt_required$"):
+                    await runtime.jobs.request(
+                        "job_result",
+                        **binding(job),
+                        outcome="answered",
+                        event_ids=job["event_ids"],
+                        receipt_keys=[proof["receipt_key"]],
+                    )
+                revised = await send(runtime, job, kind="result", text="Synthetic revised answer")
+                revised = await send(runtime, job, kind="result", text="Synthetic revised answer", dry=revised)
+                finished = await runtime.jobs.request(
+                    "job_result",
+                    **binding(job),
+                    outcome="answered",
+                    event_ids=job["event_ids"],
+                    receipt_keys=[proof["receipt_key"], revised["receipt_key"]],
+                )
+                assert finished["job"]["state"] == "completed"
+                assert runtime.inbox.status()["execution_paused"] is True
+                assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "reply_verified"
+                assert runtime.client.sent == 2 and server.counter == 0
+                await dispatcher.resume_execution()
+                await until(lambda: dispatcher.status()["ready"])
+                assert runtime.client.sent == 2 and server.counter == 0
 
     asyncio.run(scenario())

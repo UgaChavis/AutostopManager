@@ -1870,7 +1870,12 @@ async def _handle_send_photo(
         upload = io.BytesIO(photo_content)
         upload.name = photo_path.name
         sent = await client.send_file(
-            entity, upload, caption=caption, force_document=False, **({"reply_to": reply_to} if reply_to else {})
+            entity,
+            upload,
+            caption=caption,
+            force_document=False,
+            parse_mode=None,
+            **({"reply_to": reply_to} if reply_to else {}),
         )
         entry["message_id"] = int(sent.id)
         _save_idempotency(idempotency_path, idempotency)
@@ -2018,6 +2023,7 @@ async def _handle_send_document(
             caption=caption,
             force_document=True,
             mime_type="application/pdf",
+            parse_mode=None,
             **({"reply_to": reply_to} if reply_to else {}),
         )
         entry["message_id"] = int(sent.id)
@@ -2280,7 +2286,7 @@ async def _handle_send_text_to_entity(
         _save_idempotency(idempotency_path, idempotency)
         if not known_message_id:
             sent = await client.send_message(
-                entity, text, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
+                entity, text, parse_mode=None, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
             )
             entry["message_id"] = int(sent.id)
         idempotency[idempotency_key] = entry
@@ -3553,9 +3559,9 @@ async def _deliver_incident_notifications_locked(
         notification_id = str(notification["incident_id"]) + (":recovery" if recovered else ":incident")
         code = str(notification.get("reason_code") or "ready")
         text = (
-            "Рабочий Telegram: соединение восстановлено. Проверьте очередь и задания, требующие проверки."
+            f"Рабочий Telegram: сбой устранён ({code}). Проверьте очередь и задания, требующие проверки."
             if recovered
-            else f"Рабочий Telegram: обработка приостановлена ({code}). Входящие сохраняются."
+            else f"Рабочий Telegram: требуется проверка ({code}). Проверьте состояние приёма и очередь."
         )
         request = {
             "operation": "notify_owner",
@@ -3859,16 +3865,26 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
     try:
         event_id = monitor.record(event, preserve_open=bool(wake_socket))
-    except InboxError as exc:
+    except (InboxError, sqlite3.Error, OSError) as exc:
+        storage_failure = not isinstance(exc, InboxError) or str(exc) == "inbox_storage_failed"
         if isinstance(monitor, DurableInboundMonitor):
-            monitor.changed()
-        print(f"work_telegram_inbox_error={exc}", file=sys.stderr, flush=True)
-        return
-    except (sqlite3.Error, OSError):
-        if isinstance(monitor, DurableInboundMonitor):
-            monitor.failure_code = "inbound_storage_unavailable"
-            monitor.failure_event.set()
-        print("work_telegram_inbox_error=inbound_storage_unavailable", file=sys.stderr, flush=True)
+            if not storage_failure and str(exc) == "inbound_monitor_full":
+                try:
+                    health = monitor.inbox.health().get("intake", {})
+                    first_failure = (health.get("state"), health.get("error_code")) != ("held", "inbound_monitor_full")
+                    monitor.inbox.set_health("intake", "held", "inbound_monitor_full")
+                    if first_failure:
+                        monitor.request_reconciliation()
+                except (InboxError, sqlite3.Error, OSError):
+                    storage_failure = True
+            if storage_failure:
+                monitor.transport_ready = False
+                monitor.failure_code = "inbound_storage_unavailable"
+                monitor.failure_event.set()
+            else:
+                monitor.changed()
+        code = "inbound_storage_unavailable" if storage_failure else str(exc)
+        print(f"work_telegram_inbox_error={code}", file=sys.stderr, flush=True)
         return
     except BridgeError as exc:
         if str(exc) == "inbound_monitor_full":
@@ -4331,10 +4347,16 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
         monitor.inbox.set_reconciliation_cursor(**last_cursor)
     elif dialogue_count > MAX_RECONCILE_DIALOGS:
         raise BridgeError("reconciliation_cursor_unavailable")
+    if capacity_blocked:
+        monitor.reconciliation_fence = None
     monitor.inbox.set_health(
         component="intake",
         state="ready" if complete else "held",
-        error_code=None if complete else "history_reconciliation_incomplete",
+        error_code=None
+        if complete
+        else "inbound_monitor_full"
+        if capacity_blocked
+        else "history_reconciliation_incomplete",
     )
     monitor.changed()
     # Continue a finite backlog by task notification, never by interval polling.

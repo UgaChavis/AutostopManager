@@ -476,6 +476,162 @@ def test_pause_keeps_unresolved_incident_until_verified_resolution_and_resume(tm
     asyncio.run(scenario())
 
 
+def test_warm_thread_error_holds_once_ignores_foreign_and_recovers_only_on_resume(tmp_path, bundle):
+    class RecordingHealthJobs(FakeJobs):
+        async def request(self, operation, **arguments):
+            if operation == "job_health":
+                self.inbox.set_health(**arguments)
+            return await super().request(operation, **arguments)
+
+    async def scenario():
+        inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
+        inbox.duty_set(True)
+        jobs = RecordingHealthJobs(inbox)
+        server = MockServer()
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            dispatcher.start()
+
+            async def notify(status, *, thread_id=THREAD):
+                await server.sockets[-1].send(
+                    json.dumps({"method": "thread/status/changed", "params": {"threadId": thread_id, "status": status}})
+                )
+
+            try:
+                await until(lambda: dispatcher.status()["ready"] and bool(jobs.health))
+                sequence = app.thread_notification_sequence
+                await notify({"type": "systemError"}, thread_id="foreign")
+                await notify({"type": "active", "activeFlags": "private invalid body"}, thread_id="foreign")
+                valid = [
+                    {"type": "notLoaded"},
+                    {"type": "active", "activeFlags": []},
+                    {"type": "active", "activeFlags": ["waitingOnUserInput", "waitingOnApproval"]},
+                    {"type": "idle"},
+                ]
+                for status in valid:
+                    await notify(status)
+                await until(lambda: app.thread_notification_sequence >= sequence + len(valid))
+                assert not app.blocked and dispatcher.status()["ready"]
+                assert inbox.pending_notifications() == [] and len(jobs.health) == 1
+                server.thread_status = "systemError"
+                await notify({"type": "systemError"})
+                await until(lambda: app.blocked and len(jobs.health) == 2)
+                assert not dispatcher.status()["ready"] and dispatcher.execution_state == "held"
+                assert jobs.health[-1] == {
+                    "component": "codex",
+                    "state": "held",
+                    "error_code": "codex_thread_system_error",
+                }
+                sequence = app.thread_notification_sequence
+                await notify({"type": "systemError"})
+                await notify({"type": "systemError"})
+                await until(lambda: app.thread_notification_sequence >= sequence + 4)
+                assert len(inbox.pending_notifications()) == 1 and len(jobs.health) == 2
+                sequence = app.thread_notification_sequence
+                await notify({"type": "idle"})
+                await until(lambda: app.thread_notification_sequence > sequence)
+                assert app.blocked and not dispatcher.status()["ready"]
+                with pytest.raises(wake.WakeError, match=r"^codex_thread_system_error$"):
+                    await dispatcher.resume_execution()
+                assert app.blocked and server.counter == 0
+                server.thread_status = "idle"
+                await dispatcher.resume_execution()
+                await until(lambda: dispatcher.status()["ready"] and jobs.health[-1]["state"] == "ready")
+                assert [entry["state"] for entry in jobs.health] == ["ready", "held", "ready"]
+                assert inbox.pending_notifications()[0]["recovered_at"] is not None
+                assert dispatcher.last_error is None and server.counter == 0
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "status",
+    [None, {"type": "unknown"}, {"type": "active"}, {"type": "active", "activeFlags": ["private unknown flag"]}],
+)
+def test_malformed_current_thread_status_fails_closed_with_fixed_code(tmp_path, bundle, status):
+    async def scenario():
+        inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
+        inbox.duty_set(True)
+        jobs = FakeJobs(inbox)
+        server = MockServer()
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            dispatcher.start()
+            try:
+                await until(lambda: dispatcher.status()["ready"] and bool(jobs.health))
+                await server.sockets[-1].send(
+                    json.dumps({"method": "thread/status/changed", "params": {"threadId": THREAD, "status": status}})
+                )
+                await until(lambda: app.blocked and len(jobs.health) == 2)
+                assert not dispatcher.status()["ready"]
+                assert dispatcher.last_error == "codex_thread_status_invalid"
+                assert jobs.health[-1] == {
+                    "component": "codex",
+                    "state": "held",
+                    "error_code": "codex_thread_status_invalid",
+                }
+                assert inbox.active_jobs() == [] and server.counter == 0
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
+def test_warm_error_while_start_intent_commits_prevents_model_start(tmp_path, bundle):
+    async def scenario():
+        inbox, _event = new_inbox(tmp_path)
+        server = MockServer()
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+
+            class ErrorBeforeIntentReply(FakeJobs):
+                async def request(self, operation, **arguments):
+                    response = await super().request(operation, **arguments)
+                    if operation == "job_start_intent":
+                        server.thread_status = "systemError"
+                        await server.sockets[-1].send(
+                            json.dumps(
+                                {
+                                    "method": "thread/status/changed",
+                                    "params": {"threadId": THREAD, "status": {"type": "systemError"}},
+                                }
+                            )
+                        )
+                        await until(lambda: app.blocked)
+                    return response
+
+            jobs = ErrorBeforeIntentReply(inbox)
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            dispatcher.start()
+            try:
+                await until(lambda: bool(inbox.active_jobs()) and inbox.active_jobs()[0]["state"] == "needs_review")
+                job = inbox.active_jobs()[0]
+                assert job["thread_id"] == THREAD and job["turn_id"] is None
+                assert app.recovery_error == "codex_thread_system_error"
+                assert not dispatcher.status()["ready"] and server.counter == 0
+                assert not any(call.get("method") == "turn/start" for call in server.calls)
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_duty_off_cold_start_and_resume_preserve_pending_without_launch(tmp_path, bundle):
     async def scenario():
         inbox, event_id = new_inbox(tmp_path)

@@ -2242,6 +2242,7 @@ def test_send_document_uploads_validated_bytes_and_independently_reads_back(monk
                 "caption": "Car ready",
                 "force_document": True,
                 "mime_type": "application/pdf",
+                "parse_mode": None,
             }
             document.write_bytes(_minimal_pdf(note=b"swapped-order"))
             self.uploaded = upload.read()

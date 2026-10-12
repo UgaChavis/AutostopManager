@@ -334,6 +334,47 @@ class AppServer:
             self.thread_notification_sequence += 1
             self.thread_changed.set()
 
+    def _notice_thread_status(self, params: Any) -> None:
+        if not isinstance(params, dict) or not isinstance(params.get("threadId"), str) or not params["threadId"]:
+            self.block("codex_thread_status_invalid")
+            return
+        if params["threadId"] != self.config.thread_id:
+            return
+        status = params.get("status")
+        if not isinstance(status, dict):
+            self.block("codex_thread_status_invalid")
+            return
+        kind = status.get("type")
+        if not isinstance(kind, str) or kind not in {"notLoaded", "idle", "active", "systemError"}:
+            self.block("codex_thread_status_invalid")
+            return
+        if kind == "active":
+            flags = status.get("activeFlags")
+            if not isinstance(flags, list) or any(
+                not isinstance(flag, str) or flag not in {"waitingOnApproval", "waitingOnUserInput"} for flag in flags
+            ):
+                self.block("codex_thread_status_invalid")
+                return
+        self._notice_thread_change(params)
+        if kind == "systemError":
+            self.block("codex_thread_system_error")
+
+    def _notice_turn(self, method: str, params: Any) -> None:
+        self._notice_thread_change(params)
+        if (
+            self.blocked
+            or not (self.active_turn or self.outcome_unknown)
+            or not isinstance(params, dict)
+            or params.get("threadId") != self.config.thread_id
+        ):
+            return
+        turn = rpc_entity(params, "turn")
+        if self.active_turn and turn["id"] != self.active_turn:
+            return
+        # Keep early notifications while turn/start is pending, without
+        # retaining turn items or unrelated manual turns.
+        self.events.put_nowait({"method": method, "params": {"turn": {"id": turn["id"], "status": turn.get("status")}}})
+
     async def _read(self, websocket: Any, generation: int) -> None:
         from websockets.exceptions import WebSocketException
 
@@ -357,27 +398,10 @@ class AppServer:
                 elif "id" in message:
                     error = {"code": -32601, "message": "unattended_request_not_supported"}
                     await self._write({"id": message["id"], "error": error})
+                elif message.get("method") == "thread/status/changed":
+                    self._notice_thread_status(message.get("params"))
                 elif message.get("method") in {"turn/started", "turn/completed"}:
-                    params = message.get("params", {})
-                    self._notice_thread_change(params)
-                    if (
-                        self.blocked
-                        or not (self.active_turn or self.outcome_unknown)
-                        or not isinstance(params, dict)
-                        or params.get("threadId") != self.config.thread_id
-                    ):
-                        continue
-                    turn = rpc_entity(params, "turn")
-                    if self.active_turn and turn["id"] != self.active_turn:
-                        continue
-                    # Keep early notifications while turn/start is pending,
-                    # without retaining turn items or unrelated manual turns.
-                    self.events.put_nowait(
-                        {
-                            "method": message["method"],
-                            "params": {"turn": {"id": turn["id"], "status": turn.get("status")}},
-                        }
-                    )
+                    self._notice_turn(message["method"], message.get("params", {}))
         except (OSError, WebSocketException, TransportLost):
             pass
         except asyncio.QueueFull:
@@ -469,6 +493,9 @@ class AppServer:
         LOGGER.warning("codex_recovery_blocked code=%s", error)
         self.ready_event.set()  # Release waiters so they can observe the block.
         self.disconnected.set()
+        if self.active_turn or self.outcome_unknown:
+            self._clear_events()
+            self.events.put_nowait({"method": "recovery_blocked"})
 
     async def supervise(self) -> None:
         self.managed = True
@@ -632,6 +659,8 @@ class AppServer:
                     await self.resume()
                     if self.pausing:
                         raise WakeError("codex_paused")
+                    if self.blocked:
+                        raise WakeError(self.recovery_error or "codex_recovery_blocked")
                     # An idle response only authorizes the connection that
                     # produced it. A replacement must finish setup and pass
                     # its own idle check before it may receive turn/start.
@@ -647,6 +676,8 @@ class AppServer:
                         # whether start is still safe. The durable job requires reconciliation.
                         if turn_generation != self.generation or not self.connected:
                             raise TransportLost("codex_start_connection_changed")
+                        if self.blocked:
+                            raise WakeError(self.recovery_error or "codex_recovery_blocked")
                     self.outcome_unknown = True
                     try:
                         result = await self.request(
@@ -673,6 +704,8 @@ class AppServer:
     async def _wait_turn(self, turn_generation: int, *, notification_only: bool = False) -> None:
         recovered = False
         while True:
+            if self.blocked:
+                raise WakeError(self.recovery_error or "codex_recovery_blocked")
             if self.managed and self.generation != turn_generation:
                 recovered = True
             if not self.connected:
@@ -700,6 +733,8 @@ class AppServer:
                     message = await self.events.get()
             except TimeoutError:
                 continue
+            if message["method"] == "recovery_blocked":
+                raise WakeError(self.recovery_error or "codex_recovery_blocked")
             if message["method"] == "connection_lost":
                 if message["generation"] < turn_generation:
                     continue
@@ -1723,6 +1758,9 @@ class DurableWakeDispatcher:
                             "interrupted",
                         }:
                             raise WakeError("wake_recovery_turn_not_terminal")
+                        # Replace a held transport while the hold is still set;
+                        # this planned reconnect is not another outage incident.
+                        await self.app._drop_connection()
                     self.app.blocked = False
                     self.app.pausing = False
                     self.app.recovery_error = None
