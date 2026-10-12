@@ -131,6 +131,167 @@ def test_known_turn_completed_during_disconnect_is_reconciled_without_replay(tmp
     asyncio.run(scenario())
 
 
+def test_known_failed_turn_requires_review_then_continues_fifo_without_replaying_event(tmp_path, quick_recovery):
+    async def scenario():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            assert server.counter == 1
+            assert dispatcher.queue.qsize() == 1
+            assert app.failed_turn == wake.FailedTurnContext("inbound-1", "1")
+            assert dispatcher.status()["recoverable_failure"] is True
+
+            with pytest.raises(wake.WakeError, match="wake_failed_turn_review_required"):
+                await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=False)
+            assert dispatcher.queue.qsize() == 1 and server.counter == 1
+
+            server.status = "completed"
+            result = await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=True)
+            assert result == {"ok": True, "recovery_state": "reconnecting", "replayed_failed_event": False}
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            await until(lambda: dispatcher.status()["ready"])
+
+            assert dispatcher.completed == 1 and dispatcher.failed == 1
+            assert server.counter == 2
+            starts = [call["params"]["input"][0]["text"] for call in server.calls if call["method"] == "turn/start"]
+            assert starts == [
+                wake.WAKE_INSTRUCTION.format(event_id="inbound-1"),
+                wake.WAKE_INSTRUCTION.format(event_id="inbound-2"),
+            ]
+            assert dispatcher.accept(event(1), 123)["duplicate"]
+            assert server.counter == 2
+            assert app.failed_turn is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "wrong_ids",
+        "metadata_changed",
+        "thread_busy",
+        "failure_reason_changed",
+        "failure_reason_changed_during_verification",
+    ],
+)
+def test_failed_turn_recovery_rejects_mismatch_and_preserves_pending_fifo(
+    tmp_path, quick_recovery, monkeypatch, scenario
+):
+    async def run():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            server.status = "completed"
+            event_id, turn_id = "inbound-1", "1"
+            if scenario == "wrong_ids":
+                event_id, turn_id = "inbound-2", "2"
+            elif scenario == "metadata_changed":
+                server.turn_statuses["1"] = "completed"
+            elif scenario == "thread_busy":
+                server.thread_status = "active"
+            elif scenario == "failure_reason_changed":
+                app.recovery_error = "codex_rpc_response_invalid"
+                dispatcher.last_error = "codex_rpc_response_invalid"
+            elif scenario == "failure_reason_changed_during_verification":
+                metadata = app._turn_metadata
+
+                async def alter_recovery_reason(turn_id):
+                    result = await metadata(turn_id)
+                    app.recovery_error = "codex_rpc_frame_invalid"
+                    return result
+
+                monkeypatch.setattr(app, "_turn_metadata", alter_recovery_reason)
+
+            with pytest.raises(wake.WakeError):
+                await dispatcher.recover_failed(event_id=event_id, turn_id=turn_id, effects_reviewed=True)
+            assert app.blocked and not dispatcher.enabled
+            assert dispatcher.queue.qsize() == 1 and server.counter == 1
+            assert dispatcher.status()["recoverable_failure"] is True
+
+    asyncio.run(run())
+
+
+def test_concurrent_failed_turn_recovery_starts_only_one_worker(tmp_path, quick_recovery):
+    async def scenario():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (_, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            server.status = "completed"
+            recovery = {
+                "event_id": "inbound-1",
+                "turn_id": "1",
+                "effects_reviewed": True,
+            }
+            results = await asyncio.gather(
+                dispatcher.recover_failed(**recovery),
+                dispatcher.recover_failed(**recovery),
+                return_exceptions=True,
+            )
+            assert sum(isinstance(item, dict) and item.get("ok") is True for item in results) == 1
+            assert sum(isinstance(item, wake.WakeError) for item in results) == 1
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            await until(lambda: dispatcher.status()["ready"])
+            assert server.counter == 2 and dispatcher.completed == 1 and dispatcher.failed == 1
+            starts = [call for call in server.calls if call["method"] == "turn/start"]
+            assert len(starts) == 2
+
+    asyncio.run(scenario())
+
+
+def test_known_failed_turn_recovers_after_transport_closes_while_blocked(tmp_path, quick_recovery):
+    async def scenario():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            await server.sockets[-1].close()
+            await until(lambda: not app.connected)
+            server.status = "completed"
+
+            await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=True)
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            await until(lambda: dispatcher.status()["ready"])
+
+            assert len(server.sockets) >= 2
+            assert server.counter == 2 and dispatcher.completed == 1
+            starts = [call["params"]["input"][0]["text"] for call in server.calls if call["method"] == "turn/start"]
+            assert starts == [
+                wake.WAKE_INSTRUCTION.format(event_id="inbound-1"),
+                wake.WAKE_INSTRUCTION.format(event_id="inbound-2"),
+            ]
+
+    asyncio.run(scenario())
+
+
+def test_failed_recovery_timeout_leaves_queue_blocked(tmp_path, quick_recovery, monkeypatch):
+    async def scenario():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            monkeypatch.setattr(wake, "FAILED_RECOVERY_TIMEOUT", 0.01)
+
+            async def wait_forever():
+                await asyncio.Event().wait()
+
+            app.resume = wait_forever
+            with pytest.raises(TimeoutError):
+                await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=True)
+            assert app.blocked and not dispatcher.enabled
+            assert dispatcher.queue.qsize() == 1 and server.counter == 1
+
+    asyncio.run(scenario())
+
+
 def test_known_inprogress_turn_waits_for_completion_notification_then_processes_queue(tmp_path, quick_recovery):
     async def scenario():
         server = MockServer(complete=False)
@@ -197,6 +358,36 @@ def test_exact_known_turn_can_be_found_on_fifth_metadata_page(tmp_path, quick_re
             await asyncio.wait_for(dispatcher.queue.join(), 3)
             assert server.metadata_calls == 5 and server.counter == dispatcher.completed == 1
             assert dispatcher.failed == 0 and not app.outcome_unknown
+
+    asyncio.run(scenario())
+
+
+def test_partial_connect_timeout_drops_socket_and_retry_recovers(tmp_path, quick_recovery, monkeypatch):
+    async def scenario():
+        server = MockServer(status="failed")
+        async with managed_wake(tmp_path, server) as (app, dispatcher):
+            dispatcher.accept(event(1), 123)
+            dispatcher.accept(event(2), 123)
+            await until(lambda: not dispatcher.enabled and not dispatcher.active)
+            server.status = "completed"
+            monkeypatch.setattr(wake, "FAILED_RECOVERY_TIMEOUT", 0.01)
+            real_connect = app.connect
+
+            async def partial_connect():
+                app.connected = True
+                await asyncio.Event().wait()
+
+            app.connected = False
+            app.connect = partial_connect
+            with pytest.raises(TimeoutError):
+                await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=True)
+            assert not app.connected and app.blocked and not dispatcher.enabled
+
+            app.connect = real_connect
+            await dispatcher.recover_failed(event_id="inbound-1", turn_id="1", effects_reviewed=True)
+            await asyncio.wait_for(dispatcher.queue.join(), 3)
+            await until(lambda: dispatcher.status()["ready"])
+            assert server.counter == 2 and dispatcher.completed == 1
 
     asyncio.run(scenario())
 

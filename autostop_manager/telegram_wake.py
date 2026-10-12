@@ -37,6 +37,7 @@ CONNECT_TIMEOUT = 20
 RECOVERY_POLL_INTERVAL = 15
 HEARTBEAT_INTERVAL = 20
 HEARTBEAT_TIMEOUT = 20
+FAILED_RECOVERY_TIMEOUT = 20
 MAX_TURN_NOTIFICATIONS = 32
 WAKE_INSTRUCTION = (
     "$manage-owner-telegram Новое событие рабочего Telegram: {event_id}; режим включён владельцем. "
@@ -60,6 +61,17 @@ class TransportLost(WakeError):
 
 class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
+
+
+class KnownTurnFailed(WakeError):
+    """The exact Codex turn is terminally failed and must not be replayed."""
+
+
+@dataclass(frozen=True)
+class FailedTurnContext:
+    event_id: str
+    turn_id: str
+    status: str = "failed"
 
 
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
@@ -107,6 +119,8 @@ class AppServer:
         self.sequence = 0
         self.connected = False
         self.active_turn: str | None = None
+        self.active_event_id: str | None = None
+        self.failed_turn: FailedTurnContext | None = None
         self.last_turn_started = False
         self.start_lock = asyncio.Lock()
         self.pausing = False
@@ -404,7 +418,10 @@ class AppServer:
             self.ready_event.clear()
             self.disconnected.set()
 
-    async def _turn_metadata(self) -> str:
+    async def _turn_metadata(self, turn_id: str | None = None) -> str:
+        expected_turn_id = turn_id or self.active_turn
+        if not isinstance(expected_turn_id, str) or not expected_turn_id:
+            raise WakeError("codex_turn_metadata_invalid")
         cursor = None
         for _ in range(5):
             params: dict[str, Any] = {
@@ -422,7 +439,7 @@ class AppServer:
             for turn in data:
                 if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
                     raise WakeError("codex_turn_metadata_invalid")
-                if turn["id"] == self.active_turn:
+                if turn["id"] == expected_turn_id:
                     status = turn.get("status")
                     if status not in {"completed", "inProgress", "failed", "interrupted"}:
                         raise WakeError("codex_turn_metadata_invalid")
@@ -437,15 +454,32 @@ class AppServer:
     def _complete_turn(self, status: Any, *, recovered: bool) -> None:
         if status not in {"completed", "failed", "interrupted"}:
             raise WakeError("codex_turn_metadata_invalid")
+        if status == "failed" and self.active_turn and self.active_event_id:
+            self.failed_turn = FailedTurnContext(
+                event_id=self.active_event_id,
+                turn_id=self.active_turn,
+            )
         self.active_turn = None
+        self.active_event_id = None
         self.outcome_unknown = False
         self._clear_events()
+        if status == "failed" and self.failed_turn is not None:
+            self.recovery_state = "blocked"
+            raise KnownTurnFailed("codex_turn_failed")
         if status != "completed":
             raise WakeError("codex_turn_failed")
         if not recovered and not self.last_turn_started:
             raise WakeError("codex_turn_start_not_observed")
         if not self.pausing:
             self.recovery_state = "ready"
+
+    async def run_event_turn(self, text: str, event_id: str) -> None:
+        self.active_event_id = event_id
+        try:
+            await self.run_turn(text)
+        finally:
+            if self.failed_turn is None or self.failed_turn.event_id != event_id:
+                self.active_event_id = None
 
     async def run_turn(self, text: str) -> None:
         self.last_turn_started = False
@@ -570,6 +604,7 @@ class WakeDispatcher:
         self.last_error: str | None = None
         self.worker: asyncio.Task[None] | None = None
         self.supervisor: asyncio.Task[None] | None = None
+        self.control_lock = asyncio.Lock()
 
     def status(self) -> dict[str, Any]:
         return {
@@ -587,6 +622,7 @@ class WakeDispatcher:
             "accepted": self.accepted,
             "completed": self.completed,
             "failed": self.failed,
+            "recoverable_failure": self.app.failed_turn is not None,
             "last_error": self.last_error or self.app.recovery_error,
             "rpc_error_code": self.app.last_rpc_error_code,
             "retention": "memory_only",
@@ -626,7 +662,7 @@ class WakeDispatcher:
             event_id = await self.queue.get()
             self.active = True
             try:
-                await self.app.run_turn(WAKE_INSTRUCTION.format(event_id=event_id))
+                await self.app.run_event_turn(WAKE_INSTRUCTION.format(event_id=event_id), event_id)
                 self.completed += 1
             except Exception as exc:  # noqa: BLE001 - fail closed without exposing private RPC payloads.
                 if self.enabled or self.app.outcome_unknown:
@@ -647,7 +683,101 @@ class WakeDispatcher:
                 self.active = False
                 self.queue.task_done()
 
+    def failed_context(self) -> dict[str, Any]:
+        failed = self.app.failed_turn
+        if failed is None:
+            return {"ok": True, "available": False}
+        return {
+            "ok": True,
+            "available": True,
+            "event_id": failed.event_id,
+            "turn_id": failed.turn_id,
+            "status": failed.status,
+        }
+
+    async def recover_failed(
+        self,
+        *,
+        event_id: str,
+        turn_id: str,
+        effects_reviewed: bool,
+    ) -> dict[str, Any]:
+        async with self.control_lock:
+            return await self._recover_failed_locked(
+                event_id=event_id,
+                turn_id=turn_id,
+                effects_reviewed=effects_reviewed,
+            )
+
+    async def _recover_failed_locked(
+        self,
+        *,
+        event_id: str,
+        turn_id: str,
+        effects_reviewed: bool,
+    ) -> dict[str, Any]:
+        failed = self.app.failed_turn
+        if failed is None or (event_id, turn_id) != (failed.event_id, failed.turn_id):
+            raise WakeError("wake_failed_turn_mismatch")
+        if effects_reviewed is not True:
+            raise WakeError("wake_failed_turn_review_required")
+        if (
+            not self.app.blocked
+            or self.app.recovery_error != "codex_turn_failed"
+            or self.last_error != "codex_turn_failed"
+            or self.enabled
+            or self.active
+            or self.app.pausing
+            or self.app.outcome_unknown
+            or self.app.active_turn is not None
+        ):
+            raise WakeError("wake_failed_turn_not_idle")
+
+        # Verify both the configured chat and exact failed turn before allowing
+        # only the still-pending FIFO to continue. The failed event is never
+        # put back on the queue.
+        try:
+            async with asyncio.timeout(FAILED_RECOVERY_TIMEOUT):
+                if not self.app.connected:
+                    await self.app.connect()
+                await self.app.resume()
+                status = await self.app._turn_metadata(turn_id)
+        except (OSError, TimeoutError, TransportLost):
+            # A timed-out initialize may leave connected=True before the
+            # handshake is complete. Drop it so a later retry reconnects.
+            await self.app._drop_connection()
+            raise
+        if status != "failed":
+            raise WakeError("wake_failed_turn_mismatch")
+        if (
+            self.app.recovery_error != "codex_turn_failed"
+            or self.last_error != "codex_turn_failed"
+            or self.app.pausing
+            or self.app.outcome_unknown
+            or self.active
+        ):
+            raise WakeError("wake_failed_turn_not_idle")
+
+        if self.supervisor is not None and not self.supervisor.done():
+            await _cancel_task(self.supervisor)
+        self.app.failed_turn = None
+        self.app.blocked = False
+        self.app.recovery_error = None
+        self.app.managed = True
+        self.app.recovery_state = "reconnecting"
+        self.app.ready_event.clear()
+        self.app.disconnected.set()
+        self.last_error = None
+        self.enabled = True
+        self.supervisor = asyncio.create_task(self.app.supervise())
+        self.worker = asyncio.create_task(self.work())
+        return {"ok": True, "recovery_state": "reconnecting", "replayed_failed_event": False}
+
     async def pause(self) -> None:
+        async with self.control_lock:
+            await self._pause_locked()
+
+    async def _pause_locked(self) -> None:
         self.enabled = False
         self.app.pausing = True
         self.app.recovery_state = "paused"
@@ -679,6 +809,21 @@ class WakeDispatcher:
             elif uid == 0 and request == {"operation": "pause"}:
                 await self.pause()
                 response = self.status()
+            elif uid == 0 and request == {"operation": "failed_context"}:
+                response = self.failed_context()
+            elif (
+                uid == 0
+                and set(request) == {"operation", "event_id", "turn_id", "effects_reviewed"}
+                and request.get("operation") == "recover_failed"
+                and isinstance(request.get("event_id"), str)
+                and isinstance(request.get("turn_id"), str)
+                and request.get("effects_reviewed") is True
+            ):
+                response = await self.recover_failed(
+                    event_id=request["event_id"],
+                    turn_id=request["turn_id"],
+                    effects_reviewed=True,
+                )
             else:
                 response = self.accept(request, uid)
         except (ValueError, OSError, TimeoutError, WakeError) as exc:
@@ -775,7 +920,16 @@ async def setup_task(*, probe: bool = False) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["daemon", "status", "pause", "setup", "probe"])
+    parser.add_argument(
+        "command", choices=["daemon", "status", "pause", "setup", "probe", "failed-context", "recover-failed"]
+    )
+    parser.add_argument("--event-id")
+    parser.add_argument("--turn-id")
+    parser.add_argument(
+        "--effects-reviewed",
+        action="store_true",
+        help="confirm that effects of the failed Codex turn were manually reviewed",
+    )
     args = parser.parse_args()
     try:
         if args.command == "daemon":
@@ -783,6 +937,22 @@ def main() -> int:
             return 0
         if args.command in {"setup", "probe"}:
             result = asyncio.run(setup_task(probe=args.command == "probe"))
+        elif args.command == "failed-context":
+            result = asyncio.run(local_request({"operation": "failed_context"}))
+        elif args.command == "recover-failed":
+            if not args.event_id or not args.turn_id or not args.effects_reviewed:
+                result = {"ok": False, "error": "wake_failed_turn_review_required"}
+            else:
+                result = asyncio.run(
+                    local_request(
+                        {
+                            "operation": "recover_failed",
+                            "event_id": args.event_id,
+                            "turn_id": args.turn_id,
+                            "effects_reviewed": True,
+                        }
+                    )
+                )
         else:
             result = asyncio.run(local_request({"operation": args.command}))
     except (OSError, ValueError, TypeError, KeyError, WakeError, TimeoutError) as exc:
