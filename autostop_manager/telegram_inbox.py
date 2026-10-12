@@ -22,6 +22,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+INBOX_SCHEMA_VERSION = 2
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2)
+
 EVENT_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,39})")
 JOB_PATTERN = re.compile(r"job-[a-f0-9]{32}")
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -99,6 +102,7 @@ class TelegramInbox:
         try:
             self._db = sqlite3.connect(self.path, timeout=5)
             self._db.row_factory = sqlite3.Row
+            self._validate_existing_schema()
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=FULL")
@@ -145,11 +149,22 @@ class TelegramInbox:
                     raise InboxError("inbox_file_invalid")
                 file.chmod(0o600)
 
+    def _validate_existing_schema(self) -> None:
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone() is None:
+            return
+        version = self._db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+        if version is None or version[0] not in {str(value) for value in SUPPORTED_INBOX_SCHEMA_VERSIONS}:
+            raise InboxError("inbox_schema_unsupported")
+
     def _create_schema(self) -> None:
-        self._db.executescript(
-            """
+        # executescript normally commits a pending transaction first. Begin
+        # inside the script so defaults, DDL and the version migrate together.
+        with self._db:
+            self._db.executescript(
+                f"""
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            INSERT OR IGNORE INTO metadata VALUES ('schema_version', '1');
+            INSERT OR IGNORE INTO metadata VALUES ('schema_version', '{INBOX_SCHEMA_VERSION}');
             INSERT OR IGNORE INTO metadata VALUES ('generation', '0');
             INSERT OR IGNORE INTO metadata VALUES ('duty_enabled', '0');
             INSERT OR IGNORE INTO metadata VALUES ('execution_paused', '0');
@@ -208,11 +223,12 @@ class TelegramInbox:
                 sequence TEXT PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 reason_code TEXT NOT NULL
             );
-            """
-        )
-        if self._meta("schema_version") != "1":
-            raise InboxError("inbox_schema_unsupported")
-        self._db.commit()
+                """
+            )
+            self._db.execute(
+                "UPDATE metadata SET value=? WHERE key='schema_version' AND value<>?",
+                (str(INBOX_SCHEMA_VERSION), str(INBOX_SCHEMA_VERSION)),
+            )
 
     def close(self) -> None:
         if self._closed:

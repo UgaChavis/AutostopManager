@@ -81,6 +81,7 @@ def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock:
     generation = first.generation
     assert first._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert first._db.execute("PRAGMA synchronous").fetchone()[0] == 2
+    assert first._meta("schema_version") == "2"
     assert path.parent.stat().st_mode & 0o777 == 0o700
     for suffix in ("", "-wal", "-shm", ".lock"):
         assert Path(str(path) + suffix).stat().st_mode & 0o777 == 0o600
@@ -92,6 +93,92 @@ def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock:
         assert restored.record(1, 11) == event_id
         assert restored.generation == generation
         assert restored.status()["open_events"] == 1
+
+
+@pytest.mark.parametrize("pause", [None, False, True])
+def test_schema_v1_upgrade_preserves_pending_identity_effects_context_and_pause(
+    tmp_path: Path, clock: Clock, pause: bool | None
+) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    with TelegramInbox(path, clock=clock) as old:
+        old.duty_set(True)
+        first = old.record(1, 1)
+        job = running(old)
+        known = receipt(old, job, "ack")
+        unknown = old.reserve_effect(
+            **guard(job), kind="result", text_sha256="c" * 64, peer_id=1, reply_to_message_id=1
+        )
+        old.mark_effect_intent(unknown)
+        pending = old.record(1, 2)
+        job = old.needs_review(**guard(job), reason_code="codex_turn_failed")
+        old.advance_checkpoint(1, 2)
+        if pause is True:
+            old.set_execution_paused(paused=True, expected_revision=1)
+        if pause is None:
+            # Original v1 registries predate persistent executor control.
+            old._db.execute("DELETE FROM metadata WHERE key IN ('execution_paused','execution_revision')")
+        old._db.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+        old._db.commit()
+        before_job = old.read_job(job["job_id"])
+        before_events = old.events()
+        generation = old.generation
+        peer_context = old._peer_revision(1)
+        windows = old.duty_windows()
+    with TelegramInbox(path, clock=clock) as upgraded:
+        assert upgraded._meta("schema_version") == "2"
+        assert upgraded.read_job(job["job_id"]) == before_job
+        assert upgraded.events() == before_events
+        assert upgraded.require_open(first).message_id == 1
+        assert upgraded.require_open(pending).message_id == 2
+        assert upgraded.read_effect(known)["verified"] == 1
+        assert upgraded.read_effect(unknown)["attempted"] == 1
+        assert upgraded.read_effect(unknown)["verified"] == 0
+        assert upgraded.generation == generation and upgraded._peer_revision(1) == peer_context
+        assert upgraded.checkpoint(1) == 2 and upgraded.duty_windows() == windows
+        status = upgraded.status()
+        assert status["execution_paused"] is (pause is True)
+        assert status["execution_revision"] == (2 if pause is True else 1)
+
+
+def test_unknown_schema_is_rejected_before_registry_or_journal_mutations(tmp_path: Path) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    path.parent.mkdir()
+    with sqlite3.connect(path) as future:
+        future.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        future.execute("INSERT INTO metadata VALUES ('schema_version','3')")
+        future.execute("CREATE TABLE future_state (value TEXT)")
+        future.execute("INSERT INTO future_state VALUES ('synthetic')")
+        before = list(future.iterdump())
+        assert future.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    with pytest.raises(InboxError, match="inbox_open_failed"):
+        TelegramInbox(path)
+    with sqlite3.connect(path) as unchanged:
+        assert list(unchanged.iterdump()) == before
+        assert unchanged.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+def test_failed_v1_upgrade_rolls_back_defaults_and_schema_version(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    with TelegramInbox(path, clock=clock) as old:
+        old.duty_set(True)
+        event = old.record(1, 1)
+        old._db.execute("DELETE FROM metadata WHERE key IN ('execution_paused','execution_revision')")
+        old._db.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+        old._db.execute(
+            "CREATE TRIGGER fail_upgrade BEFORE UPDATE ON metadata WHEN NEW.key='schema_version' "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic'); END"
+        )
+        old._db.commit()
+        before = list(old._db.iterdump())
+    with pytest.raises(InboxError, match="inbox_open_failed"):
+        TelegramInbox(path, clock=clock)
+    with sqlite3.connect(path) as unchanged:
+        assert list(unchanged.iterdump()) == before
+        unchanged.execute("DROP TRIGGER fail_upgrade")
+    with TelegramInbox(path, clock=clock) as recovered:
+        assert recovered._meta("schema_version") == "2"
+        assert recovered.require_open(event).message_id == 1
+        assert recovered.status()["execution_paused"] is False
 
 
 def test_duplicate_notification_is_safe_and_generation_does_not_change(inbox: TelegramInbox) -> None:

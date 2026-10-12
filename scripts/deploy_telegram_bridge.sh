@@ -379,12 +379,49 @@ restore_media_wrapper() {
   fi
 }
 
+durable_inbox_compatible() {
+  local candidate="${1}"
+  [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 ]] && return 0
+  /usr/bin/python3 - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
+import ast
+from pathlib import Path
+import sqlite3
+import sys
+
+try:
+    source = Path(sys.argv[1]) / "autostop_manager/telegram_inbox.py"
+    versions = None
+    for node in ast.parse(source.read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "SUPPORTED_INBOX_SCHEMA_VERSIONS"
+            for target in node.targets
+        ):
+            versions = ast.literal_eval(node.value)
+    if (
+        not isinstance(versions, tuple)
+        or not versions
+        or any(type(version) is not int or version < 1 for version in versions)
+    ):
+        raise ValueError("unsupported_inbox_contract")
+    database = Path(sys.argv[2])
+    connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
+    try:
+        row = connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+    finally:
+        connection.close()
+    if row is None or int(row[0]) not in versions:
+        raise ValueError("unsupported_inbox_contract")
+except (OSError, ValueError, TypeError, SyntaxError, sqlite3.Error):
+    raise SystemExit(1) from None
+PY
+}
+
 restore_previous_release_assets() {
   local rollback_link current_target
-  # An older RAM-only bridge cannot reconcile or preserve newly accepted jobs.
-  # Keep the current registry and release rather than silently rolling it back.
-  if [[ "${account}" == "work" && -e /var/lib/autostop-work-telegram/inbound.sqlite3 \
-    && -n "${previous_release}" && ! -f "${previous_release}/autostop_manager/telegram_inbox.py" ]]; then
+  # The durable schema also fences execution policy and its IPC contract.
+  # Keep the registry and current pair when the rollback cannot read it safely.
+  if [[ "${account}" == "work" && -n "${previous_release}" ]] \
+    && ! durable_inbox_compatible "${previous_release}"; then
     echo "durable_inbox_rollback_incompatible=true" >&2
     return 1
   fi
@@ -444,8 +481,7 @@ activate_new_release_assets() {
 
 rollback() {
   if [[ "${account}" == "work" ]]; then
-    if [[ -e /var/lib/autostop-work-telegram/inbound.sqlite3 \
-      && -n "${previous_release}" && ! -f "${previous_release}/autostop_manager/telegram_inbox.py" ]]; then
+    if [[ -n "${previous_release}" ]] && ! durable_inbox_compatible "${previous_release}"; then
       echo "durable_inbox_rollback_incompatible=true" >&2
       return 1
     fi
@@ -483,6 +519,11 @@ transcription_runtime_ready() {
     /usr/bin/timeout --signal=TERM --kill-after=10s 120s \
     "${venv_root}/bin/python" -m autostop_manager.telegram_transcribe --account personal --self-check
 }
+
+if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${release_dir}"; then
+  echo "durable_inbox_candidate_incompatible=true" >&2
+  exit 1
+fi
 
 if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
   if ! systemctl stop "${service_unit}"; then

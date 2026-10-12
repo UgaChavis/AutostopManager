@@ -12,6 +12,7 @@ import pytest
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_wake as wake
+from autostop_manager.telegram_inbox import TelegramInbox
 from test_telegram_wake_durable import FakeJobs, REVISION, new_inbox, stop_dispatcher
 from test_telegram_wake_durable import bundle as bundle
 from telegram_wake_fakes import THREAD, MockServer, until
@@ -263,7 +264,14 @@ def test_pause_does_not_interrupt_unconfirmed_turn(tmp_path, bundle, binding):
                 job_id=job["job_id"],
                 lease=job["lease"],
                 expected_revision=job["revision"],
-                turn_id="other" if binding == "other_turn" else "manual",
+                turn_id="other" if binding in {"manual", "other_turn"} else "manual",
+            )
+        if binding == "manual":
+            job = inbox.needs_review(
+                job_id=job["job_id"],
+                lease=job["lease"],
+                expected_revision=job["revision"],
+                reason_code="codex_execution_stopped",
             )
         jobs = FakeJobs(inbox)
         app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
@@ -274,11 +282,193 @@ def test_pause_does_not_interrupt_unconfirmed_turn(tmp_path, bundle, binding):
         dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
         dispatcher.current_job = None if binding == "manual" else job
         try:
-            await dispatcher.pause()
+            with pytest.raises(wake.WakeError, match=r"^wake_pause_outcome_unknown$"):
+                await dispatcher.pause()
             app.interrupt.assert_not_awaited()
             app._turn_metadata.assert_not_awaited()
             assert app.active_turn == "manual" and app.outcome_unknown
             assert not dispatcher.enabled and inbox.active_jobs()
+            assert dispatcher.execution_state == "held"
+            assert inbox.active_jobs()[0]["state"] == "needs_review"
+        finally:
+            await stop_dispatcher(dispatcher)
+            inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("replace_with_manual_turn", "padded_page"), [(False, False), (False, True), (True, False)])
+def test_pause_recovers_committed_binding_after_lost_reply(tmp_path, bundle, replace_with_manual_turn, padded_page):
+    class LoseBindingReply(FakeJobs):
+        async def request(self, operation, **arguments):
+            if operation == "job_active" and padded_page and arguments.get("after_job_id") is None:
+                self.calls.append((operation, arguments))
+                sample = self.inbox.active_jobs()[0]
+                page = [sample | {"job_id": f"job-{index:032x}", "thread_id": "other"} for index in range(1, 51)]
+                return {"ok": True, "jobs": page, "next_job_id": page[-1]["job_id"]}
+            if operation == "job_active" and padded_page:
+                arguments = arguments | {"after_job_id": None}
+            response = await super().request(operation, **arguments)
+            if operation == "job_turn_bound":
+                raise OSError("binding reply lost after commit")
+            return response
+
+    async def scenario():
+        inbox, _event = new_inbox(tmp_path)
+        jobs = LoseBindingReply(inbox)
+        server = MockServer(complete=False)
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            await app.connect()
+            app.ready_event.set()
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+            try:
+                await dispatcher._execute(job)
+                committed = inbox.read_job(job["job_id"])
+                owned = app.active_turn
+                assert committed["thread_id"] == THREAD and committed["turn_id"] == owned
+                assert committed["state"] == "needs_review" and dispatcher.current_job is None
+                if replace_with_manual_turn:
+                    app.active_turn = "manual"
+                    with pytest.raises(wake.WakeError, match=r"^wake_pause_outcome_unknown$"):
+                        await dispatcher.pause()
+                    assert not any(call.get("method") == "turn/interrupt" for call in server.calls)
+                    assert server.turn_statuses[owned] == "inProgress"
+                    assert dispatcher.execution_state == "held" and app.outcome_unknown
+                else:
+                    await dispatcher.pause()
+                    interrupts = [call for call in server.calls if call.get("method") == "turn/interrupt"]
+                    assert [call["params"] for call in interrupts] == [{"threadId": THREAD, "turnId": owned}]
+                    assert server.turn_statuses[owned] == "interrupted"
+                    assert app.active_turn is None and not app.outcome_unknown
+                    assert dispatcher.execution_state == "paused"
+                assert server.counter == 1 and inbox.status()["execution_paused"] is True
+                assert inbox.read_job(job["job_id"])["state"] == "needs_review"
+                assert any(operation == "job_active" for operation, _args in jobs.calls)
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("thread_status", ["systemError", "notLoaded"])
+def test_empty_queue_thread_system_error_holds_once_and_not_loaded_is_valid(tmp_path, bundle, thread_status):
+    class RecordingHealthJobs(FakeJobs):
+        async def request(self, operation, **arguments):
+            if operation == "job_health":
+                self.inbox.set_health(**arguments)
+            return await super().request(operation, **arguments)
+
+    async def scenario():
+        inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
+        inbox.duty_set(True)
+        jobs = RecordingHealthJobs(inbox)
+        server = MockServer()
+        server.thread_status = thread_status
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            dispatcher.start()
+            try:
+                if thread_status == "systemError":
+                    await until(lambda: app.blocked and bool(inbox.pending_notifications()))
+                    assert not dispatcher.status()["ready"] and dispatcher.execution_state == "held"
+                    assert dispatcher.last_error == "codex_thread_system_error"
+                    assert jobs.health == [
+                        {"component": "codex", "state": "held", "error_code": "codex_thread_system_error"}
+                    ]
+                    app.block("codex_thread_system_error")
+                    jobs.changed.set()
+                    await asyncio.sleep(0.02)
+                    assert len(inbox.pending_notifications()) == 1 and len(jobs.health) == 1
+                    assert server.resume_calls == 1
+                    await dispatcher.pause()
+                    assert jobs.health[-1] == {
+                        "component": "codex",
+                        "state": "paused",
+                        "error_code": "codex_thread_system_error",
+                    }
+                    assert len(inbox.pending_notifications()) == 1
+                    assert inbox.pending_notifications()[0]["recovered_at"] is None
+                else:
+                    await until(lambda: dispatcher.status()["ready"] and bool(jobs.health))
+                    assert not app.blocked and inbox.pending_notifications() == []
+                assert inbox.events() == [] and server.counter == 0
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("held_job", [False, True])
+def test_pause_keeps_unresolved_incident_until_verified_resolution_and_resume(tmp_path, bundle, held_job):
+    class RecordingHealthJobs(FakeJobs):
+        async def request(self, operation, **arguments):
+            if operation == "job_health":
+                self.inbox.set_health(**arguments)
+            return await super().request(operation, **arguments)
+
+    async def scenario():
+        inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
+        inbox.duty_set(True)
+        job = None
+        if held_job:
+            inbox.record(123, 1)
+            job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+            job = inbox.start_intent(
+                job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"], thread_id=THREAD
+            )
+            job = inbox.bind_turn(
+                job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"], turn_id="terminal"
+            )
+            job = inbox.needs_review(
+                job_id=job["job_id"],
+                lease=job["lease"],
+                expected_revision=job["revision"],
+                reason_code="codex_job_requires_review",
+            )
+        jobs = RecordingHealthJobs(inbox)
+        app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+        app.connected = True
+        app.ready_event.set()
+        dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+        try:
+            if held_job:
+                dispatcher.last_error = "codex_job_requires_review"
+                await dispatcher._health("held", dispatcher.last_error)
+            await dispatcher.pause()
+            if held_job:
+                assert jobs.health[-1]["error_code"] == "codex_job_requires_review"
+                assert len(inbox.pending_notifications()) == 1
+                assert inbox.pending_notifications()[0]["recovered_at"] is None
+                inbox.result(
+                    job_id=job["job_id"],
+                    lease=job["lease"],
+                    expected_revision=job["revision"],
+                    outcome="no_reply_needed",
+                    event_ids=job["event_ids"],
+                    receipt_keys=[],
+                    reason_code="already_answered",
+                )
+            else:
+                assert jobs.health[-1] == {"component": "codex", "state": "paused", "error_code": None}
+                assert inbox.pending_notifications() == []
+            await dispatcher.resume_execution()
+            await until(lambda: dispatcher.status()["ready"] and jobs.health[-1]["state"] == "ready")
+            assert dispatcher.last_error is None and jobs.health[-1]["error_code"] is None
+            if held_job:
+                assert inbox.pending_notifications()[0]["recovered_at"] is not None
+            else:
+                assert inbox.pending_notifications() == []
         finally:
             await stop_dispatcher(dispatcher)
             inbox.close()

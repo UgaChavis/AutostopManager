@@ -1894,6 +1894,34 @@ async def _handle_send_photo(
     return _job_send_response(response, request, effect, idempotency_key)
 
 
+async def _verify_document_readback(
+    client: Any,
+    readback: Any,
+    *,
+    caption: str,
+    document_sha256: str,
+    document_bytes: int,
+    document_name: str,
+) -> None:
+    metadata = _message_media_metadata(readback) if readback is not None else {}
+    if (
+        readback is None
+        or str(getattr(readback, "message", None) or "") != caption
+        or getattr(readback, "media", None) is None
+        or metadata.get("mime_type") != "application/pdf"
+        or metadata.get("file_name") != document_name
+        or metadata.get("size_bytes") != document_bytes
+    ):
+        raise BridgeError("send_document_readback_failed")
+    content = await client.download_media(readback, file=bytes)
+    if (
+        not isinstance(content, bytes)
+        or len(content) != document_bytes
+        or hashlib.sha256(content).hexdigest() != document_sha256
+    ):
+        raise BridgeError("send_document_readback_failed")
+
+
 async def _handle_send_document(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -1996,21 +2024,14 @@ async def _handle_send_document(
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
-    metadata = _message_media_metadata(readback) if readback is not None else {}
-    if (
-        readback is None
-        or str(getattr(readback, "message", None) or "") != caption
-        or getattr(readback, "media", None) is None
-        or metadata.get("mime_type") != "application/pdf"
-        or metadata.get("file_name") != document_path.name
-        or metadata.get("size_bytes") != document_bytes
-    ):
-        raise BridgeError("send_document_readback_failed")
-    readback_content = await client.download_media(readback, file=bytes)
-    if not isinstance(readback_content, bytes):
-        raise BridgeError("send_document_readback_failed")
-    if len(readback_content) != document_bytes or hashlib.sha256(readback_content).hexdigest() != document_sha256:
-        raise BridgeError("send_document_readback_failed")
+    await _verify_document_readback(
+        client,
+        readback,
+        caption=caption,
+        document_sha256=document_sha256,
+        document_bytes=document_bytes,
+        document_name=document_path.name,
+    )
     if effect is not None and _message_reply_to_id(readback) != reply_to:
         raise BridgeError("send_document_readback_failed")
     idempotency[idempotency_key]["readback_verified"] = True
@@ -3230,6 +3251,179 @@ async def _handle_job_operation(
     return {"ok": True, "job": job}
 
 
+def _job_effect_ledger_target(
+    config: TelegramConfig, job: dict[str, Any], effect: dict[str, Any], entry: dict[str, Any]
+) -> tuple[int, int]:
+    if effect["peer_id"] != job["peer_id"] or effect["kind"] not in {"ack", "result", "clarification", "handoff"}:
+        raise BridgeError("job_effect_ledger_conflict")
+    operation = entry.get("operation")
+    if operation in {"send_text", "send_owner_notification"} and entry.get("text_sha256") != effect["text_sha256"]:
+        raise BridgeError("job_effect_ledger_conflict")
+    if effect["kind"] == "handoff":
+        owner_id = cast(int, _owner_peer_id(config, required=True))
+        binding = hmac.new(
+            _ensure_private_key(config.state_dir / "contract.key"), f"owner\0{owner_id}".encode(), hashlib.sha256
+        ).digest()
+        if (
+            operation != "send_owner_notification"
+            or entry.get("target_role") != "owner"
+            or entry.get("target_fingerprint") != f"{int.from_bytes(binding[:8], 'big') or 1:016x}"
+            or type(entry.get("reply_to_message_id")) is not int
+            or entry["reply_to_message_id"] != 0
+        ):
+            raise BridgeError("job_effect_ledger_conflict")
+        return int(owner_id), 0
+    if (
+        operation not in {"send_text", "send_photo", "send_document"}
+        or type(entry.get("peer_id")) is not int
+        or entry["peer_id"] != effect["peer_id"]
+        or type(entry.get("reply_to_message_id")) is not int
+        or entry["reply_to_message_id"] != effect["reply_to_message_id"]
+    ):
+        raise BridgeError("job_effect_ledger_conflict")
+    return int(effect["peer_id"]), int(effect["reply_to_message_id"])
+
+
+def _job_effect_readback_message_id(request: dict[str, Any], effect: dict[str, Any], entry: dict[str, Any]) -> int:
+    known = entry.get("message_id")
+    explicit = request.get("message_id")
+    if type(known) is not int or not 0 <= known <= 0x7FFFFFFF:
+        raise BridgeError("job_effect_ledger_conflict")
+    if explicit is not None and (type(explicit) is not int or not 0 < explicit <= 0x7FFFFFFF):
+        raise BridgeError("job_effect_message_id_invalid")
+    if known and explicit is not None and known != explicit:
+        raise BridgeError("job_effect_message_id_conflict")
+    if not known:
+        if explicit is None:
+            raise BridgeError("job_effect_message_id_required")
+        if request.get("effects_reviewed") is not True:
+            raise BridgeError("job_effect_manual_review_required")
+    identifier = known or explicit
+    if effect["sent_message_id"] is not None and effect["sent_message_id"] != identifier:
+        raise BridgeError("job_effect_message_id_conflict")
+    return cast(int, identifier)
+
+
+async def _verify_job_effect_message(
+    client: Any,
+    message: Any,
+    effect: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    peer_id: int,
+    message_id: int,
+    reply_to: int,
+) -> None:
+    if (
+        message is None
+        or type(getattr(message, "id", None)) is not int
+        or message.id != message_id
+        or type(getattr(message, "chat_id", None)) is not int
+        or message.chat_id != peer_id
+        or getattr(message, "is_private", None) is not True
+        or getattr(message, "out", None) is not True
+        or _message_reply_to_id(message) != reply_to
+    ):
+        raise BridgeError("job_effect_readback_failed")
+    text = str(getattr(message, "message", None) or "")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    operation = entry["operation"]
+    if operation in {"send_text", "send_owner_notification"}:
+        if digest != entry.get("text_sha256") or digest != effect["text_sha256"]:
+            raise BridgeError("job_effect_readback_failed")
+        return
+    media_digest = entry.get("document_sha256" if operation == "send_document" else "photo_sha256")
+    if not isinstance(media_digest, str) or re.fullmatch(r"[a-f0-9]{64}", media_digest) is None:
+        raise BridgeError("job_effect_ledger_conflict")
+    payload = json.dumps({"media_sha256": media_digest, "caption": text}, sort_keys=True, ensure_ascii=False)
+    if (
+        digest != entry.get("caption_sha256")
+        or hashlib.sha256(payload.encode("utf-8")).hexdigest() != effect["text_sha256"]
+        or getattr(message, "media", None) is None
+    ):
+        raise BridgeError("job_effect_readback_failed")
+    if operation == "send_document":
+        if type(entry.get("document_bytes")) is not int or not 0 < entry["document_bytes"] <= MAX_DOCUMENT_BYTES:
+            raise BridgeError("job_effect_ledger_conflict")
+        await _verify_document_readback(
+            client,
+            message,
+            caption=text,
+            document_sha256=media_digest,
+            document_bytes=entry["document_bytes"],
+            document_name=entry.get("document_name", ""),
+        )
+    else:
+        metadata = _message_media_metadata(message)
+        if metadata["mime_type"] not in {"image/jpeg", "image/png", "image/webp"}:
+            raise BridgeError("job_effect_readback_failed")
+        # A returned Telegram ID already binds the upload to its transformed
+        # photo. A manually supplied ID needs exact content proof instead.
+        if not entry["message_id"]:
+            content = await client.download_media(message, file=bytes)
+            if (
+                not isinstance(content, bytes)
+                or not 0 < len(content) <= MAX_PHOTO_BYTES
+                or hashlib.sha256(content).hexdigest() != media_digest
+            ):
+                raise BridgeError("job_effect_readback_failed")
+
+
+async def _handle_job_effect_readback(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any]:
+    arguments = _job_arguments(request)
+    job = monitor.inbox.read_job(arguments["job_id"])
+    if not hmac.compare_digest(job["lease"].encode(), arguments["lease"].encode()):
+        raise InboxError("inbox_lease_mismatch")
+    if job["revision"] != arguments["expected_revision"]:
+        raise InboxError("inbox_revision_conflict")
+    if job["state"] not in {"running", "needs_review"}:
+        raise InboxError("inbox_effect_state_invalid")
+    effect = monitor.inbox.read_effect(str(request.get("effect_key") or ""))
+    expected_key = (
+        "tgjob-"
+        + hashlib.sha256(
+            f"{job['job_id']}:{effect['kind']}:{effect['context_revision']}:{effect['effect_slot']}".encode()
+        ).hexdigest()
+    )
+    if (
+        effect["job_id"] != job["job_id"]
+        or effect["effect_key"] != expected_key
+        or not effect["attempted"]
+        or (effect["verified"] and effect["receipt_key"] != expected_key)
+    ):
+        raise BridgeError("job_effect_binding_invalid")
+    ledger_path = config.state_dir / "idempotency.json"
+    ledger = _load_idempotency(ledger_path)
+    entry = ledger.get(expected_key)
+    if entry is None:
+        raise BridgeError("job_effect_ledger_required")
+    peer_id, reply_to = _job_effect_ledger_target(config, job, effect, entry)
+    message_id = _job_effect_readback_message_id(request, effect, entry)
+    try:
+        message = await client.get_messages(peer_id, ids=message_id)
+        await _verify_job_effect_message(
+            client, message, effect, entry, peer_id=peer_id, message_id=message_id, reply_to=reply_to
+        )
+    except Exception as exc:  # Readback failure preserves the original unknown effect.
+        raise BridgeError("job_effect_readback_failed") from exc
+    entry["message_id"] = message_id
+    entry["readback_verified"] = True
+    _save_idempotency(ledger_path, ledger)
+    monitor.inbox.verify_effect(effect_key=expected_key, receipt_key=expected_key, message_id=message_id)
+    monitor.changed()
+    return {
+        "ok": True,
+        "verified": True,
+        "job_id": job["job_id"],
+        "effect_key": expected_key,
+        "receipt_key": expected_key,
+        "message_id": message_id,
+        "replayed": bool(effect["verified"]),
+    }
+
+
 async def _handle_job_control(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any] | None:
@@ -3272,6 +3466,8 @@ async def _handle_job_control(
         return {"ok": True, **imported, "status": inbox.job_status()}
     if operation == "job_read":
         return {"ok": True, "job": inbox.read_job(str(request.get("job_id") or ""))}
+    if operation == "job_effect_readback":
+        return await _handle_job_effect_readback(client, config, request, monitor)
     if operation == "duty_set":
         if type(request.get("enabled")) is not bool:
             raise BridgeError("duty_enabled_invalid")
@@ -4332,6 +4528,7 @@ def build_parser() -> argparse.ArgumentParser:
         "job-refresh",
         "job-owner-control",
         "job-handoff",
+        "job-effect-readback",
     ):
         job_command = subparsers.add_parser(command)
         job_command.add_argument("--job-id", required=True)
@@ -4361,6 +4558,10 @@ def build_parser() -> argparse.ArgumentParser:
             job_command.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
             job_command.add_argument("--contract-token", default="")
             job_command.add_argument("--idempotency-key", default="")
+        elif command == "job-effect-readback":
+            job_command.add_argument("--effect-key", required=True)
+            job_command.add_argument("--message-id", type=int, default=None)
+            job_command.add_argument("--effects-reviewed", action="store_true")
     dialogs = subparsers.add_parser("dialogs")
     dialogs.add_argument("--limit", type=int, default=20)
     search = subparsers.add_parser("search")
@@ -4489,6 +4690,8 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "idempotency_key",
         "limit",
         "after_job_id",
+        "effect_key",
+        "message_id",
     ):
         if hasattr(args, name):
             request[name] = getattr(args, name)

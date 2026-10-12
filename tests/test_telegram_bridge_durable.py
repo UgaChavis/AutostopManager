@@ -132,6 +132,43 @@ class MediaClient(Client):
         return message.synthetic_content
 
 
+class ReadbackClient(MediaClient):
+    def __init__(self, messages):
+        super().__init__(messages)
+        self.fail_readback = False
+        self.lose_text_response = False
+        self.lose_file_response = False
+        self.downloads = 0
+        self.reads = []
+
+    async def get_messages(self, entity, *, ids=None, limit=None):
+        self.reads.append((entity, ids))
+        message = await super().get_messages(entity, ids=ids, limit=limit)
+        if ids is not None and message is not None and message.out and self.fail_readback:
+            raise OSError("synthetic readback loss")
+        return message
+
+    async def send_message(self, entity, text, **kwargs):
+        message = await super().send_message(entity, text, **kwargs)
+        if self.lose_text_response:
+            raise OSError("synthetic response loss")
+        return message
+
+    async def send_file(self, entity, upload, **kwargs):
+        message = await super().send_file(entity, upload, **kwargs)
+        if self.lose_file_response:
+            raise OSError("synthetic response loss")
+        return message
+
+    async def download_media(self, message, *, file):
+        self.downloads += 1
+        return await super().download_media(message, file=file)
+
+    async def iter_messages(self, *_args, **_kwargs):
+        raise AssertionError("effect readback must not scan history")
+        yield
+
+
 def _runtime(tmp_path, *, max_events=10000):
     state = tmp_path / "state"
     inbox = TelegramInbox(state / "inbound.sqlite3", max_open_events=max_events)
@@ -176,6 +213,22 @@ async def _send(client, config, monitor, job, *, kind, text, mode="dry_run", dry
         mode=mode,
         idempotency_key=dry["idempotency_key"] if dry else "",
         reply_to_message_id=100,
+        inbound_monitor=monitor,
+    )
+
+
+async def _readback(client, config, monitor, job, effect_key, **params):
+    return await bridge._handle_operation(
+        client,
+        config,
+        {
+            "operation": "job_effect_readback",
+            "job_id": job["job_id"],
+            "lease": job["lease"],
+            "expected_revision": job["revision"],
+            "effect_key": effect_key,
+        }
+        | params,
         inbound_monitor=monitor,
     )
 
@@ -494,6 +547,305 @@ def test_missing_ledger_cannot_replay_attempted_effect(tmp_path):
     assert current["state"] == "needs_review"
     assert current["reason_code"] == "send_ledger_unavailable"
     monitor.inbox.close()
+
+
+@pytest.mark.parametrize("needs_review", [False, True])
+def test_effect_readback_known_id_handles_new_context_without_finishing(tmp_path, needs_review):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = ReadbackClient([source])
+    dry = asyncio.run(_send(client, config, monitor, job, kind="result", text="Ready"))
+    client.fail_readback = True
+    with pytest.raises(OSError):
+        asyncio.run(_send(client, config, monitor, job, kind="result", text="Ready", mode="apply", dry=dry))
+    new_message = _message(102, text="A new clarification")
+    client.messages[102] = new_message
+    monitor.record(new_message)
+    with pytest.raises(InboxError, match="inbox_context_stale"):
+        asyncio.run(_send(client, config, monitor, job, kind="result", text="Ready", mode="apply", dry=dry))
+    if needs_review:
+        job = monitor.inbox.needs_review(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            reason_code="send_outcome_uncertain",
+        )
+    client.fail_readback = False
+    client.reads.clear()
+    proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
+    repeated = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
+    assert proof["verified"] and repeated["replayed"]
+    assert proof["receipt_key"] == dry["idempotency_key"] and proof["message_id"] == 101
+    assert client.reads == [(42, 101), (42, 101)] and client.sent == 1
+    current = monitor.inbox.read_job(job["job_id"])
+    assert current["revision"] == job["revision"] and current["context_revision"] == job["context_revision"]
+    assert current["state"] == job["state"] and current["event_ids"] == job["event_ids"]
+    assert current["effects"][0]["verified"] == 1
+    ledger = bridge._load_idempotency(config.state_dir / "idempotency.json")[proof["receipt_key"]]
+    assert ledger["message_id"] == 101 and ledger["readback_verified"] is True
+    with pytest.raises(InboxError, match="inbox_context_stale"):
+        monitor.inbox.result(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            outcome="answered",
+            event_ids=job["event_ids"],
+            receipt_keys=[proof["receipt_key"]],
+        )
+    assert monitor.status()["open_events"] == 2
+    with pytest.raises(bridge.BridgeError, match="job_effect_message_id_conflict"):
+        asyncio.run(
+            _readback(client, config, monitor, job, proof["receipt_key"], message_id=102, effects_reviewed=True)
+        )
+    monitor.inbox.close()
+
+
+def _unknown_text_effect(tmp_path):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = ReadbackClient([source])
+    dry = asyncio.run(_send(client, config, monitor, job, kind="result", text="Ready"))
+    client.lose_text_response = True
+    with pytest.raises(OSError):
+        asyncio.run(_send(client, config, monitor, job, kind="result", text="Ready", mode="apply", dry=dry))
+    client.reads.clear()
+    return config, monitor, job, client, dry["idempotency_key"]
+
+
+@pytest.mark.parametrize("mismatch", ["peer", "body", "reply", "incoming", "id"])
+def test_unknown_effect_manual_readback_rejects_wrong_exact_message(tmp_path, mismatch):
+    config, monitor, job, client, key = _unknown_text_effect(tmp_path)
+    message = client.messages[101]
+    if mismatch == "peer":
+        message.chat_id = 43
+    elif mismatch == "body":
+        message.message = "An unrelated answer"
+    elif mismatch == "reply":
+        message.reply_to_msg_id = 99
+    elif mismatch == "incoming":
+        message.out = False
+    else:
+        message.id = 102
+    with pytest.raises(bridge.BridgeError, match="job_effect_readback_failed"):
+        asyncio.run(_readback(client, config, monitor, job, key, message_id=101, effects_reviewed=True))
+    assert monitor.inbox.read_effect(key)["verified"] == 0 and client.sent == 1
+    assert bridge._load_idempotency(config.state_dir / "idempotency.json")[key]["message_id"] == 0
+    monitor.inbox.close()
+
+
+def test_unknown_effect_manual_id_requires_review_and_never_resends(tmp_path):
+    config, monitor, job, client, key = _unknown_text_effect(tmp_path)
+    with pytest.raises(bridge.BridgeError, match="job_effect_message_id_required"):
+        asyncio.run(_readback(client, config, monitor, job, key))
+    with pytest.raises(bridge.BridgeError, match="job_effect_manual_review_required"):
+        asyncio.run(_readback(client, config, monitor, job, key, message_id=101))
+    with pytest.raises(bridge.BridgeError, match="job_effect_message_id_invalid"):
+        asyncio.run(_readback(client, config, monitor, job, key, message_id=True, effects_reviewed=True))
+    assert client.reads == []
+    proof = asyncio.run(_readback(client, config, monitor, job, key, message_id=101, effects_reviewed=True))
+    assert proof["verified"] and proof["receipt_key"] == key and client.sent == 1
+    assert client.reads == [(42, 101)] and monitor.status()["open_events"] == 1
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "operation", "peer", "reply", "digest"])
+def test_effect_readback_requires_original_consistent_native_ledger(tmp_path, mismatch):
+    config, monitor, job, client, key = _unknown_text_effect(tmp_path)
+    path = config.state_dir / "idempotency.json"
+    ledger = bridge._load_idempotency(path)
+    expected = "job_effect_ledger_conflict"
+    if mismatch == "missing":
+        path.unlink()
+        expected = "job_effect_ledger_required"
+    else:
+        changes = {
+            "operation": ("operation", "send_owner_notification"),
+            "peer": ("peer_id", 43),
+            "reply": ("reply_to_message_id", 99),
+            "digest": ("text_sha256", "0" * 64),
+        }
+        field, value = changes[mismatch]
+        ledger[key][field] = value
+        bridge._save_idempotency(path, ledger)
+    with pytest.raises(bridge.BridgeError, match=expected):
+        asyncio.run(_readback(client, config, monitor, job, key, message_id=101, effects_reviewed=True))
+    assert client.reads == [] and client.sent == 1
+    assert monitor.inbox.read_effect(key)["verified"] == 0
+    monitor.inbox.close()
+
+
+def test_effect_readback_requires_current_exact_job_binding(tmp_path):
+    config, monitor, job, client, key = _unknown_text_effect(tmp_path)
+    with pytest.raises(InboxError, match="inbox_lease_mismatch"):
+        asyncio.run(_readback(client, config, monitor, job | {"lease": "wrong-lease"}, key, message_id=101))
+    with pytest.raises(InboxError, match="inbox_revision_conflict"):
+        asyncio.run(_readback(client, config, monitor, job | {"revision": job["revision"] - 1}, key, message_id=101))
+    assert client.reads == [] and monitor.inbox.read_effect(key)["verified"] == 0
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+@pytest.mark.parametrize("known", [True, False])
+def test_media_effect_readback_uses_native_intent_and_exact_receipt(tmp_path, monkeypatch, operation, known):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = ReadbackClient([source])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    request = _media_request(config, operation) | {
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+        "kind": "result",
+        "reply_to_message_id": 100,
+    }
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    client.fail_readback = known
+    client.lose_file_response = not known
+    apply = request | {
+        "mode": "apply",
+        "contract_token": dry["contract_token"],
+        "idempotency_key": dry["idempotency_key"],
+    }
+    with pytest.raises(OSError):
+        asyncio.run(bridge._handle_operation(client, config, apply, inbound_monitor=monitor))
+    for path in (config.socket_path.parent / "outbox").iterdir():
+        path.unlink()
+    client.fail_readback = False
+    if operation == "send_photo" and known:
+        client.messages[101].synthetic_content = b"Telegram transformed image"
+    params = {} if known else {"message_id": 101, "effects_reviewed": True}
+    proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"], **params))
+    assert proof["verified"] and proof["receipt_key"] == dry["idempotency_key"] and client.sent == 1
+    assert client.downloads == (0 if operation == "send_photo" and known else 1)
+    assert monitor.status()["open_events"] == 1 and monitor.inbox.read_job(job["job_id"])["state"] == "running"
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+def test_unknown_media_effect_rejects_content_with_matching_metadata(tmp_path, monkeypatch, operation):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = ReadbackClient([source])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    request = _media_request(config, operation) | {
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+        "kind": "result",
+        "reply_to_message_id": 100,
+    }
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    client.lose_file_response = True
+    with pytest.raises(OSError):
+        asyncio.run(
+            bridge._handle_operation(
+                client,
+                config,
+                request
+                | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]},
+                inbound_monitor=monitor,
+            )
+        )
+    original = client.messages[101].synthetic_content
+    client.messages[101].synthetic_content = b"X" + original[1:]
+    with pytest.raises(bridge.BridgeError, match="job_effect_readback_failed"):
+        asyncio.run(
+            _readback(client, config, monitor, job, dry["idempotency_key"], message_id=101, effects_reviewed=True)
+        )
+    assert monitor.inbox.read_effect(dry["idempotency_key"])["verified"] == 0 and client.sent == 1
+    monitor.inbox.close()
+
+
+def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = ReadbackClient([source])
+    owner_id = 84
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: owner_id)
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    async def owner(_client, _config):
+        return owner_id, {"id": owner_id, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(bridge, "_resolve_owner_target", owner)
+    request = {
+        "operation": "job_handoff",
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "expected_revision": job["revision"],
+        "reply_to_message_id": 100,
+        "text": "Synthetic human handoff",
+        "mode": "dry_run",
+    }
+    dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+    client.fail_readback = True
+    with pytest.raises(OSError):
+        asyncio.run(
+            bridge._handle_operation(
+                client,
+                config,
+                request
+                | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]},
+                inbound_monitor=monitor,
+            )
+        )
+    client.fail_readback = False
+    client.reads.clear()
+    owner_id = 85
+    with pytest.raises(bridge.BridgeError, match="job_effect_ledger_conflict"):
+        asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
+    assert client.reads == []
+    owner_id = 84
+    proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
+    assert proof["verified"] and proof["message_id"] == 101 and client.sent == 1
+    assert client.messages[101].chat_id == 84 and monitor.status()["open_events"] == 1
+    monitor.inbox.close()
+
+
+def test_job_effect_readback_cli_preserves_exact_manual_receipt_arguments():
+    args = bridge.build_parser().parse_args(
+        [
+            "--account",
+            "work",
+            "job-effect-readback",
+            "--job-id",
+            "job-" + "a" * 32,
+            "--lease",
+            "exact-lease",
+            "--expected-revision",
+            "4",
+            "--effect-key",
+            "tgjob-" + "b" * 64,
+            "--message-id",
+            "101",
+            "--effects-reviewed",
+        ]
+    )
+    request = bridge._job_cli_request(args)
+    assert request["operation"] == "job_effect_readback"
+    assert request["effect_key"] == "tgjob-" + "b" * 64
+    assert request["expected_revision"] == 4 and request["message_id"] == 101 and request["effects_reviewed"] is True
 
 
 def test_history_respects_enabled_windows_and_off_messages(tmp_path):

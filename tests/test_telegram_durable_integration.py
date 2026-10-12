@@ -607,3 +607,57 @@ def test_explicit_pause_survives_a_worker_restart_with_pending_intake(tmp_path, 
                 assert runtime.inbox.active_jobs()[0]["event_ids"] == [ref]
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("refresh_first", [False, True])
+def test_old_send_readback_after_new_inbound_does_not_replay_or_close_new_context(tmp_path, bundle, refresh_first):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            initial = runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            dry = await send(runtime, job, kind="result", text="Synthetic first answer")
+            get_messages = runtime.client.get_messages
+            lost = False
+
+            async def lose_first_readback(entity, *, ids=None, limit=None):
+                nonlocal lost
+                if ids == 101 and not lost:
+                    lost = True
+                    return None
+                return await get_messages(entity, ids=ids, limit=limit)
+
+            runtime.client.get_messages = lose_first_readback
+            with pytest.raises(wake.WakeError, match=r"^send_readback_failed$"):
+                await send(runtime, job, kind="result", text="Synthetic first answer", dry=dry)
+            assert runtime.client.sent == 1
+            newer = runtime.monitor.record(runtime.client.inbound(102, text="Synthetic clarification"))
+            if refresh_first:
+                job = (await runtime.jobs.request("job_refresh", **binding(job), event_ids=[initial, newer]))["job"]
+            proof = await runtime.jobs.request("job_effect_readback", **binding(job), effect_key=dry["idempotency_key"])
+            assert proof["verified"] is True and proof["receipt_key"] == dry["idempotency_key"]
+            assert proof["message_id"] == 101 and runtime.client.sent == 1
+            assert runtime.inbox.read_effect(dry["idempotency_key"])["verified"] == 1
+            assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "open"
+            if not refresh_first:
+                job = (await runtime.jobs.request("job_refresh", **binding(job), event_ids=[initial, newer]))["job"]
+            with pytest.raises(wake.WakeError, match=r"^inbox_result_receipt_required$"):
+                await runtime.jobs.request(
+                    "job_result",
+                    **binding(job),
+                    outcome="answered",
+                    event_ids=job["event_ids"],
+                    receipt_keys=[proof["receipt_key"]],
+                )
+            prepared = await send(runtime, job, kind="result", text="Synthetic revised answer")
+            revised = await send(runtime, job, kind="result", text="Synthetic revised answer", dry=prepared)
+            finished = await runtime.jobs.request(
+                "job_result",
+                **binding(job),
+                outcome="answered",
+                event_ids=job["event_ids"],
+                receipt_keys=[proof["receipt_key"], revised["receipt_key"]],
+            )
+            assert finished["job"]["state"] == "completed" and runtime.client.sent == 2
+            assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "reply_verified"
+
+    asyncio.run(scenario())

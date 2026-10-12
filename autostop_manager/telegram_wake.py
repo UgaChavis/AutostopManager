@@ -426,6 +426,8 @@ class AppServer:
             or status.get("type") not in {"active", "idle", "notLoaded", "systemError"}
         ):
             raise WakeError("codex_thread_target_invalid")
+        if status["type"] == "systemError":
+            raise WakeError("codex_thread_system_error")
         if not allow_active and status["type"] != "idle":
             raise WakeError("codex_thread_busy")
         model = result.get("model") if isinstance(result, dict) else None
@@ -1302,6 +1304,14 @@ class DurableWakeDispatcher:
         if update_execution:
             self.execution_state = state
         async with self.health_lock:
+            if state == "paused":
+                # Stopping execution does not repair a known backend/protocol
+                # failure or authorize a recovery notification for its owner.
+                error = self.execution_error or (self.app.recovery_error if self.app.blocked else error)
+                if error is None and (
+                    self.inbox_status.get("needs_review_jobs", 0) or self.inbox_status.get("needs_review_events", 0)
+                ):
+                    error = self.last_error or "codex_job_requires_review"
             if state != "paused" and self.execution_error is not None:
                 state, error = "held", self.execution_error
                 self.execution_state = "held"
@@ -1602,8 +1612,11 @@ class DurableWakeDispatcher:
                             self.worker.exception()
                     else:
                         await _cancel_task(self.worker)
+                    job = await self._find_pause_job(job)
                     if job is not None:
                         await self._pause_owned_turn(job)
+                    elif self.app.active_turn is not None or self.app.outcome_unknown:
+                        raise WakeError("wake_pause_outcome_unknown")
                     if persistence_error is not None:
                         raise WakeError("wake_pause_outcome_unknown") from persistence_error
             except (OSError, TimeoutError, WakeError) as exc:
@@ -1616,8 +1629,44 @@ class DurableWakeDispatcher:
             # bounded independently of an unavailable bridge notification.
             with suppress(OSError, TimeoutError, WakeError):
                 async with asyncio.timeout(2):
+                    await self._read_status()
                     await self._health("paused")
             self.execution_state = "paused"
+
+    async def _find_pause_job(self, hint: dict[str, Any] | None) -> dict[str, Any] | None:
+        turn_id = self.app.active_turn
+        if turn_id is None and not self.app.outcome_unknown:
+            return None
+        if hint is not None:
+            current = await self._read_job(hint)
+            await self._review(current, "codex_execution_stopped")
+            if (
+                turn_id is not None
+                and current.get("thread_id") == self.app.config.thread_id
+                and current.get("turn_id") == turn_id
+            ):
+                return current
+        if turn_id is None:
+            return None
+        # A lost binding response can clear the transient current_job while its
+        # exact committed thread/turn binding remains in the durable ledger.
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _page in range(MAX_ACTIVE_JOB_PAGES):
+            active, following = await _active_job_page(self.jobs, after_job_id=cursor)
+            for job in active:
+                if job.get("thread_id") == self.app.config.thread_id and job.get("turn_id") == turn_id:
+                    current = await self._read_job(job)
+                    if current.get("thread_id") == self.app.config.thread_id and current.get("turn_id") == turn_id:
+                        return current
+                    raise WakeError("wake_pause_outcome_unknown")
+            if following is None:
+                return None
+            if following in seen:
+                raise WakeError("wake_job_status_invalid")
+            seen.add(following)
+            cursor = following
+        raise WakeError("wake_job_pages_exceeded")
 
     async def _pause_owned_turn(self, job: dict[str, Any]) -> None:
         if self.app.active_turn is None and not self.app.outcome_unknown:
@@ -1735,7 +1784,10 @@ class DurableWakeDispatcher:
                 await writer.wait_closed()
 
     async def close(self) -> None:
-        await self.pause(persist=False)
+        # Shutdown preserves unknown effects without preventing transport and
+        # supervisor cleanup. Public pause still reports the unknown outcome.
+        with suppress(WakeError):
+            await self.pause(persist=False)
         await self.jobs.close()
         await _cancel_task(self.supervisor)
 
