@@ -164,6 +164,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
 | `scripts/set-work-telegram-duty.sh` | `--status` read-only; `--enable|--disable` меняют duty. |
+| `scripts/export-work-telegram-inbox.py` | Экспортирует точные legacy-ссылки в новый root-private файл до согласованного переключения; без копирования переписки или replay. |
 | `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe --file EXACT_FILE [--language ru] [--delete-after]`, `preview --file EXACT_FILE [--delete-after]` или `self-check`; `--language` доступен только `transcribe`. |
 | `scripts/run-work-telegram-monitor-voice.sh` | Текущий event: `telegram_monitor_voice --event-id ... [--language ru]`, затем очистка. |
 | `scripts/import_offline_parts_catalogs.py` | `--verify-only` read-only; иначе импорт `--archive ZIP --cache-root PATH`. |
