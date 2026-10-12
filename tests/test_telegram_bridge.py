@@ -286,7 +286,8 @@ def _owner_notification_client(monkeypatch):
             self.timeout = False
             self.deliver = True
 
-        async def send_message(self, target, text):
+        async def send_message(self, target, text, *, parse_mode):
+            assert parse_mode is None
             assert target is entity
             self.sends += 1
             message = SimpleNamespace(
@@ -3577,7 +3578,8 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
         def __init__(self):
             self.sent: list[str] = []
 
-        async def send_message(self, _entity, text):
+        async def send_message(self, _entity, text, *, parse_mode):
+            assert parse_mode is None
             self.sent.append(text)
             return SimpleNamespace(id=30)
 
@@ -3644,7 +3646,8 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
         def __init__(self):
             self.sent: list[str] = []
 
-        async def send_message(self, _entity, text):
+        async def send_message(self, _entity, text, *, parse_mode):
+            assert parse_mode is None
             self.sent.append(text)
             return SimpleNamespace(id=30)
 
@@ -3806,7 +3809,8 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
             self.source_text = "original question"
             self.sent: list[tuple[str, int]] = []
 
-        async def send_message(self, _entity, text, *, reply_to):
+        async def send_message(self, _entity, text, *, reply_to, parse_mode):
+            assert parse_mode is None
             self.sent.append((text, reply_to))
             return SimpleNamespace(id=30)
 
@@ -3883,7 +3887,8 @@ def test_unverified_reply_does_not_close_inbound_monitor_event(monkeypatch, tmp_
         sent_count = 0
         reply_text = "wrong reply"
 
-        async def send_message(self, _entity, _text, *, reply_to):
+        async def send_message(self, _entity, _text, *, reply_to, parse_mode):
+            assert parse_mode is None
             assert reply_to == 5
             self.sent_count += 1
             return SimpleNamespace(id=30)
@@ -3952,7 +3957,8 @@ def test_verified_reply_reports_when_its_monitor_ref_was_evicted(monkeypatch, tm
         return 20
 
     class Client:
-        async def send_message(self, _entity, _text, *, reply_to):
+        async def send_message(self, _entity, _text, *, reply_to, parse_mode):
+            assert parse_mode is None
             assert reply_to == 5
             return SimpleNamespace(id=30)
 
