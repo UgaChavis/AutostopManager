@@ -67,6 +67,13 @@ def _code(value: Any) -> str:
     return value
 
 
+def _health_incident_cause(component: str, error_code: str | None) -> str | None:
+    if error_code is None:
+        return None
+    prefix = component + "_"
+    return error_code if error_code.startswith(prefix) else prefix + error_code
+
+
 def _timestamp(value: str | datetime) -> str:
     try:
         parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
@@ -1287,12 +1294,17 @@ class TelegramInbox:
         old = self._db.execute("SELECT * FROM health WHERE component=?", (component,)).fetchone()
         if old is not None and (old["state"], old["error_code"]) == (state, error_code):
             return self.health()
+        cause = _health_incident_cause(component, error_code)
         incident: dict[str, Any] | None = None
-        if old is not None and old["incident_id"] is not None and old["error_code"] != error_code:
-            self.recover_incident(old["incident_id"])
-        if error_code is not None:
-            incident_code = error_code if error_code.startswith(component + "_") else component + "_" + error_code
-            incident = self.open_incident(incident_code)
+        if old is not None and old["incident_id"] is not None:
+            if _health_incident_cause(component, old["error_code"]) == cause:
+                # A caller may report the same cause with or without its
+                # component prefix. Keep its existing receipt and legacy ID.
+                incident = self.read_incident(old["incident_id"])
+            else:
+                self.recover_incident(old["incident_id"])
+        if cause is not None and (incident is None or incident["recovered_at"] is not None):
+            incident = self.open_incident(cause)
         with self._write():
             self._db.execute(
                 "INSERT INTO health VALUES (?,?,?,?) ON CONFLICT(component) DO UPDATE SET "

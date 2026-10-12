@@ -1040,6 +1040,90 @@ def test_incident_and_recovery_notifications_survive_restart_once(tmp_path: Path
         assert restored.pending_notifications() == []
 
 
+@pytest.mark.parametrize("component", ["codex", "telegram", "intake"])
+@pytest.mark.parametrize("states", [("offline", "offline"), ("offline", "held"), ("held", "offline")])
+@pytest.mark.parametrize("prefixed_first", [False, True])
+def test_health_error_alias_preserves_incident_and_raw_api(
+    inbox: TelegramInbox, clock: Clock, component: str, states: tuple[str, str], prefixed_first: bool
+) -> None:
+    codes = ("turn_failed", component + "_turn_failed")
+    if prefixed_first:
+        codes = codes[::-1]
+    inbox.set_health(component, states[0], codes[0])
+    notification = inbox.pending_notifications()[0]
+    assert notification["code"] == component + "_turn_failed"
+    inbox.notification_verified(notification["notification_id"], "receipt-error")
+    clock.advance(1)
+    health = inbox.set_health(component, states[1], codes[1])
+    assert health[component] == {"state": states[1], "error_code": codes[1]}
+    current = inbox.read_incident(notification["incident_id"])
+    assert current["opened_at"] == notification["opened_at"]
+    assert current["opened_receipt"] == "receipt-error"
+    assert current["recovered_at"] is None
+    assert inbox.pending_notifications() == []
+    assert (
+        inbox._db.execute("SELECT incident_id FROM health WHERE component=?", (component,)).fetchone()[0]
+        == current["incident_id"]
+    )
+    assert inbox._db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 1
+
+
+def test_health_alias_keeps_legacy_incident_and_receipt_after_restart(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    with TelegramInbox(path, clock=clock) as first:
+        first.set_health("codex", "offline", "codex_turn_failed")
+        notification = first.pending_notifications()[0]
+        first.notification_verified(notification["notification_id"], "receipt-error")
+        # Simulate the already installed prefixing behavior without changing
+        # any runtime database or rewriting historical production receipts.
+        with first._write():
+            first._db.execute(
+                "UPDATE incidents SET reason_code=? WHERE incident_id=?",
+                ("codex_codex_turn_failed", notification["incident_id"]),
+            )
+    with TelegramInbox(path, clock=clock) as restored:
+        assert restored.set_health("codex", "held", "turn_failed")["codex"] == {
+            "state": "held",
+            "error_code": "turn_failed",
+        }
+        incident = restored.read_incident(notification["incident_id"])
+        assert incident["reason_code"] == "codex_codex_turn_failed"
+        assert incident["recovered_at"] is None and incident["opened_receipt"] == "receipt-error"
+        assert restored.pending_notifications() == []
+        assert restored._db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 1
+        restored.set_health("codex", "ready")
+        pending = restored.pending_notifications()
+        assert len(pending) == 1 and pending[0]["kind"] == "recovery"
+        assert pending[0]["incident_id"] == notification["incident_id"]
+
+
+@pytest.mark.parametrize("next_state", ["offline", "held"])
+def test_health_distinct_cause_still_recovers_previous_and_opens_new(
+    inbox: TelegramInbox, clock: Clock, next_state: str
+) -> None:
+    inbox.set_health("codex", "offline", "turn_failed")
+    first = inbox.pending_notifications()[0]
+    inbox.notification_verified(first["notification_id"], "receipt-error")
+    clock.advance(1)
+    health = inbox.set_health("codex", next_state, "codex_rpc_error")
+    assert health["codex"] == {"state": next_state, "error_code": "codex_rpc_error"}
+    pending = inbox.pending_notifications()
+    assert [item["kind"] for item in pending] == ["recovery", "error"]
+    assert pending[0]["incident_id"] == first["incident_id"]
+    assert pending[1]["incident_id"] != first["incident_id"]
+    assert pending[1]["code"] == "codex_rpc_error" and pending[1]["recovered_at"] is None
+
+
+def test_default_health_error_uses_same_incident_as_unprefixed_alias(inbox: TelegramInbox) -> None:
+    assert inbox.set_health("codex", "offline")["codex"]["error_code"] == "codex_offline"
+    first = inbox.pending_notifications()[0]
+    assert first["code"] == "codex_offline"
+    inbox.set_health("codex", "offline", "offline")
+    pending = inbox.pending_notifications()
+    assert len(pending) == 1 and pending[0]["incident_id"] == first["incident_id"]
+    assert pending[0]["recovered_at"] is None
+
+
 def test_component_incidents_are_independent(inbox: TelegramInbox) -> None:
     inbox.set_health("codex", "offline", "transport_lost")
     inbox.set_health("telegram", "offline", "transport_lost")
