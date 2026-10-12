@@ -100,6 +100,18 @@ def test_failed_or_lost_turn_is_not_retried(tmp_path, status, disconnect):
             assert not dispatcher.enabled
             assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
             assert server.counter == 1
+            if status == "failed":
+                assert dispatcher.status()["recoverable_failure"] is True
+                assert dispatcher.failed_context() == {
+                    "ok": True,
+                    "available": True,
+                    "event_id": "inbound-1",
+                    "turn_id": "1",
+                    "status": "failed",
+                }
+            else:
+                assert dispatcher.status()["recoverable_failure"] is False
+                assert dispatcher.failed_context() == {"ok": True, "available": False}
             await app.close()
 
     asyncio.run(scenario())
@@ -210,6 +222,43 @@ def test_status_identifies_loaded_instruction_without_processing_queued_events()
     assert status["queued"] == 1 and status["active"] is False
     assert "inbound-" not in json.dumps(status)
     app.run_turn.assert_not_awaited()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="wake recovery context is root-only")
+def test_failed_turn_context_control_is_root_only_and_recovery_requires_review(tmp_path):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.failed_turn = wake.FailedTurnContext("inbound-1", "turn-1")
+        app.blocked = True
+        app.recovery_state = "blocked"
+        app.recovery_error = "codex_turn_failed"
+        dispatcher = wake.WakeDispatcher(app, 123)
+        dispatcher.enabled = False
+        path = tmp_path / "wake.sock"
+        server = await asyncio.start_unix_server(dispatcher.serve, path=str(path), limit=1024)
+        async with server:
+            context = await wake.local_request({"operation": "failed_context"}, path)
+            assert context == {
+                "ok": True,
+                "available": True,
+                "event_id": "inbound-1",
+                "turn_id": "turn-1",
+                "status": "failed",
+            }
+            denied = await wake.local_request(
+                {
+                    "operation": "recover_failed",
+                    "event_id": "inbound-1",
+                    "turn_id": "turn-1",
+                    "effects_reviewed": False,
+                },
+                path,
+            )
+            assert denied["ok"] is False
+            assert app.blocked and dispatcher.queue.empty()
+        await app.close()
+
+    asyncio.run(scenario())
 
 
 def test_event_instruction_routes_one_event_through_telegram_skill_and_work_bridge():
