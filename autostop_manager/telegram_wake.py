@@ -473,15 +473,18 @@ class AppServer:
         if not self.pausing:
             self.recovery_state = "ready"
 
-    async def run_turn(self, text: str, *, event_id: str | None = None) -> None:
+    async def run_event_turn(self, text: str, event_id: str) -> None:
         self.active_event_id = event_id
-        self.last_turn_started = False
         try:
-            turn_generation = await self._start_turn(text)
-            await self._wait_turn(turn_generation)
+            await self.run_turn(text)
         finally:
             if self.failed_turn is None or self.failed_turn.event_id != event_id:
                 self.active_event_id = None
+
+    async def run_turn(self, text: str) -> None:
+        self.last_turn_started = False
+        turn_generation = await self._start_turn(text)
+        await self._wait_turn(turn_generation)
 
     async def _start_turn(self, text: str) -> int:
         while True:
@@ -659,7 +662,7 @@ class WakeDispatcher:
             event_id = await self.queue.get()
             self.active = True
             try:
-                await self.app.run_turn(WAKE_INSTRUCTION.format(event_id=event_id), event_id=event_id)
+                await self.app.run_event_turn(WAKE_INSTRUCTION.format(event_id=event_id), event_id)
                 self.completed += 1
             except Exception as exc:  # noqa: BLE001 - fail closed without exposing private RPC payloads.
                 if self.enabled or self.app.outcome_unknown:
