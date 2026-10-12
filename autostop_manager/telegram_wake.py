@@ -148,6 +148,9 @@ def validate_instruction_bundle(root: str, revision: str) -> None:
             raise WakeError("wake_instruction_bundle_invalid") from exc
         if target.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
             raise WakeError("wake_instruction_bundle_permissions")
+        valid_type = stat.S_ISDIR(info.st_mode) if target == path else stat.S_ISREG(info.st_mode)
+        if not valid_type:
+            raise WakeError("wake_instruction_bundle_invalid")
     if (path / "REVISION").read_text().strip() != revision:
         raise WakeError("wake_instruction_revision_mismatch")
 

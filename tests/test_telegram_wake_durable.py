@@ -335,6 +335,14 @@ def test_instruction_bundle_without_full_client_skill_is_rejected(bundle):
         wake.validate_instruction_bundle(str(bundle), REVISION)
 
 
+def test_instruction_bundle_rejects_directory_in_place_of_client_skill(bundle):
+    target = bundle / ".agents/skills/manage-autostop-client/SKILL.md"
+    target.unlink()
+    target.mkdir()
+    with pytest.raises(wake.WakeError, match=r"^wake_instruction_bundle_invalid$"):
+        wake.validate_instruction_bundle(str(bundle), REVISION)
+
+
 @pytest.mark.skipif(os.geteuid() != 0, reason="root-only control socket")
 def test_control_socket_closes_after_schema_error(tmp_path):
     async def scenario():
