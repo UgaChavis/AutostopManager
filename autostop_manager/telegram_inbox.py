@@ -1291,7 +1291,8 @@ class TelegramInbox:
         if old is not None and old["incident_id"] is not None and old["error_code"] != error_code:
             self.recover_incident(old["incident_id"])
         if error_code is not None:
-            incident = self.open_incident(component + "_" + error_code)
+            incident_code = error_code if error_code.startswith(component + "_") else component + "_" + error_code
+            incident = self.open_incident(incident_code)
         with self._write():
             self._db.execute(
                 "INSERT INTO health VALUES (?,?,?,?) ON CONFLICT(component) DO UPDATE SET "

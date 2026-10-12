@@ -1049,6 +1049,12 @@ def test_component_incidents_are_independent(inbox: TelegramInbox) -> None:
     assert sum(item["recovered_at"] is None for item in inbox.pending_notifications()) == 1
 
 
+@pytest.mark.parametrize("code", ["turn_failed", "codex_turn_failed"])
+def test_incident_code_has_one_component_prefix(inbox: TelegramInbox, code: str) -> None:
+    inbox.set_health("codex", "held", code)
+    assert [item["code"] for item in inbox.pending_notifications()] == ["codex_turn_failed"]
+
+
 def test_normal_busy_or_paused_worker_does_not_create_incident(inbox: TelegramInbox) -> None:
     for state in ("ready", "running", "waiting_thread", "paused", "ready"):
         inbox.set_health("codex", state)

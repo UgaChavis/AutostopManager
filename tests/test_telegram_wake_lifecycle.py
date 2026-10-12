@@ -476,6 +476,49 @@ def test_pause_keeps_unresolved_incident_until_verified_resolution_and_resume(tm
     asyncio.run(scenario())
 
 
+def test_unchanged_unbound_review_job_does_not_repeat_incident_notifications(tmp_path, bundle):
+    class RecordingHealthJobs(FakeJobs):
+        async def request(self, operation, **arguments):
+            if operation == "job_health":
+                self.inbox.set_health(**arguments)
+            return await super().request(operation, **arguments)
+
+    async def scenario():
+        inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
+        inbox.duty_set(True)
+        inbox.record(123, 1)
+        job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+        inbox.needs_review(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            reason_code="codex_turn_outcome_unknown",
+        )
+        jobs = RecordingHealthJobs(inbox)
+        app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+        app.connected = True
+        app.ready_event.set()
+        dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+        dispatcher._start_worker()
+        try:
+            jobs.changed.set()
+            await until(lambda: dispatcher.last_health == ("held", "codex_turn_outcome_unknown"))
+            incident = inbox.pending_notifications()[0]
+            inbox.notification_verified(incident["notification_id"], "receipt-error")
+            for _ in range(5):
+                jobs.changed.set()
+                await asyncio.sleep(0.02)
+            assert jobs.health == [{"component": "codex", "state": "held", "error_code": "codex_turn_outcome_unknown"}]
+            assert inbox.pending_notifications() == []
+            assert inbox.read_incident(incident["incident_id"])["recovered_at"] is None
+            assert inbox.active_jobs()[0]["state"] == "needs_review"
+        finally:
+            await stop_dispatcher(dispatcher)
+            inbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_warm_thread_error_holds_once_ignores_foreign_and_recovers_only_on_resume(tmp_path, bundle):
     class RecordingHealthJobs(FakeJobs):
         async def request(self, operation, **arguments):

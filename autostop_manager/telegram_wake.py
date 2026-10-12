@@ -1595,7 +1595,10 @@ class DurableWakeDispatcher:
                     await self._reconcile_active()
                     await self._read_status()
                     if self.inbox_status.get("needs_review", self.inbox_status.get("needs_review_jobs", 0)):
-                        await self._health("held", "codex_job_requires_review")
+                        # The job and lifecycle observer already identify this
+                        # hold. Replacing its cause creates false recovery/error
+                        # notifications on every unchanged subscription update.
+                        await self._health("held", self.last_error or "codex_job_requires_review")
                         continue
                     while self.enabled:
                         response = await self.jobs.request(
