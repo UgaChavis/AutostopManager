@@ -2291,7 +2291,9 @@ async def _handle_send_voice(
             entity,
             upload,
             caption=caption,
-            force_document=True,
+            # OGG is already a document transport; force_document would set
+            # MTProto force_file and suppress its voice presentation.
+            force_document=False,
             voice_note=True,
             mime_type="audio/ogg",
             attributes=[attribute],

@@ -18,10 +18,13 @@ def _ogg_audio(*, codec="libopus", samples=48000) -> bytes:
     output = io.BytesIO()
     with av.open(output, "w", format="ogg") as container:
         stream = container.add_stream(codec, rate=48000)
-        stream.layout = "mono"
-        frame = av.AudioFrame(format="s16", layout="mono", samples=samples)
+        layout = "stereo" if codec == "vorbis" else "mono"
+        stream.layout = layout
+        if codec == "vorbis":
+            stream.options = {"strict": "-2"}
+        frame = av.AudioFrame(format="s16", layout=layout, samples=samples)
         frame.sample_rate = 48000
-        frame.planes[0].update(b"\0" * (samples * 2))
+        frame.planes[0].update(b"\0" * (samples * 2 * (2 if layout == "stereo" else 1)))
         for packet in stream.encode(frame):
             container.mux(packet)
         for packet in stream.encode(None):
@@ -78,7 +81,7 @@ def scenario(tmp_path, monkeypatch, voice_bytes):
         async def send_file(self, _entity, upload, **kwargs):
             assert kwargs == {
                 "caption": "<b>тест</b>",
-                "force_document": True,
+                "force_document": False,
                 "voice_note": True,
                 "mime_type": "audio/ogg",
                 "attributes": kwargs["attributes"],
@@ -151,6 +154,78 @@ def test_voice_upload_is_real_audio_immutable_and_replayed_with_independent_read
     replay = _apply(scenario, dry)
     assert replay["replayed"] is True and replay["verified"] is True
     assert scenario.client.sends == 1 and scenario.client.downloads == 2
+
+
+def test_voice_actual_telethon_serializes_voice_without_forcing_ordinary_file(scenario, monkeypatch, voice_bytes):
+    pytest.importorskip("telethon")
+    from telethon.client.uploads import UploadMethods
+    from telethon.extensions import BinaryReader
+    from telethon.tl import functions, types
+
+    monkeypatch.setattr(bridge, "_voice_attribute", lambda duration: types.DocumentAttributeAudio(duration, voice=True))
+
+    class OfflineClient(UploadMethods):
+        last_id = 20
+        request = None
+        uploaded = b""
+
+        async def get_input_entity(self, _entity):
+            return types.InputPeerUser(10, 0)
+
+        async def _parse_message_text(self, caption, parse_mode):
+            assert parse_mode is None
+            return caption, []
+
+        def build_reply_markup(self, buttons):
+            assert buttons is None
+
+        async def upload_file(self, upload, **_kwargs):
+            self.uploaded = upload.read()
+            assert self.uploaded == voice_bytes
+            return types.InputFile(1, 1, upload.name, "0" * 32)
+
+        async def __call__(self, request):
+            # Intercept the final RPC boundary. Serialize and parse the actual
+            # Telethon object so this covers the TL force_file flag, not only
+            # send_file kwargs or get_attributes output.
+            assert isinstance(request, functions.messages.SendMediaRequest)
+            with BinaryReader(bytes(request)) as reader:
+                self.request = reader.tgread_object()
+            media = self.request.media
+            assert isinstance(media, types.InputMediaUploadedDocument)
+            assert media.force_file is False
+            assert media.mime_type == "audio/ogg"
+            audio = [item for item in media.attributes if isinstance(item, types.DocumentAttributeAudio)]
+            assert len(audio) == 1 and audio[0].voice is True and audio[0].duration == 1
+            self.last_id = 30
+            return SimpleNamespace(id=30)
+
+        def _get_response_message(self, _request, result, _entity):
+            return result
+
+        async def get_messages(self, _entity, *, ids):
+            assert ids == 30
+            message = scenario.client.message()
+            message.document.attributes = self.request.media.attributes
+            return message
+
+        async def download_media(self, _message, *, file):
+            assert file is bytes
+            return self.uploaded
+
+    original = scenario.client
+    client = OfflineClient()
+    dry = asyncio.run(bridge._handle_operation(client, scenario.config, scenario.request))
+    result = asyncio.run(
+        bridge._handle_operation(
+            client,
+            scenario.config,
+            scenario.request
+            | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": "voice-effect"},
+        )
+    )
+    assert result["verified"] is True
+    assert original.sends == 0
 
 
 def test_voice_unknown_network_outcome_blocks_fresh_contract_retry(scenario, voice_bytes):
@@ -263,7 +338,7 @@ def test_voice_file_safety(scenario, voice_bytes, unsafe, monkeypatch):
 
 
 def test_voice_rejects_forged_container_wrong_codec_and_excessive_duration(scenario, monkeypatch):
-    for content in (b"%PDF-not-a-voice", b"OggSfake", _ogg_audio(codec="libvorbis")):
+    for content in (b"%PDF-not-a-voice", b"OggSfake", _ogg_audio(codec="vorbis")):
         scenario.voice.write_bytes(content)
         with pytest.raises(bridge.BridgeError, match=r"voice_invalid|voice_codec_invalid"):
             bridge._load_validated_voice_file(scenario.voice, outbox_dir=scenario.outbox)
