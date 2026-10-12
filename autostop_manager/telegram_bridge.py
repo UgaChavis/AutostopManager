@@ -2778,11 +2778,12 @@ async def _handle_monitor_target(
 ) -> dict[str, Any]:
     """Resolve an explicit live event for guarded read/send, never infer a recipient."""
 
-    event = monitor.resolve(event_id)
+    event = monitor.require_open(event_id)
     await _load_inbound_monitor_context_messages(client, [event])
     _entity, target = await _resolve_peer(client, str(event.peer_id))
     if target["kind"] != "private" or target["id"] != event.peer_id:
         raise BridgeError("inbound_target_mismatch")
+    monitor.require_open(event_id)
     return {
         "ok": True,
         "event_id": event_id,

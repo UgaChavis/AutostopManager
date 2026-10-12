@@ -56,6 +56,7 @@ def bundle(tmp_path, monkeypatch):
         "docs/agent/modules/B2.md",
         "docs/agent/modules/B4.md",
         ".agents/skills/manage-owner-telegram/SKILL.md",
+        ".agents/skills/manage-autostop-client/SKILL.md",
     ):
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -326,6 +327,12 @@ def test_immutable_bundle_symlink_or_revision_mismatch_fails(bundle):
     alias.symlink_to(bundle)
     with pytest.raises(wake.WakeError, match="wake_instruction_bundle_invalid"):
         wake.validate_instruction_bundle(str(alias), REVISION)
+
+
+def test_instruction_bundle_without_full_client_skill_is_rejected(bundle):
+    (bundle / ".agents/skills/manage-autostop-client/SKILL.md").unlink()
+    with pytest.raises(wake.WakeError, match=r"^wake_instruction_bundle_invalid$"):
+        wake.validate_instruction_bundle(str(bundle), REVISION)
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="root-only control socket")

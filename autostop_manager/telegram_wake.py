@@ -139,9 +139,13 @@ def validate_instruction_bundle(root: str, revision: str) -> None:
         path / "docs/agent/modules/B2.md",
         path / "docs/agent/modules/B4.md",
         path / ".agents/skills/manage-owner-telegram/SKILL.md",
+        path / ".agents/skills/manage-autostop-client/SKILL.md",
     )
     for target in paths:
-        info = target.lstat()
+        try:
+            info = target.lstat()
+        except OSError as exc:
+            raise WakeError("wake_instruction_bundle_invalid") from exc
         if target.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
             raise WakeError("wake_instruction_bundle_permissions")
     if (path / "REVISION").read_text().strip() != revision:
