@@ -49,6 +49,8 @@ MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+MAX_VOICE_BYTES = 10 * 1024 * 1024
+MAX_VOICE_DURATION_SECONDS = 10 * 60
 CONTRACT_TTL_SECONDS = 15 * 60
 TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
@@ -766,6 +768,66 @@ def verify_document_contract(
     return payload
 
 
+def issue_voice_contract(
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    voice_sha256: str,
+    voice_bytes: int,
+    voice_name: str,
+    duration_seconds: int,
+    last_message_id: int,
+    now: int | None = None,
+) -> str:
+    return _issue_contract(
+        secret,
+        {
+            "type": "voice",
+            "issued_at": int(time.time()) if now is None else int(now),
+            "last_message_id": int(last_message_id),
+            "peer_id": int(peer_id),
+            "caption_sha256": hashlib.sha256(caption.encode("utf-8")).hexdigest(),
+            "voice_sha256": voice_sha256,
+            "voice_bytes": int(voice_bytes),
+            "voice_name": voice_name,
+            "duration_seconds": int(duration_seconds),
+        },
+    )
+
+
+def verify_voice_contract(
+    token: str,
+    secret: bytes,
+    *,
+    peer_id: int,
+    caption: str,
+    voice_sha256: str,
+    voice_bytes: int,
+    voice_name: str,
+    duration_seconds: int,
+    now: int | None = None,
+) -> dict[str, Any]:
+    payload = _decode_contract(token, secret)
+    if payload.get("type") != "voice":
+        raise BridgeError("contract_invalid")
+    bindings = (
+        ("peer_id", int(peer_id), "contract_target_changed"),
+        ("caption_sha256", hashlib.sha256(caption.encode("utf-8")).hexdigest(), "contract_text_changed"),
+        ("voice_sha256", voice_sha256, "contract_voice_changed"),
+        ("voice_bytes", int(voice_bytes), "contract_voice_size_changed"),
+        ("voice_name", voice_name, "contract_voice_name_changed"),
+        ("duration_seconds", int(duration_seconds), "contract_voice_duration_changed"),
+    )
+    for field, expected, code in bindings:
+        if payload.get(field) != expected:
+            raise BridgeError(code)
+    _verify_contract_age(payload, now)
+    if not isinstance(payload.get("last_message_id"), int):
+        raise BridgeError("contract_invalid")
+    return payload
+
+
 def issue_download_contract(
     secret: bytes,
     *,
@@ -932,6 +994,24 @@ def validate_document_request(request: dict[str, Any]) -> tuple[str, Path, str, 
         raise BridgeError("caption_length_invalid")
     _validate_mode(mode, idempotency_key)
     return peer, document, caption, mode, idempotency_key
+
+
+def validate_voice_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+    if request.keys() - {"operation", "peer", "voice", "caption", "mode", "contract_token", "idempotency_key"}:
+        raise BridgeError("voice_request_invalid")
+    peer = str(request.get("peer") or "").strip()
+    voice = Path(str(request.get("voice") or ""))
+    caption = str(request.get("caption") or "")
+    mode = str(request.get("mode") or "dry_run")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not peer.isdigit() or int(peer) <= 0:
+        raise BridgeError("exact_private_peer_required")
+    if len(caption) > MAX_CAPTION_CHARS:
+        raise BridgeError("caption_length_invalid")
+    if len(idempotency_key) > 256:
+        raise BridgeError("idempotency_key_invalid")
+    _validate_mode(mode, idempotency_key)
+    return peer, voice, caption, mode, idempotency_key
 
 
 def validate_download_request(request: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -1530,6 +1610,96 @@ def validate_document_file(path: Path, *, outbox_dir: Path = DEFAULT_OUTBOX_DIR)
     return validated_path, digest, size
 
 
+def _voice_duration_seconds(content: bytes) -> int:
+    """Decode only immutable OGG/Opus bytes; never reopen a supplied path."""
+    if not content.startswith(b"OggS"):
+        raise BridgeError("voice_invalid")
+    try:
+        import av
+    except ImportError as exc:
+        raise BridgeError("voice_decoder_unavailable") from exc
+    samples = 0
+    try:
+        with av.open(io.BytesIO(content), mode="r", format="ogg") as container:
+            if not isinstance(container, av.container.InputContainer):
+                raise BridgeError("voice_invalid")
+            streams = list(container.streams)
+            if (
+                len(streams) != 1
+                or not isinstance(streams[0], av.AudioStream)
+                or streams[0].codec_context.name != "opus"
+                or streams[0].codec_context.channels not in {1, 2}
+            ):
+                raise BridgeError("voice_codec_invalid")
+            for frame in container.decode(streams[0]):
+                if not isinstance(frame, av.AudioFrame) or frame.sample_rate != 48000:
+                    raise BridgeError("voice_codec_invalid")
+                samples += frame.samples
+                if samples > MAX_VOICE_DURATION_SECONDS * 48000:
+                    raise BridgeError("voice_duration_invalid")
+    except (av.FFmpegError, ValueError) as exc:
+        raise BridgeError("voice_invalid") from exc
+    if samples <= 0:
+        raise BridgeError("voice_duration_invalid")
+    return (samples + 47999) // 48000
+
+
+def _load_validated_voice_file(
+    path: Path, *, outbox_dir: Path = DEFAULT_OUTBOX_DIR
+) -> tuple[Path, str, int, bytes, int]:
+    if not path.is_absolute() or not outbox_dir.is_absolute() or path.parent != outbox_dir:
+        raise BridgeError("voice_path_invalid")
+    if path.name in {"", ".", ".."} or path.suffix.casefold() not in {".ogg", ".opus"}:
+        raise BridgeError("voice_path_invalid")
+    try:
+        outbox_fd = os.open(outbox_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise BridgeError("voice_unavailable") from exc
+    try:
+        outbox_stat = os.fstat(outbox_fd)
+        if outbox_stat.st_uid != os.geteuid() or stat.S_IMODE(outbox_stat.st_mode) != 0o700:
+            raise BridgeError("voice_outbox_permissions_invalid")
+        try:
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=outbox_fd
+            )
+        except OSError as exc:
+            raise BridgeError("voice_unavailable") from exc
+        try:
+            file_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+                raise BridgeError("voice_invalid")
+            if file_stat.st_uid != os.geteuid() or stat.S_IMODE(file_stat.st_mode) != 0o600:
+                raise BridgeError("voice_permissions_invalid")
+            if not 0 < file_stat.st_size <= MAX_VOICE_BYTES:
+                raise BridgeError("voice_size_invalid")
+            content = bytearray()
+            while len(content) <= MAX_VOICE_BYTES:
+                chunk = os.read(descriptor, min(1024 * 1024, MAX_VOICE_BYTES + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            if len(content) != file_stat.st_size or len(content) > MAX_VOICE_BYTES:
+                raise BridgeError("voice_size_invalid")
+        except OSError as exc:
+            raise BridgeError("voice_unreadable") from exc
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(outbox_fd)
+    immutable_content = bytes(content)
+    duration_seconds = _voice_duration_seconds(immutable_content)
+    return path, hashlib.sha256(immutable_content).hexdigest(), len(content), immutable_content, duration_seconds
+
+
+def _voice_attribute(duration_seconds: int) -> Any:
+    try:
+        from telethon.tl.types import DocumentAttributeAudio
+    except ImportError as exc:
+        raise BridgeError("telethon_unavailable") from exc
+    return DocumentAttributeAudio(duration=duration_seconds, voice=True)
+
+
 def redact_sensitive_message_text(text: str) -> tuple[str, bool]:
     redacted, replacements = SENSITIVE_URI_PATTERN.subn("[redacted_sensitive_uri]", text)
     return redacted, replacements > 0
@@ -2054,6 +2224,103 @@ async def _handle_send_document(
         "verified": True,
     }
     return _job_send_response(response, request, effect, idempotency_key)
+
+
+async def _handle_send_voice(
+    client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
+) -> dict[str, Any]:
+    # Personal voice uploads do not bypass the work-account job/effect ledger.
+    if config.owner_config_path is not None or config.socket_path == WORK_SOCKET_PATH or inbound_monitor is not None:
+        raise BridgeError("personal_account_required")
+    peer, voice, caption, mode, idempotency_key = validate_voice_request(request)
+    voice_path, digest, size, content, duration = await asyncio.to_thread(
+        _load_validated_voice_file, voice, outbox_dir=config.socket_path.parent / "outbox"
+    )
+    entity, target = await _resolve_peer(client, peer)
+    if target["kind"] != "private" or target["id"] != int(peer):
+        raise BridgeError("exact_private_peer_required")
+    last_message_id = await _last_message_id(client, entity)
+    contract_key = _ensure_private_key(config.state_dir / "contract.key")
+    bindings = {
+        "peer_id": target["id"],
+        "caption": caption,
+        "voice_sha256": digest,
+        "voice_bytes": size,
+        "voice_name": voice_path.name,
+        "duration_seconds": duration,
+    }
+    response = {
+        "ok": True,
+        "mode": mode,
+        "target": target,
+        "voice_bytes": size,
+        "voice_sha256": digest,
+        "duration_seconds": duration,
+        "mime_type": "audio/ogg",
+        "voice": True,
+    }
+    if mode == "dry_run":
+        return response | {
+            "last_message_id": last_message_id,
+            "contract_token": issue_voice_contract(contract_key, **bindings, last_message_id=last_message_id),
+        }
+    token = str(request.get("contract_token") or "")
+    if not token:
+        raise BridgeError("contract_required")
+    contract = verify_voice_contract(token, contract_key, **bindings)
+    idempotency_path = config.state_dir / "idempotency.json"
+    idempotency = _load_idempotency(idempotency_path)
+    previous = idempotency.get(idempotency_key)
+    intent = {field: value for field, value in bindings.items() if field != "caption"}
+    intent.update(operation="send_voice", caption_sha256=hashlib.sha256(caption.encode("utf-8")).hexdigest())
+    if previous is not None:
+        if any(previous.get(field) != value for field, value in intent.items()):
+            raise BridgeError("idempotency_key_conflict")
+        if not previous.get("message_id"):
+            raise BridgeError("send_voice_outcome_uncertain")
+    else:
+        if contract["last_message_id"] != last_message_id:
+            raise BridgeError("conversation_changed_since_dry_run")
+        attribute = _voice_attribute(duration)
+        entry = intent | {"message_id": 0, "readback_verified": False}
+        idempotency[idempotency_key] = entry
+        _save_idempotency(idempotency_path, idempotency)
+        upload = io.BytesIO(content)
+        upload.name = voice_path.name
+        sent = await client.send_file(
+            entity,
+            upload,
+            caption=caption,
+            force_document=True,
+            voice_note=True,
+            mime_type="audio/ogg",
+            attributes=[attribute],
+            parse_mode=None,
+        )
+        entry["message_id"] = int(sent.id)
+        _save_idempotency(idempotency_path, idempotency)
+    message_id = int(idempotency[idempotency_key]["message_id"])
+    readback = await client.get_messages(entity, ids=message_id)
+    metadata = _message_media_metadata(readback)
+    if (
+        readback is None
+        or getattr(readback, "id", None) != message_id
+        or getattr(readback, "out", False) is not True
+        or getattr(readback, "media", None) is None
+        or str(getattr(readback, "message", None) or "") != caption
+        or metadata.get("voice") is not True
+        or metadata.get("video") is not False
+        or metadata.get("mime_type") != "audio/ogg"
+        or metadata.get("duration_seconds") != duration
+        or metadata.get("size_bytes") != size
+    ):
+        raise BridgeError("send_voice_readback_failed")
+    downloaded = await client.download_media(readback, file=bytes)
+    if not isinstance(downloaded, bytes) or len(downloaded) != size or hashlib.sha256(downloaded).hexdigest() != digest:
+        raise BridgeError("send_voice_readback_failed")
+    idempotency[idempotency_key]["readback_verified"] = True
+    _save_idempotency(idempotency_path, idempotency)
+    return response | {"message_id": message_id, "replayed": previous is not None, "verified": True}
 
 
 async def _handle_download(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
@@ -2778,11 +3045,12 @@ async def _handle_monitor_target(
 ) -> dict[str, Any]:
     """Resolve an explicit live event for guarded read/send, never infer a recipient."""
 
-    event = monitor.resolve(event_id)
+    event = monitor.require_open(event_id)
     await _load_inbound_monitor_context_messages(client, [event])
     _entity, target = await _resolve_peer(client, str(event.peer_id))
     if target["kind"] != "private" or target["id"] != event.peer_id:
         raise BridgeError("inbound_target_mismatch")
+    monitor.require_open(event_id)
     return {
         "ok": True,
         "event_id": event_id,
@@ -3141,6 +3409,9 @@ async def _handle_operation(  # noqa: C901 - bounded local RPC operation router
 
     if operation == "send_document":
         return await _handle_send_document(client, config, request, inbound_monitor=inbound_monitor)
+
+    if operation == "send_voice":
+        return await _handle_send_voice(client, config, request, inbound_monitor=inbound_monitor)
 
     if operation == "download":
         return await _handle_download(client, config, request)
@@ -3732,6 +4003,7 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
                 "send_owner_notification",
                 "send_photo",
                 "send_document",
+                "send_voice",
                 "download",
                 "notify_owner",
             }
@@ -4631,6 +4903,15 @@ def build_parser() -> argparse.ArgumentParser:
     send_document.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send_document.add_argument("--contract-token", default="")
     send_document.add_argument("--idempotency-key", default="")
+    send_voice = subparsers.add_parser(
+        "send-voice", help="Send a private OGG/Opus voice note from the personal account"
+    )
+    send_voice.add_argument("--peer", required=True)
+    send_voice.add_argument("--file", required=True, type=Path)
+    send_voice.add_argument("--caption", default="")
+    send_voice.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
+    send_voice.add_argument("--contract-token", default="")
+    send_voice.add_argument("--idempotency-key", default="")
     for media_send in (send_photo, send_document):
         media_send.add_argument("--job-id", default="")
         media_send.add_argument("--lease", default="")
@@ -4867,6 +5148,20 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "operation": "send_document",
                         "peer": args.peer,
                         "document": str(args.file),
+                        "caption": args.caption,
+                        "mode": args.mode,
+                        "contract_token": args.contract_token,
+                        "idempotency_key": args.idempotency_key,
+                    }
+                )
+            elif args.command == "send-voice":
+                if args.account != "personal":
+                    raise BridgeError("personal_account_required")
+                request.update(
+                    {
+                        "operation": "send_voice",
+                        "peer": args.peer,
+                        "voice": str(args.file),
                         "caption": args.caption,
                         "mode": args.mode,
                         "contract_token": args.contract_token,

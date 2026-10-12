@@ -67,6 +67,10 @@ class TransportLost(WakeError):
 class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
 
+    def __init__(self, code: str, *, archived_thread: bool = False) -> None:
+        super().__init__(code)
+        self.archived_thread = archived_thread
+
 
 class KnownTurnFailed(WakeError):
     """The exact Codex turn is terminally failed and must not be replayed."""
@@ -139,11 +143,18 @@ def validate_instruction_bundle(root: str, revision: str) -> None:
         path / "docs/agent/modules/B2.md",
         path / "docs/agent/modules/B4.md",
         path / ".agents/skills/manage-owner-telegram/SKILL.md",
+        path / ".agents/skills/manage-autostop-client/SKILL.md",
     )
     for target in paths:
-        info = target.lstat()
+        try:
+            info = target.lstat()
+        except OSError as exc:
+            raise WakeError("wake_instruction_bundle_invalid") from exc
         if target.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
             raise WakeError("wake_instruction_bundle_permissions")
+        valid_type = stat.S_ISDIR(info.st_mode) if target == path else stat.S_ISREG(info.st_mode)
+        if not valid_type:
+            raise WakeError("wake_instruction_bundle_invalid")
     if (path / "REVISION").read_text().strip() != revision:
         raise WakeError("wake_instruction_revision_mismatch")
 
@@ -182,6 +193,8 @@ class AppServer:
         self.resumed_model: str | None = None
         self.lifecycle: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue(MAX_TURN_NOTIFICATIONS)
         self.last_lifecycle: tuple[str, str | None] | None = None
+        self.worker_archived = False
+        self.thread_archive_sequence = 0
 
     async def connect(self) -> None:
         from websockets.asyncio.client import unix_connect
@@ -334,6 +347,24 @@ class AppServer:
             self.thread_notification_sequence += 1
             self.thread_changed.set()
 
+    def _notice_thread_archived(self, params: Any) -> None:
+        if not isinstance(params, dict) or not isinstance(params.get("threadId"), str) or not params["threadId"]:
+            self.block("codex_thread_archive_notification_invalid")
+            return
+        if params["threadId"] != self.config.thread_id:
+            return
+        self._notice_thread_change(params)
+        self.thread_archive_sequence += 1
+        self.worker_archived = True
+        self.ready_event.clear()
+        if self.active_turn or self.outcome_unknown or self.failed_turn is not None:
+            self.block("codex_thread_archived")
+        elif not self.pausing and not self.blocked:
+            # Reuse the transport supervisor; the reader must not make an RPC
+            # request and wait for the response that only this reader can read.
+            self.recovery_state = "reconnecting"
+            self.disconnected.set()
+
     def _notice_thread_status(self, params: Any) -> None:
         if not isinstance(params, dict) or not isinstance(params.get("threadId"), str) or not params["threadId"]:
             self.block("codex_thread_status_invalid")
@@ -392,7 +423,18 @@ class AppServer:
                             error = message["error"]
                             code = error.get("code") if isinstance(error, dict) else None
                             self.last_rpc_error_code = code if type(code) is int else None
-                            future.set_exception(RPCRejected("codex_rpc_rejected"))
+                            archive_messages = {
+                                f"session {self.config.thread_id} is archived. Run `codex unarchive "
+                                f"{self.config.thread_id}` to unarchive it first.",
+                                f"thread {self.config.thread_id} is archived",
+                            }
+                            archived = (
+                                type(code) is int
+                                and code == -32600
+                                and isinstance(error.get("message"), str)
+                                and error["message"] in archive_messages
+                            )
+                            future.set_exception(RPCRejected("codex_rpc_rejected", archived_thread=archived))
                         else:
                             future.set_result(message.get("result"))
                 elif "id" in message:
@@ -400,6 +442,8 @@ class AppServer:
                     await self._write({"id": message["id"], "error": error})
                 elif message.get("method") == "thread/status/changed":
                     self._notice_thread_status(message.get("params"))
+                elif message.get("method") == "thread/archived":
+                    self._notice_thread_archived(message.get("params"))
                 elif message.get("method") in {"turn/started", "turn/completed"}:
                     self._notice_turn(message["method"], message.get("params", {}))
         except (OSError, WebSocketException, TransportLost):
@@ -436,10 +480,20 @@ class AppServer:
 
     async def resume(self, *, allow_active: bool = False) -> str:
         params = {"threadId": self.config.thread_id, "cwd": self.config.project_dir, "excludeTurns": True}
+        archive_sequence = self.thread_archive_sequence
         try:
             result = await self.request("thread/resume", params)
         except RPCRejected as exc:
-            raise WakeError("codex_thread_resume_rejected") from exc
+            if not exc.archived_thread:
+                raise WakeError("codex_thread_resume_rejected") from exc
+            await self._unarchive_idle_worker()
+            try:
+                result = await self.request("thread/resume", params)
+            except RPCRejected as retry_exc:
+                raise WakeError("codex_thread_resume_rejected") from retry_exc
+        if archive_sequence != self.thread_archive_sequence:
+            # An idle response from before an archive cannot authorize a start.
+            raise TransportLost("codex_thread_archive_changed")
         thread = rpc_entity(result, "thread")
         status = thread.get("status")
         if (
@@ -456,7 +510,44 @@ class AppServer:
             raise WakeError("codex_thread_busy")
         model = result.get("model") if isinstance(result, dict) else None
         self.resumed_model = model if isinstance(model, str) and model else None
+        self.worker_archived = False
         return str(status["type"])
+
+    async def _unarchive_idle_worker(self) -> None:
+        """Recover only the pinned service worker; never revive an owned unknown turn."""
+        if (
+            not self.managed
+            or self.config.instruction_root is None
+            or self.config.instruction_revision is None
+            or self.pausing
+            or self.blocked
+            or self.active_turn
+            or self.outcome_unknown
+            or self.failed_turn is not None
+        ):
+            raise WakeError("codex_thread_archived")
+        try:
+            result = await self.request("thread/read", {"threadId": self.config.thread_id, "includeTurns": False})
+            thread = rpc_entity(result, "thread")
+            if (
+                thread["id"] != self.config.thread_id
+                or thread.get("ephemeral")
+                or thread.get("cwd") != self.config.project_dir
+                or not isinstance(thread.get("status"), dict)
+                or thread["status"].get("type") not in {"idle", "notLoaded"}
+            ):
+                raise WakeError("codex_thread_archive_target_invalid")
+            if self.pausing or self.blocked or self.active_turn or self.outcome_unknown or self.failed_turn is not None:
+                raise WakeError("codex_thread_archived")
+            restored = rpc_entity(await self.request("thread/unarchive", {"threadId": self.config.thread_id}), "thread")
+            if (
+                restored["id"] != self.config.thread_id
+                or restored.get("ephemeral")
+                or restored.get("cwd") != self.config.project_dir
+            ):
+                raise WakeError("codex_thread_archive_target_invalid")
+        except RPCRejected as exc:
+            raise WakeError("codex_thread_unarchive_rejected") from exc
 
     async def wait_idle(self) -> None:
         """Wait on turn/connection notifications, including manual turns; never poll."""
@@ -669,12 +760,19 @@ class AppServer:
                     if not self.connected:
                         raise TransportLost("codex_disconnected")
                     turn_generation = self.generation
+                    turn_archive_sequence = self.thread_archive_sequence
                     if before_start is not None:
                         await before_start()
                         self.outcome_unknown = True
                         # If the connection changes while the intent is committed, do not guess
                         # whether start is still safe. The durable job requires reconciliation.
-                        if turn_generation != self.generation or not self.connected:
+                        if self.worker_archived or turn_archive_sequence != self.thread_archive_sequence:
+                            raise WakeError("codex_thread_archived")
+                        if (
+                            turn_generation != self.generation
+                            or not self.connected
+                            or (self.managed and not self.ready_event.is_set())
+                        ):
                             raise TransportLost("codex_start_connection_changed")
                         if self.blocked:
                             raise WakeError(self.recovery_error or "codex_recovery_blocked")
@@ -1595,7 +1693,10 @@ class DurableWakeDispatcher:
                     await self._reconcile_active()
                     await self._read_status()
                     if self.inbox_status.get("needs_review", self.inbox_status.get("needs_review_jobs", 0)):
-                        await self._health("held", "codex_job_requires_review")
+                        # The job and lifecycle observer already identify this
+                        # hold. Replacing its cause creates false recovery/error
+                        # notifications on every unchanged subscription update.
+                        await self._health("held", self.last_error or "codex_job_requires_review")
                         continue
                     while self.enabled:
                         response = await self.jobs.request(

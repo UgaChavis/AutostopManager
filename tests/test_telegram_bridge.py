@@ -656,10 +656,12 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         'media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"': f'media_wrapper_path="{media_wrapper_path}"',
         'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor_env}"',
         'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "control.lock"}"',
+        "/var/lib/autostop-work-telegram/inbound.sqlite3": str(tmp_path / "inbound.sqlite3"),
     }
     for old, new in replacements.items():
         assert old in script_text
         script_text = script_text.replace(old, new)
+    assert "/var/lib/autostop-work-telegram/inbound.sqlite3" not in script_text
     script = tmp_path / "deploy-telegram-bridge.sh"
     script.write_text(script_text, encoding="utf-8")
     script.chmod(0o755)

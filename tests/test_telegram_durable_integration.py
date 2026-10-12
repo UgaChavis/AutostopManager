@@ -102,6 +102,7 @@ def bundle(tmp_path, monkeypatch):
         "docs/agent/modules/B2.md",
         "docs/agent/modules/B4.md",
         ".agents/skills/manage-owner-telegram/SKILL.md",
+        ".agents/skills/manage-autostop-client/SKILL.md",
     ):
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)

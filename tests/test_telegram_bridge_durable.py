@@ -275,6 +275,80 @@ def test_committed_event_survives_without_wake_delivery(tmp_path, monkeypatch):
     reopened.close()
 
 
+def test_monitor_target_rejects_completed_event_before_reading_telegram(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    monitor.inbox.result(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        outcome="no_reply_needed",
+        event_ids=job["event_ids"],
+        receipt_keys=[],
+        reason_code="not_actionable",
+    )
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("closed target must not read Telegram")
+
+    monkeypatch.setattr(bridge, "_load_inbound_monitor_context_messages", unexpected)
+    monkeypatch.setattr(bridge, "_resolve_peer", unexpected)
+    try:
+        with pytest.raises(bridge.BridgeError, match=r"^inbound_event_not_open$"):
+            asyncio.run(
+                bridge._handle_operation(
+                    object(),
+                    config,
+                    {"operation": "monitor_target", "event_id": job["event_ids"][0]},
+                    inbound_monitor=monitor,
+                )
+            )
+    finally:
+        monitor.inbox.close()
+
+
+def test_monitor_target_rechecks_event_after_awaited_resolution(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+
+    async def load(_client, events):
+        assert [event.message_id for event in events] == [100]
+        return [source]
+
+    async def resolve(_client, peer):
+        assert peer == "42"
+        monitor.inbox.result(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            outcome="no_reply_needed",
+            event_ids=job["event_ids"],
+            receipt_keys=[],
+            reason_code="not_actionable",
+        )
+        return object(), {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_load_inbound_monitor_context_messages", load)
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda _config: 42)
+    try:
+        with pytest.raises(bridge.BridgeError, match=r"^inbound_event_not_open$"):
+            asyncio.run(
+                bridge._handle_operation(
+                    object(),
+                    config,
+                    {"operation": "monitor_target", "event_id": job["event_ids"][0]},
+                    inbound_monitor=monitor,
+                )
+            )
+    finally:
+        monitor.inbox.close()
+
+
 def test_acknowledgement_keeps_event_and_voice_open(tmp_path):
     config, monitor = _runtime(tmp_path)
     source = _message(100)
