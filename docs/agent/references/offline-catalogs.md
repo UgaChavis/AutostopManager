@@ -1,6 +1,6 @@
 # Офлайн-каталоги запчастей
 
-Сценарий: [E3](../modules/E3.md). Source: [offline_catalogs.py](../../../autostop_manager/offline_catalogs.py). Private index — `data/offline_parts_catalogs/catalog_index.json`, производный текст — соседний text/. Root по умолчанию рядом с `AUTOSTOP_MANAGER_DB`; отдельный разрешённый release может задать абсолютный `AUTOSTOP_OFFLINE_CATALOG_ROOT` на общий cache. Индексация исходников не меняет runtime config.
+Сценарий: [E4](../modules/E4.md). Source: [offline_catalogs.py](../../../autostop_manager/offline_catalogs.py). Private index — `data/offline_parts_catalogs/catalog_index.json`, производный текст — соседний text/. Root по умолчанию рядом с `AUTOSTOP_MANAGER_DB`; отдельный разрешённый release может задать абсолютный `AUTOSTOP_OFFLINE_CATALOG_ROOT` на общий cache. Индексация исходников не меняет runtime config.
 
 ## Поиск
 
@@ -19,7 +19,8 @@
 Только чтение без download/записи:
 
 ```bash
-PYTHONSAFEPATH=1 PYTHONPATH=/opt/AutostopManager python3 /opt/AutostopManager/scripts/sync_offline_parts_catalog_release.py --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
+manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python "$manager_snapshot/scripts/sync_offline_parts_catalog_release.py" --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
 ```
 
 Для отдельно порученной установки используй ту же команду без --verify-only. Скрипт не читает DB/.env, принудительно использует cache-root. Git checkout не содержит каталогов и сам их не импортирует.

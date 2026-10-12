@@ -23,6 +23,9 @@ PAYLOAD = (
     "scripts/disk_maintenance/core.py",
     "scripts/disk_maintenance/inventory.py",
     "scripts/disk_maintenance/ci.py",
+    "scripts/disk_maintenance/cold_cas.py",
+    "scripts/disk_maintenance/cold_registry.py",
+    "scripts/disk_maintenance/cold_restore.py",
 )
 UNITS = (
     "autostop-disk-maintenance.service",

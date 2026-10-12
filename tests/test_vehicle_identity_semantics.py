@@ -496,3 +496,55 @@ def test_different_bound_provider_year_with_hint_becomes_a_dispute(returned):
     assert identity_allows_lookup(result, "family") is True
     assert identity_allows_lookup(result, "vehicle") is False
     assert result["parts_lookup_readiness"]["ready_for_oem_candidate_lookup"] is False
+
+
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("checked", [False, True])
+def test_vpic_partial_and_empty_diagnostics_preserve_codes_without_raw_text(empty, checked):
+    source = provider(synthetic_identifier(), enginemodel="UNCONFIRMED ENGINE")
+    source.update(ok=not empty, outcome="empty_result" if empty else "success", coverage="unsafe coverage")
+    if empty:
+        source["vehicle"] = {}
+    if checked:
+        source.pop("error_code")
+        source.update(error_codes=["1", "7", "400"], has_error_text=True, diagnostics_status="reported")
+    else:
+        source.update(error_code="1,7;400", error_text="SENSITIVE_SENTINEL " + synthetic_identifier())
+    result = decode({"make": "BMW", "model": "3 Series"}, source)
+    diagnostics = result["provider_errors"][0]
+    assert diagnostics["code"] == ("empty_result" if empty else "provider_partial_evidence")
+    assert diagnostics["error_codes"] == ["1", "7", "400"]
+    assert diagnostics["has_error_text"] is True
+    assert diagnostics["coverage"] == "partial_or_unsupported"
+    assert "SENSITIVE_SENTINEL" not in json.dumps(diagnostics)
+    assert synthetic_identifier() not in json.dumps(diagnostics)
+    assert "engine" not in result["vehicle_profile"]
+    assert not identity_allows_lookup(result, "vehicle")
+
+
+def test_vpic_checked_diagnostics_reject_untyped_codes_and_text_presence():
+    source = {
+        "ok": False,
+        "outcome": "empty_result",
+        "vehicle": {},
+        "error_codes": [True, {}, "1", "7", "400", "1", "0", "SENSITIVE_SENTINEL", "12345"],
+        "has_error_text": "true",
+        "diagnostics_status": [],
+        "coverage": "SENSITIVE_SENTINEL",
+    }
+    diagnostics = decode(result=source)["provider_errors"][0]
+    assert diagnostics["error_codes"] == ["1", "7", "400"]
+    assert diagnostics["has_error_text"] is False
+    assert diagnostics["coverage"] == "partial_or_unsupported"
+    assert "SENSITIVE_SENTINEL" not in json.dumps(diagnostics)
+
+
+@pytest.mark.parametrize("market,required", [("Europe", False), ("North America", True)])
+def test_check_digit_applicability_preserves_row_caveat_and_na_guard(market, required):
+    identifier = "WVW" + "ZZZAUZ" + "FP" + "0" * 6
+    result = decode({"make": "Volkswagen", "model": "Golf", "market": market}, identifier=identifier)
+    assert result["diagnostics"]["check_digit"]["status"] == "fail"
+    assert result["diagnostics"]["check_digit"]["applicability"] == ("required" if required else "not_established")
+    assert result["identifier_validation"]["valid_for_vehicle_lookup"] is (not required)
+    assert any(row["field"] == "vin_check_digit" for row in result["conflicts"]) is required
+    assert any("applicability is not established" in warning for warning in result["warnings"]) is (not required)

@@ -36,14 +36,21 @@ STRING_FIELDS = {
     "oem_notes",
     "vin",
     "frame",
+    "engine_type",
+    "fuel_type",
 }
-CONTEXT_FIELDS = STRING_FIELDS | {
-    "model_year",
-    "production_year",
-    "transmission_speeds",
-    "source_confidence",
-    "options",
-}
+TECHNICAL_NUMERIC_FIELDS = {"displacement_cc", "power_kw", "power_hp"}
+CONTEXT_FIELDS = (
+    STRING_FIELDS
+    | TECHNICAL_NUMERIC_FIELDS
+    | {
+        "model_year",
+        "production_year",
+        "transmission_speeds",
+        "source_confidence",
+        "options",
+    }
+)
 
 
 def _issue(code: str, field: str) -> dict[str, str]:
@@ -189,6 +196,11 @@ def _clean_fields(context: dict[str, Any], errors: list[dict[str, str]], notes: 
             normalized_confidence = _validate_confidence(value, errors)
             if normalized_confidence is not None:
                 cleaned[key] = normalized_confidence
+        elif key in TECHNICAL_NUMERIC_FIELDS:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                errors.append(_issue("expected_positive_finite_number", key))
+            else:
+                cleaned[key] = value
         elif key == "transmission_speeds":
             if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 30:
                 errors.append(_issue("invalid_transmission_speeds", key))

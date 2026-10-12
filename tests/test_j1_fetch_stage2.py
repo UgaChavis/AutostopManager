@@ -71,6 +71,24 @@ def test_browser_fallback_stays_gated_and_bounded(monkeypatch: pytest.MonkeyPatc
     }
 
 
+def test_bom_robots_blocks_document_and_browser_before_content_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://elcats.ru/demo/catalog"
+    requests: list[str] = []
+    j1_fetch._ROBOTS.clear()
+
+    def robots_only(target: str, **_kwargs: object) -> tuple[int, dict[str, str], bytes, str]:
+        requests.append(target)
+        assert target == "https://elcats.ru/robots.txt"
+        return 200, {}, b"\xef\xbb\xbfUser-agent: *\nDisallow: /\n", target
+
+    monkeypatch.setattr(j1_fetch, "_request_public", robots_only)
+    monkeypatch.setattr(j1_browser, "isolation_verified", lambda: True)
+    monkeypatch.setattr(j1_fetch, "_rate_limit", lambda *_args: pytest.fail("blocked page rate-limit stage reached"))
+    assert j1_fetch.fetch_document(url) == {"ok": False, "error": "robots_disallowed"}
+    assert j1_fetch._browser_fallback(url, "DEMO", allow_browser=True) == {"ok": False, "error": "robots_disallowed"}
+    assert requests == ["https://elcats.ru/robots.txt"]
+
+
 def test_browser_fallback_records_renderer_failures_and_success(monkeypatch: pytest.MonkeyPatch) -> None:
     url = "https://example.org/dynamic"
     monkeypatch.setattr(j1_browser, "isolation_verified", lambda: True)

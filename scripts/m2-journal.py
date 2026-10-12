@@ -50,7 +50,8 @@ def validate(record):
             raise ValueError("journal_record_text")
         if "\x00" in text or "```m2-record" in text:
             raise ValueError("journal_record_text")
-    if record["git_sha"] is not None and not re.fullmatch(r"[0-9a-f]{40}", str(record["git_sha"])):
+    sha = record["git_sha"]
+    if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)):
         raise ValueError("journal_record_sha")
     if type(record["release_required"]) is not bool:
         raise ValueError("journal_record_release")
@@ -141,6 +142,8 @@ def recover(root):
 
 
 def run(root=ROOT, record=None, at=None):
+    if record is not None:
+        validate(record)
     at = at or datetime.now(UTC)
     week = week_for(at)
     if root.is_symlink():
@@ -155,7 +158,6 @@ def run(root=ROOT, record=None, at=None):
         ensure_week(root, week)
         recover(root)
         if record is not None:
-            validate(record)
             existing = [
                 entry
                 for path in (root / "journal").glob("????-W??.md")

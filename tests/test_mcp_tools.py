@@ -79,6 +79,57 @@ def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeyp
     assert captured["live_wmi"] is False
 
 
+@pytest.mark.parametrize("detail", ["summary", "full", None])
+def test_decode_vehicle_identity_detail_preserves_safety_and_evidence(tmp_path, monkeypatch, detail):
+    expected = {
+        "ok": True,
+        "status": "partial",
+        "input_binding": {"identifier_kind": "vin", "identifier_sha256": "synthetic"},
+        "vehicle_profile": {"make": "Volkswagen Group"},
+        "field_statuses": {"make": {"status": "candidate"}},
+        "provenance": {"make": [{"source_kind": "local_hint", "bound": False}]},
+        "diagnostics": {"model_year": {"candidate_years": [1981, 2011]}},
+        "missing_fields": ["engine", "model"],
+        "conflicts": [{"field": "model", "code": "synthetic_conflict"}],
+        "provider_errors": [{"code": "empty_result", "error_codes": ["7"]}],
+        "processing": {"http_attempts": 0, "elapsed_ms": 1},
+        "parts_lookup_readiness": {"exact_applicability_confirmed": False},
+        "adapter_status": [{"source_id": "synthetic_provider"}],
+        "lookup_plan": {"catalog_routes": [{"source_id": "synthetic_route"}]},
+    }
+
+    async def fake_decode(identifier, **kwargs):
+        return expected
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", fake_decode)
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
+    kwargs = {} if detail is None else {"detail": detail}
+    response = asyncio.run(server.tools["decode_vehicle_identity"]("WVW00000000000000", **kwargs))
+    for key in expected.keys() - {"adapter_status", "lookup_plan"}:
+        assert response[key] == expected[key]
+    if detail == "summary":
+        assert "adapter_status" not in response and "lookup_plan" not in response
+        assert response["presentation"] == {"detail": "summary", "omitted_fields": ["adapter_status", "lookup_plan"]}
+    else:
+        assert response["adapter_status"] == expected["adapter_status"]
+        assert response["lookup_plan"] == expected["lookup_plan"]
+        assert "presentation" not in response
+    assert response["tool_execution"]["call_id"]
+    assert "adapter_status" in expected and "lookup_plan" in expected
+
+
+def test_decode_vehicle_identity_invalid_detail_never_calls_decoder(tmp_path, monkeypatch):
+    async def forbidden_decode(*args, **kwargs):
+        raise AssertionError("invalid detail must be rejected before decoder execution")
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", forbidden_decode)
+    server = _FakeServer()
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
+    with pytest.raises(ValueError, match="detail must be summary or full"):
+        asyncio.run(server.tools["decode_vehicle_identity"]("WVW00000000000000", detail="invalid"))
+
+
 def test_vehicle_and_catalog_reads_have_read_only_annotations(tmp_path):
     server = _FakeServer()
     register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
@@ -178,7 +229,14 @@ def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
         "automotive_context": None,
         "profile": "general",
     }
-    assert calls[3][1] == {"job_id": "job-1", "document_id": "doc-1", "offset": 100, "max_chars": 500}
+    assert calls[3][1] == {
+        "job_id": "job-1",
+        "document_id": "doc-1",
+        "offset": 100,
+        "max_chars": 500,
+        "page": None,
+        "ocr": False,
+    }
     assert calls[4][1] == {"job_id": "job-1"}
 
 
@@ -356,7 +414,15 @@ def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
 
     expected = {
         "j1_research_start": (False, False, True),
-        "j1_research_add_queries": (False, False, True),
+        "j1_research_document": (True, False, False),
+        "j1_research_vin": (True, False, True),
+        "j1_research_record_facts": (True, False, False),
+        "j1_research_add_queries": (True, False, True),
+        "j1_research_status": (True, False, False),
+        "j1_research_results": (True, False, False),
+        "j1_research_report": (True, False, False),
+        "j1_research_cancel": (True, False, False),
+        "manager_automation_control": (True, False, False),
         "store_digest": (False, False, False),
         "store_management_action": (True, True, False),
         "store_quote_conductor": (True, False, False),
@@ -723,24 +789,37 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
 
     assert set(server.tools) == {"manager_automations", "manager_automation_control"}
     read_annotations = server.options["manager_automations"]["annotations"]
-    assert read_annotations.readOnlyHint is True
+    assert read_annotations.readOnlyHint is False
     assert read_annotations.destructiveHint is False
+    assert read_annotations.idempotentHint is False
+    assert read_annotations.openWorldHint is False
     control_annotations = server.options["manager_automation_control"]["annotations"]
     assert control_annotations.readOnlyHint is False
     assert control_annotations.destructiveHint is True
+    assert control_annotations.idempotentHint is False
+    assert control_annotations.openWorldHint is False
+
+    def assert_response(result, expected, tool_name):
+        assert {key: value for key, value in result.items() if key != "tool_execution"} == expected
+        trace = result["tool_execution"]
+        assert trace["tool"] == tool_name and trace["call_id"]
+        assert trace["wall_ms"] >= 0 and trace["started_at"] <= trace["ended_at"]
+        assert trace["outcome"] == ("ok" if expected["ok"] else "error")
+        assert "unsafe_detail" not in json.dumps(trace)
 
     status = server.tools["manager_automations"](operation="status", job_id="job-1", include_archived=True)
-    assert status == {
-        "ok": True,
-        "operation": "status",
-        "payload": {"job_id": "job-1", "include_archived": True},
-    }
+    assert_response(
+        status,
+        {"ok": True, "operation": "status", "payload": {"job_id": "job-1", "include_archived": True}},
+        "manager_automations",
+    )
     templates = server.tools["manager_automations"](operation="templates")
     assert templates["payload"] == {}
-    assert server.tools["manager_automations"](operation="readiness") == {
-        "ok": False,
-        "error": "automation_control_unavailable",
-    }
+    assert_response(
+        server.tools["manager_automations"](operation="readiness"),
+        {"ok": False, "error": "automation_control_unavailable"},
+        "manager_automations",
+    )
 
     created = server.tools["manager_automation_control"](
         operation="create_from_template",
@@ -754,17 +833,22 @@ def test_native_automation_tools_forward_safe_control_contracts(tmp_path, monkey
         idempotency_key="archive-job-0001",
         expected_revision=7,
     )
-    assert conflict == {
-        "ok": False,
-        "error": "automation_revision_conflict",
-        "job_id": "job-1",
-        "revision": 8,
-        "expected_revision": 7,
-        "current_revision": 8,
-    }
-    assert server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"}) == {
-        "ok": False,
-        "error": "automation_control_failed",
-    }
+    assert_response(
+        conflict,
+        {
+            "ok": False,
+            "error": "automation_revision_conflict",
+            "job_id": "job-1",
+            "revision": 8,
+            "expected_revision": 7,
+            "current_revision": 8,
+        },
+        "manager_automation_control",
+    )
+    assert_response(
+        server.tools["manager_automation_control"](operation="run_now", payload={"job_id": "job-1"}),
+        {"ok": False, "error": "automation_control_failed"},
+        "manager_automation_control",
+    )
     assert calls[-2]["expected_revision"] == 7
     assert calls[-2]["idempotency_key"] == "archive-job-0001"

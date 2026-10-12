@@ -1,0 +1,1246 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import resource
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+from typing import Any
+
+import pytest
+
+from autostop_manager import j1_vin_documents as documents
+from test_j1_vin_evidence import Sandbox, sandbox as sandbox
+
+_PYTHON = str(Path(sys.executable).resolve())
+_FORMAT_TAGS = ["b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]
+
+
+def _pdf(page_count: int) -> bytes:
+    """Generate a public synthetic PDF without external fixture dependencies."""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{' '.join(f'{4 + 2 * i} 0 R' for i in range(page_count))}] /Count {page_count} >>".encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for index in range(page_count):
+        stream_id = 5 + 2 * index
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {stream_id} 0 R >>".encode()
+        )
+        lines = [f"PAGE {index + 1} PUBLIC DOCUMENT LINE {line} BACKGROUND DATA" for line in range(8)]
+        if index == 455:
+            lines.append("PAGE 456 SYNTHETIC 1HGCM82673A000000")
+        content = b"BT /F1 10 Tf 40 730 Td " + b" ".join(f"({line}) Tj 0 -15 Td".encode() for line in lines) + b" ET"
+        objects.append(f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"\nendstream")
+    pieces = [b"%PDF-1.4\n"]
+    offsets = [0]
+    length = len(pieces[0])
+    for number, obj in enumerate(objects, 1):
+        offsets.append(length)
+        piece = f"{number} 0 obj\n".encode() + obj + b"\nendobj\n"
+        pieces.append(piece)
+        length += len(piece)
+    pieces.append(f"xref\n0 {len(offsets)}\n".encode() + b"0000000000 65535 f \n")
+    pieces.extend(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    pieces.append(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{length}\n%%EOF\n".encode())
+    return b"".join(pieces)
+
+
+def _workspace(tmp_path: Path) -> Path:
+    result = tmp_path / "private"
+    result.mkdir(mode=0o700)
+    return result
+
+
+def _fake_pdf(monkeypatch: pytest.MonkeyPatch, output: bytes, count: int | None = None) -> None:
+    monkeypatch.setattr(
+        documents.shutil, "which", lambda name: f"/usr/bin/{name}" if name != "pdfinfo" or count else None
+    )
+
+    def parser(argv: list[str], *_args: Any, **_kwargs: Any) -> tuple[str, bytes]:
+        if "pdfinfo" in argv[0]:
+            return "ok", f"Pages: {count}\n".encode()
+        assert argv[argv.index("-l") + 1] == "1000"
+        return "ok", output
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+
+
+def test_html_visible_text_title_charset_and_unredacted_vin(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    workspace = _workspace(tmp_path)
+    body = """<html><head><title>Технический документ</title><script>hidden VIN</script></head>
+    <body><p>1HGCM82673A000000</p><div hidden>not visible</div>
+    <span style="display: none">css hidden</span><span aria-hidden="true">aria hidden</span>
+    <style>secret style</style><template>template hidden</template><noscript>noscript hidden</noscript>
+    <div>Useful &amp; public<br/>text</div><footer>Visible footer</footer></body></html>""".encode("cp1251")
+    result = documents.extract_content(body, "text/html; charset=windows-1251", "https://example.org", workspace)
+    assert result["ok"] and result["title"] == "Технический документ"
+    text = result["pages"][0]["text"]
+    assert "1HGCM82673A000000" in text and "Useful & public" in text and "Visible footer" in text
+    assert "hidden" not in text and "Технический" not in text
+    assert result["pages"][0]["page"] == 1 and result["page_count"] == 1
+    assert list(workspace.iterdir()) == [] and "1HGCM82673A000000" not in caplog.text
+    fallback = documents.extract_content(b"<p>Fallback</p>", "text/html; charset=missing-codec", "", workspace)
+    assert fallback["pages"][0]["text"] == "Fallback"
+
+
+@pytest.mark.parametrize("tag", ["iframe", "noembed", "noframes", "canvas", "datalist", "dialog", "audio", "video"])
+def test_html_intrinsic_hidden_fallback_cannot_supply_visible_vin(tmp_path: Path, tag: str) -> None:
+    body = (f"<p>Public general document</p><{tag}>1HGCM82673A000000</{tag}><p>Visible tail</p>").encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public general document\nVisible tail"
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["object", "applet"])
+def test_html_visible_fallback_is_retained(tmp_path: Path, tag: str) -> None:
+    result = documents.extract_content(f"<{tag}>1HGCM82673A000000</{tag}>".encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000"
+
+
+@pytest.mark.parametrize("tag", ["details", "dialog"])
+@pytest.mark.parametrize("opened", [False, True])
+def test_html_disclosure_visibility_retains_summary_and_open_content(tmp_path: Path, tag: str, opened: bool) -> None:
+    attribute = " open" if opened else ""
+    summary = "<summary>Public summary</summary>" if tag == "details" else ""
+    body = f"<{tag}{attribute}>{summary}<p>1HGCM82673A000000</p></{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is opened
+    assert ("Public summary" in text) is (tag == "details")
+    assert "Visible tail" in text and not result["truncated"]
+
+
+def test_html_closed_details_exposes_only_first_direct_summary(tmp_path: Path) -> None:
+    body = (
+        b"<details><summary>Public summary</summary><summary>1HGCM82673A000000</summary>"
+        b"<div><summary>1HGCM82673A000000</summary></div></details><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public summary\nVisible tail"
+
+
+@pytest.mark.parametrize(
+    "style,visible", [('style="display:none" style=""', False), ('style="" style="display:none"', True)]
+)
+def test_html_duplicate_attributes_keep_first_visibility_value(tmp_path: Path, style: str, visible: bool) -> None:
+    body = f"<p {style}>1HGCM82673A000000</p><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert ("1HGCM82673A000000" in result["pages"][0]["text"]) is visible
+    assert "Visible tail" in result["pages"][0]["text"]
+
+
+@pytest.mark.parametrize("tag", ["template", "iframe", "script", "style", "noembed", "noframes", "canvas", "datalist"])
+def test_html_nonvoid_slash_preserves_hidden_context(tmp_path: Path, tag: str) -> None:
+    body = f"<{tag}/>1HGCM82673A000000</{tag}><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["script", "style", "iframe", "noembed", "noframes"])
+def test_html_slash_rawtext_does_not_create_nested_contexts(tmp_path: Path, tag: str) -> None:
+    body = f"<{tag}/><{tag}>1HGCM82673A000000</{tag}><p>Visible tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+
+
+@pytest.mark.parametrize("content_type,visible", [("text/html", False), ("application/xhtml+xml", True)])
+def test_html_nonvoid_slash_keeps_xhtml_semantics(tmp_path: Path, content_type: str, visible: bool) -> None:
+    result = documents.extract_content(b"<template/><p>Visible tail</p>", content_type, "", tmp_path)
+    assert result["pages"][0]["text"] == ("Visible tail" if visible else "")
+
+
+@pytest.mark.parametrize("tag", ["svg", "math"])
+def test_html_foreign_selfclosing_elements_preserve_following_text(tmp_path: Path, tag: str) -> None:
+    result = documents.extract_content(f"<{tag}/><p>Visible tail</p>".encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+
+
+@pytest.mark.parametrize("foreign", ["<svg><title/></svg>", "<svg><g><title/></g></svg>"])
+def test_html_foreign_selfclosing_title_preserves_visible_tail(tmp_path: Path, foreign: str) -> None:
+    result = documents.extract_content((foreign + "<p>Visible tail</p>").encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+    assert not result["truncated"]
+
+
+def test_html_foreign_integration_point_does_not_release_template_slash(tmp_path: Path) -> None:
+    body = b"<math><mtext><template/>1HGCM82673A000000</template>Visible content</mtext></math><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible content\nVisible tail"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        '<annotation encoding="text/plain">1HGCM82673A000000</annotation>',
+        '<annotation-xml encoding="application/xhtml+xml"><div>1HGCM82673A000000</div></annotation-xml>',
+    ],
+)
+def test_html_hidden_math_metadata_cannot_create_vin_match(tmp_path: Path, metadata: str) -> None:
+    from autostop_manager.j1_vin_research import ingest_pages
+
+    body = f"<math><semantics><mi>Visible math</mi>{metadata}</semantics></math><p>Public general document</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible math\nPublic general document"
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute(
+            "CREATE TABLE pages(document_id TEXT,page INTEGER,text TEXT,match_evidence_id TEXT,"
+            "PRIMARY KEY(document_id,page))"
+        )
+        conn.execute("CREATE VIRTUAL TABLE pages_fts USING fts5(document_id UNINDEXED,page UNINDEXED,text)")
+        job = {"vin": "1HGCM82673A000000", "revision": 0, "analysis_status": "draft"}
+        ingest_pages(conn, job, "synthetic-document", result["pages"])
+        assert not conn.execute("SELECT match_evidence_id FROM pages").fetchone()[0]
+
+
+def test_html_math_metadata_scope_keeps_visible_math_and_html_custom_elements(tmp_path: Path) -> None:
+    body = (
+        b"<annotation>Visible custom element</annotation>"
+        b"<math><mtext>Visible math text</mtext><annotation>Hidden metadata</annotation></math>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible custom elementVisible math text\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_math_metadata_cannot_close_outer_paragraph_or_hidden_context(tmp_path: Path) -> None:
+    body = (
+        b"<p>Public beginning<math><semantics><mi>Visible math</mi>"
+        b"<annotation-xml encoding='application/xhtml+xml'></p><div>1HGCM82673A000000</div>"
+        b"</annotation-xml></semantics></math></p><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert "1HGCM82673A000000" not in result["pages"][0]["text"]
+    assert "Public beginning" in result["pages"][0]["text"] and "Visible tail" in result["pages"][0]["text"]
+
+
+@pytest.mark.parametrize("slash", ["", "/"])
+def test_html_rcdata_retains_literal_control_text_and_decodes_entities_once(tmp_path: Path, slash: str) -> None:
+    body = (
+        f"<head><title{slash}>Public &amp;amp; title</title></head><body>"
+        f"<textarea{slash}>&lt;a hidden&gt;1HGCM82673A000000&lt;/a&gt; &amp;amp;</textarea><p>Visible &amp;amp; tail</p></body>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["title"] == "Public &amp; title"
+    assert result["pages"][0]["text"] == "<a hidden>1HGCM82673A000000</a> &amp;\nVisible &amp; tail"
+
+
+def test_xhtml_title_and_control_entities_are_decoded_once(tmp_path: Path) -> None:
+    body = b"<head><title>A &amp;amp; B</title></head><textarea>&lt;a&gt;CONTROL&lt;/a&gt; &amp;amp;</textarea>"
+    result = documents.extract_content(body, "application/xhtml+xml", "", tmp_path)
+    assert result["title"] == "A &amp; B"
+    assert result["pages"][0]["text"] == "<a>CONTROL</a> &amp;"
+
+
+def test_html_unterminated_rcdata_keeps_literal_text_and_title_at_eof(tmp_path: Path) -> None:
+    body = b"<textarea>Visible &amp; literal <a>1HGCM82673A000000</a>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible & literal <a>1HGCM82673A000000</a>"
+    title = documents.extract_content(b"<head><title>Public &amp;amp; title", "text/html", "", tmp_path)
+    assert title["title"] == "Public &amp; title" and title["pages"][0]["text"] == ""
+
+
+@pytest.mark.parametrize("tag", ["script", "iframe", "template", "noscript"])
+def test_html_unterminated_hidden_context_does_not_leak_at_eof(tmp_path: Path, tag: str) -> None:
+    body = f"<p>Public general document</p><{tag}>1HGCM82673A000000<p>Hidden tail</p>".encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Public general document"
+
+
+def test_html_structure_and_text_are_bounded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(documents, "MAX_TEXT_BYTES", 16)
+    result = documents.extract_content(b"<p>" + "ж".encode() * 50 + b"</p>", "text/html", "", tmp_path)
+    assert result["truncated"] and len(result["pages"][0]["text"].encode()) <= 16
+    nested = documents.extract_content(b"<div>" * 600 + b"ignored", "text/html", "", tmp_path)
+    assert nested["truncated"] and "html_structure_limit" in nested["limitations"]
+    assert nested["pages"][0]["text"] == ""
+
+
+@pytest.mark.parametrize(
+    "prefix,element,suffix",
+    [
+        ("<ul>", "<li>", "</ul>"),
+        ("<table><tbody>", "<tr><td>", "</table>"),
+        ("<table><tr>", "<td>", "</table>"),
+        ("<table><tr>", "<th>", "</table>"),
+        ("", "<p>", ""),
+    ],
+)
+def test_html_optional_end_tags_preserve_large_flat_documents(
+    tmp_path: Path, prefix: str, element: str, suffix: str
+) -> None:
+    body = prefix + "".join(f"{element}PUBLIC ROW {number}" for number in range(700)) + suffix
+    body += "<p>AFTER DOCUMENT 1HGCM82673A000000</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("PUBLIC ROW") == 700 and "PUBLIC ROW 699" in text
+    assert "AFTER DOCUMENT 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+@pytest.mark.parametrize("head_end", ["", "</head>"])
+@pytest.mark.parametrize("body_text", ["<body><p>{text}</p></body>", "<p>{text}</p>", "{text}"])
+def test_html_body_closes_optional_head_without_hiding_visible_vin(
+    tmp_path: Path, head_end: str, body_text: str
+) -> None:
+    visible = "VISIBLE VIN 1HGCM82673A000000"
+    body = (
+        f"<html><head><title>Public document</title><meta charset=utf-8>{head_end}"
+        + body_text.format(text=visible)
+        + "</html>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == visible
+    assert result["title"] == "Public document" and not result["truncated"]
+
+
+def test_html_optional_definition_ends_preserve_flat_terms_and_tail(tmp_path: Path) -> None:
+    body = (
+        "<dl>"
+        + "".join(f"<dt>TERM {number}<dd>VALUE {number}" for number in range(700))
+        + "</dl><p>AFTER DEFINITIONS VIN 1HGCM82673A000000</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("TERM ") == 700 and text.count("VALUE ") == 700
+    assert "AFTER DEFINITIONS VIN 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+@pytest.mark.parametrize("explicit_ends", [False, True])
+@pytest.mark.parametrize("groups", [False, True])
+def test_html_optional_option_and_optgroup_ends_preserve_flat_choices(
+    tmp_path: Path, explicit_ends: bool, groups: bool
+) -> None:
+    choices = []
+    for number in range(520):
+        prefix = f"<optgroup label='Group {number}'>" if groups else ""
+        suffix = ("</option>" + ("</optgroup>" if groups else "")) if explicit_ends else ""
+        choices.append(f"{prefix}<option>PUBLIC CHOICE {number}{suffix}")
+    body = "<select size='20'>" + "".join(choices) + "</select><p>Visible tail 1HGCM82673A000000</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert text.count("PUBLIC CHOICE ") == 520 and "PUBLIC CHOICE 519" in text
+    assert "Visible tail 1HGCM82673A000000" in text
+    assert not result["truncated"] and "html_structure_limit" not in result["limitations"]
+
+
+@pytest.mark.parametrize("attribute", ["hidden", "style='display:none'", "aria-hidden='true'"])
+def test_html_omitted_option_end_releases_hidden_sibling(tmp_path: Path, attribute: str) -> None:
+    body = f"<select size='2'><option {attribute}>Hidden choice<option>Visible choice</select><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible choice\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_omitted_optgroup_ends_keep_hidden_parent_and_release_hidden_sibling(tmp_path: Path) -> None:
+    body = (
+        b"<select size='4'><optgroup hidden><option>Hidden first<option>Hidden second"
+        b"<optgroup label='Visible group'><option>Visible first<option>Visible second</select>"
+        b"<select hidden><optgroup><option>Hidden select<option>Hidden select sibling</select>"
+        b"<datalist><option>Hidden datalist<option>Hidden datalist sibling</datalist>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible firstVisible second\nVisible tail"
+    assert not result["truncated"]
+
+
+def test_html_option_closures_do_not_escape_hidden_template_or_foreign_metadata(tmp_path: Path) -> None:
+    body = (
+        b"<select><option hidden>Hidden first<template><option>Hidden template</option></template>"
+        b"<option>Visible choice</select>"
+        b"<math><annotation-xml><option>Hidden metadata<option>Hidden next metadata</annotation-xml></math>"
+        b"<p>Visible tail</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible choice\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+@pytest.mark.parametrize("inline", ["", "<span hidden>Hidden inline"])
+def test_html_nested_link_or_button_closes_hidden_predecessor(tmp_path: Path, tag: str, inline: str) -> None:
+    end_inline = "</span>" if inline else ""
+    body = (
+        f"<{tag} hidden>Hidden predecessor{inline}<{tag}>1HGCM82673A000000</{tag}>{end_inline}<p>Visible tail</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+def test_html_nested_link_or_button_keeps_hidden_ancestors_and_template_scopes(tmp_path: Path, tag: str) -> None:
+    body = (
+        f"<div hidden><{tag}>Hidden ancestor<{tag}>Hidden new control</{tag}></div>"
+        f"<{tag} hidden><template><{tag}>Hidden template</{tag}></template></{tag}>"
+        "<p>Visible tail</p>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_html_nested_link_cannot_expose_a_hidden_block_during_implicit_close(tmp_path: Path) -> None:
+    body = b"<a hidden><div hidden>Hidden block<a>1HGCM82673A000000</a></div></a><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_html_nested_button_closes_intervening_hidden_block(tmp_path: Path) -> None:
+    body = b"<button hidden><div hidden>Hidden block<button>Visible control</button></div><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible control\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("own_hidden", [False, True])
+def test_html_nested_anchor_reconstruction_distinguishes_own_and_inherited_hidden(
+    tmp_path: Path, tag: str, own_hidden: bool
+) -> None:
+    attribute = " hidden" if own_hidden else ""
+    body = f"<a hidden><{tag}{attribute}>Hidden prefix<a>1HGCM82673A000000</a></{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not own_hidden
+    assert "Hidden prefix" not in text and "Visible tail" in text and not result["truncated"]
+    if own_hidden:
+        assert "html_formatting_reconstruction" in result["limitations"]
+
+
+@pytest.mark.parametrize("tag", ["a", *_FORMAT_TAGS])
+@pytest.mark.parametrize("own_block_hidden", [False, True])
+def test_html_formatting_end_preserves_independently_hidden_block_and_releases_inheritance(
+    tmp_path: Path, tag: str, own_block_hidden: bool
+) -> None:
+    formatting_attr = "" if own_block_hidden else " hidden"
+    block_attr = " hidden" if own_block_hidden else ""
+    body = f"<{tag}{formatting_attr}>Prefix<div{block_attr}></{tag}>1HGCM82673A000000</div><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not own_block_hidden
+    assert "Visible tail" in text and "html_formatting_reconstruction" in result["limitations"]
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize(
+    "prefix,close,finish",
+    [
+        ("<p>", "</p>", "</{tag}>"),
+        ("<p>", "<p>", "</{tag}></p>"),
+        ("<ul><li>", "</li><li>", "</li></{tag}></ul>"),
+        ("<ul><li>", "<li>", "</{tag}></ul>"),
+        ("<div>", "</div>", "</{tag}>"),
+        ("<button>", "<button>", "</button></{tag}>"),
+        ("<button>", "</button>", "</{tag}>"),
+    ],
+)
+def test_html_hidden_formatting_survives_block_list_and_button_reconstruction(
+    tmp_path: Path, tag: str, prefix: str, close: str, finish: str
+) -> None:
+    body = prefix + f"<{tag} hidden>Hidden prefix" + close + "1HGCM82673A000000" + finish.format(tag=tag)
+    result = documents.extract_content((body + "<p>Visible tail</p>").encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail"
+    assert "html_formatting_reconstruction" in result["limitations"] and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("ancestor", ["p", "div", "button"])
+def test_html_reconstruction_discards_only_inherited_hidden_after_ancestor_end(
+    tmp_path: Path, tag: str, ancestor: str
+) -> None:
+    body = f"<{ancestor} hidden><{tag}>Hidden prefix</{ancestor}>1HGCM82673A000000</{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", _FORMAT_TAGS)
+@pytest.mark.parametrize("marker", ["td", "th", "caption", "template", "object", "applet", "marquee"])
+def test_html_formatting_markers_clear_hidden_context_after_their_end(tmp_path: Path, tag: str, marker: str) -> None:
+    table = marker in {"td", "th", "caption"}
+    prefix = "<table><tr>" if marker in {"td", "th"} else "<table>" if table else ""
+    suffix = "</tr></table>" if marker in {"td", "th"} else "</table>" if table else ""
+    body = prefix + f"<{marker}><{tag} hidden>Hidden prefix</{marker}>" + suffix
+    body += f"1HGCM82673A000000</{tag}><p>Visible tail</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["b", "em", "strong"])
+def test_html_formatting_marker_suspends_and_restores_prior_hidden_reconstruction(tmp_path: Path, tag: str) -> None:
+    body = (
+        f"<p><{tag} hidden>Hidden prefix</p><table><tr><td>Visible cell 1HGCM82673A000000</td></tr></table>"
+        f"Hidden after table</{tag}><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "Visible cell 1HGCM82673A000000" in text and "Visible tail" in text
+    assert "Hidden" not in text and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["b", "em", "strong", "code"])
+@pytest.mark.parametrize("outer_hidden", [False, True])
+def test_html_duplicate_formatting_end_closes_the_inner_reconstructed_identity(
+    tmp_path: Path, tag: str, outer_hidden: bool
+) -> None:
+    outer_attr = " hidden" if outer_hidden else ""
+    inner_attr = "" if outer_hidden else " hidden"
+    body = (
+        f"<{tag}{outer_attr}><p><{tag}{inner_attr}>Hidden prefix</p></{tag}>"
+        f"<table><tr><td>1HGCM82673A000000</td></tr></table></{tag}><p>Visible tail</p>"
+    )
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert ("1HGCM82673A000000" in text) is not outer_hidden
+    assert "Hidden prefix" not in text and "Visible tail" in text and not result["truncated"]
+    assert "html_formatting_reconstruction" in result["limitations"]
+
+
+def test_html_new_anchor_clears_a_predecessor_already_removed_from_the_stack(tmp_path: Path) -> None:
+    body = b"<p><a hidden>Hidden prefix</p><a>1HGCM82673A000000</a><p>Visible tail</p>"
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail" and not result["truncated"]
+
+
+@pytest.mark.parametrize("tag", ["a", "button"])
+def test_xhtml_nested_controls_preserve_xml_hidden_ancestry(tmp_path: Path, tag: str) -> None:
+    body = (
+        f'<html xmlns="http://www.w3.org/1999/xhtml"><body><{tag} hidden=""><{tag}>1HGCM82673A000000</{tag}>'
+        f"</{tag}><p>Visible tail</p></body></html>"
+    )
+    result = documents.extract_content(body.encode(), "application/xhtml+xml", "", tmp_path)
+    assert result["pages"][0]["text"] == "Visible tail" and not result["truncated"]
+
+
+def test_xhtml_selfclosing_hidden_formatting_does_not_start_html_reconstruction(tmp_path: Path) -> None:
+    body = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><b hidden=""/>1HGCM82673A000000<p>Visible tail</p></body></html>'
+    result = documents.extract_content(body, "application/xhtml+xml", "", tmp_path)
+    assert result["pages"][0]["text"] == "1HGCM82673A000000\nVisible tail"
+    assert "html_formatting_reconstruction" not in result["limitations"]
+
+
+def test_html_formatting_bookkeeping_stays_bounded_and_balanced(tmp_path: Path) -> None:
+    parser = documents._VisibleHTML()
+    parser.feed("<div><b>Public</b><em hidden>Hidden</em></div>" * 1000)
+    parser.close()
+    assert not parser.structure_limited and not parser.stack and not parser.hidden
+    assert not parser._formatting and not parser._visibility and not parser._own_hidden
+    assert not parser._closed_details and not parser._details_summary_seen and not parser._summary_nodes
+    limited = documents._VisibleHTML()
+    limited.feed("<p><b hidden>Hidden prefix</p>" * 600 + "1HGCM82673A000000")
+    limited.close()
+    assert limited.structure_limited and limited.hidden and limited.truncated
+    assert len(limited.stack) <= 512 and len(limited._formatting) <= 512 and len(limited._visibility) <= 512
+    assert "1HGCM82673A000000" not in "".join(limited.parts)
+
+
+@pytest.mark.parametrize(
+    "hidden_source",
+    [
+        "<a><div hidden></a><a>1HGCM82673A000000</a></div>",
+        "<a hidden><em hidden>Hidden<a>1HGCM82673A000000</a></em>",
+        "<b hidden><p><b>Hidden prefix</p></b><table><tr><td>1HGCM82673A000000</td></tr></table></b>",
+    ],
+)
+def test_html_reconstruction_limit_survives_save_and_document_read_without_false_vin_binding(
+    sandbox: Sandbox, hidden_source: str
+) -> None:
+    from autostop_manager import j1_vin_research as api, j1_vin_store as store, j1_vin_worker as worker
+    from test_j1_vin_evidence import _claim, _document, _record, _start
+
+    job = _start()
+    document = _document(job, vin=None)
+    result = documents.extract_content(
+        (hidden_source + "<p>Engine Alpha; power 100 kW; transmission Manual.</p>").encode(),
+        "text/html",
+        "https://example.org/synthetic",
+        sandbox.root,
+    )
+    with store.connect(job, transaction=True) as conn:
+        current = store.metadata(conn)
+        worker._save_document(
+            conn, current, {"id": document["document_id"], "url": document["url"], "title": "Synthetic source"}, result
+        )
+        store.write_metadata(conn, current)
+    readback = api.research_document(job, document["document_id"])
+    assert "html_formatting_reconstruction" in readback["limitations"]
+    assert readback["match_evidence_id"] is None
+    recorded = _record(job, [_claim(readback)], finalize=True)
+    assert not recorded["ok"] and recorded["error"]["code"] == "vin_match_evidence_required"
+    assert api.research_report(job)["claims"] == []
+
+
+def test_html_definition_scope_retains_hidden_ancestors_and_nested_lists(tmp_path: Path) -> None:
+    body = (
+        b"<dl hidden><dt>secret term<dd>secret value<dt>secret next term<dd>secret next value</dl>"
+        b"<dl><dt hidden>secret sibling<dd>visible value"
+        b"<dl hidden><dt>secret nested term<dd>secret nested value</dl>"
+        b"<dt>visible term<dd>visible next value</dl>"
+        b"<template><dl><dt>secret template term<dd>secret template value</dl></template>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text
+    assert all(value in text for value in ("visible value", "visible term", "visible next value"))
+    assert not result["truncated"]
+
+
+def test_html_definition_optional_ends_keep_real_nesting_limit(tmp_path: Path) -> None:
+    body = ("<p>visible before</p>" + "<dl><dd>" * 300 + "ignored deep text" + "</dl>" * 300).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible before"
+    assert result["truncated"] and "html_structure_limit" in result["limitations"]
+
+
+def test_html_implicit_head_and_unmatched_end_tags_do_not_escape_hidden_contexts(tmp_path: Path) -> None:
+    body = (
+        b"<div hidden><head><meta><body><p>secret ancestor</p></body></div>"
+        b"<div><template></div><head><meta><body><p>secret template</p></body></template></div>"
+        b"<p>visible after</p>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible after" and not result["truncated"]
+
+
+def test_html_optional_end_tags_keep_hidden_ancestors_and_close_hidden_siblings(tmp_path: Path) -> None:
+    body = (
+        b"<ul hidden><li>secret ancestor one<li>secret ancestor two</ul>"
+        b"<ul><li hidden>secret item<template><li>secret template</li></template><li>visible item</ul>"
+        b"<p hidden>secret paragraph<div>visible block</div>"
+        b"<table hidden><tr><td>secret table one<tr><td>secret table two</table>"
+        b"<table><tr hidden><td>secret cell<tr><td>visible cell</table>"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text
+    assert all(part in text for part in ("visible item", "visible block", "visible cell"))
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("boundary", ["button", "section", "fieldset", "select"])
+def test_html_list_optional_end_tag_does_not_escape_hidden_special_elements(tmp_path: Path, boundary: str) -> None:
+    body = (
+        f"<ul><li>visible before<{boundary} hidden>secret before<li>secret nested</li>"
+        f"</{boundary}><li>visible after</ul>"
+    ).encode()
+    result = documents.extract_content(body, "text/html", "", tmp_path)
+    text = result["pages"][0]["text"]
+    assert "secret" not in text and "visible before" in text and "visible after" in text
+    assert not result["truncated"]
+
+
+@pytest.mark.parametrize("nested,closing", [("<ul><li>", "</li></ul>"), ("<table><tr><td>", "</td></tr></table>")])
+def test_html_optional_end_tags_do_not_collapse_real_nested_structures(
+    tmp_path: Path, nested: str, closing: str
+) -> None:
+    body = "<p>visible before</p>" + nested * 300 + "ignored deep text" + closing * 300 + "<p>ignored after</p>"
+    result = documents.extract_content(body.encode(), "text/html", "", tmp_path)
+    assert result["pages"][0]["text"] == "visible before"
+    assert result["truncated"] and "html_structure_limit" in result["limitations"]
+
+
+def test_real_pdf_page_456_survives_50k_and_private_parent(tmp_path: Path) -> None:
+    if not shutil.which("pdftotext"):
+        pytest.skip("poppler is not installed")
+    workspace = _workspace(tmp_path)
+    result = documents.extract_content(_pdf(456), "application/pdf", "https://example.org/manual.pdf", workspace)
+    assert result["ok"], result
+    assert result["page_count"] == 456 and len(result["pages"]) == 456
+    assert sum(len(row["text"]) for row in result["pages"][:455]) > 50_000
+    assert result["pages"][455]["page"] == 456
+    assert "1HGCM82673A000000" in result["pages"][455]["text"]
+    assert not result["truncated"]
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o700 and list(workspace.iterdir()) == []
+
+
+def test_pdf_empty_pages_retain_indices_and_optional_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_pdf(monkeypatch, b"first\f\fthird\f")
+    workspace = _workspace(tmp_path)
+    result = documents.extract_content(b"%PDF synthetic", "", "https://example.org/file", workspace)
+    assert result["pages"] == [{"page": 1, "text": "first"}, {"page": 2, "text": ""}, {"page": 3, "text": "third"}]
+    assert result["page_count"] == 3 and "page_count_inferred" in result["limitations"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_pdf_page_and_utf8_text_limits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_pdf(monkeypatch, ("ж" * 100 + "\f").encode() * 1001, count=1001)
+    monkeypatch.setattr(documents, "MAX_TEXT_BYTES", 100)
+    monkeypatch.setattr(documents, "MAX_PAGE_TEXT_BYTES", 60)
+    result = documents.extract_content(b"%PDF synthetic", "application/pdf", "", _workspace(tmp_path))
+    assert len(result["pages"]) == 1000 and result["page_count"] == 1001
+    assert sum(len(row["text"].encode()) for row in result["pages"]) <= 100
+    assert result["truncated"] and {"page_limit", "text_limit", "page_text_limit"}.issubset(result["limitations"])
+
+
+@pytest.mark.parametrize(
+    "outcome,error",
+    [("timeout", "pdf_timeout"), ("failed", "pdf_extract_failed"), ("unavailable", "pdf_extract_failed")],
+)
+def test_pdf_errors_clean_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: str, error: str) -> None:
+    monkeypatch.setattr(documents.shutil, "which", lambda name: None if name == "pdfinfo" else "/usr/bin/pdftotext")
+    monkeypatch.setattr(documents, "_run_parser", lambda *_args, **_kwargs: (outcome, b""))
+    workspace = _workspace(tmp_path)
+    result = documents.extract_content(b"%PDF synthetic", "application/pdf", "", workspace)
+    assert not result["ok"] and result["error"] == error and list(workspace.iterdir()) == []
+
+
+def test_pdf_output_limit_keeps_marked_partial_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(documents.shutil, "which", lambda name: None if name == "pdfinfo" else "/usr/bin/pdftotext")
+    monkeypatch.setattr(documents, "_run_parser", lambda *_args, **_kwargs: ("output_limit", b"partial text"))
+    result = documents.extract_content(b"%PDF synthetic", "application/pdf", "", _workspace(tmp_path))
+    assert result["ok"] and result["truncated"] and "text_limit" in result["limitations"]
+
+
+def test_input_and_tool_limits_before_parser(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(documents, "MAX_PDF_BYTES", 20)
+    monkeypatch.setattr(documents, "MAX_HTML_BYTES", 20)
+    monkeypatch.setattr(documents.shutil, "which", lambda _name: None)
+    assert (
+        documents.extract_content(b"%PDF" + b"x" * 20, "application/pdf", "", tmp_path)["error"]
+        == "document_body_too_large"
+    )
+    assert documents.extract_content(b"x" * 21, "text/html", "", tmp_path)["error"] == "document_body_too_large"
+    assert documents.extract_content(b"not PDF", "application/pdf", "", tmp_path)["error"] == "invalid_pdf"
+    assert documents.extract_content(b"%PDF", "application/pdf", "", tmp_path)["error"] == "pdf_tool_unavailable"
+    assert documents.extract_content(b"binary", "image/png", "", tmp_path)["error"] == "unsupported_content_type"
+    assert documents.extract_content(None, "", "", tmp_path)["error"] == "invalid_body"  # type: ignore[arg-type]
+    assert documents.ocr_pages(b"%PDF", [1], tmp_path)["error"] == "ocr_tool_unavailable"
+    assert documents.ocr_pages(b"%PDF" + b"x" * 20, [1], tmp_path)["error"] == "document_body_too_large"
+
+
+@pytest.mark.parametrize("selection", [[], [0], [1001], [True], [1, 1], list(range(1, 14)), ["1"]])
+def test_ocr_selection_rejects_invalid_or_excess_pages(selection: list[int], tmp_path: Path) -> None:
+    assert documents.ocr_pages(b"%PDF synthetic", selection, tmp_path)["error"] == "ocr_invalid_pages"
+
+
+def _fake_ocr(
+    monkeypatch: pytest.MonkeyPatch, *, fail_page: int | None = None, languages: bytes = b"eng\nrus\n"
+) -> list[int]:
+    selections: list[int] = []
+    monkeypatch.setattr(documents.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def parser(argv: list[str], directory: Path, _descriptor: int, **kwargs: Any) -> tuple[str, bytes]:
+        if "--list-langs" in argv:
+            return "ok", languages
+        if "pdftoppm" in argv[0]:
+            page = int(argv[argv.index("-f") + 1])
+            assert argv[argv.index("-l") + 1] == str(page)
+            assert kwargs["payload"].startswith(b"%PDF")
+            assert kwargs["file_limit"] == documents.MAX_IMAGE_BYTES
+            assert kwargs["output_limit"] == documents.MAX_IMAGE_BYTES
+            assert argv[-1] == "-"  # No output prefix: image goes to stdout.
+            selections.append(page)
+            if page == fail_page:
+                return "timeout", b""
+            return "ok", b"\x89PNG\r\n\x1a\nsynthetic image"
+        assert argv[argv.index("-l") + 1] == "rus+eng"
+        assert argv[1:3] == ["stdin", "stdout"]
+        assert kwargs["payload"].startswith(b"\x89PNG\r\n\x1a\n")
+        assert list(directory.iterdir()) == []
+        return "ok", f"OCR SELECTED PAGE {selections[-1]} 1HGCM82673A000000".encode()
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+    return selections
+
+
+def test_ocr_selected_page_mapping_and_cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    selections = _fake_ocr(monkeypatch)
+    workspace = _workspace(tmp_path)
+    result = documents.ocr_pages(b"%PDF synthetic", [456, 3], workspace)
+    assert result["ok"] and selections == [456, 3]
+    assert [row["page"] for row in result["pages"]] == [456, 3]
+    assert "PAGE 456" in result["pages"][0]["text"] and "1HGCM82673A000000" in result["pages"][1]["text"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_real_ocr_uses_inherited_private_cwd_and_cleans_images(tmp_path: Path) -> None:
+    if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
+        pytest.skip("OCR system tools are not installed")
+    workspace = _workspace(tmp_path)
+    result = documents.ocr_pages(_pdf(1), [1], workspace)
+    if result.get("error") == "ocr_languages_unavailable":
+        pytest.skip("rus+eng language data is not installed")
+    assert result["ok"], result
+    assert result["pages"][0]["page"] == 1 and "PUBLIC DOCUMENT" in result["pages"][0]["text"]
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o700 and list(workspace.iterdir()) == []
+
+
+def test_ocr_partial_failure_retains_exact_selected_indices(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_ocr(monkeypatch, fail_page=456)
+    workspace = _workspace(tmp_path)
+    result = documents.ocr_pages(b"%PDF synthetic", [3, 456], workspace)
+    assert not result["ok"] and result["error"] == "ocr_timeout"
+    assert [row["page"] for row in result["pages"]] == [3] and result["limitations"] == ["partial_ocr"]
+    assert list(workspace.iterdir()) == []
+
+
+def test_ocr_languages_invalid_pdf_and_text_caps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    _fake_ocr(monkeypatch, languages=b"eng\n")
+    assert documents.ocr_pages(b"%PDF synthetic", [1], workspace)["error"] == "ocr_languages_unavailable"
+    assert documents.ocr_pages(b"bad", [1], workspace)["error"] == "invalid_pdf"
+    _fake_ocr(monkeypatch)
+    monkeypatch.setattr(documents, "MAX_TEXT_BYTES", 30)
+    result = documents.ocr_pages(b"%PDF synthetic", [1, 2], workspace)
+    assert result["truncated"] and sum(len(row["text"].encode()) for row in result["pages"]) == 30
+    assert "text_limit" in result["limitations"] and list(workspace.iterdir()) == []
+
+
+@pytest.mark.parametrize("image", [b"", b"not a PNG"])
+def test_ocr_rejects_invalid_renderer_stdout_without_starting_tesseract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, image: bytes
+) -> None:
+    _fake_ocr(monkeypatch)
+    original = documents._run_parser
+
+    def parser(argv: list[str], *args: Any, **kwargs: Any) -> tuple[str, bytes]:
+        if argv[0].endswith("pdftoppm"):
+            return "ok", image
+        if "--list-langs" not in argv:
+            raise AssertionError("Invalid image bytes must not reach Tesseract")
+        return original(argv, *args, **kwargs)
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+    workspace = _workspace(tmp_path)
+    assert documents.ocr_pages(b"%PDF synthetic", [1], workspace)["error"] == "ocr_render_failed"
+    assert list(workspace.iterdir()) == []
+
+
+def test_workspace_rejects_open_permissions_and_symlinks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_pdf(monkeypatch, b"text\f")
+    workspace = _workspace(tmp_path)
+    workspace.chmod(0o755)
+    assert (
+        documents.extract_content(b"%PDF synthetic", "application/pdf", "", workspace)["error"]
+        == "workspace_unavailable"
+    )
+    workspace.chmod(0o700)
+    link = tmp_path / "alias"
+    link.symlink_to(workspace, target_is_directory=True)
+    assert documents.extract_content(b"%PDF synthetic", "application/pdf", "", link)["error"] == "workspace_unavailable"
+    assert list(workspace.iterdir()) == []
+
+
+def test_real_parser_inherited_cwd_privilege_and_resource_caps(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    script = (
+        "import json,os,resource\n"
+        "blocked=False\n"
+        "try:\n open('parser-marker','w').write('synthetic')\n"
+        "except PermissionError:\n blocked=True\n"
+        "print(json.dumps({'uid':os.geteuid(),'cpu':resource.getrlimit(resource.RLIMIT_CPU),"
+        "'memory':resource.getrlimit(resource.RLIMIT_AS),'file':resource.getrlimit(resource.RLIMIT_FSIZE),"
+        "'core':resource.getrlimit(resource.RLIMIT_CORE),'tmp':os.environ['TMPDIR'],'write_blocked':blocked}))"
+    )
+    with documents._parser_workspace(workspace) as (directory, descriptor):
+        outcome, output = documents._run_parser(
+            [_PYTHON, "-c", script], directory, descriptor, timeout=3, output_limit=4096
+        )
+        assert outcome == "ok"
+        report = json.loads(output)
+        assert report["cpu"] == [documents.PARSER_CPU_SECONDS] * 2
+        assert report["memory"] == [documents.PARSER_MEMORY_BYTES] * 2
+        assert report["file"] == [4096, 4096] and report["core"] == [0, 0] and report["tmp"] == "."
+        if os.geteuid() == 0:
+            assert report["uid"] != 0 and report["write_blocked"] and not (directory / "parser-marker").exists()
+        else:
+            assert report["uid"] == os.geteuid()
+        assert directory.stat().st_uid == os.geteuid() and stat.S_IMODE(directory.stat().st_mode) == 0o700
+        assert stat.S_IMODE(workspace.stat().st_mode) == 0o700 and workspace.stat().st_uid == os.geteuid()
+    assert list(workspace.iterdir()) == []
+
+
+def test_real_parser_deadline_failure_and_file_output_limit(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    with documents._parser_workspace(workspace) as (directory, descriptor):
+        outcome, output = documents._run_parser(
+            [_PYTHON, "-c", "import time;time.sleep(10)"], directory, descriptor, timeout=0.05, output_limit=100
+        )
+        assert (outcome, output) == ("timeout", b"")
+        assert (
+            documents._run_parser(
+                [_PYTHON, "-c", "raise SystemExit(3)"], directory, descriptor, timeout=2, output_limit=100
+            )[0]
+            == "failed"
+        )
+        outcome, output = documents._run_parser(
+            [_PYTHON, "-c", "import os;os.write(1,b'x'*1000)"],
+            directory,
+            descriptor,
+            timeout=2,
+            output_limit=100,
+        )
+        assert outcome == "output_limit" and len(output) == 100
+        assert (
+            documents._run_parser(["/missing/parser"], directory, descriptor, timeout=2, output_limit=100)[0]
+            == "unavailable"
+        )
+        assert documents._run_parser([_PYTHON], directory, descriptor, timeout=0, output_limit=100)[0] == "timeout"
+    assert list(workspace.iterdir()) == []
+
+
+def test_parser_timeout_kills_and_reaps_with_service_capabilities_and_no_new_privs() -> None:
+    if os.geteuid() != 0 or not shutil.which("setpriv"):
+        pytest.skip("capability bounding test requires root and setpriv")
+    script = r"""
+import json, os, signal, subprocess, sys, tempfile, time
+from pathlib import Path
+from autostop_manager import j1_vin_documents as documents
+parent = {line.split(':')[0]: int(line.split()[1], 16)
+          for line in Path('/proc/self/status').read_text().splitlines()
+          if line.startswith(('CapBnd:', 'CapEff:', 'CapAmb:'))}
+created = []
+original = subprocess.Popen
+def record(*args, **kwargs):
+    process = original(*args, **kwargs)
+    status = Path(f'/proc/{process.pid}/status').read_text()
+    created.append((process, {'uid': int(next(line for line in status.splitlines()
+                                            if line.startswith('Uid:')).split()[1]),
+                            'capabilities': {line.split(':')[0]: int(line.split()[1], 16)
+                                             for line in status.splitlines()
+                                             if line.startswith(('CapEff:', 'CapPrm:', 'CapAmb:'))},
+                            'no_new_privs': int(next(line for line in status.splitlines()
+                                                    if line.startswith('NoNewPrivs:')).split()[1])}))
+    return process
+documents.subprocess.Popen = record
+reports = []
+with tempfile.TemporaryDirectory(prefix='j1-vin-timeout-cap-') as raw:
+    workspace = Path(raw)
+    workspace.chmod(0o700)
+    for _ in range(3):
+        started = time.monotonic()
+        with documents._parser_workspace(workspace) as (directory, descriptor):
+            outcome, output = documents._run_parser(
+                [str(Path(sys.executable).resolve()), '-I', '-c', 'import time;time.sleep(0.6)'],
+                directory, descriptor, timeout=0.04, output_limit=4096)
+            process, child = created[-1]
+            try:
+                os.waitpid(process.pid, os.WNOHANG)
+                reaped = False
+            except ChildProcessError:
+                reaped = True
+            reports.append({'outcome': outcome, 'empty': not output, 'child': child,
+                            'returncode': process.returncode, 'reaped': reaped,
+                            'proc_exists': Path(f'/proc/{process.pid}').exists(),
+                            'elapsed': time.monotonic() - started})
+    try:
+        os.waitpid(-1, os.WNOHANG)
+        no_children = False
+    except ChildProcessError:
+        no_children = True
+    # A regressed implementation must also leave no test processes behind;
+    # the recorded assertions above still describe the state at timeout.
+    for process, _child in created:
+        process.wait(timeout=2)
+    print(json.dumps({'parent': parent, 'reports': reports,
+                      'workspace_empty': not list(workspace.iterdir()), 'no_children': no_children}))
+"""
+    result = subprocess.run(
+        [
+            "setpriv",
+            "--no-new-privs",
+            "--bounding-set=-all,+setuid,+setgid",
+            "--inh-caps=-all,+setuid,+setgid",
+            "--ambient-caps=-all,+setuid,+setgid",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        timeout=15,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "PYTHONPATH": str(Path(documents.__file__).resolve().parents[1]),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "AUTOSTOP_MANAGER_ENV_FILE": "/dev/null",
+        },
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    report = json.loads(result.stdout)
+    assert report["parent"] == {"CapBnd": 0xC0, "CapEff": 0xC0, "CapAmb": 0xC0}
+    assert report["workspace_empty"] and report["no_children"]
+    for item in report["reports"]:
+        assert item["outcome"] == "timeout" and item["empty"]
+        assert item["returncode"] == -9 and item["reaped"] and not item["proc_exists"]
+        assert item["child"]["uid"] != 0 and item["child"]["no_new_privs"] == 1
+        assert item["child"]["capabilities"] == {"CapEff": 0, "CapPrm": 0, "CapAmb": 0}
+        assert item["elapsed"] < 2.0
+
+
+def test_restrict_child_limits_and_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    limits: dict[int, tuple[int, int]] = {}
+    monkeypatch.setattr(documents.resource, "setrlimit", lambda kind, values: limits.update({kind: values}))
+    monkeypatch.setattr(documents.os, "geteuid", lambda: 0)
+    changed: list[tuple[str, Any]] = []
+    monkeypatch.setattr(documents.os, "setgroups", lambda values: changed.append(("groups", values)))
+    monkeypatch.setattr(documents.os, "setgid", lambda value: changed.append(("gid", value)))
+    monkeypatch.setattr(documents.os, "setuid", lambda value: changed.append(("uid", value)))
+    documents._restrict_child(1234)
+    assert limits[resource.RLIMIT_CPU] == (10, 10) and limits[resource.RLIMIT_FSIZE] == (1234, 1234)
+    assert limits[resource.RLIMIT_CORE] == (0, 0)
+    assert [name for name, _value in changed] == ["groups", "gid", "uid"]
+
+
+def test_pdfinfo_failed_and_ocr_extract_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    monkeypatch.setattr(documents.shutil, "which", lambda name: f"/usr/bin/{name}")
+    with documents._parser_workspace(workspace) as (directory, descriptor):
+        monkeypatch.setattr(documents, "_run_parser", lambda *_args, **_kwargs: ("failed", b"metadata"))
+        assert documents._pdf_page_count(b"%PDF", directory, descriptor, 1e20) is None
+    _fake_ocr(monkeypatch)
+    original = documents._run_parser
+
+    def parser(argv: list[str], *args: Any, **kwargs: Any) -> tuple[str, bytes]:
+        if argv[0].endswith("tesseract") and "--list-langs" not in argv:
+            return "failed", b""
+        return original(argv, *args, **kwargs)
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+    assert documents.ocr_pages(b"%PDF", [1], workspace)["error"] == "ocr_extract_failed"
+    assert list(workspace.iterdir()) == []
+
+
+@pytest.mark.parametrize("remaining", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_invalid_remaining_budget_fails_before_starting_parser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, remaining: float
+) -> None:
+    def forbidden(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("A depleted budget must not launch a parser")
+
+    monkeypatch.setattr(documents, "_run_parser", forbidden)
+    workspace = _workspace(tmp_path)
+    assert (
+        documents.extract_content(b"%PDF synthetic", "application/pdf", "", workspace, timeout_seconds=remaining)[
+            "error"
+        ]
+        == "pdf_timeout"
+    )
+    assert documents.ocr_pages(b"%PDF synthetic", [1], workspace, timeout_seconds=remaining)["error"] == "ocr_timeout"
+    assert (
+        documents.extract_content(b"<p>public</p>", "text/html", "", workspace, timeout_seconds=remaining)["error"]
+        == "document_timeout"
+    )
+    assert list(workspace.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["pdf", "ocr"])
+def test_small_remaining_budget_kills_real_parser_and_cleans_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
+) -> None:
+    workspace = _workspace(tmp_path)
+    monkeypatch.setattr(documents.shutil, "which", lambda name: None if name == "pdfinfo" else f"/usr/bin/{name}")
+    original = documents._run_parser
+    timeouts: list[float] = []
+
+    def slow_parser(_argv: list[str], *args: Any, **kwargs: Any) -> tuple[str, bytes]:
+        timeouts.append(kwargs["timeout"])
+        return original([_PYTHON, "-c", "import time;time.sleep(10)"], *args, **kwargs)
+
+    monkeypatch.setattr(documents, "_run_parser", slow_parser)
+    started = time.monotonic()
+    if kind == "pdf":
+        result = documents.extract_content(b"%PDF synthetic", "application/pdf", "", workspace, timeout_seconds=0.05)
+    else:
+        result = documents.ocr_pages(b"%PDF synthetic", [1], workspace, timeout_seconds=0.05)
+    assert not result["ok"] and result["error"] == f"{kind}_timeout"
+    assert timeouts and 0 < timeouts[0] <= 0.05
+    assert time.monotonic() - started < 1.0 and list(workspace.iterdir()) == []
+
+
+def test_requested_budget_cannot_extend_default_parser_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_pdf(monkeypatch, b"text\f")
+    original = documents._run_parser
+    timeouts: list[float] = []
+
+    def parser(*args: Any, **kwargs: Any) -> tuple[str, bytes]:
+        timeouts.append(kwargs["timeout"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+    result = documents.extract_content(
+        b"%PDF synthetic", "application/pdf", "", _workspace(tmp_path), timeout_seconds=1000
+    )
+    assert result["ok"] and 0 < timeouts[0] <= documents.PDF_TIMEOUT_SECONDS
+
+
+def test_pdf_metadata_and_text_share_one_remaining_budget(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(documents.shutil, "which", lambda name: f"/usr/bin/{name}")
+    clock = [100.0]
+    monkeypatch.setattr(documents.time, "monotonic", lambda: clock[0])
+    budgets: list[float] = []
+
+    def parser(argv: list[str], *_args: Any, **kwargs: Any) -> tuple[str, bytes]:
+        budgets.append(kwargs["timeout"])
+        if argv[0].endswith("pdfinfo"):
+            clock[0] += 0.08
+            return "ok", b"Pages: 1\n"
+        return "ok", b"public text\f"
+
+    monkeypatch.setattr(documents, "_run_parser", parser)
+    result = documents.extract_content(
+        b"%PDF synthetic", "application/pdf", "", _workspace(tmp_path), timeout_seconds=0.1
+    )
+    assert result["ok"] and budgets == pytest.approx([0.1, 0.02])
+
+
+def test_html_positive_budget_stops_real_nested_document(tmp_path: Path) -> None:
+    body = ("<div>" * 450 + "<span>PUBLIC</span>" * 60000 + "</div>" * 450).encode()
+    assert len(body) < documents.MAX_HTML_BYTES
+    started = time.monotonic()
+    result = documents.extract_content(body, "text/html", "", tmp_path, timeout_seconds=0.02)
+    assert result["error"] == "document_timeout" and not result["ok"] and result["pages"] == []
+    assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.parametrize("stage", ["decode", "feed", "close", "normalize"])
+def test_html_one_deadline_includes_decode_feed_eof_and_normalization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage: str
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(documents.time, "monotonic", lambda: clock[0])
+    original_feed = documents._VisibleHTML.feed
+    original_close = documents._VisibleHTML.close
+    original_sub = documents.re.sub
+    events: list[str] = []
+
+    def feed(parser: documents._VisibleHTML, data: str) -> None:
+        events.append("feed")
+        original_feed(parser, data)
+        if stage == "feed":
+            clock[0] += 0.2
+
+    def close(parser: documents._VisibleHTML) -> None:
+        events.append("close")
+        if stage == "close":
+            clock[0] += 0.2
+        original_close(parser)
+
+    def sub(pattern: str, replacement: str, text: str) -> str:
+        if pattern == r"[ \t]+":
+            events.append("normalize")
+            if stage == "normalize":
+                clock[0] += 0.2
+        return original_sub(pattern, replacement, text)
+
+    class Body(bytes):
+        def decode(self, *args: Any, **kwargs: Any) -> str:
+            decoded = super().decode(*args, **kwargs)
+            if stage == "decode":
+                clock[0] += 0.2
+            return decoded
+
+    monkeypatch.setattr(documents._VisibleHTML, "feed", feed)
+    monkeypatch.setattr(documents._VisibleHTML, "close", close)
+    monkeypatch.setattr(documents.re, "sub", sub)
+    result = documents.extract_content(
+        Body(b"<textarea>Public &amp; EOF"), "text/html", "", tmp_path, timeout_seconds=0.1
+    )
+    assert result["error"] == "document_timeout" and not result["ok"] and result["pages"] == []
+    assert ("feed" in events) is (stage != "decode")
+    assert ("close" in events) is (stage in {"close", "normalize"})
+    assert ("normalize" in events) is (stage == "normalize")
+
+
+@pytest.mark.parametrize("chunk_chars", [1, 7, 4096])
+def test_html_incremental_budgeted_feed_preserves_one_entity_decode_and_eof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, chunk_chars: int
+) -> None:
+    monkeypatch.setattr(documents, "_HTML_FEED_CHARS", chunk_chars)
+    body = (
+        b"<head><title>Public &amp;amp; title</title></head><p>Visible &amp;amp; body</p>"
+        b"<textarea>Literal &amp;amp; &lt;a&gt;1HGCM82673A000000&lt;/a&gt;"
+    )
+    result = documents.extract_content(body, "text/html", "", tmp_path, timeout_seconds=1.0)
+    assert result["ok"] and result["title"] == "Public &amp; title"
+    assert result["pages"][0]["text"] == "Visible &amp; body\nLiteral &amp; <a>1HGCM82673A000000</a>"
+
+
+def test_real_pdf_and_ocr_with_service_uid_gid_capabilities_only() -> None:
+    """Reproduce the worker's capability set without changing any service."""
+    if os.geteuid() != 0 or not shutil.which("setpriv"):
+        pytest.skip("capability bounding test requires root and setpriv")
+    if not all(shutil.which(name) for name in ("pdftotext", "pdftoppm", "tesseract")):
+        pytest.skip("system PDF/OCR tools are not installed")
+    if not Path("/dev/shm").is_dir():
+        pytest.skip("private tmpfs workspace is unavailable")
+    script = r'''
+import json, os, re, stat, sys, tempfile
+from pathlib import Path
+from autostop_manager import j1_vin_documents as documents
+body = sys.stdin.buffer.read()
+status = Path('/proc/self/status').read_text()
+capabilities = {name: int(re.search(r'^' + name + r':\s*([0-9a-f]+)', status, re.M).group(1), 16)
+                for name in ('CapBnd', 'CapEff', 'CapAmb')}
+probe = """import json,os
+blocked=False
+try:
+ os.mkdir('child-owned-cache',0o700)
+except PermissionError:
+ blocked=True
+capabilities={line.split(':')[0]:int(line.split()[1],16)
+              for line in open('/proc/self/status') if line.startswith(('CapEff:', 'CapPrm:', 'CapAmb:'))}
+print(json.dumps({'uid':os.geteuid(),'write_blocked':blocked,'capabilities':capabilities}))
+"""
+with tempfile.TemporaryDirectory(prefix='j1-vin-low-cap-', dir='/dev/shm') as directory:
+    workspace = Path(directory)
+    workspace.chmod(0o700)
+    with documents._parser_workspace(workspace) as (parser_dir, descriptor):
+        probe_status, probe_output = documents._run_parser(
+            [str(Path(sys.executable).resolve()), '-I', '-c', probe], parser_dir, descriptor,
+            timeout=3, output_limit=4096)
+    decoded = documents.extract_content(body, 'application/pdf', 'https://example.org/synthetic.pdf', workspace)
+    recognized = documents.ocr_pages(body, [456], workspace)
+    print(json.dumps({
+        'capabilities': capabilities, 'probe_status': probe_status,
+        'child': json.loads(probe_output) if probe_status == 'ok' else None,
+        'pdf_ok': decoded.get('ok'), 'pdf_error': decoded.get('error'),
+        'page_count': decoded.get('page_count'),
+        'late_page_found': decoded.get('ok') and len(decoded['pages']) == 456
+                           and 'SYNTHETIC' in decoded['pages'][455]['text'],
+        'ocr_ok': recognized.get('ok'), 'ocr_error': recognized.get('error'),
+        'ocr_page': recognized['pages'][0]['page'] if recognized.get('pages') else None,
+        'ocr_text_found': any('PUBLIC DOCUMENT' in page['text'] for page in recognized.get('pages', [])),
+        'workspace_mode': stat.S_IMODE(workspace.stat().st_mode),
+        'workspace_owner': workspace.stat().st_uid, 'remaining_files': len(list(workspace.iterdir()))
+    }))
+'''
+    result = subprocess.run(
+        [
+            "setpriv",
+            "--bounding-set=-all,+setuid,+setgid",
+            "--inh-caps=-all,+setuid,+setgid",
+            "--ambient-caps=-all,+setuid,+setgid",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        input=_pdf(456),
+        capture_output=True,
+        timeout=30,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "PYTHONPATH": str(Path(documents.__file__).resolve().parents[1]),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONSAFEPATH": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    report = json.loads(result.stdout)
+    assert report["capabilities"] == {"CapBnd": 0xC0, "CapEff": 0xC0, "CapAmb": 0xC0}
+    assert report["probe_status"] == "ok" and report["child"]["uid"] != 0 and report["child"]["write_blocked"]
+    assert report["child"]["capabilities"] == {"CapEff": 0, "CapPrm": 0, "CapAmb": 0}
+    assert report["pdf_ok"] and report["page_count"] == 456 and report["late_page_found"], report
+    if report["ocr_error"] == "ocr_languages_unavailable":
+        pytest.skip("rus+eng language data is not installed")
+    assert report["ocr_ok"] and report["ocr_page"] == 456 and report["ocr_text_found"], report
+    assert report["workspace_mode"] == 0o700 and report["workspace_owner"] == 0 and report["remaining_files"] == 0

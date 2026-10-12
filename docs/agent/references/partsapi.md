@@ -1,12 +1,12 @@
 # PartsAPI: контракт магазина
 
-Сценарий: [E2](../modules/E2.md). Текущий поддерживаемый контракт основан на owner export `partsapi.ru/account/shop` от 2026-09-25: 43 метода. Private export, keys, sample URLs и customer responses не помещаются в Git/docs. Код: [partsapi_methods.py](../../../autostop_manager/partsapi_methods.py), [catalog_clients.py](../../../autostop_manager/catalog_clients.py).
+Карта задач: [E1](../modules/E1.md); 43 операции распределены по профильным подмодулям; exact invocation указан в едином registry. Текущий поддерживаемый контракт основан на owner export `partsapi.ru/account/shop` от 2026-09-25: 43 метода. Private export, keys, sample URLs и customer responses не помещаются в Git/docs. Код: [partsapi_methods.py](../../../autostop_manager/partsapi_methods.py), [catalog_clients.py](../../../autostop_manager/catalog_clients.py).
 
 ## Доступ и параметры
 
 GET `https://api.partsapi.ru`: `method`, `key` и поля точного метода. Для каждого метода используется свой `PARTSAPI_*_KEY`; точное сопоставление имён — `PARTSAPI_METHOD_KEY_ENV_NAMES` в catalog_clients.py. Общий исторический `PARTSAPI_KEY` доступа не даёт. Новый `getProductGroupsByBrandNumber` использует `PARTSAPI_GET_PRODUCT_GROUPS_BY_BRAND_NUMBER_KEY`. Keys opaque: экспорт пишет String(30), примеры имеют 32 символа; не обрезай значения. Test quota экспорта — 50 вызовов/сутки/device на key; не делай bulk calls и автоматический retry после quota rejection.
 
-Configured/status/dry_run подтверждают только конфигурацию, не live authorization. Экспорт содержит таблицы полей, не гарантированный полный response envelope. Сохраняй регистр параметров: VINdecode.lang — двухбуквенный код (ru), TecDoc lang/LANG — числовой (16 русский, 4 английский), где это определено. Generic methods принимают только документированные scalar parameters; friendly operations могут заполнять документированные defaults.
+Configured/status/dry_run подтверждают только конфигурацию, не live authorization. Экспорт содержит таблицы полей, не гарантированный полный response envelope. Официальная гарантия точной VIN-комплектации и влияние тестового режима на точность не подтверждены; отдельная политика группового ответа VINdecode основана на уточнении владельца ниже. Сохраняй регистр параметров: VINdecode.lang — двухбуквенный код (ru), TecDoc lang/LANG — числовой (16 русский, 4 английский), где это определено. Generic methods принимают только документированные scalar parameters; friendly operations могут заполнять документированные defaults.
 
 ## Все 43 метода
 
@@ -27,29 +27,76 @@ Configured/status/dry_run подтверждают только конфигур
 
 ## VIN → кандидат
 
-VINdecode → сверка VIN/вариантов и независимое согласование автомобиля → однозначный carId и vehicle_type → getSearchTree → strId именно этого дерева → getArticles. CarType не гарантирован VINdecode: нужен `PC`, `CV` или `Motorcycle`; неизвестный type останавливает resolver до tree lookup. Перед подтверждением сверяй двигатель, выпуск, рынок, options, side/axle/position, OEM и replacement chain. TecDoc article — кандидат.
+VINdecode → проверка привязки ответа; запасной маршрут — getMakes → getModels → getCars, при необходимости getEngine. Для выбора модификации нужны независимые сведения клиента, фотографий или CRM о двигателе, мощности, выпуске, КПП и приводе. Данные VINdecode/getCars/getEngine одного каталога не становятся независимыми свидетельствами друг для друга. Несколько подходящих вариантов требуют конкретного параметра для уточнения, а не выбора первого. Однозначный carId и vehicle_type → getSearchTree → strId именно этого дерева → getArticles. Нужен `PC`, `CV` или `Motorcycle`; неизвестный type закрывает tree lookup. Перед подтверждением сверяй рынок, options, side/axle/position, OEM и replacement chain. TecDoc article — кандидат, не подтверждённая применимость.
 
-`identifier` и `provider_parameters.vin` нормализуются одинаково по регистру и пробелам. Разные значения отклоняются как `invalid_input` до HTTP, включая dry-run; при передаче только `provider_parameters.vin` он становится исходным VIN. Идентификатор в отправке, проверке ответа и метаданных один.
+`resolve_vin_oem_parts.crm_context` хранит независимые факты, включая production_year/date, modification, displacement_cc, power_kw/hp и engine_type. `tecdoc_vehicle_fallback` возвращает status, selected_profile, vehicle_profiles, missing_fields и conflicting_fields. getCars вызывается как `operation="getCars"` с точными `provider_parameters`. `max_live_calls` общий для всех методов; полный маршрут с VINdecode и деталями требует минимум 6 вызовов, с getEngine — 7, вместо прежнего default 3.
+
+`identifier` и `provider_parameters.vin` нормализуются одинаково по регистру и пробелам. Разные значения отклоняются как `invalid_input` до HTTP, включая dry-run; при передаче только `provider_parameters.vin` он становится исходным VIN. Исходный VIN сохраняется отдельно от возвращаемого каталогом; каталожный VIN не заменяет его и не устанавливает год или комплектацию машины. Совпадение первых восьми символов не подтверждает точную идентификацию.
 
 | Результат `vin_decode` | `ok` | `identifier_matches_request` | Действие |
 | --- | --- | --- | --- |
 | `success` | true | true | Продолжить проверки подбора |
-| `identifier_unverified` | true | null | Только кандидаты после независимого согласования автомобиля |
-| `identifier_mismatch` | false | false | Остановить подбор; `failure_class=provider_identifier_mismatch`, без автоматического повтора |
+| `group_match` | true | false | Сохранить PartsAPI каталожного кандидата с `binding_kind=provider_group_reference`; точная VIN-привязка не установлена |
+| `identifier_unverified` | true | null | Закрыть точную расшифровку этим ответом; возможен независимый запасной маршрут |
+| `identifier_mismatch` | false | false | Противоречивые VIN отклонить; другой одиночный корректный VIN допускается только по групповой политике ниже |
 
-VIN каждой карточки проверяется вместе с VIN её родительских оболочек; все варианты регистра поля учитываются. Эхо запроса и соседние ветви не подтверждают карточку. Чужой полный VIN в любой найденной карточке блокирует весь ответ. Пустой, частичный или маскированный VIN сам совпадение не подтверждает; несколько модификаций нельзя автоматически свести к первой.
+Исключение относится только к PartsAPI `VINdecode` (`operation="vin_decode"`): по прямому пояснению владельца метод может намеренно вернуть VIN представителя группы той же комплектации. Основание политики — уточнение владельца (`semantics_basis=owner_clarification`), не официальное подтверждение PartsAPI. Для распознанного непротиворечивого группового ответа сохраняются запрошенный VIN и буквальное `identifier_matches_request=false`; outcome — `group_match`, `binding_kind=provider_group_reference`, `identifier_semantics=group_representative`. Профиль имеет `requires_exact_identifier_confirmation=true`, `catalog_candidate_only=true`, `independent_vehicle_confirmation=false`, `fitment_confirmed=false`; provenance provider и primary_lineage — `partsapi_ru`.
+
+VIN представителя не подменяет исходный VIN и не подтверждает индивидуальные заводские даты, оснащение, точную спецификацию или VIN/OEM fitment. Маркер группы не снимает конфликты характеристик и не усиливает независимость источника. Подборщик разрешает только ограниченный каталожный кандидат; конфликт с независимыми сведениями блокирует этот маршрут.
+
+Для остальных VIN-методов чужой VIN по-прежнему возвращает `identifier_mismatch`/`provider_identifier_mismatch` и отклоняется. Исключение нельзя переносить на `decodeVINus`, vPIC, другие методы, неподтверждённую оболочку или эхо запроса.
+
+VIN каждой карточки проверяется вместе с VIN её родительских оболочек; все варианты регистра поля учитываются. Эхо запроса и соседние ветви не подтверждают карточку. Иной полный VIN не даёт точной расшифровки запрошенного автомобиля; допустимый групповой кандидат ограничен исключением VINdecode выше. Само несовпадение не доказывает конфликт автомобиля. Пустой, частичный или маскированный VIN также не подтверждает совпадение; характеристики отвергнутого ответа не переносятся в согласованный профиль.
 
 Характеристики автомобиля из родительской оболочки сохраняются при сверке вложенной, даже если оболочка содержит только одно поле. Противоречие или другой carId нельзя скрыть выбором дочерней карточки. Поддерживаемые альтернативные имена полей берутся из той же схемы, что и нормализованный профиль; metadata и эхо запроса, включая requestParams/requestParameters, не являются карточками автомобиля.
 
-Совпадающий VIN только во вложенном фрагменте не подтверждает родительскую карточку; чужой VIN в таком фрагменте остаётся причиной остановки. Противоречивые carId/typeNumber/TYPE_ID, carType/CAR_TYPE или kp/kpp и превышение глубины разбора останавливают весь ответ как `unparsed_response`, без публикации частично разобранного успеха. Согласованные обозначения КПП сохраняют все сведения, включая число передач.
+Совпадающий VIN только во вложенном фрагменте не подтверждает родительскую карточку; чужой VIN в таком фрагменте закрывает точное использование ответа, в том числе при `group_match`. Противоречивые carId/typeNumber/TYPE_ID, carType/CAR_TYPE или kp/kpp и превышение глубины разбора отклоняют весь ответ как `unparsed_response`, без публикации частичного успеха. Согласованные обозначения КПП сохраняют число передач.
 
-Подборщик и benchmark используют одну сверку характеристик. Известный конфликт двигателя, КПП, марки, модели или явно указанного рынка и год вне распознанного диапазона выпуска останавливают поиск. Границы года принимаются в форматах YYYY, YYYYMM, YYYY-MM и YYYY/MM; отсутствующая или неразобранная граница не считается противоречием. Географические WMI-подсказки и предположения локальных правил не устанавливают точный двигатель и рынок конкретного автомобиля. Для марки, модели, КПП, года и двигателя сверяются все значения CRM и vPIC независимо от порядка источников; для рынка — явно указанные значения CRM. Противоречие между достоверными значениями блокирует подбор, даже если PartsAPI соответствующее поле не вернул. При отсутствии этих источников сохраняется сравнение с исходным профилем, кроме явно помеченных предположений о двигателе и рынке. Диапазон выпуска сверяется с выбранным достоверным годом, а не с более ранней подсказкой.
+Подборщик и benchmark используют одну сверку характеристик. Реальный конфликт двигателя, мощности, КПП, привода, марки, модели, модификации или явно указанного рынка закрывает точный подбор. Значения клиента/CRM и привязанных независимых источников сверяются независимо от порядка; спорные характеристики нельзя восстановить данными того же каталога. WMI и локальные предположения не устанавливают точный двигатель и рынок. Диапазон выпуска сверяется с годом/датой производства; модельный год хранится отдельно и не подменяет выпуск.
 
-Ошибка провайдера внутри известных оболочек data/result/array/items возвращает `provider_rejected` и останавливает подбор без повтора. Ошибка в metadata не является результатом операции.
+getCars нормализует идентификаторы, названия модификаций, объём, мощность, тип двигателя и границы выпуска. Поддерживаются YYYY, YYYYMM, YYYY-MM, YYYY/MM и HTTP/RFC-даты вида `Tue, 01 May 2018 00:00:00 GMT`; пустая граница открыта, неразобранная не подтверждает совпадение или противоречие. Отсутствующий существенный параметр остаётся поводом для уточнения.
 
-Без подтверждённого VIN выставляется `requires_exact_identifier_confirmation=true`. Поиск кандидатов требует одного профиля, совпадения марки/модели с независимым контекстом, confidence medium/high, отсутствия выявленных противоречий, положительного carId и согласованного carType. `vin_fitment_confirmed=false`, ручная проверка обязательна, автоматическая запись в CRM запрещена. Transport, auth, quota, empty и unparsed сохраняют отдельные исходы.
+Фактическая uppercase-форма getCars (`CAR_ID`, `CAR_NAME`, `MAKE_NAME`, `MODEL_NAME`,
+`ENGINE_TYPE`, `POWER_KW`, `POWER_PS`, `YEAR_START`, `YEAR_END`) нормализуется вместе со
+старыми aliases. `CAPACITY` вида `1998/2.0 l` содержит отдельные значения см³ и литров;
+противоречие со старыми полями не скрывается. Несколько модификаций остаются кандидатами.
 
-`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. `docs/agent/partsapi_category_index.json` хранит непроверенные числовые cat hints старого getPartsbyVIN только как legacy fixture, не активный query path.
+getEngine (`operation="engine_info"`) нормализует числовые характеристики в числа;
+диапазоны сохраняются, а не заменяются первым значением или средней величиной.
+`COOLING_TYPE` и `CYLINDER_CONSTRUCTION` доступны как `cooling_type` и `cylinder_construction`
+(например, охлаждение и DOHC). Значения bore/stroke/compression остаются в исходном payload
+при `detail=full`: без догадок о масштабе и единицах и без выдуманных нормализованных значений.
+
+getArticle выдаёт `article_candidates[].oe_references` только из `OEM_NUMBERS` и
+`article_candidates[].criteria` из `ARTICLE_CRITERIA`. Бренд, номер, подпись и единицы
+сохраняются; номер самой aftermarket-статьи не становится OEM. OE-reference и размеры
+не подтверждают VIN-применимость, список номеров не задаёт направление замены.
+
+decodeVINus отделяет transport success от полноты и привязки VIN. Распознанный ответ
+NHTSA/vPIC сохраняет это происхождение; другая неизвестная форма остаётся unknown.
+Поля `Error Code`/`Error Text` поддерживаются вместе с `ErrorCode`/`ErrorText`;
+противоречащие aliases отклоняются. Диагностические коды и признаки наличия текста
+доступны в summary без сырого provider text. Ответ только с диагностикой не даёт
+фактов автомобиля; upstream без подтверждённой схемы/маркера остаётся unknown.
+PartsAPI transport и vPIC с одной первичной базой не дают два независимых подтверждения.
+Диагностика и отсутствующая модификация сохраняют partial; чужой VIN отклоняется.
+
+Facade `type_id` передавай строкой, например `"42"`; числовые provider IDs в generic
+`provider_parameters` следуют своей схеме. `catalog_provider_status.stage` допускает
+только identity, oem_catalog, catalog_cross, aftermarket_catalog, procurement_price,
+market_price, market_listing либо null. Значение `oem` недопустимо.
+
+`detail="summary"` у PartsAPI и provider status сокращает показанные коллекции до25
+элементов с общим количеством и признаком обрезки, после всех проверок полного ответа.
+Сырой payload не дублируется; для generic методов остаётся ограниченный preview.
+`detail="full"` — совместимый default. Новые показатели выполнения не подтверждают
+авторизацию провайдера или точную применимость сами по себе.
+
+Ошибка провайдера внутри известных оболочек data/result/array/items возвращает `provider_rejected` без автоматического повтора; ошибка в metadata не является результатом операции. Недоступность одного метода не доказывает отсутствие автомобиля или конфликт его характеристик; запасной маршрут требует доступности собственных методов.
+
+Без подтверждённого VIN выставляется `requires_exact_identifier_confirmation=true`. Поиск кандидатов требует однозначной модификации, независимого контекста, отсутствия выявленных противоречий, положительного carId и согласованного carType. `vin_fitment_confirmed=false`, ручная проверка обязательна, автоматическая запись в CRM запрещена. Transport, auth, quota, empty и unparsed сохраняют отдельные исходы.
+
+`VINdecodeOE`, `getPartsbyVIN`, `getOEApplicability` в export отсутствуют и не входят в поддерживаемый surface. Старые credentials/public pages не подтверждают доступ. [Исторический category fixture](../partsapi_category_index.json) хранит непроверенные числовые cat hints старого getPartsbyVIN, не активный query path. Его диагностические поиск и проверка не разрешают использовать эти категории в текущем 43-методном контракте.
 
 GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make ID; последующие model/motor IDs — из того же Autonorms catalog. getArticle требует ART_NUM/SUP_ID, media/crosses/criteria — ART_ID. Для getEngine, getPassengerCarInfo и части maintenance методов response tables неполны: parsing provisional до разрешённого live ответа. Generic payload сам не доказывает OEM/fitment.
 
@@ -57,4 +104,4 @@ GetNormsModels.makeNameSEO берётся из GetNormsMakes, не TecDoc make I
 
 ## Проверки исходников
 
-CI и release gates требуют общее покрытие проекта не ниже 82% и отдельное покрытие ветвей E2 не ниже 82%. Для E2 суммируются покрытые и все ветви `catalog_clients.py`, `vin_oem_resolver.py`, `vin_parts_benchmark.py` из полного прогона тестов. Проверка — `scripts/check-e2-branch-coverage.py`; отсутствие данных по файлу или измерения ветвей останавливает gate.
+CI и release gates требуют общее покрытие проекта не ниже 82% и отдельное покрытие каталожных ветвей не ниже 82%. Этот gate сохраняет историческое имя E2 и скрипт `scripts/check-e2-branch-coverage.py`; он суммирует покрытые и все ветви `catalog_clients.py`, `vin_oem_resolver.py`, `vin_parts_benchmark.py` из полного прогона тестов, а не только инструменты нынешнего модуля E2. Отсутствие данных по файлу или измерения ветвей останавливает gate.

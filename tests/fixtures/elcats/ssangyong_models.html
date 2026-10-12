@@ -1,0 +1,18 @@
+<!-- Minimal cleaned public navigation sample, 2026-10-09; no account/VIN/state fields. -->
+<html><head><title>SsangYong - электронный каталог автозапчастей</title></head><body>
+<script>
+function submit(modelId, title) {
+ var form = document.getElementById('GetForm');
+ form.innerHTML = "<input type=\"hidden\" name=\"Model\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"Title\">";
+ document.forms[1].Model.value = modelId;
+ document.forms[1].Title.value = title;
+ document.forms[1].action = "Group.aspx";
+ document.forms[1].submit();
+}
+</script>
+<form method="get" id="GetForm"></form>
+<a href="javascript:submit('A922235A-0C56-4344-8B2B-853BD0515DF1','ACTYON')">ACTYON</a>
+<a href="javascript:submit('F10B0F5A-895B-4A3F-8377-71B48104CD37','KYRON')">KYRON</a>
+<a href="javascript:submit('76E6F7D3-AF28-433D-A81A-9BE3A48CE3F0','TIVOLI')">TIVOLI</a>
+</body></html>

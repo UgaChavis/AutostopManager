@@ -171,7 +171,7 @@ def test_benchmark_blocks_vin_decode_identifier_mismatch(monkeypatch):
     ("matches", "outcome", "confirmation", "allowed"),
     [
         (True, "success", False, True),
-        (None, "identifier_unverified", True, True),
+        (None, "identifier_unverified", True, False),
         (None, "success", True, False),
         (None, "identifier_unverified", False, False),
         (False, "identifier_mismatch", True, False),
@@ -636,10 +636,11 @@ def test_benchmark_known_characteristics_guard_candidate_readiness(
     )
     digest = result["items"][0]["identity"]
     agreement = digest["cross_source_agreement"]
-    can_read = not conflict and bool(
+    characteristics_agree = not conflict and bool(
         profiles[0].get("make") and (profiles[0].get("model") or profiles[0].get("model_family"))
     )
-    assert agreement["status"] == ("conflict" if conflict else "matched" if can_read else "partial_match")
+    can_read = verified and characteristics_agree
+    assert agreement["status"] == ("conflict" if conflict else "matched" if characteristics_agree else "partial_match")
     assert [item["field"] for item in agreement["conflicting_fields"]] == ([conflict] if conflict else [])
     if not fields and field_sources:
         assert "engine" not in agreement["matched_fields"]
@@ -817,7 +818,18 @@ def test_benchmark_missing_writeback_permission_stays_false(monkeypatch):
     assert result["summary"]["ready_for_crm_writeback_count"] == 0
 
 
-def test_benchmark_provider_plan_honors_resolver_identifier_mismatch(monkeypatch):
+@pytest.mark.parametrize(
+    ("source_status", "independent_ready"),
+    [
+        ("identifier_mismatch", True),
+        ("ambiguous_vehicle_modification", True),
+        ("conflict", False),
+        ("unverified_conflict", True),
+    ],
+)
+def test_benchmark_provider_plan_separates_resolver_source_error_from_real_vehicle_conflict(
+    monkeypatch, source_status, independent_ready
+):
     from autostop_manager import vin_oem_resolver
 
     identity = _medium_identity()
@@ -833,20 +845,27 @@ def test_benchmark_provider_plan_honors_resolver_identifier_mismatch(monkeypatch
         vin_oem_resolver, "decode_vehicle_identity", lambda *_a, **_k: pytest.fail("Benchmark repeated E4 decoding")
     )
     calls = []
+    profiles = [
+        {
+            "make": "HONDA",
+            "model": "Civic" if source_status in {"conflict", "unverified_conflict"} else "Accord",
+            "tecdoc_car_id": "9877",
+            "vehicle_type": "PC",
+            "identifier_matches_request": False
+            if source_status == "identifier_mismatch"
+            else None
+            if source_status == "unverified_conflict"
+            else True,
+        }
+    ]
+    if source_status == "ambiguous_vehicle_modification":
+        profiles.append({**profiles[0], "tecdoc_car_id": "9878"})
     monkeypatch.setattr(
         vin_oem_resolver,
         "partsapi_catalog_lookup",
         _fake_lookup(
             calls,
-            profiles=[
-                {
-                    "make": "HONDA",
-                    "model": "Accord",
-                    "tecdoc_car_id": "9877",
-                    "vehicle_type": "PC",
-                    "identifier_matches_request": False,
-                }
-            ],
+            profiles=profiles,
         ),
     )
     result = benchmark_vin_parts_lookup(
@@ -860,9 +879,13 @@ def test_benchmark_provider_plan_honors_resolver_identifier_mismatch(monkeypatch
     )
     row = result["items"][0]
     assert [call["operation"] for call in calls] == ["vin_decode"]
-    assert row["identity"]["cross_source_agreement"]["status"] == "identifier_mismatch"
-    assert row["identity"]["ready_for_vehicle_lookup"] is False
-    assert row["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert row["identity"]["cross_source_agreement"]["status"] == (
+        "conflict" if source_status == "unverified_conflict" else source_status
+    )
+    for flag in ["ready_for_vehicle_lookup", "ready_for_oem_lookup", "ready_for_oem_candidate_lookup"]:
+        assert row["identity"][flag] is independent_ready
+    assert row["identity"]["ready_for_tecdoc_candidate_lookup"] is False
+    assert row["live_capability"]["identity_ready_for_vehicle_lookup"] is independent_ready
     assert row["live_capability"]["identity_ready_for_family_lookup"] is True
     assert row["live_capability"]["identity_ready_for_crm_writeback"] is False
 

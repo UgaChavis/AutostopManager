@@ -8,7 +8,9 @@ import re
 from typing import Any, Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from .bounded_http_read import urlopen as bounded_urlopen
 
 from .vin_sources import (
     AMAYAMA_SOURCE_ID,
@@ -18,6 +20,7 @@ from .vin_sources import (
     normalize_make,
     sources_for_inputs,
     sources_for_make,
+    source_supports_make,
 )
 
 LookupKind = Literal["vin", "vin_partial", "frame_number", "market_code", "unknown"]
@@ -336,6 +339,10 @@ _VPIC_BASE_URL = "https://vpic.nhtsa.dot.gov/api/vehicles/"
 MAX_VPIC_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
+def urlopen(request: Request, timeout: float = 8.0) -> Any:
+    return bounded_urlopen(request, timeout=timeout, maximum=MAX_VPIC_RESPONSE_BYTES, follow_redirects=True)
+
+
 def _finite_number(value: int | float) -> bool:
     try:
         return math.isfinite(value)
@@ -390,6 +397,10 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
 
 
 def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
+        return "provider_busy", False
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
+        return "provider_executor_unavailable", False
     if isinstance(exc, HTTPError):
         if int(exc.code) == 429:
             return "provider_throttled", True
@@ -458,6 +469,16 @@ def _parse_vpic_row(row: dict[str, Any], vin: str, *, source: str, partial: bool
     if not any(vehicle.get(key) for key in ("make", "model", "manufacturer", "manufacturername", "vehicletype")):
         result = _provider_failure("empty_result", source=source)
         result["identifier_binding"] = binding
+        result["error_codes"] = list(
+            dict.fromkeys(
+                str(int(token))
+                for token in re.split(r"[,;\s]+", "" if error_code is None else str(error_code))
+                if re.fullmatch(r"[0-9]{1,4}", token)
+            )
+        )
+        result["has_error_text"] = bool(error_text)
+        result["diagnostics_status"] = "reported" if error_code not in (None, "") else "missing"
+        result["coverage"] = "partial_or_unsupported"
         return result
     clean = error_code in ("0", 0)
     return {
@@ -515,6 +536,28 @@ def _wmi_request(wmi: str) -> str:
     return f"{_VPIC_BASE_URL}DecodeWMI/{quote(normalized)}?format=json"
 
 
+def _wmi_identifier_binding(payload: dict[str, Any], row: dict[str, Any], wmi: str) -> dict[str, Any]:
+    echo = row.get("WMI")
+    binding = {"status": "missing", "verified": False}
+    if isinstance(echo, str) and echo.strip():
+        matches = normalize_vin(echo) == wmi
+        binding = {"status": "exact" if matches else "mismatch", "verified": matches}
+    if "SearchCriteria" in payload:
+        criteria = payload["SearchCriteria"]
+        matched = (
+            re.fullmatch(r"WMI:[ \t]*([A-HJ-NPR-Z0-9]{3}(?:[A-HJ-NPR-Z0-9]{3})?)", criteria.strip(), re.IGNORECASE)
+            if isinstance(criteria, str)
+            else None
+        )
+        if matched is None:
+            return {"status": "unverified", "verified": False}
+        if matched[1].upper() != wmi:
+            return {"status": "mismatch", "verified": False}
+        if "WMI" not in row:
+            return {"status": "exact", "verified": True}
+    return binding
+
+
 def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
     _validate_vpic_payload(payload)
     rows = payload["Results"]
@@ -523,14 +566,10 @@ def _parse_wmi_payload(payload: dict[str, Any], wmi: str) -> dict[str, Any]:
     if len(rows) != 1:
         return _provider_failure("adapter_malformed_payload", source="NHTSA vPIC WMI")
     row = rows[0]
-    echo = row.get("WMI")
-    binding = {"status": "missing", "verified": False}
-    if isinstance(echo, str) and echo.strip():
-        matches = normalize_vin(echo) == wmi
-        binding = {"status": "exact" if matches else "mismatch", "verified": matches}
+    binding = _wmi_identifier_binding(payload, row, wmi)
     if not binding["verified"]:
         result = _provider_failure(
-            "identity_unverified" if binding["status"] == "missing" else "identity_mismatch", source="NHTSA vPIC WMI"
+            "identity_mismatch" if binding["status"] == "mismatch" else "identity_unverified", source="NHTSA vPIC WMI"
         )
         result["identifier_binding"] = binding
         return result
@@ -748,10 +787,12 @@ def _step_from_source(source: dict[str, Any], query: str, notes_prefix: str = ""
 def _catalog_steps_for_vin(make: str | None, query: str) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     for source in sources_for_make(make):
-        steps.append(_step_from_source(source, query))
+        if source_supports_make(source, make):
+            steps.append(_step_from_source(source, query))
     if not steps:
         for source in sources_for_inputs("vin"):
-            steps.append(_step_from_source(source, query))
+            if source_supports_make(source, make):
+                steps.append(_step_from_source(source, query))
     return steps
 
 
@@ -1349,9 +1390,34 @@ def lookup_original_parts(
     captured_source: str | None = None,
     captured_supersedes: str | None = None,
     captured_note: str | None = None,
+    vehicle_identity: dict[str, Any] | None = None,
+    live_vpic: bool = True,
+    identifier_type: str = "auto",
 ) -> dict[str, Any]:
+    from .automotive_contracts import ready_identity
+
+    prepared = None
+    if vehicle_identity is not None:
+        identity, conflicts = ready_identity(
+            vehicle_identity,
+            raw_identifier,
+            identifier_type=identifier_type,
+            context={"make": make_hint, "model_year": model_year},
+        )
+        if conflicts or identity is None:
+            return {
+                "ok": False,
+                "error": "invalid_ready_identity",
+                "conflicts": conflicts,
+                "execution": {"network_calls": 0},
+                "oem_candidates": [],
+            }
+        prepared = {"ok": True, "vehicle": identity["vehicle_profile"]}
     return build_lookup_plan(
         raw_identifier,
+        identifier_type=identifier_type,
+        live_vpic=live_vpic and vehicle_identity is None,
+        vpic_result=prepared,
         model_year=model_year,
         make_hint=make_hint,
         part_name=part_name,

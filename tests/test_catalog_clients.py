@@ -105,6 +105,7 @@ def _partsapi_vin_readback(monkeypatch, payload, *, transmission=None):
         return _FakeResponse(
             {
                 "VINdecode": payload,
+                "getMakes": [],
                 "getSearchTree": [{"NODE_3_TEXT": "Колодки тормозные", "NODE_3_STR_ID": 100470}],
                 "getArticles": [{"ART_ID": 1, "ART_NUM": "TEST-1", "SUP_BRAND": "TEST"}],
             }[method]
@@ -127,7 +128,13 @@ def _partsapi_vin_readback(monkeypatch, payload, *, transmission=None):
     decoded = partsapi_catalog_lookup(operation="vin_decode", identifier="A" * 17, max_attempts=3)
     methods.clear()
     resolved = vin_oem_resolver.resolve_vin_oem_parts(
-        identifier="A" * 17, requested_part="передние колодки", live_partsapi_oem=True, live_vpic=False
+        identifier="A" * 17,
+        requested_part="передние колодки",
+        live_partsapi_oem=True,
+        live_vpic=False,
+        make="TEST",
+        model="MODEL",
+        vehicle_type="PC",
     )
     assert resolved["readiness"]["ready_for_crm_writeback"] is False
     for candidate in resolved["article_candidates"]:
@@ -224,7 +231,13 @@ def test_partsapi_nested_profiles_preserve_parent_context(
     assert [profile.get("transmission") for profile in decoded["vehicle_profiles"]] == expected_transmissions
     assert decoded["identifier_matches_request"] is True
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == agreement
-    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if agreement == "matched" else ["VINdecode"])
+    assert methods == (
+        ["VINdecode", "getSearchTree", "getArticles"]
+        if agreement == "matched"
+        else ["VINdecode"]
+        if agreement == "conflict"
+        else ["VINdecode", "getMakes"]
+    )
     assert json.dumps(payload, sort_keys=True) == before
 
 
@@ -252,7 +265,7 @@ def test_partsapi_supported_alias_card_cannot_hide_foreign_vin(partsapi_vin_env,
     assert decoded["ok"] is False
     assert decoded["outcome"] == "identifier_mismatch"
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == "identifier_mismatch"
-    assert methods == ["VINdecode"]
+    assert methods == ["VINdecode", "getMakes"]
 
 
 @pytest.mark.parametrize(
@@ -266,7 +279,7 @@ def test_partsapi_metadata_card_cannot_confirm_response_vin(partsapi_vin_env, mo
     assert decoded["outcome"] == "unparsed_response"
     assert decoded.get("identifier_matches_request") is None
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == "provider_failed"
-    assert methods == ["VINdecode"]
+    assert methods == ["VINdecode", "getMakes"]
 
 
 @pytest.mark.parametrize(
@@ -286,7 +299,13 @@ def test_partsapi_sparse_ancestor_context_survives(partsapi_vin_env, monkeypatch
     )
     assert len(decoded["vehicle_profiles"]) == count
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == agreement
-    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if agreement == "matched" else ["VINdecode"])
+    assert methods == (
+        ["VINdecode", "getSearchTree", "getArticles"]
+        if agreement == "matched"
+        else ["VINdecode"]
+        if agreement == "conflict"
+        else ["VINdecode", "getMakes"]
+    )
     if "kp" in context:
         assert decoded["vehicle_profiles"][0]["transmission"] == context["kp"]
 
@@ -300,7 +319,7 @@ def test_partsapi_foreign_sparse_row_blocks_complete_row(partsapi_vin_env, monke
     assert decoded["outcome"] == "identifier_mismatch"
     assert decoded["identifier_matches_request"] is False
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == "identifier_mismatch"
-    assert methods == ["VINdecode"]
+    assert methods == ["VINdecode", "getMakes"]
 
 
 @pytest.mark.parametrize("envelope", ["data", "result", "array", "items"])
@@ -316,7 +335,7 @@ def test_partsapi_nested_provider_rejection_blocks_candidate_lookup(
     assert decoded["attempt_count"] == 1
     assert decoded["retryable"] is False
     assert resolved["tecdoc_vehicle"]["identity_agreement"] == "provider_failed"
-    assert methods == ["VINdecode"]
+    assert methods == ["VINdecode", "getMakes"]
 
 
 @pytest.mark.parametrize(
@@ -346,7 +365,13 @@ def test_partsapi_incomplete_or_conflicting_profile_cannot_hide_evidence(
     assert decoded.get("identifier_matches_request") is matches
     assert decoded["attempt_count"] == 1
     assert decoded["retryable"] is False
-    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode"])
+    assert methods == (
+        ["VINdecode", "getSearchTree", "getArticles"]
+        if allowed
+        else ["VINdecode", "getMakes"]
+        if outcome == "unparsed_response"
+        else ["VINdecode"]
+    )
     assert resolved["tecdoc_vehicle"]["requires_exact_identifier_confirmation"] is (matches is not True)
     if outcome == "success" and payload.get("kp"):
         assert decoded["vehicle_profiles"][0]["transmission"] == f"{payload['kp']} / {payload['kpp']}"
@@ -402,7 +427,7 @@ def test_partsapi_vin_scoped_tokens_do_not_confirm_fitment(parts, expected):
         ({}, {"identifier_matches_request": False}, False),
         ({}, {"identifier_matches_request": "true"}, False),
         ({}, {"requires_exact_identifier_confirmation": True}, False),
-        ({"outcome": "identifier_unverified"}, {"requires_exact_identifier_confirmation": True}, True),
+        ({"outcome": "identifier_unverified"}, {"requires_exact_identifier_confirmation": True}, False),
         ({"outcome": "identifier_unverified"}, {}, False),
     ],
 )
@@ -479,20 +504,29 @@ def test_partsapi_vin_correlation_across_response_branches(partsapi_vin_env, mon
     result, resolved, methods = _partsapi_vin_readback(monkeypatch, payload)
     assert result["identifier_matches_request"] is matches
     assert result["requires_exact_identifier_confirmation"] is (matches is not True)
+    group_reference = result.get("binding_kind") == "provider_group_reference"
     assert result["outcome"] == (
-        "identifier_mismatch" if matches is False else "identifier_unverified" if matches is None else "success"
+        "group_match"
+        if group_reference
+        else "identifier_mismatch"
+        if matches is False
+        else "identifier_unverified"
+        if matches is None
+        else "success"
     )
-    assert result["ok"] is (matches is not False)
-    assert result["failure_class"] == ("provider_identifier_mismatch" if matches is False else None)
-    assert result["requires_fallback"] is (matches is False)
+    assert result["ok"] is (matches is not False or group_reference)
+    assert result["failure_class"] == (
+        "provider_identifier_mismatch" if matches is False and not group_reference else None
+    )
+    assert result["requires_fallback"] is (matches is not True and not group_reference)
     assert result["attempt_count"] == 1
     assert result["retryable"] is False
     assert result["empty_payload"] is False
     assert "B" * 17 not in str(result["vehicle_profiles"])
     assert json.dumps(payload, sort_keys=True) == before
 
-    allowed = matches is not False and len(result["vehicle_profiles"]) == 1
-    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode"])
+    allowed = (matches is True or group_reference) and len(result["vehicle_profiles"]) == 1
+    assert methods == (["VINdecode", "getSearchTree", "getArticles"] if allowed else ["VINdecode", "getMakes"])
     assert resolved["tecdoc_vehicle"]["identifier_matches_request"] is matches
 
 
@@ -1019,12 +1053,12 @@ def test_extract_partsapi_vehicle_profiles_handles_engine_info_payload():
             "provider": "partsapi_ru",
             "source_operation": "engine_info",
             "raw_keys": ["ENG_CODE", "ENG_ID", "ENG_NAME", "cylinderCapacityCcm", "fuelType", "powerHpFrom"],
-            "engine_id": "15",
+            "engine_id": 15,
             "engine_code": "CZDA",
             "engine_name": "1.4 TSI",
             "fuel_type": "Petrol",
-            "displacement_cc": "1395",
-            "power_hp_from": "150",
+            "displacement_cc": 1395,
+            "power_hp_from": 150,
         }
     ]
 
@@ -1358,6 +1392,9 @@ def test_extract_partsapi_vehicle_profiles_handles_vin_decode_payload():
     assert profiles[0]["modification"] == "2.8 quattro"
     assert profiles[0]["tecdoc_car_id"] == 12345
     assert profiles[0]["redacted_identifier"] == "WAU***542"
+    assert profiles[0]["production_date_from"] == "2000-01-01"
+    assert profiles[0]["production_date_to"] == "2005-12-31"
+    assert "model_year_from" not in profiles[0]
 
 
 @pytest.mark.parametrize(
@@ -2289,6 +2326,312 @@ def test_partsapi_returned_different_vin_is_not_exact_confirmation():
     assert "B" * 17 not in str(profile)
 
 
+def test_partsapi_same_prefix_for_different_model_years_keeps_requested_vin(partsapi_vin_env, monkeypatch):
+    original_vins = ["WVGZZZ7P0GD000001", "WVGZZZ7P0HD000002"]
+    catalog_vin = "WVGZZZ7P0FD000003"
+    seen = []
+
+    def respond(request, **_kwargs):
+        seen.append(parse_qs(urlsplit(request.full_url).query)["vin"][0])
+        return _FakeResponse(
+            {"result": [_vin_row(vin=catalog_vin, vin8=catalog_vin[:8], modelName="Touareg", modelyearfrom=2015)]}
+        )
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", respond)
+    responses = [partsapi_catalog_lookup(operation="vin_decode", identifier=vin) for vin in original_vins]
+    assert seen == original_vins
+    for vin, result in zip(original_vins, responses, strict=True):
+        assert result["outcome"] == "group_match"
+        assert result["ok"] is True
+        assert result["failure_class"] is None
+        assert result["redacted_requested_identifier"] == vin[:3] + "***" + vin[-3:]
+        profile = result["vehicle_profiles"][0]
+        assert profile["redacted_requested_identifier"] == result["redacted_requested_identifier"]
+        assert profile["redacted_identifier"] != result["redacted_requested_identifier"]
+        assert profile["provider_identifier_is_vehicle_confirmation"] is False
+        assert profile["vin_prefix_is_vehicle_confirmation"] is False
+        assert "vin8" not in profile
+        assert catalog_vin not in str(profile)
+
+
+def test_partsapi_vin8_only_does_not_confirm_full_vin(partsapi_vin_env, monkeypatch):
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(_vin_row(vin8="WVGZZZ7P")))
+    result = partsapi_catalog_lookup(operation="vin_decode", identifier="WVGZZZ7P0GD000001")
+    assert result["outcome"] == "identifier_unverified"
+    assert result["identifier_matches_request"] is None
+    assert result["vehicle_profiles"][0]["vin_prefix_is_vehicle_confirmation"] is False
+
+
+def test_partsapi_vin_decode_production_interval_and_model_year_remain_separate():
+    profile = extract_partsapi_vehicle_profiles(
+        operation="vin_decode",
+        requested_identifier="A" * 17,
+        payload=_vin_row(
+            vin="A" * 17,
+            yearOfConstrFrom="Tue, 01 May 2018 00:00:00 GMT",
+            yearOfConstrTo="",
+            modelyearfrom=2019,
+            modelyearto=2023,
+        ),
+    )[0]
+    assert profile["production_date_from"] == "2018-05-01"
+    assert profile["production_year_from"] == 2018
+    assert profile["model_year_from"] == 2019
+    assert profile["model_year_to"] == 2023
+    assert "production_date_to" not in profile
+    assert profile["identifier_matches_request"] is True
+    assert profile["provider_identifier_is_vehicle_confirmation"] is False
+
+
+@pytest.mark.parametrize(
+    ("start", "finish", "normalized_start", "normalized_finish", "precision"),
+    [
+        ("Tue, 01 May 2018 00:00:00 GMT", "Sat, 31 Dec 2022 00:00:00 GMT", "2018-05-01", "2022-12-31", "day"),
+        ("2018-05-01", "2022-12-31", "2018-05-01", "2022-12-31", "day"),
+        ("2018", "2022", "2018-01-01", "2022-12-31", "year"),
+        ("201805", "202212", "2018-05-01", "2022-12-31", "month"),
+        ("2018-05", "2022-12", "2018-05-01", "2022-12-31", "month"),
+        ("2018/05", "2022/12", "2018-05-01", "2022-12-31", "month"),
+    ],
+)
+def test_partsapi_get_cars_normalizes_production_dates(start, finish, normalized_start, normalized_finish, precision):
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars", payload=[{"carId": 1, "yearOfConstrFrom": start, "yearOfConstrTo": finish}]
+    )[0]
+    assert profile["production_date_from"] == normalized_start
+    assert profile["production_date_to"] == normalized_finish
+    assert profile["production_year_from"] == 2018
+    assert profile["production_year_to"] == 2022
+    assert profile["production_boundaries"]["production_date_from"]["precision"] == precision
+    assert "model_year_from" not in profile
+    assert "model_year_to" not in profile
+
+
+@pytest.mark.parametrize("boundary", [None, "", "  "])
+def test_partsapi_get_cars_empty_production_boundary_is_open(boundary):
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars", payload=[{"carId": 1, "yearOfConstrFrom": boundary, "yearOfConstrTo": boundary}]
+    )[0]
+    assert "production_boundaries" not in profile
+    assert "production_date_from" not in profile
+    assert "production_date_to" not in profile
+
+
+@pytest.mark.parametrize("boundary", ["not a date", "201813", "2018-02-31", True])
+def test_partsapi_get_cars_invalid_production_boundary_retains_diagnostic(boundary):
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars", payload=[{"carId": 1, "yearOfConstrFrom": boundary}]
+    )[0]
+    assert "production_date_from" not in profile
+    assert profile["production_boundaries"]["production_date_from"]["date"] is None
+    assert profile["production_boundaries"]["production_date_from"]["raw_value"] == boundary
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [lambda rows: rows, lambda rows: {"data": {"array": rows}}, lambda rows: {"result": {"0": rows[0], "1": rows[1]}}],
+)
+def test_partsapi_get_cars_keeps_all_normalized_modifications(partsapi_vin_env, monkeypatch, wrap):
+    rows = [
+        {
+            "carId": "123",
+            "makeId": "121",
+            "modelId": "456",
+            "manuName": "Volkswagen",
+            "modelName": "Touareg",
+            "typeName": "3.0 V6 TDI",
+            "cylinderCapacityCcm": "2967.000",
+            "powerHpFrom": "286",
+            "powerHpTo": "286",
+            "powerKwFrom": "210.0",
+            "powerKwTo": 210,
+            "engineType": "Diesel",
+            "fuelType": "Diesel",
+            "motorCodes": "DENA",
+            "driveType": "AWD",
+            "kp": "8AT",
+            "yearOfConstrFrom": "Tue, 01 May 2018 00:00:00 GMT",
+            "yearOfConstrTo": "",
+        },
+        {"id": "124", "name": "3.0 V6 TDI", "capacity": "2967", "kw": "170,5", "hp": "231"},
+    ]
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(wrap(rows)))
+    result = partsapi_catalog_lookup(
+        operation="getCars", provider_parameters={"carType": "PC", "makeId": 121, "modelId": 456}
+    )
+    assert result["outcome"] == "success"
+    assert result["record_counts"]["vehicle_profiles"] == 2
+    first, second = result["vehicle_profiles"]
+    assert first["tecdoc_car_id"] == 123
+    assert first["make_id"] == 121
+    assert first["model_id"] == 456
+    assert first["make"] == "Volkswagen"
+    assert first["model"] == "Touareg"
+    assert first["modification"] == "3.0 V6 TDI"
+    assert first["displacement_cc"] == 2967
+    assert first["power_hp_from"] == first["power_hp_to"] == 286
+    assert first["power_kw_from"] == first["power_kw_to"] == 210
+    assert first["engine_type"] == "Diesel"
+    assert first["engine_code"] == first["engine"] == "DENA"
+    assert first["transmission"] == "8AT"
+    assert first["drive_type"] == "AWD"
+    assert first["drivetrain"] == "AWD"
+    assert second["power_kw_from"] == 170.5
+    for profile in result["vehicle_profiles"]:
+        assert profile["vehicle_type"] == "PC"
+        assert profile["catalog_candidate_only"] is True
+        assert profile["independent_vehicle_confirmation"] is False
+        assert profile["fitment_confirmed"] is False
+        assert profile["requires_exact_identifier_confirmation"] is True
+
+
+@pytest.mark.parametrize("car_id", [None, "", False, -1, "NaN", "1.5", "unknown", {}, []])
+def test_partsapi_get_cars_invalid_identifier_does_not_create_vehicle(car_id):
+    assert extract_partsapi_vehicle_profiles(operation="getCars", payload=[{"carId": car_id, "typeName": "Test"}]) == []
+
+
+def test_partsapi_get_cars_conflicting_identifiers_are_not_selected():
+    assert (
+        extract_partsapi_vehicle_profiles(operation="getCars", payload=[{"carId": 1, "TYPE_ID": 2, "typeName": "Test"}])
+        == []
+    )
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars", payload=[{"carId": "001", "TYPE_ID": 1, "typeName": "Test"}]
+    )[0]
+    assert profile["tecdoc_car_id"] == 1
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"kp": "8AT", "kpp": "6MT"},
+        {"transmission": "8AT", "kp": "6AT"},
+        {"transmission": "Automatic", "kp": "6AT", "kpp": "8AT"},
+        {"engineCode": "DENA", "motorCodes": "CRCA"},
+        {"driveType": "AWD", "drive_type": "FWD"},
+        {"cylinderCapacityCcm": "2967", "ccmTech": "1984"},
+        {"powerHpFrom": "286", "powerHp": "245"},
+        {"powerKwFrom": "210", "powerKw": "170"},
+        {"makeId": 121, "manuId": 999},
+        {"modelId": 456, "MOD_ID": 999},
+        {"manuName": "Volkswagen", "makeName": "Porsche"},
+        {"modelName": "Touareg", "model": "Golf"},
+        {"carType": "PC", "CAR_TYPE": "CV"},
+    ],
+)
+def test_partsapi_get_cars_contradictory_aliases_cannot_hide_material_facts(partsapi_vin_env, monkeypatch, fields):
+    payload = [{"carId": 1, "motorCodes": "DENA", **fields}]
+    assert extract_partsapi_vehicle_profiles(operation="getCars", payload=payload) == []
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(payload))
+    result = partsapi_catalog_lookup(
+        operation="getCars", provider_parameters={"makeId": 121, "modelId": 456, "carType": "PC"}
+    )
+    assert result["outcome"] == "unparsed_response"
+    assert result["ok"] is False
+    assert result["vehicle_profiles"] == []
+    assert result["requires_fallback"] is True
+
+
+def test_partsapi_get_cars_compatible_aliases_keep_transmission_speed():
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars",
+        payload=[
+            {
+                "carId": 1,
+                "transmission": "Automatic",
+                "kp": "8AT",
+                "kpp": "8 speed automatic",
+                "engineCode": "DENA",
+                "motorCodes": "DENA",
+                "cylinderCapacityCcm": "2967",
+                "ccmTech": 2967.0,
+                "powerHpFrom": "286",
+                "powerHp": 286,
+                "driveType": "AWD",
+                "drive_type": "4WD",
+            }
+        ],
+    )[0]
+    assert profile["transmission"] == "Automatic / 8AT / 8 speed automatic"
+    assert profile["engine_code"] == "DENA"
+    assert profile["displacement_cc"] == 2967
+    assert profile["power_hp_from"] == 286
+
+
+@pytest.mark.parametrize(
+    "invalid_row",
+    [
+        {"carId": 101, "TYPE_ID": 102, "engineCode": "CASA"},
+        {"carId": 101, "engineCode": "CASA", "motorCodes": "DENA"},
+        {"carId": 101, "kp": "6MT", "kpp": "8AT"},
+        {"carId": 0, "engineCode": "CASA"},
+        {"carId": None, "engineCode": "CASA"},
+        {"carId": "", "engineCode": "CASA"},
+        {"carId": "unknown", "engineCode": "CASA"},
+    ],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_partsapi_get_cars_invalid_variant_cannot_create_partial_success(
+    partsapi_vin_env, monkeypatch, invalid_row, reverse
+):
+    payload = [invalid_row, {"carId": 103, "engineCode": "CASA"}]
+    if reverse:
+        payload.reverse()
+    assert extract_partsapi_vehicle_profiles(operation="getCars", payload=payload) == []
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(payload))
+    result = partsapi_catalog_lookup(
+        operation="getCars", provider_parameters={"makeId": 121, "modelId": 456, "carType": "PC"}
+    )
+    assert result["outcome"] == "unparsed_response"
+    assert result["ok"] is False
+    assert result["vehicle_profiles"] == []
+    assert result["empty_payload"] is False
+
+
+def test_partsapi_get_cars_parser_depth_does_not_publish_partial_result():
+    nested = {"carId": 1}
+    for _ in range(6):
+        nested = {"data": nested}
+    assert extract_partsapi_vehicle_profiles(operation="getCars", payload=[{"carId": 2}, nested]) == []
+
+
+@pytest.mark.parametrize("value", [True, "invalid", -1, "NaN", "", None, {}])
+def test_partsapi_get_cars_invalid_numeric_characteristics_are_missing(value):
+    profile = extract_partsapi_vehicle_profiles(
+        operation="getCars", payload=[{"carId": 1, "cylinderCapacityCcm": value, "powerHpFrom": value}]
+    )[0]
+    assert "displacement_cc" not in profile
+    assert "power_hp_from" not in profile
+
+
+@pytest.mark.parametrize(
+    ("payload", "outcome"),
+    [([], "empty_result"), ({"items": []}, "empty_result"), ({"unknown": "shape"}, "unparsed_response")],
+)
+def test_partsapi_get_cars_empty_and_unparsed_are_distinct(partsapi_vin_env, monkeypatch, payload, outcome):
+    monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_a, **_k: _FakeResponse(payload))
+    result = partsapi_catalog_lookup(
+        operation="getCars", provider_parameters={"carType": "PC", "makeId": 1, "modelId": 2}
+    )
+    assert result["outcome"] == outcome
+    assert result["vehicle_profiles"] == []
+    assert result["requires_fallback"] is True
+
+
+def test_partsapi_get_cars_provider_failure_is_not_empty(partsapi_vin_env, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise TimeoutError("synthetic timeout")
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", fail)
+    result = partsapi_catalog_lookup(
+        operation="getCars", provider_parameters={"carType": "PC", "makeId": 1, "modelId": 2}
+    )
+    assert result["ok"] is False
+    assert result["failure_class"] == "timeout"
+    assert result["empty_payload"] is False
+    assert result["requires_fallback"] is True
+
+
 @pytest.mark.parametrize("year_first", [False, True])
 def test_partsapi_oe_engine_market_and_year_survive_normalization(year_first):
     attributes = [
@@ -2346,11 +2689,11 @@ def test_partsapi_engine_list_is_a_successful_profile(monkeypatch):
     profile = result["vehicle_profiles"][0]
     assert profile["engine"] == profile["engine_code"] == "TEST-ENGINE"
     assert profile["tecdoc_car_id"] == 123
-    assert profile["displacement_cc"] == "2000.000"
+    assert profile["displacement_cc"] == 2000
     assert profile["cylinders"] == 4
     assert profile["valves"] == 16
-    assert profile["power_kw_from"] == "150.000"
-    assert profile["torque_nm_from"] == "300.000"
+    assert profile["power_kw_from"] == 150
+    assert profile["torque_nm_from"] == 300
     assert profile["timing_drive"] == "Test timing drive"
 
 
@@ -2481,3 +2824,249 @@ def test_restored_partsapi_total_attempt_budget_is_bounded(monkeypatch):
     )
     assert result["attempt_count"] == 3
     assert sum(timeouts) <= 60.0
+
+
+@pytest.fixture
+def supplier_lookup(monkeypatch):
+    _clear_partsapi_method_env(monkeypatch)
+    _configure_partsapi_test_keys(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def run(operation, rows, **kwargs):
+        monkeypatch.setattr(catalog_clients_module, "urlopen", lambda *_args, **_kwargs: _FakeResponse(rows))
+        return partsapi_catalog_lookup(operation=operation, **kwargs)
+
+    return run
+
+
+def _supplier_article_row(**fields):
+    return {
+        "ART_ID": 123,
+        "ART_ARTICLE_NR": "TEST-100",
+        "ART_SUP_BRAND": "TEST BRAND",
+        "ART_PRODUCT_NAME": "Brake disc",
+        "FOUND_VIA": "IAMNumber",
+        **fields,
+    }
+
+
+def test_partsapi_supplier_search_contract_exposes_supported_id_followup(supplier_lookup):
+    result = supplier_lookup("search_articles", [_supplier_article_row()], part_number="TEST-100")
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] is None and candidate["supplier_id_source"] is None
+    assert candidate["get_article_ready"] is False
+    assert candidate["missing_for_get_article"] == ["supplier_id"]
+    assert candidate["supplier_id_resolution"] == "linked_getArticles"
+    assert candidate["article_id_operations"] == ["article_criteria", "getArticleMedia", "article_crosses"]
+    assert result["completeness"] == "complete" and result["completeness_scope"] == "catalog_response"
+    assert result["missing_fields"] == []
+    followup = partsapi_catalog_lookup(
+        operation="article_criteria", article_id=str(candidate["article_id"]), dry_run=True
+    )
+    assert followup["ok"] is True and followup["attempt_count"] == 0
+    assert followup["request_plan"]["params"] == {"ART_ID": "123", "LANG": 16}
+    assert candidate["fitment_evidence"]["fitment_confirmed"] is False
+
+
+def test_partsapi_supplier_get_articles_keeps_documented_id(supplier_lookup):
+    result = supplier_lookup(
+        "articles",
+        [_supplier_article_row(SUP_ID="7", PRODUCT_GROUP="Brake disc", PT_ID=8)],
+        type_id="42",
+        category="18",
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] == 7 and candidate["supplier_id_source"] == "provider_response"
+    assert candidate["get_article_ready"] is True and candidate["missing_for_get_article"] == []
+    assert result["completeness"] == "complete"
+    assert result["catalog_binding"]["fitment_confirmed"] is False
+
+
+def test_partsapi_supplier_article_inherits_only_matching_request_parameters(supplier_lookup):
+    result = supplier_lookup(
+        "article",
+        [_supplier_article_row(ARTICLE_CRITERIA="Diameter [mm]: 300", OEM_NUMBERS="TEST OEM: A123")],
+        provider_parameters={"ART_NUM": "test 100", "SUP_ID": 42, "LANG": 16},
+        brand="TEST BRAND",
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] == 42 and candidate["supplier_id_source"] == "request_parameters"
+    assert candidate["get_article_ready"] is True
+    assert result["completeness"] == "complete" and result["missing_fields"] == []
+    assert "SUP_ID" not in candidate["raw_keys"]
+    assert result["oem_candidates"] == []
+    assert candidate["oe_references"][0]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("fields", [{"ART_ARTICLE_NR": "FOREIGN-200"}, {"ART_SUP_BRAND": "FOREIGN BRAND"}])
+def test_partsapi_supplier_article_mismatched_return_never_inherits_id(supplier_lookup, fields):
+    result = supplier_lookup(
+        "article", [_supplier_article_row(**fields)], part_number="TEST-100", supplier_id=42, brand="TEST BRAND"
+    )
+    candidate = result["article_candidates"][0]
+    assert candidate["supplier_id"] is None and candidate["supplier_id_source"] is None
+    assert candidate["get_article_ready"] is False
+    assert result["completeness"] == "partial"
+    assert candidate["missing_for_get_article"] == ["supplier_id"]
+
+
+def test_partsapi_supplier_article_ambiguous_brand_return_does_not_inherit_id(supplier_lookup):
+    result = supplier_lookup(
+        "article",
+        [_supplier_article_row(), _supplier_article_row(ART_ID=124, ART_SUP_BRAND="OTHER BRAND")],
+        part_number="TEST-100",
+        supplier_id=42,
+    )
+    assert result["record_counts"]["article_candidates"] == 2
+    assert all(candidate["supplier_id"] is None for candidate in result["article_candidates"])
+
+
+@pytest.mark.parametrize("supplier", [True, 0, -1, "unknown", "1.5"])
+def test_partsapi_supplier_invalid_response_id_does_not_enable_get_article(supplier):
+    candidate = extract_partsapi_article_candidates(payload=[_supplier_article_row(SUP_ID=supplier)])[0]
+    assert candidate["supplier_id"] is None and candidate["get_article_ready"] is False
+
+
+def test_partsapi_supplier_article_missing_details_are_partial(supplier_lookup):
+    result = supplier_lookup("article", [_supplier_article_row()], part_number="TEST-100", supplier_id=42)
+    assert result["completeness"] == "partial"
+    assert result["missing_fields"] == ["criteria", "oe_references"]
+    assert result["outcome"] == "success" and result["record_counts"]["article_candidates"] == 1
+
+
+def test_partsapi_supplier_article_explicit_empty_details_are_known_response(supplier_lookup):
+    row = _supplier_article_row(ARTICLE_CRITERIA=None, OEM_NUMBERS=None)
+    row.pop("ART_PRODUCT_NAME")  # Fresh getArticle omits this optional field.
+    result = supplier_lookup("article", [row], part_number="TEST-100", supplier_id=42)
+    assert result["completeness"] == "complete" and result["missing_fields"] == []
+    assert result["article_candidates"][0]["oe_references"] == []
+    assert result["article_candidates"][0]["fitment_evidence"]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_partsapi_supplier_get_cars_completeness_is_catalog_only(supplier_lookup, partial):
+    row = {
+        "CAR_ID": 123,
+        "MAKE_NAME": "TEST",
+        "MODEL_NAME": "TEST SUV",
+        "CAR_NAME": "TEST 2.0",
+        "CAR_TYPES": "PC",
+        "CAPACITY": "1998/2.0 l",
+        "POWER_KW": "150.0000",
+        "POWER_PS": "204.0000",
+        "ENGINE_TYPE": "Petrol Engine",
+        "YEAR_START": "Sat, 01 Dec 2007 00:00:00 GMT",
+        "YEAR_END": "",
+    }
+    if partial:
+        row["CAPACITY"] = "unknown"
+    result = supplier_lookup("getCars", [row], provider_parameters={"carType": "PC", "makeId": 42, "modelId": 43})
+    assert result["completeness"] == ("partial" if partial else "complete")
+    assert result["completeness_scope"] == "catalog_response"
+    assert result["missing_fields"] == (["displacement_cc"] if partial else [])
+    assert result["vehicle_profiles"][0]["fitment_confirmed"] is False
+    assert result["vehicle_profiles"][0]["independent_vehicle_confirmation"] is False
+
+
+def test_partsapi_supplier_partial_search_retains_counts_and_guards(supplier_lookup):
+    result = supplier_lookup("search_articles", [{"ART_ID": 123, "ART_ARTICLE_NR": "TEST-100"}], part_number="TEST-100")
+    assert result["completeness"] == "partial"
+    assert result["missing_fields"] == ["brand", "found_via", "product_name"]
+    assert result["record_counts"]["article_candidates"] == 1
+    assert result["article_candidates"][0]["fitment_evidence"]["fitment_confirmed"] is False
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize("marked", [False, True])
+def test_partsapi_us_spaced_diagnostics_preserve_partial_binding_and_origin(supplier_lookup, wrapper, marked):
+    row = {
+        "VIN": "A" * 17,
+        "Make": "TEST",
+        "Model": "TEST MODEL",
+        "Error Code": "1,7;400",
+        "ErrorCode": "1,7;400",
+        "Error Text": "Incomplete synthetic decode",
+        "ErrorText": "Incomplete synthetic decode",
+    }
+    if marked:
+        row["source"] = "NHTSA vPIC"
+    payload = {"Results": [row]} if wrapper == "results" else row
+    before = json.dumps(payload, sort_keys=True)
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["semantic_status"] == "partial"
+    assert result["provider_diagnostics"]["error_codes"] == ["1", "7", "400"]
+    assert result["provider_diagnostics"]["has_error_text"] is True
+    assert result["identifier_matches_request"] is True
+    assert result["provenance"]["upstream"] == ("nhtsa_vpic" if marked or wrapper == "results" else "unknown")
+    assert result["vehicle_profiles"][0]["fitment_confirmed"] is False
+    assert result["requires_fallback"] is True
+    assert json.dumps(payload, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize("echo", [None, "A" * 17])
+def test_partsapi_us_diagnostics_only_do_not_create_vehicle_identity(supplier_lookup, wrapper, echo):
+    row = {"Error Code": "1,7,400", "Error Text": "No vehicle facts", "source": "NHTSA vPIC"}
+    if echo:
+        row["VIN"] = echo
+    payload = {"Results": [row]} if wrapper == "results" else row
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["semantic_status"] == "missing"
+    assert result["outcome"] == "empty_result"
+    assert result["vehicle_profiles"] == []
+    assert result["provider_diagnostics"]["error_codes"] == ["1", "7", "400"]
+    assert result["identifier_matches_request"] is (True if echo else None)
+    assert result["requires_fallback"] is True
+
+
+@pytest.mark.parametrize("wrapper", ["flat", "results"])
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"Error Code": "0", "ErrorCode": "1"},
+        {"Error Text": "first", "ErrorText": "second"},
+        {"Error Code": True},
+        {"Error Code": ["1", "7"]},
+        {"Error Text": {"text": "SENSITIVE_SENTINEL"}},
+    ],
+)
+def test_partsapi_us_conflicting_or_malformed_diagnostics_fail_closed(supplier_lookup, wrapper, fields):
+    row = {"VIN": "A" * 17, "Make": "TEST", **fields}
+    payload = {"Results": [row]} if wrapper == "results" else row
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["outcome"] == "unparsed_response"
+    assert result["vehicle_profiles"] == []
+    assert result["provider_diagnostics"]["error_codes"] == []
+    assert result["provenance"]["upstream"] == "unknown"
+
+
+@pytest.mark.parametrize("code", ["0", "1,7,400,SENSITIVE_SENTINEL", "9" * 4097])
+def test_partsapi_us_diagnostic_codes_are_bounded_and_zero_text_is_not_an_error(supplier_lookup, code):
+    row = {
+        "VIN": "A" * 17,
+        "Make": "TEST",
+        "Model": "TEST MODEL",
+        "ModelYear": "2020",
+        "EngineModel": "TEST ENGINE",
+        "Trim": "TEST TRIM",
+        "Error Code": code,
+        "Error Text": "0 - explanatory text",
+        "source": "NHTSA vPIC",
+    }
+    result = supplier_lookup("decodeVINus", row, identifier="A" * 17)
+    diagnostics = result["provider_diagnostics"]
+    assert diagnostics["error_codes"] == (["1", "7", "400"] if code.startswith("1,") else [])
+    assert "SENSITIVE_SENTINEL" not in json.dumps(diagnostics)
+    assert diagnostics["has_errors"] is (code != "0")
+    assert diagnostics["has_error_text"] is True
+    assert result["semantic_status"] == ("complete" if code == "0" else "partial")
+
+
+@pytest.mark.parametrize("outer_foreign", [False, True])
+def test_partsapi_us_spaced_diagnostics_cannot_hide_foreign_vin(supplier_lookup, outer_foreign):
+    row = {"VIN": "A" * 17 if outer_foreign else "B" * 17, "Make": "TEST", "Error Code": "0", "Error Text": "OK"}
+    payload = {"Results": [row], **({"VIN": "B" * 17} if outer_foreign else {})}
+    result = supplier_lookup("decodeVINus", payload, identifier="A" * 17)
+    assert result["outcome"] == "identifier_mismatch"
+    assert result["identifier_matches_request"] is False
+    assert result["vehicle_profiles"] == []

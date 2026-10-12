@@ -1,0 +1,30 @@
+{
+  "schema": "autostop.automotive-offline-sources.v1",
+  "reviewed_at": "2026-10-06",
+  "vininfo": {
+    "version": "1.11.0",
+    "license": "BSD-3-Clause",
+    "source_url": "https://github.com/idlesign/vininfo",
+    "archive_url": "https://files.pythonhosted.org/packages/fb/4b/9fbb348af899be2e627dfcb22cebe1b5e7aa5f73b61404b2641bbdd687a5/vininfo-1.11.0-py3-none-any.whl",
+    "archive_sha256": "0ec961b2eb8eea93475292dd7a64a9f1a975dd145a3277509a177615b79a54ff",
+    "archive_bytes": 23670,
+    "python_minimum": "3.10",
+    "dependencies": []
+  },
+  "corgi": {
+    "version": "2.0.4",
+    "license": "ISC",
+    "source_url": "https://github.com/cardog-ai/corgi",
+    "archive_url": "https://registry.npmjs.org/@cardog/corgi/-/corgi-2.0.4.tgz",
+    "archive_sha256": "f357aec3a6df4d3b1a2ec1cdc2fc47ef0e97ecf32b48639c085b68d4fae5f565",
+    "archive_bytes": 26366743,
+    "database_sha256": "72f1470302a2a78a6824ae966c877b83ef947e983a7d407bc19a096bc17c0b2b",
+    "database_bytes": 80355328,
+    "database_version": "bundled-with-corgi-2.0.4",
+    "primary_lineage": "nhtsa_vpic",
+    "community_patterns": "Included in upstream customized database; not independent vPIC corroboration",
+    "execution": "dist/browser.mjs decodeVIN with node:sqlite read-only adapter; no cache/download helpers",
+    "node_minimum": "22.13.0",
+    "native_npm_dependencies": []
+  }
+}

@@ -4,15 +4,55 @@
 
 ## Выбор и отчёт
 
-Короткий запрос: `search_web_multi` → `fetch_page_excerpt`; JS-страница — `fetch_page_browser` при готовом browser. Исследование: `j1_research_start` → status → results/document порциями → report (`autostop.j1.report.v1`). `add_queries/cancel` меняют только точную временную job, затем требуется status readback.
+Короткий запрос: `search_web_multi` → `fetch_page_excerpt`; JS-страница — `fetch_page_browser` при готовом browser. Исследование: `j1_research_start` → status → results/document порциями → report (`autostop.j1.report.v1`). `add_queries/cancel` меняют выбранную временную job; VIN-пути также выполняют lifecycle housekeeping, затем требуется status readback.
+
+Актуальная автомобильная карта публичного поиска — [E15](../modules/E15.md); E8 описывает масла и жидкости.
+Порученное исследование одного VIN — самостоятельный `j1_research_vin` в том же MCP, независимо от
+E2/E4 и decoder API. Исключение действует только в его job; общий search/fetch/browser и обычный J1
+сохраняют запрет VIN. Текущий агент извлекает и записывает цитируемые утверждения через
+`j1_research_record_facts`, затем фиксирует анализ. [Подробный контракт](j1-vin-research.md).
+
+Для простой сверки детали ориентир — два разных запроса и две целевые страницы;
+следующий вызов должен устранять конкретную неоднозначность. Пустая выдача отличается
+от ошибки провайдера, неизвестной разметки и challenge. Challenge не обходится.
+Безопасные HTTP/transport причины и upstream `retryable=false` сохраняются до Manager;
+старая generic ошибка остаётся с неизвестной причиной, не предполагаемым404.
+
+Elcats/Japancats имеют зафиксированный robots запрет: [E15](../modules/E15.md) и общий CRM HTTP/browser
+reader блокируют их каталожные страницы до DNS/HTTP. J1 учитывает UTF-8 BOM в robots
+и также прекращает чтение запрещённого источника. Не меняй reader/provider/proxy
+ради обхода такого отказа. Публичные snippets сохраняют область ссылки; ordinary
+robots.txt читается только для проверки политики. Источники и optional local OCR
+номерных изображений — [Elcats](elcats.md).
+
+Excerpt сообщает известный HTTP-статус, content type, способ извлечения, запрошенный
+и эффективный размер, обрезку. Явный PDF-ответ может перейти в существующий bounded
+static J1 reader без browser или большой research job. На404 этот путь не запускается.
+Текст live HTML/PDF, ранее извлечённый текст и поисковый snippet — разные свидетельства;
+snippet и шаблон динамического OE-раздела не подтверждают прочитанный оригинальный номер.
 
 Automotive context: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`; полный VIN, контакты и секреты не передаются. Automotive profile — до 12 запросов/60 страниц; общий — 30/300. Лимиты: 50 000 символов документа, cache 250 МБ/семь дней. `canonical_url` удаляет только tracking; дубли не индексируются. Sources: A — OEM/регулятор/TSB, B — component manufacturer, C — catalog, D — форум/контекст. D не доказательство; частота оценивается лишь по измеримой совокупности A/B, иначе `not_measured`. Отчёт различает `exact/analog/general`, доступ, confidence и gaps.
 
-`start` создаёт job в `AUTOSTOP_J1_CACHE_DIR` и читает сеть. Status/results/document/report read-only; jobs не являются долговременной customer memory. Локальный `search_offline_parts_catalogs` — отдельное чтение файлов, не J1: [offline-catalogs.md](offline-catalogs.md).
+Обычный `start` создаёт job в `AUTOSTOP_J1_CACHE_DIR`; сеть затем читает worker.
+Отдельная VIN-job хранит приватные основания в tmpfs. Status/results/report не ищут и не получают
+новые страницы, но открытие обычной SQLite может создать/мигрировать схему. Все VIN-пути перед
+доменной проверкой могут удалить истёкшие private jobs, пометить lost-state stubs и восстановить
+состояние остановленного worker; cleanup действует также при отключённых VIN-записях.
+Поэтому все восемь VIN-aware tools имеют readOnly=false/destructive=true/idempotent=false.
+Status/results/report/document/cancel/record_facts работают локально (openWorld=false);
+vin/add_queries допускают порученную сеть worker (openWorld=true). General start сохраняет
+прежние false/false/false/true: сам start не выполняет worker cleanup.
+`ocr=true` ставит дедуплицированную OCR-задачу по cached PDF без новой сети и меняет временную
+revision/draft. Scoped receipts/CAS и OCR dedup сохраняются, но не покрывают lifecycle housekeeping.
+Jobs не являются долговременной customer memory. Локальный `search_offline_parts_catalogs` — отдельное чтение файлов, не J1: [offline-catalogs.md](offline-catalogs.md).
 
 ## Runtime и guards
 
 Static search использует loopback `AUTOSTOP_J1_SEARXNG_URL`, может иметь fallback. Fetch HTML/PDF соблюдает robots/rate limits и URL/privacy guards. Static J1 работает без browser. Browser использует Unix socket renderer и отдельный egress proxy; запрещены login/cookies/CAPTCHA. Проверяются Docker networks, DNS/private-address guards, socket и SHA-bound marker `root:root 0600`. Отсутствие prerequisite отключает browser path; marker вручную не создаётся.
+
+VIN-mode допускает только scoped static fetch с исходным VIN. URL с VIN в browser запрещён;
+обезличенные страницы могут использовать прежний attested browser. Наличие feature flag или
+инструмента в `tools/list` не подтверждает runtime readiness, доступность источников или качество расшифровки.
 
 `autostop-j1.service` — static worker, root-only `/var/cache/autostop-j1`; `autostop-j1-browser.service` — one-shot renderer/proxy stack. Active/exited не доказывает container health. CLI `j1_research --help`: worker (`--once`), probe; `j1_browser_verify --help`: probe, attest, release-root/socket/marker. Worker и attest меняют состояние; attest вызывается штатной service после topology check. Installers/start/restart — только разрешённый [выпуск](deployment.md).
 

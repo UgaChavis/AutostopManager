@@ -1,0 +1,19 @@
+<!-- Minimal cleaned ACTYON brake Unit.aspx sample, 2026-10-09. -->
+<script>
+function submitUnit(model, unit, title) {
+ var form = document.getElementById('GetForm');
+ form.innerHTML = "<input type=\"hidden\" name=\"Model\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"Unit\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"Title\">";
+ document.forms[1].Model.value = model;
+ document.forms[1].Unit.value = unit;
+ document.forms[1].Title.value = title;
+ document.forms[1].action = "Parts.aspx";
+ document.forms[1].submit();
+}
+</script>
+<form method="get" id="GetForm"></form>
+<a href="javascript:submitUnit('a922235a-0c56-4344-8b2b-853bd0515df1','1f54d365-1d49-4121-b542-15d97f1c923e','ЗАДНИЕ ТОРМОЗА (ДИСКИ)')">ЗАДНИЕ ТОРМОЗА (ДИСКИ)</a>
+<a href="javascript:submitUnit('a922235a-0c56-4344-8b2b-853bd0515df1','6b0573dd-4620-4a66-9b88-cb8b199e4668','ПЕРЕДНИЕ ТОРМОЗА')"><img src="/Unitimages/6b0573dd-4620-4a66-9b88-cb8b199e4668.png" title="ПЕРЕДНИЕ ТОРМОЗА"></a>
+<a href="javascript:submitUnit('a922235a-0c56-4344-8b2b-853bd0515df1','6b0573dd-4620-4a66-9b88-cb8b199e4668','ПЕРЕДНИЕ ТОРМОЗА')">ПЕРЕДНИЕ ТОРМОЗА</a>
+<a href="javascript:submitUnit('a922235a-0c56-4344-8b2b-853bd0515df1','d98fb5f5-f932-4efc-b944-e47384b22982','СИСТЕМА ABS')">СИСТЕМА ABS</a>

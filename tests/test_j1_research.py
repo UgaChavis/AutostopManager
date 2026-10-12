@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import shutil
 import socket
@@ -507,6 +508,27 @@ def test_capacity_failure_is_visible_to_agent(monkeypatch: pytest.MonkeyPatch) -
     assert j1.research_results(job_id)["results"][0]["error"] == "cache_capacity_reached"
 
 
+def test_generic_retention_still_expires_old_completed_jobs_and_keeps_queued_jobs() -> None:
+    jobs = []
+    for days, status in ((8, "completed"), (6, "completed"), (8, "queued")):
+        created = j1.start_research("Public queue retention", ["temporary public sources"])
+        assert created["ok"], created
+        jobs.append(created["job_id"])
+        with j1._db() as connection:
+            connection.execute(
+                "UPDATE jobs SET status=?,created_at=? WHERE id=?",
+                (status, (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds"), jobs[-1]),
+            )
+            connection.commit()
+
+    with j1._db() as connection:
+        j1._prune(connection)
+        assert connection.execute("SELECT COUNT(*) FROM queries WHERE job_id=?", (jobs[0],)).fetchone()[0] == 0
+    assert j1.research_status(jobs[0])["error"]["code"] == "job_not_found"
+    assert j1.research_status(jobs[1])["status"] == "completed"
+    assert j1.research_status(jobs[2])["status"] == "queued"
+
+
 def test_stage1_metadata_coverage_and_safe_suggestions(monkeypatch: pytest.MonkeyPatch) -> None:
     discovered = "https://static.nhtsa.gov/odi/tsbs/2014/SB-10063500-2280.pdf?utm_source=test&edition=2014&_ga=ignore"
     monkeypatch.setattr(
@@ -648,6 +670,8 @@ def test_stage1_migrates_legacy_cache_additively(tmp_path: Path) -> None:
     ("status", "body", "expected_allowed", "expected_delay"),
     [
         (200, b"User-agent: *\nDisallow: /private\nCrawl-delay: 4", False, 4.0),
+        (200, b"\xef\xbb\xbfUser-agent: *\nDisallow: /\n", False, 1.0),
+        (200, b"\xef\xbb\xbfUser-agent: *\nDisallow: /other\n", True, 1.0),
         (404, b"", True, 1.0),
         (503, b"", False, 1.0),
     ],

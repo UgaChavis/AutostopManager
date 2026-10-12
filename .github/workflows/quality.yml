@@ -33,6 +33,9 @@ jobs:
       - name: Audit knowledge and documentation contracts
         run: |
           python -m autostop_manager.cli doctor --project-only
+          python scripts/update-instruction-catalogs.py --check --project-only
+          python scripts/check-automotive-catalog.py
+          python scripts/generate-automotive-instructions.py --check
 
       - name: Lint, format, and type check
         run: |
@@ -42,7 +45,7 @@ jobs:
 
       - name: Enforce project and E2 coverage gates
         run: |
-          python -m coverage run -m pytest -q
+          python -m coverage run -m pytest -q -ra
           python -m coverage report --fail-under=82
           python -m coverage json -o "$RUNNER_TEMP/coverage.json"
           python scripts/check-e2-branch-coverage.py "$RUNNER_TEMP/coverage.json"

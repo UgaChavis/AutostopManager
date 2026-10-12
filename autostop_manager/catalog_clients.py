@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import calendar
 from contextlib import suppress
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from http.client import HTTPException
 from html import unescape
 from html.parser import HTMLParser
@@ -11,9 +15,10 @@ import os
 import re
 import time
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from .bounded_http_read import urlopen as bounded_urlopen
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .partsapi_methods import PARTSAPI_SHOP_METHODS
@@ -56,7 +61,15 @@ def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:
 
 def urlopen(request: Request, timeout: float = 20.0) -> Any:
     """Keep credentials on their origin and bound each provider request."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=_clamp_timeout(timeout))
+    request_timeout = _clamp_timeout(timeout)
+    try:
+        allocated_timeout = float(timeout)
+    except (TypeError, ValueError):
+        allocated_timeout = request_timeout
+    # An already allocated remaining budget must never be extended to the public minimum.
+    if math.isfinite(allocated_timeout) and allocated_timeout > 0:
+        request_timeout = min(request_timeout, allocated_timeout)
+    return bounded_urlopen(request, timeout=request_timeout, maximum=MAX_PROVIDER_RESPONSE_BYTES)
 
 
 def _read_response_bytes(response: Any, *, maximum: int = MAX_PROVIDER_RESPONSE_BYTES) -> bytes:
@@ -1544,6 +1557,10 @@ def _partsapi_http_error_payload(exc: HTTPError) -> dict[str, Any]:
 
 def _partsapi_failure_details(exc: BaseException) -> tuple[str, bool, str]:
     """Return a safe, machine-readable failure class and retry decision."""
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
+        return "provider_busy", False, "Provider HTTP transport capacity is busy."
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
+        return "provider_executor_unavailable", False, "Provider HTTP transport is unavailable."
     if isinstance(exc, HTTPError):
         code = int(exc.code)
         payload = _partsapi_http_error_payload(exc)
@@ -1754,8 +1771,10 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "vehicle_type": ("carType", "CAR_TYPE"),
     "tecdoc_external_id": ("TecDocExternalId",),
     "tecrmi_external_id": ("TecRmiExternalId",),
-    "model_year_from": ("yearOfConstrFrom", "modelyearfrom"),
-    "model_year_to": ("yearOfConstrTo", "modelyearto"),
+    "model_year_from": ("modelyearfrom",),
+    "model_year_to": ("modelyearto",),
+    "production_date_from": ("yearOfConstrFrom",),
+    "production_date_to": ("yearOfConstrTo",),
     "plant": ("plant",),
     "frame_color": ("framecolor", "cvet_kuzova"),
     "trim_color": ("trimcolor", "cvet_salona"),
@@ -1778,7 +1797,71 @@ _PARTSAPI_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "charge_type": ("CHARGE_TYPE",),
     "timing_drive": ("ENGINE_MANAGEMENT",),
     "engine_layout": ("ENGINE_CONSTRUCTION",),
+    "cooling_type": ("COOLING_TYPE",),
+    "cylinder_construction": ("CYLINDER_CONSTRUCTION",),
 }
+
+
+_PARTSAPI_ENGINE_INTEGER_FIELDS = frozenset(
+    {"engine_id", "tecdoc_car_id", "tecdoc_external_id", "tecrmi_external_id", "cylinders", "valves"}
+)
+_PARTSAPI_ENGINE_NUMBER_FIELDS = _PARTSAPI_ENGINE_INTEGER_FIELDS | {
+    "displacement_cc",
+    "power_hp_from",
+    "power_hp_to",
+    "power_kw_from",
+    "power_kw_to",
+    "torque_nm_from",
+    "torque_nm_to",
+}
+
+
+def _partsapi_engine_number(value: Any, *, integer: bool) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    raw = str(value).strip().replace(",", ".")
+    if not re.fullmatch(r"\+?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", raw):
+        return None
+    try:
+        decimal = Decimal(raw)
+        number = float(decimal)
+    except (InvalidOperation, OverflowError, ValueError):
+        return None
+    if not decimal.is_finite() or not math.isfinite(number) or number <= 0:
+        return None
+    integral = decimal == decimal.to_integral_value()
+    if integer and not integral:
+        return None
+    return int(decimal) if integral else number
+
+
+def _partsapi_engine_profile_numbers(profile: dict[str, Any], item: dict[str, Any]) -> None:
+    issues = {}
+    for field in sorted(_PARTSAPI_ENGINE_NUMBER_FIELDS):
+        values = [item[key] for key in _PARTSAPI_PROFILE_FIELDS[field] if item.get(key) not in (None, "")]
+        if not values:
+            continue
+        numbers = [_partsapi_engine_number(value, integer=field in _PARTSAPI_ENGINE_INTEGER_FIELDS) for value in values]
+        if any(number is None for number in numbers):
+            profile.pop(field, None)
+            issues[field] = "invalid_numeric_value"
+        elif any(number != numbers[0] for number in numbers[1:]):
+            profile.pop(field, None)
+            issues[field] = "conflicting_numeric_aliases"
+        else:
+            profile[field] = numbers[0]
+    for lower, upper in (
+        ("power_hp_from", "power_hp_to"),
+        ("power_kw_from", "power_kw_to"),
+        ("torque_nm_from", "torque_nm_to"),
+    ):
+        if lower in profile and upper in profile and profile[lower] > profile[upper]:
+            profile.pop(lower)
+            profile.pop(upper)
+            issues[lower] = issues[upper] = "invalid_numeric_range"
+    # Diagnostics alone must not turn an otherwise unreadable record into a vehicle profile.
+    if issues and len(profile) > 3:
+        profile["numeric_field_issues"] = issues
 
 
 def _partsapi_profile_values(item: dict[str, Any]) -> dict[str, Any]:
@@ -1806,11 +1889,274 @@ def _partsapi_vehicle_profile_from_item(item: dict[str, Any], *, operation: str 
         "raw_keys": sorted(str(key) for key in item),
     }
     profile.update(_partsapi_profile_values(item))
+    if operation == "engine_info":
+        _partsapi_engine_profile_numbers(profile, item)
+    _partsapi_profile_production_boundaries(profile)
 
     identifier = _first_value(item, ("vin", "VIN", "frame", "FRAME"))
     if identifier not in (None, ""):
         profile["redacted_identifier"] = _redact_identifier(str(identifier))
     return profile
+
+
+_PARTSAPI_CAR_FIELDS: dict[str, tuple[str, ...]] = {
+    "tecdoc_car_id": ("carId", "typeNumber", "TYPE_ID", "TYP_ID", "id", "CAR_ID"),
+    "make_id": ("makeId", "manuId", "MFA_ID", "MAKE_ID"),
+    "model_id": ("modelId", "MOD_ID", "MODEL_ID"),
+    "make": ("manuName", "makeName", "manuShortName", "MFA_BRAND", "brand", "MAKE_NAME"),
+    "model": ("modelName", "model", "MOD_CDS_TEXT", "MODEL_NAME"),
+    "modification": ("typeName", "carName", "name", "TYP_CDS_TEXT", "modification", "CAR_NAME"),
+    "vehicle_type": ("carType", "CAR_TYPE", "vehicle_type", "CAR_TYPES"),
+    "displacement_cc": ("cylinderCapacityCcm", "ccmTech", "capacity", "TYP_CCM", "ENG_CAPACITY_CCM", "CAPACITY"),
+    "power_hp_from": ("powerHpFrom", "powerHp", "hp", "TYP_HP_FROM", "ENG_POWER_PS_START", "POWER_PS"),
+    "power_hp_to": ("powerHpTo", "TYP_HP_UPTO", "ENG_POWER_PS_UPTO"),
+    "power_kw_from": ("powerKwFrom", "powerKw", "kw", "TYP_KW_FROM", "ENG_POWER_KW_START", "POWER_KW"),
+    "power_kw_to": ("powerKwTo", "TYP_KW_UPTO", "ENG_POWER_KW_UPTO"),
+    "engine_type": ("engineType", "engine_type", "TYP_ENGINE_DES", "ENGINE_TYPE"),
+    "fuel_type": ("fuelType", "fuel_type", "TYP_FUEL_DES", "FUEL_TYPE"),
+    "engine_code": ("engineCode", "motorCodes", "ENGINE_CODE", "ENG_CODE"),
+    "engine": ("motorCodes", "engineCode", "ENGINE_CODE", "ENG_CODE", "engine"),
+    "transmission": ("transmission", "transmissionType", "kp", "kpp"),
+    "drive_type": ("driveType", "drive_type", "TYP_DRIVE_DES"),
+    "production_date_from": ("yearOfConstrFrom", "productionDateFrom", "dateFrom", "TYP_PCON_START", "YEAR_START"),
+    "production_date_to": ("yearOfConstrTo", "productionDateTo", "dateTo", "TYP_PCON_END", "YEAR_END"),
+    "body": ("bodyStyle", "BODY"),
+    "full_model_name": ("FULL_MODEL_NAME",),
+}
+
+
+def _partsapi_car_number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except ValueError:
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _partsapi_car_field_number(field: str, key: str, value: Any) -> int | float | None:
+    if field == "displacement_cc" and key == "CAPACITY" and isinstance(value, str) and "/" in value:
+        match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+(?:[.,]\d+)?)\s*l\s*", value, re.IGNORECASE)
+        if not match:
+            return None
+        cc = _partsapi_car_number(match[1])
+        liters = match[2].replace(",", ".")
+        liters_number = _partsapi_car_number(liters)
+        if not isinstance(cc, int) or liters_number is None:
+            return None
+        precision = len(liters.split(".")[1]) if "." in liters else 0
+        # The liter label is rounded; the cc field is the exact catalog value.
+        if abs(cc - liters_number * 1000) > 500 * 10**-precision + 1e-6:
+            return None
+        return cc
+    return _partsapi_car_number(value)
+
+
+def _partsapi_production_boundary(value: Any, *, upper: bool = False) -> dict[str, Any] | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip()
+    boundary: dict[str, Any] = {"raw_value": value, "date": None, "precision": None}
+    partial = re.fullmatch(r"(\d{4})(?:[-/]?(\d{2}))?", text)
+    try:
+        if partial:
+            year = int(partial[1])
+            month = int(partial[2]) if partial[2] else 12 if upper else 1
+            day = calendar.monthrange(year, month)[1] if upper else 1
+            parsed = date(year, month, day)
+            precision = "month" if partial[2] else "year"
+        else:
+            try:
+                parsed = date.fromisoformat(text)
+            except ValueError:
+                parsed = parsedate_to_datetime(text).date()
+            precision = "day"
+    except (ValueError, TypeError, OverflowError):
+        return boundary
+    boundary.update(date=parsed.isoformat(), precision=precision)
+    return boundary
+
+
+def _partsapi_profile_production_boundaries(profile: dict[str, Any]) -> None:
+    boundaries = {}
+    for field in ("production_date_from", "production_date_to"):
+        boundary = _partsapi_production_boundary(profile.pop(field, None), upper=field.endswith("_to"))
+        if boundary:
+            boundaries[field] = boundary
+            if boundary["date"]:
+                profile[field] = boundary["date"]
+                profile[field.replace("date", "year")] = int(boundary["date"][:4])
+    if boundaries:
+        profile["production_boundaries"] = boundaries
+
+
+def _partsapi_car_records(payload: Any, *, depth: int = 0) -> list[dict[str, Any]]:
+    if depth > 5:
+        raise ValueError("getCars response exceeds the parser depth limit.")
+    if isinstance(payload, list):
+        return [record for item in payload for record in _partsapi_car_records(item, depth=depth + 1)]
+    if not isinstance(payload, dict):
+        return []
+    if any(key in payload for key in _PARTSAPI_CAR_FIELDS["tecdoc_car_id"]):
+        return [payload]
+    return [
+        record
+        for key, nested in payload.items()
+        if str(key).casefold() in {"data", "result", "array", "items", "cars"} or str(key).isdigit()
+        for record in _partsapi_car_records(nested, depth=depth + 1)
+    ]
+
+
+def _partsapi_car_aliases_agree(item: dict[str, Any]) -> bool:
+    from .vehicle_identity import identity_values_agree
+
+    numeric_fields = {
+        "tecdoc_car_id",
+        "make_id",
+        "model_id",
+        "displacement_cc",
+        "power_hp_from",
+        "power_hp_to",
+        "power_kw_from",
+        "power_kw_to",
+    }
+    text_fields = {"make", "model", "engine_code", "transmission", "drive_type", "vehicle_type", "modification"}
+    for field in numeric_fields | text_fields:
+        aliases = [
+            (key, item[key])
+            for key in _PARTSAPI_CAR_FIELDS[field]
+            if item.get(key) not in (None, "") and (not isinstance(item[key], str) or item[key].strip())
+        ]
+        if len(aliases) < 2:
+            continue
+        if field in numeric_fields:
+            numbers = [_partsapi_car_field_number(field, key, value) for key, value in aliases]
+            if None in numbers or len(set(numbers)) != 1:
+                return False
+        else:
+            identity_field = {"engine_code": "engine", "drive_type": "drivetrain"}.get(field, field)
+            if not all(
+                identity_values_agree(identity_field, left, right)
+                for index, (_key, left) in enumerate(aliases)
+                for _other_key, right in aliases[index + 1 :]
+            ):
+                return False
+    for field in ("production_date_from", "production_date_to"):
+        boundaries = [
+            _partsapi_production_boundary(item[key], upper=field.endswith("_to"))
+            for key in _PARTSAPI_CAR_FIELDS[field]
+            if item.get(key) not in (None, "")
+        ]
+        dates = [boundary["date"] for boundary in boundaries if boundary]
+        if len(dates) > 1 and (None in dates or len(set(dates)) != 1):
+            return False
+    return True
+
+
+def _partsapi_car_profile(item: dict[str, Any], *, vehicle_type: Any = None) -> dict[str, Any] | None:
+    identifiers = [
+        _partsapi_car_number(item[key])
+        for key in _PARTSAPI_CAR_FIELDS["tecdoc_car_id"]
+        if item.get(key) not in (None, "")
+    ]
+    if (
+        not identifiers
+        or any(not isinstance(value, int) for value in identifiers)
+        or len(set(identifiers)) != 1
+        or not _partsapi_car_aliases_agree(item)
+    ):
+        return None
+    profile = _partsapi_vehicle_profile_from_item(item, operation="getCars")
+    # TecDoc construction dates describe a modification's production interval,
+    # not the customer's production date or the VIN's model year.
+    profile.pop("model_year_from", None)
+    profile.pop("model_year_to", None)
+    numeric_fields = {
+        "tecdoc_car_id",
+        "make_id",
+        "model_id",
+        "displacement_cc",
+        "power_hp_from",
+        "power_hp_to",
+        "power_kw_from",
+        "power_kw_to",
+    }
+    boundaries = {}
+    for field, aliases in _PARTSAPI_CAR_FIELDS.items():
+        value = _first_value(item, aliases)
+        if field.startswith("production_date_"):
+            boundary = _partsapi_production_boundary(value, upper=field.endswith("_to"))
+            if boundary:
+                boundaries[field] = boundary
+                if boundary["date"]:
+                    profile[field] = boundary["date"]
+                    profile[field.replace("date", "year")] = int(boundary["date"][:4])
+        elif field in numeric_fields:
+            key = next((key for key in aliases if item.get(key) not in (None, "")), "")
+            number = _partsapi_car_field_number(field, key, value)
+            if number is not None and (not field.endswith("_id") or isinstance(number, int)):
+                profile[field] = number
+            else:
+                profile.pop(field, None)
+        elif isinstance(value, str) and value.strip():
+            profile[field] = value.strip()
+        else:
+            profile.pop(field, None)
+    if not profile.get("tecdoc_car_id"):
+        return None
+    if "vehicle_type" not in profile and vehicle_type in {"PC", "CV", "Motorcycle"}:
+        profile["vehicle_type"] = vehicle_type
+    elif vehicle_type in {"PC", "CV", "Motorcycle"} and profile.get("vehicle_type") != vehicle_type:
+        return None
+    if boundaries:
+        profile["production_boundaries"] = boundaries
+    if "drive_type" in profile:
+        profile["drivetrain"] = profile["drive_type"]
+    capacity = item.get("CAPACITY")
+    if (
+        isinstance(capacity, str)
+        and "/" in capacity
+        and _partsapi_car_field_number("displacement_cc", "CAPACITY", capacity) is not None
+    ):
+        liters_raw = capacity.split("/", 1)[1].strip()[:-1].strip()
+        profile["displacement_litres"] = float(liters_raw.replace(",", "."))
+        profile["displacement_litres_raw"] = liters_raw
+    transmissions = list(
+        dict.fromkeys(
+            item[key].strip()
+            for key in _PARTSAPI_CAR_FIELDS["transmission"]
+            if isinstance(item.get(key), str) and item[key].strip()
+        )
+    )
+    if transmissions:
+        profile["transmission"] = " / ".join(transmissions)
+    profile.update(
+        identifier_matches_request=None,
+        requires_exact_identifier_confirmation=True,
+        catalog_candidate_only=True,
+        independent_vehicle_confirmation=False,
+        fitment_confirmed=False,
+    )
+    return profile
+
+
+def _extract_partsapi_car_profiles(payload: Any, *, vehicle_type: str | None = None) -> list[dict[str, Any]]:
+    try:
+        records = _partsapi_car_records(payload)
+    except ValueError:
+        return []
+    profiles = []
+    for item in records:
+        profile = _partsapi_car_profile(item, vehicle_type=vehicle_type)
+        if profile is None:
+            # Dropping an unreadable variant could turn an ambiguous response
+            # into an apparently unique vehicle. Reject this source response.
+            return []
+        profiles.append(profile)
+    return profiles
 
 
 def _partsapi_plate_vin_records(payload: Any) -> list[dict[str, Any]]:
@@ -2020,9 +2366,228 @@ def _partsapi_vin_decode_records(
     return [(payload, identifiers, ()), *records]
 
 
+def _partsapi_us_diagnostic_aliases(record: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(record)
+    for alias, canonical in (("Error Code", "ErrorCode"), ("Error Text", "ErrorText")):
+        if alias not in normalized:
+            continue
+        value = normalized.pop(alias)
+        if canonical in normalized and (
+            normalized[canonical] != value or type(normalized[canonical]) is not type(value)
+        ):
+            raise ValueError("decodeVINus returned contradictory diagnostic aliases.")
+        normalized[canonical] = value
+    code, text = normalized.get("ErrorCode"), normalized.get("ErrorText")
+    if code is not None and (isinstance(code, bool) or not isinstance(code, (str, int))):
+        raise ValueError("decodeVINus returned malformed diagnostic codes.")
+    if text is not None and not isinstance(text, str):
+        raise ValueError("decodeVINus returned malformed diagnostic text.")
+    return normalized
+
+
+def _partsapi_us_error_codes(value: str | int | None) -> tuple[list[str], bool]:
+    if value in (None, ""):
+        return [], True
+    if len(str(value)) > 4096:
+        return [], False
+    tokens = [token.strip() for token in re.split(r"[,;]", str(value))]
+    valid = len(tokens) <= 64 and all(re.fullmatch(r"[0-9]{1,4}", token) for token in tokens)
+    codes = list(dict.fromkeys(token for token in tokens[:64] if re.fullmatch(r"[0-9]{1,4}", token) and token != "0"))
+    return codes, valid
+
+
+def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool]:
+    if depth > 5 or not isinstance(payload, dict):
+        return {}, False
+    results = payload.get("Results")
+    if isinstance(results, list) and results:
+        variables = [row for row in results if isinstance(row, dict) and "Variable" in row and "Value" in row]
+        if len(variables) == len(results):
+            record: dict[str, Any] = {}
+            for row in variables:
+                key = str(row["Variable"]).replace(" ", "")
+                if key in record and record[key] != row["Value"]:
+                    return {}, False
+                record[key] = row["Value"]
+            record = _partsapi_us_diagnostic_aliases(record)
+            return record, "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear"))
+        if len(results) == 1 and isinstance(results[0], dict):
+            record = _partsapi_us_diagnostic_aliases(results[0])
+            return record, "ErrorCode" in record and "ErrorText" in record
+    record = _partsapi_us_diagnostic_aliases(payload)
+    if any(key in record for key in ("Make", "Model", "ErrorCode", "ErrorText")):
+        marker = " ".join(str(payload.get(key) or "") for key in ("source", "provider", "upstream", "Message"))
+        origin = bool(re.search(r"\b(?:NHTSA|vPIC)\b|vpic\.nhtsa\.dot\.gov", marker, re.IGNORECASE))
+        return record, origin and "ErrorCode" in record and "ErrorText" in record
+    for key in ("data", "result"):
+        nested = payload.get(key)
+        if isinstance(nested, list) and len(nested) == 1:
+            nested = nested[0]
+        record, recognized = _partsapi_us_decode_record(nested, depth=depth + 1)
+        if record:
+            return record, recognized
+    return {}, False
+
+
+def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
+    if depth > 5:
+        raise ValueError("decodeVINus response exceeds parser depth limit.")
+    if isinstance(payload, list):
+        return tuple(vin for row in payload for vin in _partsapi_us_identifiers(row, depth=depth + 1))
+    if not isinstance(payload, dict):
+        return ()
+    identifiers = tuple(
+        _partsapi_identifier(value) for key, value in payload.items() if str(key).casefold() == "vin" and value
+    )
+    if str(payload.get("Variable") or "").replace(" ", "").casefold() == "vin" and payload.get("Value"):
+        identifiers += (_partsapi_identifier(payload["Value"]),)
+    return identifiers + tuple(
+        vin
+        for key, nested in payload.items()
+        if str(key).casefold() in {"data", "result", "results", "array", "items"}
+        for vin in _partsapi_us_identifiers(nested, depth=depth + 1)
+    )
+
+
+def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | None) -> dict[str, Any]:
+    try:
+        record, recognized = _partsapi_us_decode_record(payload)
+    except ValueError:
+        record, recognized = {}, False
+    requested = _partsapi_identifier(requested_identifier)
+    returned = _partsapi_identifier(record.get("VIN"))
+    try:
+        identifiers = _partsapi_us_identifiers(payload)
+    except ValueError:
+        record, recognized, identifiers = {}, False, ()
+    full_vins = [vin for vin in identifiers if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)]
+    matches = None
+    if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and full_vins:
+        matches = (
+            False
+            if any(vin != requested for vin in full_vins)
+            else True
+            if len(full_vins) == len(identifiers)
+            else None
+        )
+    aliases = {
+        "make": "Make",
+        "model": "Model",
+        "model_year": "ModelYear",
+        "engine": "EngineModel",
+        "modification": "Trim",
+    }
+    facts = {
+        field: str(record[key]).strip()
+        for field, key in aliases.items()
+        if record.get(key) not in (None, "")
+        and str(record[key]).strip().casefold() not in {"not applicable", "null", "unknown"}
+    }
+    codes, diagnostics_valid = _partsapi_us_error_codes(record.get("ErrorCode"))
+    recognized = recognized and diagnostics_valid
+    missing = [field for field in aliases if field not in facts]
+    provenance = {
+        "provider": "partsapi_ru",
+        "upstream": "nhtsa_vpic" if recognized else "unknown",
+        "basis": "recognized_response_shape" if recognized else "origin_unverified",
+        "independent_of_direct_vpic": False if recognized else None,
+    }
+    profile = {
+        "provider": "partsapi_ru",
+        "source_operation": "decodeVINus",
+        **facts,
+        "primary_lineage": "nhtsa_vpic" if recognized else None,
+        "provenance": provenance,
+        "identifier_matches_request": matches,
+        "redacted_identifier": _redact_identifier(returned) if returned else None,
+        "redacted_requested_identifier": _redact_identifier(requested) if requested else None,
+        "requires_exact_identifier_confirmation": matches is not True,
+        "catalog_candidate_only": True,
+        "independent_vehicle_confirmation": False,
+        "fitment_confirmed": False,
+    }
+    status = "partial" if facts else "missing"
+    outcome = "partial_result" if facts else "empty_result"
+    if facts and not missing and not codes and diagnostics_valid and matches is True:
+        status, outcome = "complete", "success"
+    if not record:
+        status, outcome = "unparsed", "unparsed_response"
+    if matches is False:
+        status, outcome = "identifier_mismatch", "identifier_mismatch"
+    return {
+        "vehicle_profiles": [profile] if facts and matches is not False else [],
+        "semantic_status": status,
+        "missing_fields": missing,
+        "provider_diagnostics": {
+            "error_codes": codes,
+            "has_errors": bool(codes) or not diagnostics_valid,
+            "has_error_text": bool(record.get("ErrorText")),
+            "diagnostics_status": "invalid"
+            if not diagnostics_valid
+            else "reported"
+            if record.get("ErrorCode") not in (None, "")
+            else "missing",
+        },
+        "provenance": provenance,
+        "identifier_matches_request": matches,
+        "requires_exact_identifier_confirmation": matches is not True,
+        "outcome": outcome,
+        "ok": outcome not in {"unparsed_response", "identifier_mismatch"},
+        "failure_class": "provider_identifier_mismatch"
+        if matches is False
+        else "adapter_unparsed_response"
+        if not record
+        else None,
+        "requires_fallback": outcome != "success" or matches is not True,
+    }
+
+
+def _partsapi_group_reference_evidence(
+    requested: str, identifiers: tuple[str, ...], descendants: tuple[str, ...], matches: bool | None
+) -> dict[str, Any]:
+    """A single valid representative is a provider claim, never exact identity."""
+    from .automotive_contracts import binding
+
+    values = identifiers + descendants
+    if (
+        matches is not False
+        or re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) is None
+        or len(set(values)) != 1
+        or not all(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", value) for value in values)
+    ):
+        return {}
+    return {
+        "binding_kind": "provider_group_reference",
+        "identifier_semantics": "group_representative",
+        "input_binding": binding(requested, "vin"),
+        "catalog_candidate_only": True,
+        "independent_vehicle_confirmation": False,
+        "fitment_confirmed": False,
+        "warning": (
+            "PartsAPI returned a group representative VIN; characteristics are catalog candidates "
+            "for the requested VIN, not an exact factory specification or confirmed part fitment."
+        ),
+        "provenance": {
+            "provider": "partsapi_ru",
+            "primary_lineage": "partsapi_ru",
+            "semantics_basis": "owner_clarification",
+        },
+    }
+
+
 def extract_partsapi_vehicle_profiles(
-    *, payload: Any, operation: str | None = None, requested_identifier: str | None = None
+    *,
+    payload: Any,
+    operation: str | None = None,
+    requested_identifier: str | None = None,
+    vehicle_type: str | None = None,
 ) -> list[dict[str, Any]]:
+    profile_extractors = {
+        "getCars": lambda: _extract_partsapi_car_profiles(payload, vehicle_type=vehicle_type),
+        "decodeVINus": lambda: _partsapi_decode_vin_us_semantics(payload, requested_identifier)["vehicle_profiles"],
+    }
+    if operation in profile_extractors:
+        return profile_extractors[operation]()
     # getEngine currently returns a top-level list; retain legacy envelopes too.
     if operation == "engine_info" and isinstance(payload, list):
         payload = {"data": payload}
@@ -2077,10 +2642,20 @@ def extract_partsapi_vehicle_profiles(
                     else None
                 )
             profile["identifier_matches_request"] = matches
+            profile["redacted_requested_identifier"] = _redact_identifier(requested) if requested else None
+            # A matching identifier binds this response; it does not independently
+            # establish the customer's engine, model year, equipment or part fitment.
+            profile["provider_identifier_is_vehicle_confirmation"] = False
+            profile["vin_prefix_is_vehicle_confirmation"] = False
             profile["requires_exact_identifier_confirmation"] = matches is not True
+            # VINdecode may return a representative of the requested catalog
+            # group (owner-confirmed provider semantics), not an exact VIN echo.
+            # Contradictory or malformed identifiers still fail closed.
+            group_evidence = _partsapi_group_reference_evidence(requested, identifiers, descendants, matches)
+            profile.update(group_evidence)
             if identifiers:
                 profile["redacted_identifier"] = _redact_identifier(identifiers[-1])
-            if matches is not True:
+            if matches is not True and not group_evidence:
                 profile["warning"] = (
                     "Provider returned a different identifier; do not use this vehicle for the requested VIN."
                     if matches is False
@@ -2098,17 +2673,54 @@ def extract_partsapi_vehicle_profiles(
     return profiles
 
 
-def partsapi_identifier_allows_candidate_lookup(call: dict[str, Any]) -> bool:
-    """Require explicit VIN evidence, or the declared unverified candidate-only path."""
+def partsapi_is_group_reference(call: dict[str, Any]) -> bool:
+    """Recognize only this provider/method's explicitly bound single catalog group."""
+    from .automotive_contracts import valid_binding
+
     profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
-    if not call.get("ok") or call.get("dry_run") or call.get("outcome") == "identifier_mismatch" or len(profiles) != 1:
+    if (
+        call.get("provider") != "partsapi_ru"
+        or call.get("operation") != "vin_decode"
+        or call.get("ok") is not True
+        or call.get("dry_run")
+        or call.get("outcome") != "group_match"
+        or call.get("identifier_matches_request") is not False
+        or call.get("binding_kind") != "provider_group_reference"
+        or call.get("identifier_semantics") != "group_representative"
+        or len(profiles) != 1
+    ):
         return False
-    matches = profiles[0].get("identifier_matches_request")
-    return matches is True or (
-        matches is None
-        and call.get("outcome") == "identifier_unverified"
-        and profiles[0].get("requires_exact_identifier_confirmation") is True
+    profile = profiles[0]
+    provenance = profile.get("provenance")
+    return (
+        profile.get("provider") == "partsapi_ru"
+        and profile.get("source_operation") == "vin_decode"
+        and profile.get("identifier_matches_request") is False
+        and profile.get("binding_kind") == "provider_group_reference"
+        and profile.get("identifier_semantics") == "group_representative"
+        and profile.get("catalog_candidate_only") is True
+        and profile.get("independent_vehicle_confirmation") is False
+        and profile.get("fitment_confirmed") is False
+        and profile.get("provider_identifier_is_vehicle_confirmation") is False
+        and profile.get("vin_prefix_is_vehicle_confirmation") is False
+        and isinstance(provenance, dict)
+        and provenance.get("provider") == "partsapi_ru"
+        and provenance.get("primary_lineage") == "partsapi_ru"
+        and provenance.get("semantics_basis") == "owner_clarification"
+        and valid_binding(call.get("input_binding"))
+        and call["input_binding"]["identifier_kind"] == "vin"
+        and profile.get("input_binding") == call.get("input_binding")
     )
+
+
+def partsapi_identifier_allows_candidate_lookup(call: dict[str, Any]) -> bool:
+    """Allow exact echoes or the scoped representative group for catalog research."""
+    if partsapi_is_group_reference(call):
+        return True
+    profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
+    if not call.get("ok") or call.get("dry_run") or call.get("outcome") != "success" or len(profiles) != 1:
+        return False
+    return profiles[0].get("identifier_matches_request") is True
 
 
 _AUTONORMS_FIELDS: dict[str, tuple[str, ...]] = {
@@ -2410,8 +3022,138 @@ def _partsapi_article_records(payload: Any) -> list[dict[str, Any]]:
     return records
 
 
+def _partsapi_article_oe_references(value: Any) -> list[dict[str, Any]]:
+    """Read only the declared OE block, never unrelated nested article numbers."""
+    from .vin_lookup import normalize_part_number
+
+    if not isinstance(value, str):
+        return []
+    references = []
+    seen = set()
+    for token in re.split(r"[,;]", value):
+        brand, separator, number = token.partition(":")
+        brand, number = brand.strip(), number.strip()
+        if not separator or not brand or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._/-]*", number):
+            continue
+        normalized_number = normalize_part_number(number)
+        identity = (brand.casefold(), normalized_number)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        references.append(
+            {
+                "brand": brand,
+                "part_number": number,
+                "raw_number": number,
+                "normalized_number": normalized_number,
+                "source_operation": "getArticle",
+                "relationship": "oe_reference",
+                "fitment_confirmed": False,
+            }
+        )
+    return references
+
+
+def _partsapi_article_embedded_criteria(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, str):
+        return []
+    criteria = []
+    for token in value.split(";"):
+        name, separator, raw_value = token.partition(":")
+        name, raw_value = name.strip(), raw_value.strip()
+        if not separator or not name or not raw_value:
+            continue
+        criterion: dict[str, Any] = {"name": name, "value": raw_value}
+        unit = re.search(r"\[([^]]+)\]|\(([^)]+)\)", name)
+        if unit:
+            criterion["unit"] = unit[1] or unit[2]
+        if re.fullmatch(r"[+-]?\d+(?:[.,]\d+)?", raw_value):
+            number = float(raw_value.replace(",", "."))
+            if math.isfinite(number):
+                criterion["numeric_value"] = int(number) if number.is_integer() else number
+        criteria.append(criterion)
+    return criteria
+
+
+def _partsapi_article_followups(
+    candidates: list[dict[str, Any]], operation: str | None, request_parameters: dict[str, Any] | None
+) -> None:
+    from .vin_lookup import normalize_part_number
+
+    params = request_parameters or {}
+    requested_number = normalize_part_number(str(params.get("ART_NUM") or ""))
+    requested_supplier = _partsapi_car_number(params.get("SUP_ID"))
+    requested_brand = str(params.get("brand") or "").strip().casefold()
+    matching_brands = {
+        str(candidate.get("brand") or "").strip().casefold()
+        for candidate in candidates
+        if normalize_part_number(str(candidate.get("part_number") or "")) == requested_number
+    }
+    for candidate in candidates:
+        supplier = _partsapi_car_number(candidate.get("supplier_id"))
+        candidate["supplier_id_source"] = "provider_response" if isinstance(supplier, int) else None
+        candidate["supplier_id"] = supplier if isinstance(supplier, int) else None
+        brand = str(candidate.get("brand") or "").strip().casefold()
+        bound = (
+            operation == "article"
+            and requested_number
+            and normalize_part_number(str(candidate.get("part_number") or "")) == requested_number
+            and len(matching_brands) == 1
+            and brand
+            and (not requested_brand or brand == requested_brand)
+        )
+        if candidate["supplier_id"] is None and bound and isinstance(requested_supplier, int):
+            candidate["supplier_id"] = requested_supplier
+            candidate["supplier_id_source"] = "request_parameters"
+        candidate["get_article_ready"] = bool(candidate.get("part_number") and candidate["supplier_id"])
+        candidate["missing_for_get_article"] = [
+            field for field in ("part_number", "supplier_id") if not candidate.get(field)
+        ]
+        candidate["article_id_operations"] = (
+            ["article_criteria", "getArticleMedia", "article_crosses"]
+            if isinstance(_partsapi_car_number(candidate.get("article_id")), int)
+            else []
+        )
+        if candidate["supplier_id"] is None:
+            candidate["supplier_id_resolution"] = "linked_getArticles"
+
+
+def _partsapi_catalog_completeness(operation: str, candidates: list[dict[str, Any]], outcome: str) -> dict[str, Any]:
+    required = {
+        "search_articles": ("article_id", "part_number", "brand", "product_name", "found_via"),
+        "articles": ("article_id", "part_number", "brand", "supplier_id", "product_group", "product_group_id"),
+        "article": ("article_id", "part_number", "brand"),
+        "getCars": (
+            "tecdoc_car_id",
+            "make",
+            "model",
+            "modification",
+            "vehicle_type",
+            "displacement_cc",
+            "power_kw_from",
+            "power_hp_from",
+            "engine_type",
+            "production_date_from",
+        ),
+    }.get(operation)
+    if required is None:
+        return {}
+    missing = {field for candidate in candidates for field in required if candidate.get(field) in (None, "")}
+    if operation == "article":
+        missing.update(
+            field
+            for field, raw_key in (("criteria", "ARTICLE_CRITERIA"), ("oe_references", "OEM_NUMBERS"))
+            if any(raw_key not in candidate["raw_keys"] for candidate in candidates)
+        )
+    return {
+        "completeness": "complete" if candidates and not missing and outcome == "success" else "partial",
+        "completeness_scope": "catalog_response",
+        "missing_fields": sorted(missing),
+    }
+
+
 def extract_partsapi_article_candidates(
-    *, payload: Any, operation: str | None = "search_articles"
+    *, payload: Any, operation: str | None = "search_articles", request_parameters: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
@@ -2450,6 +3192,13 @@ def extract_partsapi_article_candidates(
                 "raw_keys": sorted(str(key) for key in item),
             }
         )
+        if operation == "article":
+            candidates[-1].update(
+                oe_references=_partsapi_article_oe_references(item.get("OEM_NUMBERS")),
+                criteria=_partsapi_article_embedded_criteria(item.get("ARTICLE_CRITERIA")),
+                supersession={"superseded": item.get("SUPERSEDED"), "superseded_by": item.get("SUPERSEDED BY")},
+            )
+    _partsapi_article_followups(candidates, operation, request_parameters)
     return candidates
 
 
@@ -2526,6 +3275,7 @@ def partsapi_catalog_lookup(
     timeout: float = 20.0,
     max_attempts: int = 1,
     dry_run: bool = False,
+    catalog_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if operation.startswith("norms_"):
         max_attempts = _bounded_attempt_count(max_attempts, limit=2)
@@ -2582,7 +3332,14 @@ def partsapi_catalog_lookup(
         or not isinstance(value, (str, int, float))
         or (isinstance(value, float) and not math.isfinite(value))
     ]
-    if invalid:
+    from .automotive_contracts import validate_catalog_context
+
+    context_errors = validate_catalog_context(
+        operation,
+        {api_name: overrides.get(api_name, input_values.get(source)) for api_name, source in spec["params"].items()},
+        catalog_context,
+    )
+    if invalid or context_errors:
         return {
             "ok": False,
             "provider": "partsapi_ru",
@@ -2593,6 +3350,7 @@ def partsapi_catalog_lookup(
             "retryable": False,
             "requires_fallback": False,
             "attempt_count": 0,
+            "errors": context_errors,
         }
     for api_name, value in overrides.items():
         input_values[spec["params"][api_name]] = value
@@ -2614,6 +3372,7 @@ def partsapi_catalog_lookup(
             }
         identifier = requested or override
         input_values[spec["params"]["vin"]] = identifier
+        input_values["identifier"] = identifier
     if operation == "norms_models" and isinstance(input_values.get("make_name_seo"), str):
         # AUTONORMS makeNameSEO uses uppercase codes (GetNormsMakes), unlike TecDoc IDs.
         input_values["make_name_seo"] = input_values["make_name_seo"].strip().upper()
@@ -2634,6 +3393,13 @@ def partsapi_catalog_lookup(
         "quota_cost_estimate": 1,
         "request_plan": _safe_request_plan(request_plan, omit={"url"}),
         "redacted_identifier": _redact_identifier(identifier or "") if identifier else None,
+        "redacted_requested_identifier": _redact_identifier(identifier or "") if identifier else None,
+        "catalog_binding": {
+            "status": "validated_reference" if catalog_context is not None else "raw_parameters_unverified",
+            "exact_vehicle_confirmed": False,
+            "fitment_confirmed": False,
+            "category_queryable": operation == "articles" and catalog_context is not None,
+        },
         "redacted_registration_number": _redact_identifier(registration_number or "") if registration_number else None,
         "privacy": {
             "raw_identifier_is_sensitive": bool(identifier or registration_number),
@@ -2778,7 +3544,9 @@ def partsapi_catalog_lookup(
         else []
     )
     article_candidates = (
-        extract_partsapi_article_candidates(payload=payload, operation=operation)
+        extract_partsapi_article_candidates(
+            payload=payload, operation=operation, request_parameters={**params, "brand": brand}
+        )
         if operation
         in {
             "search_articles",
@@ -2810,7 +3578,10 @@ def partsapi_catalog_lookup(
         else extract_oem_candidates(provider="partsapi_ru", payload=payload, operation=operation)
     )
     vehicle_profiles = extract_partsapi_vehicle_profiles(
-        payload=payload, operation=operation, requested_identifier=str(input_values.get("identifier") or "")
+        payload=payload,
+        operation=operation,
+        requested_identifier=str(input_values.get("identifier") or ""),
+        vehicle_type=str(params.get("carType") or ""),
     )
     autonorms_rows = extract_partsapi_autonorms_rows(payload=payload, operation=operation)
     fill_volumes = extract_partsapi_fill_volumes(payload=payload) if operation == "fill_volumes" else []
@@ -2831,6 +3602,7 @@ def partsapi_catalog_lookup(
     }
     expected_records = {
         "vin_decode": ("vehicle_profiles",),
+        "getCars": ("vehicle_profiles",),
         "plate_to_vin": ("vehicle_profiles",),
         "crosses": ("cross_candidates",),
         "crosses_with_brand": ("cross_candidates",),
@@ -2853,20 +3625,46 @@ def partsapi_catalog_lookup(
     outcome = "empty_result" if empty_payload else "unparsed_response" if no_expected_records else "success"
     identifier_evidence: dict[str, Any] = {}
     if operation == "vin_decode" and vehicle_profiles:
+        from .automotive_contracts import binding
+
         matches = [profile.get("identifier_matches_request") for profile in vehicle_profiles]
         confirmation = False if False in matches else True if all(value is True for value in matches) else None
+        group_reference = confirmation is False and all(
+            profile.get("binding_kind") == "provider_group_reference" for profile in vehicle_profiles
+        )
         identifier_evidence = {
             "identifier_matches_request": confirmation,
             "requires_exact_identifier_confirmation": confirmation is not True,
+            "input_binding": binding(str(input_values.get("identifier") or ""), "vin"),
         }
+        identifier_evidence.update(
+            {
+                "binding_kind": "provider_group_reference",
+                "identifier_semantics": "group_representative",
+                "catalog_binding": {
+                    **base["catalog_binding"],
+                    "status": "group_match",
+                    "basis": "provider_group_reference",
+                },
+            }
+            if group_reference
+            else {}
+        )
         outcome = (
-            "identifier_mismatch"
+            "group_match"
+            if group_reference
+            else "identifier_mismatch"
             if confirmation is False
             else "identifier_unverified"
             if confirmation is None
             else outcome
         )
 
+    us_semantics = (
+        _partsapi_decode_vin_us_semantics(payload, str(input_values.get("identifier") or ""))
+        if operation == "decodeVINus"
+        else {}
+    )
     return {
         **base,
         **identifier_evidence,
@@ -2895,7 +3693,12 @@ def partsapi_catalog_lookup(
             else None
         ),
         "retryable": False,
-        "requires_fallback": outcome in {"empty_result", "unparsed_response", "identifier_mismatch"},
+        "requires_fallback": outcome
+        in {"empty_result", "unparsed_response", "identifier_mismatch", "identifier_unverified"},
+        **_partsapi_catalog_completeness(
+            operation, vehicle_profiles if operation == "getCars" else article_candidates, outcome
+        ),
+        **us_semantics,
     }
 
 

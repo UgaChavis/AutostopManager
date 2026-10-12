@@ -25,6 +25,55 @@ def mcp_schema_fingerprint(tool_schemas: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def manager_session_schema_evidence(
+    expected_schemas: Mapping[str, Any],
+    app_schemas: Mapping[str, Any],
+    *,
+    connected: bool,
+    tools_error: bool = False,
+    declarations: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare independent schema observations, never claiming a host refresh."""
+    expected = dict(expected_schemas)
+    app_drift = sorted(
+        name
+        for name in expected.keys() | app_schemas.keys()
+        if name not in expected or name not in app_schemas or app_schemas[name] != expected[name]
+    )
+    declaration_drift = (
+        sorted(
+            name
+            for name in expected.keys() | declarations.keys()
+            if name not in expected or name not in declarations or declarations[name] != expected[name]
+        )
+        if declarations is not None
+        else None
+    )
+    app_matches = bool(expected) and connected and not tools_error and not app_drift
+    declarations_match = bool(expected) and declaration_drift == []
+    diagnostic = (
+        "app_schema_stale_or_unavailable"
+        if not app_matches
+        else "model_declarations_unverified"
+        if declarations is None
+        else "model_declarations_stale"
+        if not declarations_match
+        else "schema_verified"
+    )
+    return {
+        "ok": app_matches and declarations_match,
+        "diagnostic": diagnostic,
+        "expected_tool_count": len(expected),
+        "app_tool_count": len(app_schemas),
+        "app_schema_matches": app_matches,
+        "app_schema_drift_tools": app_drift,
+        "declarations_checked": declarations is not None,
+        "declarations_match": declarations_match if declarations is not None else None,
+        "declarations_drift_tools": declaration_drift,
+        "reload_guarantees_declarations": False,
+    }
+
+
 def validate_manager_mcp_surface(
     tool_schemas: Mapping[str, Any],
     *,

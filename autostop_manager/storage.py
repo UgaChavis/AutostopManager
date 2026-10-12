@@ -99,6 +99,7 @@ ACTIVE_WORKFLOW_STATES = {"planned", "executing", "external_wait", "verifying", 
 # compact identifier here would turn a misleadingly named fingerprint into a
 # covert channel for business data, so they must be one-way hashes.
 STORE_CHECKPOINT_STREAMS = frozenset({"store_digest", "store_bootstrap"})
+_STORE_CHECKPOINT_REF_FIELDS = ("compact_refs", "traversal_refs", "pending_refs", "pending_page_refs")
 STORE_CHECKPOINT_REF_KEYS = {"entity", "id", "version", "updated_at"}
 STORE_LEDGER_REF_ENTITIES = frozenset(
     {
@@ -1340,6 +1341,45 @@ def _sanitize_external_refs(value: dict[str, Any] | None) -> tuple[dict[str, Any
     return sanitized, []
 
 
+def _store_checkpoint_result(row: sqlite3.Row | None, stream: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "ok": True,
+            "exists": False,
+            "stream": stream,
+            "cursor": None,
+            "last_success_at": None,
+            "compact_refs": [],
+            "traversal_cursor": None,
+            "traversal_refs": [],
+            "traversal_baseline": False,
+            "traversal_snapshot_at": None,
+            "pending_cursor": None,
+            "pending_request_cursor": None,
+            "pending_request_since": None,
+            "pending_refs": [],
+            "pending_page_refs": [],
+            "pending_baseline": False,
+            "pending_page_has_more": False,
+            "pending_page_limit": 25,
+            "pending_snapshot_at": None,
+            "pending_delivery_token": None,
+            "last_ack_cursor": None,
+            "last_ack_delivery_token": None,
+            "last_ack_snapshot_at": None,
+            "last_ack_was_final": False,
+            "last_attempt_status": "never",
+            "last_error_code": "",
+            "state_version": 0,
+        }
+    item = dict(row)
+    for key in _STORE_CHECKPOINT_REF_FIELDS:
+        item[key] = _decode_json(item.pop(f"{key}_json"), [])
+    for key in ("traversal_baseline", "pending_baseline", "pending_page_has_more", "last_ack_was_final"):
+        item[key] = bool(item.get(key))
+    return {"ok": True, "exists": True, **item}
+
+
 @dataclass(frozen=True)
 class StoreState:
     db_path: Path | None = None
@@ -1519,46 +1559,61 @@ class StoreState:
             row = conn.execute(
                 "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
             ).fetchone()
-        if not row:
+        return _store_checkpoint_result(row, normalized_stream)
+
+    def read_store_checkpoint(self, stream: str = "store_digest") -> dict[str, Any]:
+        """Read existing checkpoint state without initialization or schema migrations.
+
+        A normal read transaction includes committed WAL state. SQLite may still
+        maintain WAL/SHM sidecars; no SQL writes or immutable stale snapshot are used.
+        """
+
+        normalized_stream = str(stream or "").strip().casefold()
+        if normalized_stream not in STORE_CHECKPOINT_STREAMS:
+            return {"ok": False, "error": "store_checkpoint_stream_invalid"}
+
+        def unavailable(category: str) -> dict[str, Any]:
             return {
-                "ok": True,
-                "exists": False,
+                "ok": False,
+                "read_only": True,
                 "stream": normalized_stream,
-                "cursor": None,
-                "last_success_at": None,
-                "compact_refs": [],
-                "traversal_cursor": None,
-                "traversal_refs": [],
-                "traversal_baseline": False,
-                "traversal_snapshot_at": None,
-                "pending_cursor": None,
-                "pending_request_cursor": None,
-                "pending_request_since": None,
-                "pending_refs": [],
-                "pending_page_refs": [],
-                "pending_baseline": False,
-                "pending_page_has_more": False,
-                "pending_page_limit": 25,
-                "pending_snapshot_at": None,
-                "pending_delivery_token": None,
-                "last_ack_cursor": None,
-                "last_ack_delivery_token": None,
-                "last_ack_snapshot_at": None,
-                "last_ack_was_final": False,
-                "last_attempt_status": "never",
-                "last_error_code": "",
-                "state_version": 0,
+                "error": f"store_checkpoint_{category}_unavailable",
             }
-        item = dict(row)
-        item["compact_refs"] = _decode_json(item.pop("compact_refs_json"), [])
-        item["traversal_refs"] = _decode_json(item.pop("traversal_refs_json"), [])
-        item["traversal_baseline"] = bool(item.get("traversal_baseline"))
-        item["pending_refs"] = _decode_json(item.pop("pending_refs_json"), [])
-        item["pending_page_refs"] = _decode_json(item.pop("pending_page_refs_json"), [])
-        item["pending_baseline"] = bool(item.get("pending_baseline"))
-        item["pending_page_has_more"] = bool(item.get("pending_page_has_more"))
-        item["last_ack_was_final"] = bool(item.get("last_ack_was_final"))
-        return {"ok": True, "exists": True, **item}
+
+        try:
+            path = self.path
+            if not path.is_file():
+                return unavailable("database")
+            connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        except (OSError, sqlite3.Error):
+            return unavailable("database")
+
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("BEGIN")
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(store_checkpoints)")}
+            # The existing response fields define the columns required even when
+            # this stream has no row. Ref fields are serialized as *_json in SQL.
+            required_columns = {
+                f"{key}_json" if key in _STORE_CHECKPOINT_REF_FIELDS else key
+                for key in _store_checkpoint_result(None, normalized_stream)
+                if key not in {"ok", "exists"}
+            } | {"updated_at"}
+            if not required_columns.issubset(columns):
+                return unavailable("schema")
+            row = connection.execute(
+                "SELECT * FROM store_checkpoints WHERE stream = ? LIMIT 1", (normalized_stream,)
+            ).fetchone()
+            result = _store_checkpoint_result(row, normalized_stream)
+            # Match the diagnostic CLI's JSON and UTF-8 output contract without
+            # imposing a new field schema or changing writer parsing semantics.
+            json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
+            return result
+        except (OSError, sqlite3.Error, UnicodeError, TypeError, ValueError, RecursionError):
+            return unavailable("state")
+        finally:
+            connection.close()
 
     def record_store_checkpoint_pending(
         self,

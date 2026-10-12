@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "M2 journal append input",
+  "description": "Technical private record for scripts/m2-journal.py validate(record); contains no customer data or secrets. Native validation remains authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "task", "before", "actions", "checks", "result", "git_sha", "release_required", "state"],
+  "properties": {
+    "id": {"type": "string", "format": "uuid", "description": "Stable UUID for this exact record; a changed body requires a new UUID."},
+    "task": {"$ref": "#/$defs/text"},
+    "before": {"$ref": "#/$defs/text"},
+    "actions": {"$ref": "#/$defs/text"},
+    "checks": {"$ref": "#/$defs/text"},
+    "result": {"$ref": "#/$defs/text"},
+    "git_sha": {"type": ["string", "null"], "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "release_required": {"type": "boolean"},
+    "state": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000,
+      "pattern": "^(?![\\s\\S]*\u0000)(?![\\s\\S]*```m2-record)[\\s\\S]*\\S[\\s\\S]*$",
+      "description": "Complete replacement of current-state.md; preserve all other open issues and limitations from a fresh read."
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^(?![\\s\\S]*\u0000)(?![\\s\\S]*```m2-record)[\\s\\S]*\\S[\\s\\S]*$"
+    }
+  }
+}

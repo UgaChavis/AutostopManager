@@ -262,6 +262,7 @@ def test_catalog_script_uses_its_own_checkout_with_an_isolated_interpreter(tmp_p
         "scripts/update-instruction-catalogs.py",
         "autostop_manager/__init__.py",
         "autostop_manager/markdown_links.py",
+        "autostop_manager/instruction_inventory.py",
     ):
         write(project / name, (ROOT / name).read_text())
     document_links = ROOT / "autostop_manager/document_links.py"
@@ -410,6 +411,39 @@ def test_catalogs_reject_manifest_skill_path_outside_installed_version(tmp_path)
     installed_package(tmp_path, "github", skills="../../outside")
     with pytest.raises(ValueError, match="outside-package"):
         catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize("entry_alias", [False, True])
+def test_catalogs_reject_skill_symlink_outside_selected_manifest_version(tmp_path, monkeypatch, entry_alias):
+    version = installed_package(tmp_path, "github")
+    outside = skill(tmp_path / "outside/SKILL.md", "outside")
+    entry = version / "skills/current/SKILL.md"
+    if entry_alias:
+        entry.parent.mkdir()
+        entry.symlink_to(outside)
+    else:
+        entry.parent.symlink_to(outside.parent, target_is_directory=True)
+    calls = []
+    original = catalogs.metadata
+
+    def counted(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(catalogs, "metadata", counted)
+    with pytest.raises(ValueError, match="Outside-package skill"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+    assert not calls
+
+
+def test_catalogs_allow_skill_alias_within_selected_manifest_version(tmp_path):
+    version = installed_package(tmp_path, "github", skills="./current-skills")
+    target = skill(version / "shared/SKILL.md", "current")
+    entry = version / "current-skills/current/SKILL.md"
+    entry.parent.mkdir()
+    entry.symlink_to(target)
+
+    assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [entry]
 
 
 def test_catalog_check_preserves_recorded_date_after_day_or_year_rollover(tmp_path, monkeypatch):

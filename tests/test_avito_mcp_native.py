@@ -171,16 +171,23 @@ def test_native_e10_schema_bounds_and_read_only_annotations_are_preserved(native
     assert tools["assess_avito_price_sample"].annotations.openWorldHint is False
 
 
-def test_scalar_preparser_is_scoped_to_two_e10_tools_and_preserves_other_tools(native_server):
+def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_tools(native_server):
     server = build_server()
     tools = server._tool_manager._tools
-    assert len(tools) == 48
+    protected = {
+        "avito_search_listings",
+        "avito_read_listing",
+        "j1_research_vin",
+        "j1_research_record_facts",
+        "j1_research_document",
+    }
     for name, tool in tools.items():
-        if name in {"avito_search_listings", "avito_read_listing"}:
-            assert isinstance(tool.fn_metadata, mcp_tools._ListingScalarMetadata)
+        if name in protected:
+            assert isinstance(tool.fn_metadata, mcp_tools._OriginalJsonMetadata)
             assert tool.fn_metadata.pre_parse_json({"price_min": "null"}) == {"price_min": "null"}
         else:
             assert type(tool.fn_metadata) is FuncMetadata
+    assert protected <= tools.keys()
     assessment = tools["assess_avito_price_sample"]
     assert assessment.fn_metadata.pre_parse_json({"listings": "[]"}) == {"listings": []}
 
@@ -220,7 +227,18 @@ def test_native_async_control_finishes_while_the_provider_worker_is_held(native_
         assert len(worker_threads) == 1
         assert worker_threads[0] != threading.get_ident()
         release.set()
-        assert (await task).structuredContent == {"ok": True}
+        completed = await task
+        assert completed.isError is False
+        payload = completed.structuredContent
+        assert isinstance(payload, dict)
+        assert {key: value for key, value in payload.items() if key != "tool_execution"} == {"ok": True}
+        trace = payload["tool_execution"]
+        assert trace["tool"] == name
+        assert trace["outcome"] == "ok"
+        assert isinstance(trace["call_id"], str)
+        assert trace["wall_ms"] >= 0
+        assert trace["network_calls"] is None
+        assert "query" not in trace and "ad_id" not in trace
 
     try:
         asyncio.run(run())

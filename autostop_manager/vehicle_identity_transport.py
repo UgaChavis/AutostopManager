@@ -1,4 +1,4 @@
-"""Bounded vPIC collection shared by sync library and asynchronous E4 tools.
+"""Bounded vPIC collection shared by sync library and asynchronous E2 tools.
 
 Only this module schedules provider work. Parsing and identity merging remain pure.
 Diagnostics contain counters and error codes, never identifiers or request URLs.

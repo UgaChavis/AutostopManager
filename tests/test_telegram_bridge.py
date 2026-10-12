@@ -1049,7 +1049,7 @@ def test_work_media_sandbox_wrapper_is_scoped_and_has_no_bridge_access() -> None
 
     assert completed.returncode == 0
     text = script.read_text(encoding="utf-8")
-    assert "transcribe|preview" in text
+    assert "transcribe)" in text and "preview)" in text
     assert "self-check" in text
     assert "--account" in text and "work" in text
     assert "systemd-run --quiet --wait --pipe --collect" in text

@@ -2,11 +2,13 @@
 
 MNG1 — прикладной сервер `vps26457.mnogoweb.in`: AutoStop Manager, CRM, Store, Telegram, G1, J1, Nginx и PostgreSQL. Source: `/opt/AutostopManager`, `/opt/autostopcrm`, `/opt/autostopapp`. Installed Manager: `/opt/autostop-manager-releases/current`; Store: `/opt/autostop-app`. Каталоги Git и installed runtime имеют разные роли.
 
-Основной VPN — MNG2 (раньше MNJ2), резервный — `fst.kz`. Перед VPN работой установи точную текущую identity и SSH-доступ. Старый alias и `/root/AutostopVPN/repo` на MNG1 не доказывают доступ к MNG2. Для FST используй [VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md), проверяя hostname/container и клиентскую связь отдельно. VPN исключён из обычного прикладного выпуска.
+Основной VPN — MNG2 (раньше MNJ2), резервный — `fst.kz`; текущий доступ к MNG2 не подтверждён. Перед VPN работой установи точную текущую identity и SSH-доступ; это отдельный scope. Старый alias и `/root/AutostopVPN/repo` на MNG1 не доказывают доступ к MNG2. Для FST используй [VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md), проверяя hostname/container и клиентскую связь отдельно. VPN исключён из обычного прикладного выпуска.
 
 ## Ревизии и проверки
 
 Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd активного процесса; CRM — OCI label работающего `autostopcrm`; Store — deploy marker, image и current.env. Git HEAD и зелёный workflow не доказывают установленную ревизию. Проверяй состояние заново, без опоры на датированные снимки.
+
+Разреши Manager current в физический snapshot и читай live-инструкции от него. Для source-работы отдельно запиши checkout/worktree HEAD и dirty diff; смешанная задача сохраняет оба корня. Этот выбор не требует новой runtime-копии или смены cwd — [A3](../modules/A3.md).
 
 | Служба или контейнер | Проверка и граница |
 | --- | --- |
@@ -17,7 +19,7 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 | `autostop-codex-start.service` | Codex boot daemon и App Server status; restart по разрешённому runbook. |
 | `autostop-j1.service`, `autostop-j1-browser.service` | Static probe; для browser ещё renderer/proxy, socket и revision-bound attestation. |
 | `autostopcrm`, `autostop-db`, `autostop-app` | Health + revision, private transport и API contract. |
-| `autostop-searxng`, `autostop-crawl4ai`, browser containers | Container health и отдельные static/browser вызовы. |
+| `autostop-searxng`, optional browser containers | Container health и отдельные static/browser вызовы. Исторический `autostop-crawl4ai` не обязателен текущему runtime; перед старым rollback восстанови точный cold image по CRM runbook. |
 | `autostop24-db-backup.timer` | Store PostgreSQL backup: текущий Result и точный `pg_restore --list`; файл сам не доказывает восстановимость. CRM backup проверяется отдельно. |
 | `autostop-app-watchdog.timer` | Store deploy сам ставит pause/release; не включай timer вручную внутри deploy. |
 

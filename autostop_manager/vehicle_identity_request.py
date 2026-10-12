@@ -1,4 +1,4 @@
-"""Keep an E4 collector bounded by its owning MCP HTTP request."""
+"""Keep an E2 collector bounded by its owning MCP HTTP request."""
 
 from __future__ import annotations
 

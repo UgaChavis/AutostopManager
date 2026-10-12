@@ -13,6 +13,7 @@ import uvicorn
 
 from autostop_manager import config
 from autostop_manager import mcp_tools
+from autostop_manager.automotive_contracts import binding
 from autostop_manager.mcp_server import build_server
 from autostop_manager.vehicle_identity_transport import IdentityBudget
 
@@ -84,10 +85,12 @@ def test_native_year_validation_and_batch_row_isolation():
                         row = payload["results"][index]
                         assert row["ok"] is False
                         assert row["vehicle_profile"] == {}
+                        assert row["input_binding"] is None
                         assert row["errors"]
                         assert row["parts_lookup_readiness"]["ready_for_family_lookup"] is False
                     healthy = payload["results"][1]
                     assert healthy["ok"] is True
+                    assert healthy["input_binding"] == binding(SYNTHETIC_VIN)
                     assert all(row.keys() == healthy.keys() for row in payload["results"])
                     assert healthy["vehicle_profile"]["production_year"] == 2004
                     assert healthy["normalization_notes"]

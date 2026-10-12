@@ -8,7 +8,7 @@ from statistics import median
 from typing import Any
 
 from .config import get_db_path
-from .work_pricing_research import collect_public_work_pricing_research
+from .work_pricing_research import collect_public_work_pricing_research, legacy_work_evidence_row
 
 ROUNDING_STEP_RUB = 100
 KRASNOYARSK_MARKUP = 1.45
@@ -333,6 +333,7 @@ def _labor_time_rows(source_json: Any) -> list[dict[str, Any]]:
 
 
 def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
+    row = legacy_work_evidence_row(row)
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
@@ -355,6 +356,11 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append("labor_only_not_confirmed")
 
     return {
+        **(
+            {"evidence_source": row["evidence_source"], "public_source": row.get("public_source")}
+            if "evidence_source" in row
+            else {}
+        ),
         "source": source,
         "city_region": city_region,
         "operation_name": operation_name,
@@ -410,6 +416,7 @@ def _coerce_first_hours(*values: Any) -> tuple[float | None, list[float] | None]
 
 
 def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
+    row = legacy_work_evidence_row(row)
     source = str(row.get("source") or row.get("source_name") or "").strip()
     city_region = str(row.get("city") or row.get("region") or row.get("city_region") or "").strip()
     operation_name = str(row.get("operation_name") or row.get("operation") or row.get("work_item") or "").strip()
@@ -417,9 +424,12 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
     confidence = _normalize_key(str(row.get("confidence") or "low"))
     public_source = _parse_bool(row.get("public_source"))
     official = _parse_bool(row.get("official"))
-    hours, hours_range = _coerce_first_hours(
-        row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours"), row.get("range_hours")
-    )
+    if "range_hours" in row:
+        hours, hours_range = _coerce_hours(row["range_hours"])
+    else:
+        hours, hours_range = _coerce_first_hours(
+            row.get("hours"), row.get("labor_hours"), row.get("norm_hours"), row.get("time_hours")
+        )
 
     reasons: list[str] = []
     if not source:
@@ -432,6 +442,7 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
         reasons.append("public_source_not_confirmed")
 
     return {
+        **({"evidence_source": row["evidence_source"]} if "evidence_source" in row else {}),
         "source": source,
         "city_region": city_region,
         "operation_name": operation_name,
@@ -1117,6 +1128,54 @@ def _pricing_next_actions(
     return next_actions
 
 
+def _ready_price_context_matches(field: str, observed: Any, expected: Any) -> bool:
+    if observed in (None, ""):
+        return True
+    if field != "year":
+        return bool(observed == expected)
+    return (
+        isinstance(observed, (int, str))
+        and not isinstance(observed, bool)
+        and isinstance(expected, (int, str))
+        and not isinstance(expected, bool)
+        and str(observed).strip() == str(expected).strip()
+    )
+
+
+def _ready_price_evidence(
+    price_evidence: dict[str, Any] | None, raw_work_items: list[str], context: dict[str, Any]
+) -> tuple[dict[str, Any] | None, str | None]:
+    supplied_evidence: dict[str, Any] | None = None
+    if price_evidence is not None:
+        if not isinstance(price_evidence, dict):
+            return None, "invalid_ready_price_evidence"
+        supplied_evidence = price_evidence["data"] if isinstance(price_evidence.get("data"), dict) else price_evidence
+        if any(
+            row.get("ok") is False or row.get("outcome") not in (None, "success", "partial") or row.get("conflicts")
+            for row in (price_evidence, supplied_evidence)
+        ):
+            return None, "invalid_ready_price_evidence"
+        if supplied_evidence.get("work_items") != raw_work_items or not isinstance(
+            supplied_evidence.get("observations"), list
+        ):
+            return None, "invalid_ready_price_evidence"
+        if (
+            len(supplied_evidence["observations"]) > MAX_QUOTE_ROWS
+            or any(not isinstance(row, dict) for row in supplied_evidence["observations"])
+            or not isinstance(supplied_evidence.get("vehicle_context", {}), dict)
+            or not isinstance(supplied_evidence.get("labor", []), list)
+            or any(not isinstance(row, dict) for row in supplied_evidence.get("labor", []))
+        ):
+            return None, "invalid_ready_price_evidence"
+        if any(
+            not _ready_price_context_matches(field, supplied_evidence.get("vehicle_context", {}).get(field), value)
+            for field, value in context.items()
+            if value not in (None, "")
+        ):
+            return None, "ready_price_context_mismatch"
+    return supplied_evidence, None
+
+
 def estimate_repair_work_cost(
     *,
     vehicle: str | None = None,
@@ -1135,10 +1194,18 @@ def estimate_repair_work_cost(
     labor_time_policy: str = "public_only",
     internal_experience_json: Any = None,
     use_internal_experience: bool = True,
+    price_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a read-only multi-source labor-price estimate."""
 
     raw_work_items = _as_text_list(work_items)
+    supplied_evidence, reuse_error = _ready_price_evidence(
+        price_evidence,
+        raw_work_items,
+        {"make": make, "model": model, "year": year, "engine": engine, "transmission": transmission},
+    )
+    if reuse_error:
+        return {"ok": False, "error": reuse_error, "execution": {"network_calls": 0}}
     input_errors: list[str] = []
     if len(raw_work_items) > MAX_WORK_ITEMS:
         input_errors.append(f"work_items exceeds maximum of {MAX_WORK_ITEMS}")
@@ -1183,16 +1250,29 @@ def estimate_repair_work_cost(
     experience_snapshot: dict[str, Any] | None
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
-    elif use_internal_experience:
+    elif supplied_evidence is not None and isinstance(supplied_evidence.get("provided_aggregate"), dict):
+        experience_snapshot = supplied_evidence["provided_aggregate"]
+    elif use_internal_experience and supplied_evidence is None:
         experience_snapshot = _load_labor_experience()
     else:
         experience_snapshot = None
-    research = collect_public_work_pricing_research(
-        vehicle_context=_research_vehicle_context(vehicle_context),
-        operations=normalized_operations,
-        city=city,
-        auto_research=bool(auto_research and not manual_quote_rows),
-        labor_time_policy=labor_time_policy,
+    research = (
+        {
+            "quotes": supplied_evidence["observations"],
+            "labor_time_sample": supplied_evidence.get("labor", []),
+            "sources_checked": [],
+            "warnings": [],
+            "enabled": False,
+            "access_mode": "provided_evidence",
+        }
+        if supplied_evidence is not None
+        else collect_public_work_pricing_research(
+            vehicle_context=_research_vehicle_context(vehicle_context),
+            operations=normalized_operations,
+            city=city,
+            auto_research=bool(auto_research and not manual_quote_rows),
+            labor_time_policy=labor_time_policy,
+        )
     )
     quote_sample = [_normalize_quote(row) for row in [*manual_quote_rows, *research.get("quotes", [])]]
     labor_time_sample = [

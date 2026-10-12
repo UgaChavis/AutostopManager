@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,115 @@ from autostop_manager.action_contract import EXECUTOR_TOOLS, INVENTORY_EXECUTOR_
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_action_contract_detaches_nested_changes_from_caller():
+    changes = {
+        "title": "Synthetic card",
+        "deadline": {"total_seconds": 60},
+        "tags": ["synthetic"],
+    }
+    arguments = {
+        "domain": "crm",
+        "action": "create_card",
+        "owner_intent": "Create only a synthetic card in this contract preview",
+        "idempotency_key": "synthetic-nested-contract",
+    }
+    contract = prepare_action_contract(**arguments, planned_changes=changes)
+    snapshot = copy.deepcopy(contract)
+    assert contract["ok"] is True
+
+    changes["deadline"]["total_seconds"] = 120
+    changes["tags"].append("caller-added")
+    assert contract == snapshot
+    assert prepare_action_contract(**arguments, planned_changes=changes)["contract_id"] != contract["contract_id"]
+
+    contract["planned_changes"]["deadline"]["total_seconds"] = 180
+    contract["planned_changes"]["tags"].append("contract-added")
+    assert changes == {
+        "title": "Synthetic card",
+        "deadline": {"total_seconds": 120},
+        "tags": ["synthetic", "caller-added"],
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        Decimal("1.25"),
+        {"unsupported"},
+        ("tuple",),
+        {1: "number", "1": "text"},
+        "\ud800",
+    ],
+    ids=["nan", "infinity", "negative-infinity", "decimal", "set", "tuple", "mixed-keys", "surrogate"],
+)
+def test_action_contract_rejects_non_json_nested_changes_without_ready_payload(value):
+    result = prepare_action_contract(
+        domain="crm",
+        action="create_card",
+        planned_changes={"title": "Synthetic card", "metadata": {"value": value}},
+        owner_intent="synthetic",
+        idempotency_key="synthetic-json-boundary",
+    )
+    assert result["ok"] is False
+    assert "invalid_planned_changes_json" in result["preflight"]["blocking_reasons"]
+    assert result["execution"]["ready"] is False
+    assert result["planned_changes"] == {}
+    json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+@pytest.mark.parametrize("shape", ["cycle", "deep"])
+def test_action_contract_rejects_unserializable_nested_structure_without_raising(shape):
+    value = {}
+    if shape == "cycle":
+        value["child"] = value
+    else:
+        for _ in range(1100):
+            value = {"child": value}
+    result = prepare_action_contract(
+        domain="crm",
+        action="create_card",
+        planned_changes={"title": "Synthetic card", "metadata": value},
+        owner_intent="synthetic",
+        idempotency_key="synthetic-json-boundary",
+    )
+    assert result["ok"] is False
+    assert "invalid_planned_changes_json" in result["preflight"]["blocking_reasons"]
+    assert result["execution"]["ready"] is False
+    assert result["planned_changes"] == {}
+    json.dumps(result, allow_nan=False)
+
+
+def test_action_contract_valid_json_keeps_original_hash_and_key_order_independent_identity():
+    changes = {
+        "title": "Synthetic card",
+        "metadata": {
+            "unicode": "Тест",
+            "enabled": True,
+            "value": 1.25,
+            "missing": None,
+            "items": [1, False, {"key": "value"}],
+        },
+    }
+    arguments = {
+        "domain": "crm",
+        "action": "create_card",
+        "owner_intent": "synthetic",
+        "idempotency_key": "synthetic-json-boundary",
+    }
+    original = copy.deepcopy(changes)
+    contract = prepare_action_contract(**arguments, planned_changes=changes)
+    assert contract["ok"] is True
+    # Pinned before the JSON boundary change; the canonical wire hash stays exact.
+    assert contract["contract_id"] == "ac_322af71a10a2bf9a4cb9"
+    reordered = {"metadata": dict(reversed(list(changes["metadata"].items()))), "title": changes["title"]}
+    assert prepare_action_contract(**arguments, planned_changes=reordered) == contract
+    contract["planned_changes"]["metadata"]["items"].append("contract-only")
+    assert changes == original
 
 
 def _completion_act_form(*, basis: str = "") -> dict:
@@ -34,6 +145,34 @@ def _completion_act_form(*, basis: str = "") -> dict:
         "items": [],
         "acceptance_text": "",
     }
+
+
+@pytest.mark.parametrize("section", [[], {}], ids=["list", "dict"])
+@pytest.mark.parametrize("action", ["save_completion_act_form", "reset_completion_act_form"])
+def test_completion_act_rejects_non_string_item_section_without_raising(section, action):
+    form = _completion_act_form()
+    form["items"] = [
+        {"id": "synthetic", "name": "synthetic", "unit": "unit", "quantity": "1", "price": "1", "section": section}
+    ]
+    changes = {"expected_source_fingerprint": "a" * 64}
+    if action == "save_completion_act_form":
+        changes["form"] = form
+        expected = "invalid_completion_act_form"
+    else:
+        changes["verified_snapshot"] = {"form": form, "version": 4, "source_fingerprint": "a" * 64}
+        expected = "verified_completion_act_snapshot_required"
+    result = prepare_action_contract(
+        domain="document",
+        action=action,
+        target_id="synthetic-card",
+        planned_changes=changes,
+        owner_intent="synthetic",
+        expected_revision="4",
+        idempotency_key="synthetic-completion-form",
+    )
+    assert result["ok"] is False
+    assert expected in result["preflight"]["blocking_reasons"]
+    assert result["execution"]["ready"] is False
 
 
 def test_completion_act_save_builds_named_dry_run_and_apply_contracts():

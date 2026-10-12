@@ -10,13 +10,21 @@ import re
 import sys
 import tomllib
 
+import yaml
+
 PROJECT = Path(__file__).resolve().parents[1]
 # Use this checkout's shared parsers even when invoked outside the project or
 # through a venv whose editable install points at another checkout.
 sys.path.insert(0, str(PROJECT))
 
-from autostop_manager.document_links import local_document_link_target  # noqa: E402
-from autostop_manager.markdown_links import visible_markdown_links  # noqa: E402
+from autostop_manager.document_links import document_source_lines  # noqa: E402
+from autostop_manager.instruction_inventory import (  # noqa: E402
+    active_instruction_candidates,
+    collect_instruction_inventory,
+    read_instruction_bytes,
+    require_instruction_inventory,
+)
+from autostop_manager.markdown_links import markdown_section_body  # noqa: E402
 
 CODEX = Path("/root/.codex")
 PACKAGES = (
@@ -29,7 +37,6 @@ PACKAGES = (
     "plugin-management",
     "visualize",
 )
-BLOCKED_PARTS = {"archive", "archives", "archived", "draft", "drafts"}
 
 
 def cell(value):
@@ -44,57 +51,39 @@ def link(label, path, project):
 
 
 def metadata(path):
-    text = path.read_text(encoding="utf-8")
-    header = text.split("---", 2)[1] if text.startswith("---") else ""
-    values = {}
-    for key in ("name", "description"):
-        match = re.search(r"^" + key + r":\s*(.*?)(?=\n[a-zA-Z][\w-]*:|\Z)", header, re.M | re.S)
-        value = re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
-        if value[:1] in {'"', "'"} and value[-1:] == value[:1]:
-            value = value[1:-1]
-        values[key] = value.lstrip("> |").strip()
-    if not all(values.values()):
+    text = read_instruction_bytes(path).decode("utf-8")
+    lines = document_source_lines(text)
+    end = next((index for index, line in enumerate(lines[1:], 1) if line.rstrip(" \t") == "---"), None)
+    if not lines or lines[0].rstrip(" \t") != "---" or end is None:
         raise ValueError("Incomplete skill metadata: " + str(path))
-    return values
+    try:
+        header = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError:
+        raise ValueError("Invalid skill metadata: " + str(path)) from None
+    if not isinstance(header, dict) or any(
+        not isinstance(header.get(key), str) or not header[key].strip() for key in ("name", "description")
+    ):
+        raise ValueError("Incomplete skill metadata: " + str(path))
+    return {key: re.sub(r"\s+", " ", header[key]).strip() for key in ("name", "description")}
 
 
-def title(path):
-    text = path.read_text(encoding="utf-8")
+def title(path, content=None):
+    text = (read_instruction_bytes(path) if content is None else content).decode("utf-8")
     match = re.search(r"^#\s+(.+)$", text, re.M)
     return match.group(1).strip() if match else path.stem
 
 
 def project_documents(project):
     """Follow explicit project links, never generated catalogs or external caches."""
-    seeds = {project / "AGENTS.md"}
-    seeds.update(p for p in (project / "docs/agent/modules").glob("*.md") if re.fullmatch(r"[A-Z]\d+", p.stem))
-    seeds.update((project / ".agents/skills").glob("*/SKILL.md"))
-    pending = sorted(seeds)
-    found = set()
-    while pending:
-        path = pending.pop().resolve()
-        if path in found:
-            continue
-        if not path.is_relative_to(project) or not path.is_file():
-            raise ValueError("Missing or outside-project instruction: " + str(path))
-        if set(path.relative_to(project).parts) & BLOCKED_PARTS or path.name.endswith("-draft.md"):
-            raise ValueError("Retired instruction is still linked: " + str(path))
-        found.add(path)
-        if path.suffix != ".md" or path.name in {"A4.md", "A5.md"}:
-            continue
-        text = path.read_text(encoding="utf-8")
-        for target_link in visible_markdown_links(text):
-            destination = local_document_link_target(target_link)
-            if destination is None:
-                continue
-            target = path.parent / destination
-            target = target.resolve()
-            if target.is_relative_to(project) and target.suffix in {".md", ".json"}:
-                pending.append(target)
-    return sorted(found)
+    return require_instruction_inventory(collect_instruction_inventory(project))
 
 
 def installed_skill_root(package, codex, config):
+    location = _installed_skill_location(package, codex, config)
+    return location[0] if location is not None else None
+
+
+def _installed_skill_location(package, codex, config):
     """Resolve installation metadata before inspecting skill files in its cache."""
     caches = codex / "plugins/cache"
     remote = caches / "openai-curated-remote" / package
@@ -146,7 +135,7 @@ def installed_skill_root(package, codex, config):
     root = (version / skill_path).resolve()
     if not root.is_relative_to(version) or not root.is_dir():
         raise ValueError("Missing or outside-package skills: " + str(manifest))
-    return root
+    return root, version
 
 
 def selected_skills(project, codex):
@@ -155,16 +144,23 @@ def selected_skills(project, codex):
     disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
     disabled = {Path(s["path"]).resolve() for s in disabled_selectors if s.get("path")}
     disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
-    roots = [("AutoStop Manager", project / ".agents/skills"), ("Codex", codex / "skills/.system")]
+    roots = [
+        ("AutoStop Manager", project / ".agents/skills", (project / ".agents/skills").resolve()),
+        ("Codex", codex / "skills/.system", (codex / "skills/.system").resolve()),
+    ]
     for package in PACKAGES:
-        root = installed_skill_root(package, codex, config)
-        if root is not None:
-            roots.append((package, root))
+        location = _installed_skill_location(package, codex, config)
+        if location is not None:
+            roots.append((package, *location))
     result = []
-    for group, root in roots:
+    for group, root, boundary in roots:
         for path in sorted(root.glob("*/SKILL.md")):
             if path.resolve() in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
                 continue
+            # Validate each entry, not just the manifest's skills directory;
+            # a symlink may otherwise read another installed version or host file.
+            if not path.resolve().is_relative_to(boundary):
+                raise ValueError("Outside-package skill: " + str(path))
             info = metadata(path)
             name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
             if disabled_names.intersection({name, info["name"]}):
@@ -173,11 +169,24 @@ def selected_skills(project, codex):
     return result
 
 
-def build_catalogs(project=PROJECT, codex=CODEX, day=None):
+def project_skill_entries(project):
+    """Canonical repository entries, independent of one host's skill selectors."""
+    boundary = (project / ".agents/skills").resolve()
+    result = []
+    for path in sorted(boundary.glob("*/SKILL.md")):
+        if not path.resolve().is_relative_to(boundary):
+            raise ValueError("Outside-package skill: " + str(path))
+        info = metadata(path)
+        result.append({"group": "AutoStop Manager", "path": path, **info})
+    return result
+
+
+def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False):
     project = project.resolve()
     day = day or datetime.now(UTC).strftime("%Y-%m-%d")
-    skills = selected_skills(project, codex)
-    project_paths = project_documents(project)
+    skills = project_skill_entries(project) if project_only else selected_skills(project, codex)
+    inventory = collect_instruction_inventory(project)
+    project_paths = require_instruction_inventory(inventory)
     external = [s for s in skills if not s["path"].is_relative_to(project)]
     documents = len(project_paths) + len(external)
     a4 = [
@@ -206,7 +215,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         "",
         "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние входы выбираются по manifest установленного пакета. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
-        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи: `python scripts/update-instruction-catalogs.py --check`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
+        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи на хосте: `python scripts/update-instruction-catalogs.py --check`; переносимая проверка проектной части: `python scripts/update-instruction-catalogs.py --check --project-only`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
         "",
         "## AutoStop Manager",
         "",
@@ -218,7 +227,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None):
         project / "docs/agent/modules/A5.md": a5[0].removeprefix("# "),
     }
     for path in project_paths:
-        document_title = generated_titles[path] if path in generated_titles else title(path)
+        document_title = generated_titles[path] if path in generated_titles else title(path, inventory.contents[path])
         a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
     a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
     for s in external:
@@ -251,10 +260,58 @@ def checked_catalog_day(project):
     return days[0] if days[0] == days[1] else None
 
 
+def check_project_catalogs(project=PROJECT):
+    """Check repository coverage and generated project sections without Codex IO."""
+    project = project.resolve()
+    day = checked_catalog_day(project)
+    a4, a5, summary = build_catalogs(project, day=day, project_only=True)
+    expected_paths = {project / name for name in summary["project_paths"]}
+    candidates = active_instruction_candidates(project)
+    orphaned = sorted(
+        path.relative_to(project).as_posix() for path in candidates if path.resolve() not in expected_paths
+    )
+    mismatches = []
+    for name, expected in (("A4.md", a4), ("A5.md", a5)):
+        path = project / "docs/agent/modules" / name
+        if not path.is_file():
+            mismatches.append(name)
+            continue
+        actual = read_instruction_bytes(path).decode("utf-8")
+        actual_section = markdown_section_body(actual, "AutoStop Manager")
+        if actual_section != markdown_section_body(expected, "AutoStop Manager"):
+            mismatches.append(name)
+        if name == "A5.md":
+            count = re.search(r"(?m)^Срез: \d{4}-\d{2}-\d{2}\. Всего \d+ файлов: (\d+) в AutoStop Manager\b", actual)
+            if count is None or int(count[1]) != summary["project_documents"]:
+                mismatches.append(name)
+    if day is None:
+        mismatches.extend(["A4.md", "A5.md"])
+    return {
+        "ok": not mismatches and not orphaned,
+        "project_only": True,
+        "project_documents": summary["project_documents"],
+        "project_skills": summary["skills"],
+        "active_document_candidates": len(candidates),
+        "orphaned_active_documents": orphaned[:64],
+        "orphaned_active_document_count": len(orphaned),
+        "mismatches": sorted(set(mismatches)),
+        "external_skills_checked": False,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    parser.add_argument(
+        "--project-only", action="store_true", help="Check repository sections without host Codex files"
+    )
     args = parser.parse_args()
+    if args.project_only:
+        if not args.check:
+            parser.error("--project-only requires --check; host catalogs must not be overwritten")
+        summary = check_project_catalogs(PROJECT)
+        print(json.dumps(summary, ensure_ascii=False))
+        return int(not summary["ok"])
     # A read-only check compares content at the recorded cutoff; tomorrow's
     # date alone does not make an unchanged inventory stale.
     day = checked_catalog_day(PROJECT) if args.check else None

@@ -17,7 +17,7 @@ import asyncio
 from pathlib import Path
 import sys
 sys.path.insert(0, sys.argv[1])
-from autostop_manager.diagnostics import instruction_paths
+from autostop_manager.diagnostics import audit_documentation, instruction_paths
 from autostop_manager.telegram_bridge import InboundMonitor
 from autostop_manager.telegram_automation_control import (
     TelegramAutomationIncomingCoordinator,
@@ -28,6 +28,7 @@ from autostop_manager.telegram_automation_control import (
 assert 'markdown_it' not in sys.modules
 assert 'autostop_manager.markdown_links' not in sys.modules
 assert 'AGENTS.md' in instruction_paths(Path(sys.argv[1]))
+assert audit_documentation(Path(sys.argv[1]), check_external_links=False)['ok'] is False
 monitor = InboundMonitor()
 adapter = build_runtime_owner_adapter(
     owner_peer_id=1,

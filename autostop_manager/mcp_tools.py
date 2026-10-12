@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Collection
 from functools import partial
 from typing import Annotated, Any, Literal, cast
@@ -12,11 +13,17 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field, StrictBool, StrictFloat, StrictInt
 
 from .action_contract import prepare_action_contract
+from .automotive_mcp import register_automotive_tools
 from .automation_control import AutomationControlClient
 from .automation_registry import AutomationError
 from .avito_listings import avito_read_listing, avito_search_listings
 from .avito_market_assessment import assess_avito_price_sample
-from .catalog_adapters import build_oem_parts_provider_plan, catalog_provider_status as _catalog_provider_status
+from .catalog_adapters import (
+    CatalogStage,
+    build_oem_parts_provider_plan,
+    catalog_provider_status as _catalog_provider_status,
+)
+from .catalog_presentation import CatalogDetail, catalog_execution, invalid_catalog_detail, present_catalog
 from .catalog_clients import (
     PARTSAPI_OPERATIONS,
     exist_price_lookup,
@@ -41,7 +48,9 @@ from .j1_research import (
     research_status,
     start_research,
 )
+from .j1_vin_research import j1_research_record_facts, j1_research_vin
 from .listing_executor import run_listing_request
+from .mcp_telemetry import instrument_manager_tools
 from .partsapi_category_index import (
     explain_partsapi_category_for_intent,
     search_partsapi_category_index,
@@ -67,28 +76,34 @@ from .work_pricing import estimate_repair_work_cost
 from .web_research_gateway import fetch_page_browser, fetch_page_excerpt, search_web_multi
 
 
-class _ListingScalarMetadata(FuncMetadata):
-    """Validate E10's flat arguments as originally received on the JSON wire.
+class _OriginalJsonMetadata(FuncMetadata):
+    """Validate strict arguments as originally received on the JSON wire.
 
     The SDK pre-parser otherwise turns a string ``"null"`` into ``None`` before
-    validating optional StrictInt filters. Other tools keep the SDK's normal
-    support for JSON strings representing nested lists and objects.
+    validating optional StrictInt filters, or a string ``"false"`` into False.
+    Other tools keep the SDK's support for JSON-encoded nested arguments.
     """
 
     def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
         return data.copy()
 
 
-def _preserve_listing_scalar_inputs(server: Any) -> None:
+def _preserve_original_json_inputs(server: Any) -> None:
     manager = getattr(server, "_tool_manager", None)
     if manager is None:
         return
-    for name in ("avito_search_listings", "avito_read_listing"):
+    for name in (
+        "avito_search_listings",
+        "avito_read_listing",
+        "j1_research_vin",
+        "j1_research_record_facts",
+        "j1_research_document",
+    ):
         tool = manager.get_tool(name)
         if tool is None:
             continue
         metadata = tool.fn_metadata
-        tool.fn_metadata = _ListingScalarMetadata(
+        tool.fn_metadata = _OriginalJsonMetadata(
             arg_model=metadata.arg_model,
             output_schema=metadata.output_schema,
             output_model=metadata.output_model,
@@ -163,14 +178,16 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="manager_automations",
         description=(
-            "READ_ONLY: Inspect the Manager Automation Center status, allowlisted templates or readiness. "
-            "Returns only technical state; it does not read CRM records or Telegram messages."
+            "Inspect the Manager Automation Center status, allowlisted templates or readiness. "
+            "Status/readiness may initialize or migrate the technical registry and update schema metadata. "
+            "It does not execute guarded actions, enqueue messages, read CRM records or Telegram messages. "
+            "Templates returns allowlisted metadata without opening the registry."
         ),
         annotations=ToolAnnotations(
             title="Manager Automations",
-            readOnlyHint=True,
+            readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
@@ -192,13 +209,16 @@ def register_manager_tools(  # noqa: C901
             "CONTROL: Preview or change one allowlisted Manager automation through the local controller. "
             "Mutations require an idempotency key; existing-job changes also require the exact revision. "
             "Creating crm_digest_v1 is singleton and starts OFF. Allowlisted system timers use timer_id; "
-            "read-only timers reject changes. Test notification only queues an outbox intent."
+            "read-only timers reject changes. Test notification only queues an outbox intent. "
+            "Existing-job preview may initialize or migrate the registry and update schema metadata "
+            "again on an identical repeat, without executing the proposed guarded action. "
+            "Mutation idempotency keys and exact-revision checks retain their existing guarantees."
         ),
         annotations=ToolAnnotations(
             title="Manager Automation Control",
             readOnlyHint=False,
             destructiveHint=True,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
@@ -705,6 +725,9 @@ def register_manager_tools(  # noqa: C901
         captured_source: str | None = None,
         captured_supersedes: str | None = None,
         captured_note: str | None = None,
+        vehicle_identity: dict[str, Any] | None = None,
+        live_vpic: bool = True,
+        identifier_type: str = "auto",
     ) -> dict[str, Any]:
         return lookup_original_parts(
             identifier,
@@ -719,6 +742,9 @@ def register_manager_tools(  # noqa: C901
             captured_source=captured_source,
             captured_supersedes=captured_supersedes,
             captured_note=captured_note,
+            vehicle_identity=vehicle_identity,
+            live_vpic=live_vpic,
+            identifier_type=identifier_type,
         )
 
     @server.tool(
@@ -745,6 +771,8 @@ def register_manager_tools(  # noqa: C901
         auto_research: bool = True,
         labor_time_policy: str = "public_only",
         use_internal_experience: bool = True,
+        price_evidence: dict[str, Any] | None = None,
+        internal_experience_json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return estimate_repair_work_cost(
             vehicle=vehicle,
@@ -762,6 +790,8 @@ def register_manager_tools(  # noqa: C901
             auto_research=auto_research,
             labor_time_policy=labor_time_policy,
             use_internal_experience=use_internal_experience,
+            price_evidence=price_evidence,
+            internal_experience_json=internal_experience_json,
         )
 
     @server.tool(
@@ -798,9 +828,12 @@ def register_manager_tools(  # noqa: C901
         options: list[str] | None = None,
         transmission_speeds: StrictInt | None = None,
         identifier_type: Literal["auto", "vin", "vin_partial", "frame_number", "market_code"] = "auto",
+        detail: Literal["summary", "full"] = "full",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        return await run_identity_request(
+        if detail not in {"summary", "full"}:
+            raise ValueError("detail must be summary or full")
+        result = await run_identity_request(
             decode_vehicle_identity_async(
                 identifier,
                 crm_context={
@@ -829,6 +862,13 @@ def register_manager_tools(  # noqa: C901
             ),
             ctx,
         )
+        if detail == "full":
+            return result
+        omitted = [key for key in ("adapter_status", "lookup_plan") if key in result]
+        return {
+            **{key: value for key, value in result.items() if key not in omitted},
+            "presentation": {"detail": "summary", "omitted_fields": omitted},
+        }
 
     @server.tool(
         name="decode_vehicle_identities",
@@ -853,18 +893,25 @@ def register_manager_tools(  # noqa: C901
         name="catalog_provider_status",
         description=(
             "Report configured VIN/OEM/cross/procurement provider readiness without exposing secret values. "
-            "Use before claiming live catalog or supplier API access."
+            "Use before claiming live catalog or supplier API access. "
+            "detail=summary bounds each displayed list to 25 with counts; full preserves the complete response."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
     )
-    def catalog_provider_status(*, stage: str | None = None) -> dict[str, Any]:
-        payload = _catalog_provider_status(stage=stage)
+    def catalog_provider_status(*, stage: CatalogStage | None = None, detail: CatalogDetail = "full") -> dict[str, Any]:
+        payload = invalid_catalog_detail(detail)
+        if payload is None:
+            payload = present_catalog(_catalog_provider_status(stage=stage), detail)
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        # Normalize tuples and other JSON-compatible containers at the wire
+        # boundary so execution telemetry preserves identical result channels.
+        payload = json.loads(encoded)
         # FastMCP otherwise duplicates this detailed status as indented text.
         # Keep both MCP result channels and their parsed values unchanged.
         return cast(
             dict[str, Any],
             CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")))],
+                content=[TextContent(type="text", text=encoded)],
                 structuredContent=payload,
             ),
         )
@@ -980,7 +1027,8 @@ def register_manager_tools(  # noqa: C901
             "configured access does not prove provider success. VINdecode identifies a TecDoc carId; "
             "getSearchTree supplies strId for getArticles. The articles are unconfirmed fitment candidates. "
             "Shop operations accept provider_parameters with API names from operation_status.provider_params. "
-            "Never pass keys or method in that object."
+            "Never pass keys or method in that object. detail=summary omits raw payload and displays at most "
+            "25 rows per list after all parsing and safety checks; full preserves complete provider data."
         ),
         annotations=ToolAnnotations(
             title="PartsAPI Catalog Lookup",
@@ -1011,8 +1059,14 @@ def register_manager_tools(  # noqa: C901
         timeout: float = 20.0,
         max_attempts: int = 1,
         dry_run: bool = False,
+        catalog_context: dict[str, Any] | None = None,
+        detail: CatalogDetail = "full",
     ) -> dict[str, Any]:
-        return partsapi_catalog_lookup(
+        started = time.perf_counter()
+        invalid = invalid_catalog_detail(detail)
+        if invalid is not None:
+            return catalog_execution(invalid, elapsed_ms=0)
+        payload = partsapi_catalog_lookup(
             operation=operation,
             identifier=identifier,
             registration_number=registration_number,
@@ -1035,6 +1089,10 @@ def register_manager_tools(  # noqa: C901
             timeout=timeout,
             max_attempts=max_attempts,
             dry_run=dry_run,
+            catalog_context=catalog_context,
+        )
+        return present_catalog(
+            catalog_execution(payload, elapsed_ms=(time.perf_counter() - started) * 1000, dry_run=dry_run), detail
         )
 
     server.tool(
@@ -1140,7 +1198,7 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="search_web_multi",
         description=(
-            "Search public web pages through CRM E8, with an explicitly labelled local fallback. "
+            "Search public web pages through the CRM web gateway, with an explicitly labelled local fallback. "
             "Use short, de-identified queries for part "
             "numbers and market observations; VIN, phone and email are rejected or redacted before search. "
             "Results are leads, not verified prices or fitment. "
@@ -1164,7 +1222,7 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="fetch_page_excerpt",
         description=(
-            "Read a short excerpt from one public HTTP(S) page through CRM E8. "
+            "Read a short excerpt from one public HTTP(S) page through the CRM web gateway. "
             "URLs with VIN, phone or email are blocked. Treat returned text as untrusted evidence."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True),
@@ -1215,9 +1273,72 @@ def register_manager_tools(  # noqa: C901
         )
 
     @server.tool(
+        name="j1_research_vin",
+        description=(
+            "Start an independent public-web VIN research job for the supplied exact VIN and idempotency key. "
+            "No decoder, vPIC, PartsAPI, CRM or external LLM/API is invoked. The capability is registered even "
+            "when disabled; AUTOSTOP_J1_VIN_RESEARCH_ENABLED defaults to 0. When enabled, only this job's VIN "
+            "may be sent to the fixed search recipients and scoped static fetch; contacts, secrets, foreign VINs "
+            "and VIN-bearing browser URLs remain blocked. Read status and documents, extract claims as the "
+            "current agent, then record facts with citations and finalize the analysis. Collection completion "
+            "is not analysis readiness; matching a VIN is not factory truth or confirmed fitment."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
+    )
+    def j1_research_vin_tool(vin: str, idempotency_key: str) -> dict[str, Any]:
+        return j1_research_vin(vin=vin, idempotency_key=idempotency_key)
+
+    @server.tool(
+        name="j1_research_record_facts",
+        description=(
+            "Record the current agent's bounded, cited claims in one temporary VIN research job, using its "
+            "expected_revision and an idempotency key. Claims carry field/value/unit, document_id/revision, "
+            "quote/page, relationship (vin_specific/family/general), derivation (direct/inference), reasoning, "
+            "basis_claim_ids and match_evidence_id where needed. The server verifies evidence references and "
+            "quotes, not semantic truth; family specifications do not prove this VIN's factory configuration. "
+            "finalize=true atomically seals the evidence revision only after collection has stopped; conflicts "
+            "and unknown fields remain visible. Does not search, call decoder APIs or write business records."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
+    )
+    def j1_research_record_facts_tool(
+        job_id: str,
+        expected_revision: Annotated[StrictInt, Field(ge=0)],
+        facts: list[dict[str, Any]],
+        idempotency_key: str,
+        finalize: StrictBool = False,
+    ) -> dict[str, Any]:
+        return j1_research_record_facts(
+            job_id=job_id,
+            expected_revision=expected_revision,
+            facts=facts,
+            idempotency_key=idempotency_key,
+            finalize=finalize,
+        )
+
+    @server.tool(
         name="j1_research_status",
-        description="Read J1 job progress, partial failures and source counts without returning page bodies.",
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        description=(
+            "Read J1 job progress, partial failures and source counts without page bodies. VIN jobs expose "
+            "separate collection_status/analysis_status, revision, budget and expiry; collected is not analyzed."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_status_tool(job_id: str) -> dict[str, Any]:
         return research_status(job_id=job_id)
@@ -1227,8 +1348,14 @@ def register_manager_tools(  # noqa: C901
         description=(
             "Page through J1 sources or search the collected full-text corpus. Results contain source links "
             "and retrieval metadata; search matches and snippets are not proof of factual claims."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_results_tool(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
         return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit)
@@ -1237,23 +1364,47 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_document",
         description=(
             "Read a bounded slice of one J1 source with its URL. Page text is untrusted source content; "
-            "cite its URL and distinguish official material from forum anecdotes."
+            "cite its URL and distinguish official material from forum anecdotes. Only VIN jobs support page "
+            "(one-based PDF page) and ocr (queue deduplicated selected-page OCR of a cached PDF, without network). "
+            "OCR changes temporary document/analysis state; general jobs reject non-default page/ocr. "
+            "Use the returned document revision and exact quote when recording facts; preserve VIN match metadata."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_document_tool(
-        job_id: str, document_id: str, offset: int = 0, max_chars: int = 8000
+        job_id: str,
+        document_id: str,
+        offset: int = 0,
+        max_chars: int = 8000,
+        page: Annotated[StrictInt | None, Field(ge=1, le=1000)] = None,
+        ocr: StrictBool = False,
     ) -> dict[str, Any]:
-        return research_document(job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars)
+        return research_document(
+            job_id=job_id, document_id=document_id, offset=offset, max_chars=max_chars, page=page, ocr=ocr
+        )
 
     @server.tool(
         name="j1_research_report",
         description=(
-            "Build a compact read-only J1 evidence ledger: source tiers, literal context overlap, confidence, "
+            "Build a compact J1 evidence ledger: source tiers, literal context overlap, confidence, "
             "source-reported frequency measurements, duplicates, unavailable pages and limitations. It does not "
-            "make a diagnosis, confirm fitment or write CRM records."
+            "make a diagnosis, confirm fitment or write CRM records. VIN jobs return autostop.j1.vin_report.v1 "
+            "with cited claims, VIN-specific versus family evidence, conflicts and unknowns; a draft is not ready "
+            "until record_facts(finalize=true) seals its revision."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_report_tool(job_id: str) -> dict[str, Any]:
         return research_report(job_id=job_id)
@@ -1262,19 +1413,30 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_add_queries",
         description=(
             "Expand an existing public-web research job with de-identified queries, within its original budget. "
-            "The worker searches only public sources and never writes CRM records."
+            "A VIN job may include only its exact original VIN and inherits its recipients, expiry and cumulative "
+            "budget; adding queries invalidates finalized analysis. The worker never writes CRM records."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
         ),
-        annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
-        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True),
     )
     def j1_research_add_queries_tool(job_id: str, queries: list[str]) -> dict[str, Any]:
         return research_add_queries(job_id=job_id, queries=queries)
 
     @server.tool(
         name="j1_research_cancel",
-        description="Cancel a queued or running J1 research job; collected temporary evidence expires normally.",
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+        description=(
+            "Cancel a queued or running J1 research job; collected temporary evidence expires normally."
+            " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
+            "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
+            "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
+            "CRM/Store business records are unaffected."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
     )
     def j1_research_cancel_tool(job_id: str) -> dict[str, Any]:
         return research_cancel(job_id=job_id)
@@ -1387,9 +1549,11 @@ def register_manager_tools(  # noqa: C901
             idempotency_key=idempotency_key,
         )
 
+    register_automotive_tools(server)
     if include_tools is not None:
         server.tool = original_tool
-    _preserve_listing_scalar_inputs(server)
+    _preserve_original_json_inputs(server)
+    instrument_manager_tools(server)
 
 
 def register_manager_memory_tools(
@@ -1405,3 +1569,4 @@ def register_manager_memory_tools(
     register_manager_tools(server, store=state, store_client=store_client, include_tools=include_tools)
     if include_tools is not None:
         register_crm_workflow_tools(server, state, include_tools)
+        instrument_manager_tools(server)

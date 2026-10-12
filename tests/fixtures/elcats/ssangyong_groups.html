@@ -1,0 +1,21 @@
+<!-- Minimal cleaned ACTYON Group.aspx public sample, 2026-10-09. -->
+<script>
+function submit(model, group, subgroup, title, value) {
+ var form = document.getElementById('GetForm');
+ form.innerHTML = "<input type=\"hidden\" name=\"Model\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"Group\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"SubGroup\">";
+ form.innerHTML += "<input type=\"hidden\" name=\"Title\">";
+ document.forms[1].Model.value = model;
+ document.forms[1].Group.value = group;
+ document.forms[1].SubGroup.value = subgroup;
+ document.forms[1].Title.value = title;
+ document.forms[1].action = "Unit.aspx";
+ document.forms[1].submit();
+}
+</script>
+<form method="get" id="GetForm"></form>
+<table>
+<tr><td><a href="javascript:submit('a922235a-0c56-4344-8b2b-853bd0515df1','4','9','ШАССИ (ПАРКОВОЧНЫЙ ТОРМОЗ)','7');">ПАРКОВОЧНЫЙ ТОРМОЗ</a></td></tr>
+<tr><td><a href="javascript:submit('a922235a-0c56-4344-8b2b-853bd0515df1','4','8','ШАССИ (ТОРМОЗНАЯ СИСТЕМА)','7');">ТОРМОЗНАЯ СИСТЕМА</a></td></tr>
+</table>

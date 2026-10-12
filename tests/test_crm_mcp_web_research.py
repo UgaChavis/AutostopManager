@@ -162,7 +162,7 @@ def test_transport_unwraps_nested_crm_raw_envelope_for_search_and_page(monkeypat
             "providers": [{"provider": "searxng", "status": "success"}],
         }
         if capability == "search_web_multi"
-        else {"ok": True, "final_url": "https://example.com/part", "excerpt": "Public price 4200 RUB"}
+        else {"ok": True, "final_url": "https://example.com/part", "excerpt": "x" * 8000}
     )
 
     class FakeSession:
@@ -188,6 +188,7 @@ def test_transport_unwraps_nested_crm_raw_envelope_for_search_and_page(monkeypat
                         "data": {"input_schema": {"type": "object"}},
                     },
                 )
+            assert _arguments["allow_large_output"] is (capability == "fetch_page_excerpt")
             inner = (
                 {"ok": False, "error": {"code": "web_search_provider_failed", "retryable": True}}
                 if upstream_failure
@@ -211,8 +212,9 @@ def test_transport_unwraps_nested_crm_raw_envelope_for_search_and_page(monkeypat
         assert len(result["results"]) == 1
         assert result["providers"][0]["provider"] == "searxng"
     else:
-        result = gateway.fetch_page_excerpt(url="https://example.com/part")
-        assert result["excerpt"] == "Public price 4200 RUB"
+        result = gateway.fetch_page_excerpt(url="https://example.com/part", max_chars=8000)
+        assert result["excerpt"] == "x" * 8000
+        assert result["delivered_chars"] == result["excerpt_limit_chars"] == 8000
     assert result["ok"] is True
 
 

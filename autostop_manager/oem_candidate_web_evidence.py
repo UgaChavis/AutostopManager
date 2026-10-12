@@ -30,6 +30,9 @@ _CONFIDENCE_LABELS = {"high", "medium", "low", "blocked"}
 _APPLICABILITY_STATUSES = {"catalog_evidence_found", "not_checked", "check_failed", "not_found", "rejected"}
 _NONPUBLIC_ACCESS_TOKENS = ("login", "registration", "subscription", "paid", "mixed")
 _E8_AUTHORIZED_PART_SOURCES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("elcats_catalog", "oem_catalog"): ("elcats.ru",),
+    ("japancats_catalog", "oem_catalog"): ("japancats.ru",),
+    ("exist_ssangyong_catalog", "oem_catalog"): ("ssangyong.exist.ru",),
     ("partsouq_catalog", "oem_catalog"): ("partsouq.com",),
     ("amayama_catalog", "oem_catalog"): ("amayama.com",),
     ("emex_public", "price_catalog"): ("emex.ru",),
@@ -397,12 +400,12 @@ def _candidate_status(
     if candidate.get("catalog_sources"):
         return (
             "кандидат",
-            "Переданная каталожная ссылка показана для ручной сверки; E7 не принимает её как доказательство применимости.",
+            "Переданная каталожная ссылка показана для ручной сверки; E6 не принимает её как доказательство применимости.",
         )
     if candidate.get("applicability_status") == "catalog_evidence_found":
         return (
             "кандидат",
-            "Есть заявленный каталожный результат, но E7 не может подтвердить его без доверенной EPC-проверки.",
+            "Есть заявленный каталожный результат, но E6 не может подтвердить его без доверенной EPC-проверки.",
         )
     return "кандидат", "Публичные ссылки могут поддержать поиск, но не подтверждают применимость."
 
@@ -429,7 +432,7 @@ def _registered_domain(value: str, domains: tuple[str, ...]) -> bool:
 
 
 def _gateway_authorized_source(row: Mapping[str, Any], url: str) -> dict[str, str] | None:
-    """Accept E8 metadata only when it intersects the local static registry."""
+    """Accept CRM Web Research Gateway metadata only when it intersects the local static registry."""
 
     if row.get("source_authorized") is not True:
         return None
@@ -775,7 +778,7 @@ def verify_oem_candidates_web(
         "warnings": list(dict.fromkeys(route_warnings)),
         "rules": [
             "Публичные поисковые сниппеты — слабое справочное свидетельство, а не подтверждение применимости.",
-            "E7 не выдаёт статус «подтверждён»: переданные ссылки и веб-сниппеты остаются кандидатами до доверенной EPC-проверки применимости.",
+            "E6 не выдаёт статус «подтверждён»: переданные ссылки и веб-сниппеты остаются кандидатами до доверенной EPC-проверки применимости.",
             "Перед подтверждением применимости и заказом подтвердить номер, замену, количество и условия в доверенном VIN-специфичном EPC; предварительный результат остаётся кандидатом.",
             "Момент оформления клиентского кейса определяет .agents/skills/manage-autostop-client/SKILL.md.",
             "Инструмент не создаёт заказов, не обращается к CRM и не принимает VIN.",

@@ -319,7 +319,7 @@ def _robots_policy(url: str) -> tuple[bool, float]:
             policy: tuple[RobotFileParser | None, bool, float] = (None, True, 1.0)
         elif status == 200:
             parser = RobotFileParser()
-            parser.parse(body.decode("utf-8", "replace").splitlines())
+            parser.parse(body.decode("utf-8-sig", "replace").splitlines())
             crawl_delay = parser.crawl_delay(USER_AGENT) or parser.crawl_delay("*") or 1.0
             policy = (parser, True, min(max(float(crawl_delay), 1.0), 30.0))
         else:

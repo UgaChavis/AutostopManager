@@ -6,7 +6,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 transcribe|preview --file /run/autostop-work-telegram/inbox/EXACT_FILE [--language ru] [--delete-after] | self-check" >&2
+  printf 'usage: %s transcribe --file /run/autostop-work-telegram/inbox/EXACT_FILE [--language ru] [--delete-after]\n       %s preview --file /run/autostop-work-telegram/inbox/EXACT_FILE [--delete-after]\n       %s self-check\n' "$0" "$0" "$0" >&2
   exit 2
 fi
 

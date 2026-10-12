@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from os.path import normpath
+from collections.abc import Iterable
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
-from .document_links import local_document_link_target
+from .document_links import parse_local_document_link, validate_document_reference
+from .instruction_inventory import (
+    InstructionInventory,
+    InventoryIssue,
+    collect_instruction_inventory,
+    read_instruction_bytes,
+    retired_instruction,
+)
 
 MODULE_PARENTS: dict[str, str | None] = {
     "A1": None,
@@ -33,16 +40,20 @@ MODULE_PARENTS: dict[str, str | None] = {
     "D4": "D2",
     "D5": "D3",
     "E1": None,
-    "E2": None,
-    "E3": None,
+    "E2": "E1",
+    "E3": "E1",
     "E4": "E1",
     "E5": "E1",
     "E6": "E1",
     "E7": "E1",
-    "E8": None,
+    "E8": "E1",
     "E9": "E1",
-    "E10": None,
-    "E11": None,
+    "E10": "E1",
+    "E11": "E1",
+    "E12": "E1",
+    "E13": "E1",
+    "E14": "E1",
+    "E15": "E1",
     "F1": None,
     "F2": None,
     "F3": "F2",
@@ -97,11 +108,39 @@ ROLE_JOURNAL_ENTRIES = {ROLE_JOURNAL_ROOT / "current-state.md", ROLE_JOURNAL_ROO
 
 
 def instruction_paths(root: Path = PROJECT_ROOT) -> tuple[str, ...]:
-    """Include every current Markdown document and missing required instructions."""
+    """Return current Markdown instructions and missing required entrypoints."""
+    root = root.resolve()
     names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
-    for directory in (root / "docs", root / ".agents/skills"):
-        names.update(str(path.relative_to(root)) for path in directory.rglob("*.md"))
+    try:
+        inventory = collect_instruction_inventory(root, required_paths=names)
+    except ModuleNotFoundError as exc:
+        if exc.name != "markdown_it":
+            raise
+        # Telegram's owner-control lane intentionally imports without Manager
+        # site packages. Only this path-list helper may use seed/card discovery.
+        inventory = collect_instruction_inventory(root, required_paths=names, follow_links=False)
+    return inventory_instruction_paths(root, inventory)
+
+
+def inventory_instruction_paths(root: Path, inventory: InstructionInventory) -> tuple[str, ...]:
+    """Keep failed active targets visible rather than silently dropping their hashes."""
+    root = root.resolve()
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS)
+    names.update(
+        path.relative_to(root).as_posix()
+        for path in (*inventory.paths, *inventory.unavailable)
+        if path.suffix == ".md" and path.is_relative_to(root)
+    )
     return (*TEXT_DOCUMENTS, *sorted(names.difference(TEXT_DOCUMENTS)))
+
+
+def instruction_inventory_snapshot(root: Path, *, required_paths: Iterable[str] = ()) -> InstructionInventory:
+    """A strict operation snapshot; audit/readiness never use parser-free fallback."""
+    names = set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | set(required_paths)
+    try:
+        return collect_instruction_inventory(root, required_paths=names)
+    except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
+        return InstructionInventory((), (InventoryIssue("unavailable", "AGENTS.md", "AGENTS.md"),))
 
 
 def _document_links(text: str) -> list[str]:
@@ -111,11 +150,18 @@ def _document_links(text: str) -> list[str]:
     return visible_markdown_links(text)
 
 
-def _local_link_path(link: str, document: Path, root: Path, *, check_external_links: bool = True) -> Path | None:
-    target = local_document_link_target(link)
-    if target is None:
+def _local_link_path(
+    link: str,
+    document: Path,
+    root: Path,
+    *,
+    check_external_links: bool = True,
+    contents: dict[Path, bytes] | None = None,
+) -> Path | None:
+    reference = parse_local_document_link(link)
+    if reference is None:
         return None
-    candidate = Path(normpath(document.parent / target))
+    candidate = document.parent / reference.path if reference.path else document
     document_name = document.relative_to(root).as_posix()
     if not check_external_links and not candidate.is_relative_to(root):
         allowed_external = document_name in {
@@ -145,6 +191,11 @@ def _local_link_path(link: str, document: Path, root: Path, *, check_external_li
         )
     if not allowed or not resolved.is_file():
         raise ValueError("document_link_invalid")
+    if reference.line is not None or reference.fragment:
+        content = contents.get(resolved) if contents is not None else None
+        if content is None:
+            content = read_instruction_bytes(resolved)
+        validate_document_reference(reference, resolved, content.decode("utf-8"))
     return resolved
 
 
@@ -165,29 +216,53 @@ def _codex_skill_entrypoint(path: Path, *, resolve_roots: bool = False) -> bool:
     return False
 
 
+def _audit_instruction_paths(
+    root: Path, inventory: InstructionInventory | None = None
+) -> tuple[tuple[str, ...], list[str]]:
+    """Return a complete graph or explicit bounded errors; never use the fallback."""
+    warnings: list[str] = []
+    inventory = inventory if inventory is not None else instruction_inventory_snapshot(root)
+    if inventory.issues:
+        warnings.append("instruction_inventory_mismatch")
+    for item in inventory.issues:
+        if item.code in {
+            "missing",
+            "outside",
+            "retired",
+            "invalid_link",
+            "document_link_line_invalid",
+            "document_link_line_out_of_range",
+            "document_link_anchor_missing",
+        }:
+            warnings.append(f"document_link_invalid:{item.source}")
+        else:
+            warnings.append(f"document_unreadable:{item.target}")
+    return inventory_instruction_paths(root, inventory), warnings
+
+
 def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool = True) -> dict[str, Any]:
     """Validate source documents without opening or creating a Manager database."""
     root = root.resolve()
-    warnings: list[str] = []
-    actual = {"AGENTS.md"}
-    actual.update(str(p.relative_to(root)) for p in (root / "docs").rglob("*.md"))
-    actual.update(str(p.relative_to(root)) for p in (root / ".agents/skills").rglob("*.md"))
-    references = {str(p.relative_to(root)) for p in (root / "docs/agent/references").rglob("*.md")}
-    for skill in SKILL_DOCUMENTS:
-        directory = (root / skill).parent
-        references.update(str(p.relative_to(root)) for p in directory.rglob("*.md") if p.name != "SKILL.md")
-    if actual != set(TEXT_DOCUMENTS) | set(REFERENCE_DOCUMENTS) | references:
-        warnings.append("instruction_inventory_mismatch")
+    inventory = instruction_inventory_snapshot(root)
+    paths, warnings = _audit_instruction_paths(root, inventory)
     size = 0
     detail_size = 0
     linked_paths: dict[str, set[Path]] = {}
-    paths = instruction_paths(root)
     for name in paths:
         path = root / name
         try:
-            if not path.resolve().is_relative_to(root):
+            resolved_path = path.resolve()
+            if (
+                not resolved_path.is_relative_to(root)
+                or retired_instruction(path, root)
+                or retired_instruction(resolved_path, root)
+                or resolved_path in inventory.unavailable
+            ):
                 raise ValueError("outside_project")
-            text = path.read_text(encoding="utf-8")
+            content = inventory.contents.get(resolved_path)
+            if content is None:
+                content = read_instruction_bytes(resolved_path)
+            text = content.decode("utf-8")
             if name in TEXT_DOCUMENTS:
                 size += len(text.encode())
             else:
@@ -210,13 +285,15 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
             linked_paths[name] = set()
             for link in _document_links(text):
                 try:
-                    resolved = _local_link_path(link, path, root, check_external_links=check_external_links)
+                    resolved = _local_link_path(
+                        link, path, root, check_external_links=check_external_links, contents=inventory.contents
+                    )
                 except (OSError, RuntimeError, ValueError):
                     warnings.append(f"document_link_invalid:{name}")
                 else:
                     if resolved is not None:
                         linked_paths[name].add(resolved)
-        except (OSError, RuntimeError, UnicodeError, ValueError):
+        except (ModuleNotFoundError, OSError, RuntimeError, UnicodeError, ValueError):
             warnings.append(f"document_unreadable:{name}")
     required_links = [("AGENTS.md", MODULE_DOCUMENTS["A1"])]
     required_links.extend(

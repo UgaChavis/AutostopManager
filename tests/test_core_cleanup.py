@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
-import shutil
 import sqlite3
 from types import SimpleNamespace
 
@@ -11,6 +10,7 @@ import pytest
 
 from autostop_manager import cli, diagnostics
 from autostop_manager.catalog_adapters import catalog_provider_status
+from autostop_manager.mcp_contract import validate_manager_mcp_surface
 from autostop_manager.mcp_server import build_server
 from autostop_manager.storage import StoreState
 
@@ -21,21 +21,51 @@ hooks = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hooks)
 
 
-@pytest.fixture
-def docs(tmp_path):
-    names = set(diagnostics.instruction_paths(ROOT))
+@pytest.fixture(scope="module")
+def docs_seed():
+    """Audit the full source once and freeze all instruction and link bytes."""
+    assert diagnostics.audit_documentation(ROOT, check_external_links=False)["ok"]
+    inventory = diagnostics.instruction_inventory_snapshot(ROOT)
+    assert not inventory.issues
+    names = set(diagnostics.inventory_instruction_paths(ROOT, inventory))
     for name in sorted(names):
         document = ROOT / name
-        for link in diagnostics._document_links(document.read_text()):
-            target = diagnostics._local_link_path(link, document, ROOT, check_external_links=False)
+        for link in diagnostics._document_links(inventory.contents[document].decode("utf-8")):
+            target = diagnostics._local_link_path(
+                link, document, ROOT, check_external_links=False, contents=inventory.contents
+            )
             if target is not None and target.is_relative_to(ROOT):
                 names.add(str(target.relative_to(ROOT)))
-    for name in sorted(names):
-        dest = tmp_path / name
+    return tuple(
+        (name, inventory.contents[path] if (path := ROOT / name) in inventory.contents else path.read_bytes())
+        for name in sorted(names)
+    )
+
+
+def _copy_documents(root, seed):
+    for name, content in seed:
+        dest = root / name
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / name, dest)
-    assert diagnostics.audit_documentation(tmp_path, check_external_links=False)["ok"]
-    return tmp_path
+        dest.write_bytes(content)
+    return root
+
+
+@pytest.fixture
+def docs(tmp_path, docs_seed):
+    # Each mutation case still audits its full graph; only the repeated audit of
+    # an unchanged source copy is removed. Bytes are immutable and never shared
+    # as mutable files between tests.
+    return _copy_documents(tmp_path, docs_seed)
+
+
+def test_full_document_copies_remain_independent(tmp_path, docs_seed):
+    first = _copy_documents(tmp_path / "first", docs_seed)
+    second = _copy_documents(tmp_path / "second", docs_seed)
+    (first / "AGENTS.md").write_text("[broken](missing.md)\n")
+
+    assert not diagnostics.audit_documentation(first, check_external_links=False)["ok"]
+    assert diagnostics.audit_documentation(second, check_external_links=False)["ok"]
+    assert all((second / name).read_bytes() == content for name, content in docs_seed)
 
 
 def test_documents_fit_budget_and_cover_operational_skills():
@@ -54,8 +84,37 @@ def test_documents_fit_budget_and_cover_operational_skills():
     }
 
 
+def test_audit_and_path_listing_ignore_unlinked_drafts_and_history(docs):
+    before = diagnostics.instruction_paths(docs)
+    for name in (
+        "docs/agent/drafts/e1-modernization-implementation-plan.md",
+        "docs/old-roadmap.md",
+        "docs/archive/old.md",
+    ):
+        path = docs / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xff")
+
+    assert diagnostics.instruction_paths(docs) == before
+    assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
+
+
+def test_audit_rejects_an_active_link_to_a_draft(docs):
+    target = docs / "docs/agent/drafts/old.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# Historical instructions\n")
+    module = docs / diagnostics.MODULE_DOCUMENTS["D1"]
+    module.write_text(module.read_text() + "\n[Old](../drafts/old.md)\n")
+
+    report = diagnostics.audit_documentation(docs, check_external_links=False)
+
+    assert report["ok"] is False
+    assert "document_link_invalid:docs/agent/modules/D1.md" in report["warnings"]
+    assert "docs/agent/drafts/old.md" not in diagnostics.instruction_paths(docs)
+
+
 @pytest.mark.parametrize(
-    "fault", ["missing", "empty", "link", "outside", "large", "extra", "reference_missing", "name", "description"]
+    "fault", ["missing", "empty", "link", "outside", "large", "reference_missing", "name", "description"]
 )
 def test_document_checks_fail_on_broken_instructions(docs, fault):
     path = docs / "AGENTS.md"
@@ -69,8 +128,6 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
         path.write_text("[bad](../elsewhere.md)")
     elif fault == "large":
         path.write_text("x" * (diagnostics.INSTRUCTION_BUDGET_BYTES + 1))
-    elif fault == "extra":
-        (docs / "docs/agent/extra.md").write_text("# extra")
     elif fault == "reference_missing":
         (docs / diagnostics.REFERENCE_DOCUMENTS[0]).unlink()
     else:
@@ -107,14 +164,16 @@ def test_document_checks_fail_on_broken_instructions(docs, fault):
     ],
 )
 def test_document_navigation_requires_a_visible_module_link(docs, literal):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + literal + "\n")
 
     report = diagnostics.audit_documentation(docs, check_external_links=False)
 
     assert report["ok"] is False
-    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+    assert "module_link_missing:docs/agent/modules/E1.md:docs/agent/modules/E10.md" in report["warnings"]
 
 
 @pytest.mark.parametrize(
@@ -138,8 +197,10 @@ def test_document_navigation_requires_a_visible_module_link(docs, literal):
     ],
 )
 def test_document_navigation_accepts_visible_inline_and_used_reference_links(docs, visible):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + visible + "\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -156,8 +217,10 @@ def test_document_navigation_accepts_visible_inline_and_used_reference_links(doc
     ],
 )
 def test_document_navigation_survives_literal_markers_and_escaped_code_openings(docs, prefix):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + prefix + "\n[E10](E10.md)\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -167,8 +230,10 @@ def test_document_navigation_survives_literal_markers_and_escaped_code_openings(
     "separator", ["\n\n", "\n \t\n", "\r\n\r\n", "\n~~~\nexample\n~~~\n", "\n# Section\n", "\n> Section\n"]
 )
 def test_document_navigation_in_a_separate_paragraph_survives_unmatched_code_markers(docs, separator):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n` unmatched" + separator + "[E10](E10.md)" + separator + "trailing `\n")
 
     assert diagnostics.audit_documentation(docs, check_external_links=False)["ok"]
@@ -184,19 +249,21 @@ def test_document_navigation_in_a_separate_paragraph_survives_unmatched_code_mar
     ],
 )
 def test_document_navigation_ignores_code_in_container_fences(docs, container):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
-    text = navigation.read_text().replace("[E10 — Авито / ReefAPI](E10.md)", "E10 — Авито / ReefAPI")
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
+    text = navigation.read_text().replace(
+        "[E10 — Б/у, контрактные и восстановленные детали](E10.md)", "E10 — Б/у, контрактные и восстановленные детали"
+    )
     navigation.write_text(text + "\n" + container)
 
     report = diagnostics.audit_documentation(docs, check_external_links=False)
 
     assert report["ok"] is False
-    assert "module_link_missing:docs/agent/modules/A1.md:docs/agent/modules/E10.md" in report["warnings"]
+    assert "module_link_missing:docs/agent/modules/E1.md:docs/agent/modules/E10.md" in report["warnings"]
     assert not any("format_unsupported" in warning for warning in report["warnings"])
 
 
 def test_document_examples_and_unused_definitions_do_not_require_nonexistent_files(docs):
-    navigation = docs / diagnostics.MODULE_DOCUMENTS["A1"]
+    navigation = docs / diagnostics.MODULE_DOCUMENTS["E1"]
     navigation.write_text(
         navigation.read_text()
         + "\n[unused]: missing.md\n```markdown\n[Example](also-missing.md)\n```\n"
@@ -307,7 +374,10 @@ def test_old_database_history_is_preserved_without_being_read(tmp_path):
 
 def test_retired_tools_and_providers_are_absent():
     tools = build_server()._tool_manager._tools
-    assert len(tools) == 48
+    assert (
+        len(tools)
+        == validate_manager_mcp_surface({name: tool.parameters for name, tool in tools.items()})["expected_tool_count"]
+    )
     assert (
         not {
             "remember",
