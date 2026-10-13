@@ -51,7 +51,7 @@ def _validate_private_file(
         if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
             raise VideoPreviewError("video_inbox_permissions_invalid")
         try:
-            file_fd = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=inbox_fd)
+            file_fd = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=inbox_fd)
         except OSError as exc:
             raise VideoPreviewError(unavailable_code) from exc
         try:

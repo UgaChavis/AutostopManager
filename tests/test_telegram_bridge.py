@@ -274,6 +274,7 @@ def _owner_notification_client(monkeypatch):
     entity = SimpleNamespace(is_self=False)
 
     async def resolve(_client, peer):
+        entity.id = int(peer)
         return entity, {"id": int(peer), "kind": "private"}
 
     async def last_message(client, _entity):
@@ -291,7 +292,12 @@ def _owner_notification_client(monkeypatch):
             assert target is entity
             self.sends += 1
             message = SimpleNamespace(
-                id=max(self.messages, default=20) + 1, message=text, out=True, date=datetime.now(UTC)
+                id=max(self.messages, default=20) + 1,
+                chat_id=target.id,
+                is_private=True,
+                message=text,
+                out=True,
+                date=datetime.now(UTC),
             )
             if self.deliver:
                 self.messages[message.id] = message
@@ -2089,7 +2095,15 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
 
         async def get_messages(self, _entity, *, ids):
             assert ids == 30
-            return SimpleNamespace(message="caption", media=object())
+            return SimpleNamespace(
+                id=30,
+                chat_id=10,
+                is_private=True,
+                out=True,
+                message="caption",
+                media=object(),
+                file=SimpleNamespace(mime_type="image/jpeg", name=photo.name, size=len(original)),
+            )
 
     client = Client()
     dry_run = asyncio.run(
@@ -2257,6 +2271,9 @@ def test_send_document_uploads_validated_bytes_and_independently_reads_back(monk
             return SimpleNamespace(
                 id=30,
                 message="Car ready",
+                chat_id=10,
+                is_private=True,
+                out=True,
                 media=SimpleNamespace(),
                 file=SimpleNamespace(
                     name="order-813.pdf",
@@ -3254,6 +3271,8 @@ def test_download_media_requires_dry_run_and_saves_private_verified_file(monkeyp
     content = b"%PDF-1.7\nexample"
     message = SimpleNamespace(
         id=44,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="inspection.pdf", mime_type="application/pdf", size=len(content)),
     )
@@ -3321,6 +3340,8 @@ def test_telegram_voice_is_downloadable_when_duration_is_bounded(monkeypatch, tm
     audio_attribute.voice = True
     message = SimpleNamespace(
         id=46,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=len(content)),
         document=SimpleNamespace(attributes=[audio_attribute]),
@@ -3378,6 +3399,8 @@ def test_telegram_voice_over_ten_minutes_is_not_downloadable(monkeypatch, tmp_pa
     audio_attribute.voice = True
     message = SimpleNamespace(
         id=47,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=100),
         document=SimpleNamespace(attributes=[audio_attribute]),
@@ -3413,6 +3436,8 @@ def test_telegram_short_mp4_video_is_downloadable(monkeypatch, tmp_path) -> None
     video_attribute.h = 1080
     message = SimpleNamespace(
         id=48,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=len(content)),
         document=SimpleNamespace(attributes=[video_attribute]),
@@ -3482,6 +3507,8 @@ def test_telegram_mp4_video_requires_bounded_duration(monkeypatch, tmp_path, dur
     video_attribute.h = 720
     message = SimpleNamespace(
         id=49,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=100),
         document=SimpleNamespace(attributes=[video_attribute]),
@@ -3520,6 +3547,8 @@ def test_download_rejects_unsupported_or_oversized_media(monkeypatch, tmp_path) 
     entity = object()
     message = SimpleNamespace(
         id=45,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="archive.zip", mime_type="application/zip", size=100),
     )
@@ -3587,7 +3616,7 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
 
         async def get_messages(self, _entity, *, ids):
             assert ids == 30
-            return SimpleNamespace(message=self.sent[-1])
+            return SimpleNamespace(id=30, chat_id=10, is_private=True, out=True, message=self.sent[-1])
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -3655,7 +3684,7 @@ def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch,
 
         async def get_messages(self, _entity, *, ids):
             assert ids == 30
-            return SimpleNamespace(id=30, message=self.sent[-1], out=True)
+            return SimpleNamespace(id=30, chat_id=10, is_private=True, message=self.sent[-1], out=True)
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -3825,7 +3854,9 @@ def test_text_reply_binds_source_sends_and_verifies_reply(monkeypatch, tmp_path)
                     date=datetime(2026, 8, 25, tzinfo=UTC),
                 )
             assert ids == 30
-            return SimpleNamespace(message=self.sent[-1][0], reply_to_msg_id=self.sent[-1][1])
+            return SimpleNamespace(
+                id=30, chat_id=10, is_private=True, out=True, message=self.sent[-1][0], reply_to_msg_id=self.sent[-1][1]
+            )
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -3899,7 +3930,9 @@ def test_unverified_reply_does_not_close_inbound_monitor_event(monkeypatch, tmp_
             if ids == 5:
                 return SimpleNamespace(id=5, message="question", out=False, date=None)
             assert ids == 30
-            return SimpleNamespace(message=self.reply_text, reply_to_msg_id=5)
+            return SimpleNamespace(
+                id=30, chat_id=10, is_private=True, out=True, message=self.reply_text, reply_to_msg_id=5
+            )
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -3968,7 +4001,7 @@ def test_verified_reply_reports_when_its_monitor_ref_was_evicted(monkeypatch, tm
             if ids == 5:
                 return SimpleNamespace(id=5, message="question", out=False, date=None)
             assert ids == 30
-            return SimpleNamespace(message="answer", reply_to_msg_id=5)
+            return SimpleNamespace(id=30, chat_id=10, is_private=True, out=True, message="answer", reply_to_msg_id=5)
 
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
     monkeypatch.setattr(telegram_bridge, "_last_message_id", last_message)
@@ -4533,7 +4566,8 @@ def test_owner_notification_cli_never_accepts_or_emits_a_target(monkeypatch, cap
 def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch) -> None:
     selected: list[bool] = []
 
-    async def daemon(_config, *, monitor_incoming):
+    async def daemon(_config, *, monitor_incoming, _cleanup_watchdog):
+        assert _cleanup_watchdog.daemon and not _cleanup_watchdog.is_alive()
         selected.append(monitor_incoming)
 
     monkeypatch.setattr(telegram_bridge, "_config_from_args", lambda args: SimpleNamespace(account=args.account))

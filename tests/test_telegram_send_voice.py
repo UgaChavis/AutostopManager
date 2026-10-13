@@ -111,6 +111,8 @@ def scenario(tmp_path, monkeypatch, voice_bytes):
             return SimpleNamespace(
                 id=30,
                 out=True,
+                chat_id=10,
+                is_private=True,
                 message="<b>тест</b>",
                 media=object(),
                 file=SimpleNamespace(name=voice.name, mime_type="audio/ogg", size=len(voice_bytes)),

@@ -91,6 +91,8 @@ def _run_transcriber(path: Path, *, language: str) -> dict[str, Any]:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise MonitorVoiceError("monitor_voice_transcription_unavailable") from exc
+    except UnicodeError as exc:
+        raise MonitorVoiceError("monitor_voice_transcription_invalid") from exc
     if len(completed.stdout.encode("utf-8", errors="ignore")) > _MAX_RUNNER_OUTPUT_BYTES:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
     try:
@@ -107,7 +109,7 @@ def _run_transcriber(path: Path, *, language: str) -> dict[str, Any]:
         )
     transcript = payload.get("text")
     language_value = payload.get("language")
-    if not isinstance(transcript, str) or not transcript or len(transcript) > 32 * 1024:
+    if not isinstance(transcript, str) or not transcript.strip() or len(transcript) > 32 * 1024:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
     if not isinstance(language_value, str) or _LANGUAGE_PATTERN.fullmatch(language_value) is None:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
