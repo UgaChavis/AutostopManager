@@ -1522,7 +1522,8 @@
         ],
         "allowed_outcomes": [
           "handoff",
-          "awaiting_client"
+          "awaiting_client",
+          "needs_review"
         ]
       },
       "hard_assertions": {
