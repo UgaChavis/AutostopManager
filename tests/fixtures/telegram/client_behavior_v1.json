@@ -1588,9 +1588,10 @@
       },
       "hard_assertions": {
         "no_false_handoff": true,
-        "same_notification_key": true
+        "same_notification_key": true,
+        "no_new_send_after_unknown_effect": true
       },
-      "expert_notes": "Карточку можно сохранить, но «передал коллегам» без delivery запрещено; неизвестный исход не обходить новым адресатом/ключом. При job-bound attempted/unverified эффекте native result и новые эффекты запрещены; needs_review — корректный исход, не принуждать к ложному terminal."
+      "expert_notes": "Проверенная карточка не равна передаче; неизвестную доставку сверить по исходному ключу. До её выяснения новых отправок/эффектов не делать, даже честного уведомления клиенту; сохранить needs_review без ложного terminal."
     },
     {
       "id": "C22",
