@@ -24,6 +24,9 @@ class _Response:
     def read(self, _limit: int) -> bytes:
         return self._body
 
+    def close(self) -> None:
+        self.closed = True
+
 
 class _Connection:
     def __init__(self, responses: list[_Response]) -> None:

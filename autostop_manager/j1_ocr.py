@@ -187,7 +187,7 @@ def extract_scanned_pdf(
         "text": text,
         "kind": "pdf",
         "extraction_method": "pdf_ocr",
-        "pages_processed": len(images),
+        "pages_processed": len(parts),
     }
 
 

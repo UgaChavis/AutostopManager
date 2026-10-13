@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import os
 import shutil
 import socket
 import sqlite3
+import sys
+from threading import Event, current_thread
+from types import ModuleType
 
 import pytest
 
@@ -16,10 +21,31 @@ from autostop_manager import j1_browser, j1_fetch, j1_research as j1
 @pytest.fixture(autouse=True)
 def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("AUTOSTOP_J1_VIN_CACHE_DIR", str(tmp_path / "private-vin"))
+    monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "0")
     monkeypatch.delenv("AUTOSTOP_J1_SEARXNG_URL", raising=False)
     monkeypatch.setattr(j1, "_STOP", False)
     j1_fetch._ROBOTS.clear()
     j1_fetch._HOST_NEXT.clear()
+
+
+def test_ordinary_worker_housekeeping_stays_in_disposable_cache(monkeypatch, tmp_path):
+    from autostop_manager import j1_vin_store
+
+    housekeeping = []
+
+    def isolated_prune():
+        root = Path(os.environ.get("AUTOSTOP_J1_VIN_CACHE_DIR", "/run/autostop-j1-vin"))
+        assert root.is_relative_to(tmp_path)
+        housekeeping.append(root)
+
+    monkeypatch.setattr(j1_vin_store, "prune", isolated_prune)
+    monkeypatch.setattr(j1, "search_public", lambda *_args, **_kwargs: ([], "synthetic"))
+    created = j1.start_research("Synthetic public topic", ["synthetic public query"])
+    assert created["ok"]
+    j1.run_worker(once=True)
+    assert housekeeping
+    assert j1.research_status(created["job_id"])["status"] == "completed"
 
 
 def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
@@ -414,9 +440,13 @@ def test_public_dns_and_redirect_guard(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class RedirectResponse:
         status = 302
+        closed = False
 
         def getheaders(self) -> list[tuple[str, str]]:
             return [("Location", "https://second.example/private")]
+
+        def close(self) -> None:
+            self.closed = True
 
     class FakeConnection:
         calls = 0
@@ -759,12 +789,16 @@ def test_public_request_rejects_oversize_and_compressed_responses(monkeypatch: p
         def __init__(self, headers: dict[str, str], body: bytes) -> None:
             self.headers = headers
             self.body = body
+            self.closed = False
 
         def getheaders(self) -> list[tuple[str, str]]:
             return list(self.headers.items())
 
         def read(self, count: int) -> bytes:
             return self.body[:count]
+
+        def close(self) -> None:
+            self.closed = True
 
     class FakeConnection:
         def __init__(self, *_args: object) -> None:
@@ -995,3 +1029,244 @@ def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPa
     assert status["browser_pages_attempted"] == j1.MAX_BROWSER_PAGES
     assert status["browser_pages_remaining"] == 0
     assert {item["reason"] for item in status["page_failures"]} == {"browser_unavailable", "browser_limit_reached"}
+
+
+@pytest.fixture
+def j1003_offline(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("AUTOSTOP_J1_SEARXNG_URL", raising=False)
+    monkeypatch.setattr(j1, "_STOP", False)
+    monkeypatch.setattr(j1, "_vin_api", lambda _job_id: None)
+    private_stub = ModuleType("autostop_manager.j1_vin_store")
+    private_stub.prune = lambda: None
+    monkeypatch.setitem(sys.modules, "autostop_manager.j1_vin_store", private_stub)
+
+
+def _j1003_legacy_document():
+    created = j1.start_research("Public technical evidence", ["initial ordinary query"], max_pages=3)
+    assert created["ok"], created
+    job_id = created["job_id"]
+    document_id = "0" * 31 + "1"
+    url = "https://example.org/legacy-document"
+    with j1._db() as connection:
+        connection.execute(
+            "INSERT INTO documents(id,job_id,url,status,body,created_at) VALUES(?,?,?,?,?,?)",
+            (document_id, job_id, url, "fetched", "Legacy public technical text", j1._utcnow()),
+        )
+        connection.execute("UPDATE queries SET status='done' WHERE job_id=?", (job_id,))
+        connection.execute("UPDATE jobs SET status='completed' WHERE id=?", (job_id,))
+        connection.commit()
+    return job_id, document_id, url
+
+
+def test_j1003_migration_commits_backfill_before_domain_transaction(j1003_offline):
+    _job_id, document_id, url = _j1003_legacy_document()
+    with j1._db() as connection:
+        assert not connection.in_transaction
+        connection.execute("BEGIN IMMEDIATE")
+        assert connection.execute("SELECT canonical_url FROM documents WHERE id=?", (document_id,)).fetchone()[0] == url
+        connection.rollback()
+    with j1._db(readonly=True) as connection:
+        assert connection.execute("SELECT canonical_url FROM documents WHERE id=?", (document_id,)).fetchone()[0] == url
+
+
+def test_j1003_new_job_is_admitted_after_legacy_backfill(j1003_offline):
+    _job_id, document_id, url = _j1003_legacy_document()
+    created = j1.start_research("Another public technical question", ["another ordinary query"], max_pages=3)
+    assert created["ok"], created
+    assert created["status"] == "queued"
+    with j1._db(readonly=True) as connection:
+        assert connection.execute("SELECT canonical_url FROM documents WHERE id=?", (document_id,)).fetchone()[0] == url
+
+
+@pytest.mark.parametrize("control", ["cancel", "add_queries"])
+def test_j1003_completion_preserves_concurrent_control(j1003_offline, monkeypatch, control):
+    created = j1.start_research("Public technical evidence", ["initial ordinary query"], max_pages=3)
+    job_id = created["job_id"]
+    with j1._db() as connection:
+        connection.execute("UPDATE queries SET status='done' WHERE job_id=?", (job_id,))
+        connection.commit()
+        assert j1._claim_job(connection) == job_id
+    observed = Event()
+    release = Event()
+    control_started = Event()
+    transactions = []
+    connect = sqlite3.connect
+    calls = []
+    followup = "accepted public followup"
+
+    class ObservedRow:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            cursor = super().execute(sql, *args, **kwargs)
+            if current_thread().name == "j1-completion-reader" and sql.startswith(
+                "SELECT id,url FROM documents WHERE job_id="
+            ):
+                row = cursor.fetchone()
+                cursor.close()
+                assert row is None
+                transactions.append(self.in_transaction)
+                observed.set()
+                assert release.wait(5), "synthetic completion reader was not released"
+                return ObservedRow(row)
+            return cursor
+
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *args, **kwargs: connect(*args, **kwargs, factory=ObservedConnection)
+    )
+
+    def search(query, **_kwargs):
+        calls.append(query)
+        return (
+            [{"url": "https://example.org/followup", "title": "Followup material", "source": "synthetic"}],
+            "synthetic",
+        )
+
+    monkeypatch.setattr(j1, "search_public", search)
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "title": "Public followup material",
+            "kind": "html",
+            "text": "Public technical evidence retained after an accepted followup.",
+        },
+    )
+
+    def worker():
+        current_thread().name = "j1-completion-reader"
+        j1._work_job(job_id)
+
+    def apply_control():
+        current_thread().name = "j1-completion-control"
+        control_started.set()
+        if control == "cancel":
+            return j1.research_cancel(job_id)
+        return j1.research_add_queries(job_id, [followup])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        running = pool.submit(worker)
+        try:
+            assert observed.wait(2)
+            controlled = pool.submit(apply_control)
+            assert control_started.wait(2)
+            if not transactions[0]:
+                # Before the fix, finish the control write between the queue
+                # read and completion update. When a transaction owns the
+                # SQLite lock, release it before awaiting the other writer.
+                controlled.result(timeout=3)
+        finally:
+            release.set()
+        running.result(timeout=3)
+        receipt = controlled.result(timeout=3)
+    assert receipt["ok"], receipt
+    status = j1.research_status(job_id)
+    if control == "cancel":
+        assert receipt["status"] in {"cancelled", "completed"}
+        assert status["status"] == receipt["status"]
+        assert calls == []
+        return
+    assert receipt["added"] == 1
+    assert status["queries_total"] == 2
+    with j1._db() as connection:
+        pending = connection.execute(
+            "SELECT COUNT(*) FROM queries WHERE job_id=? AND status='pending'", (job_id,)
+        ).fetchone()[0]
+    assert not (status["status"] == "completed" and pending)
+    if status["status"] == "queued":
+        with j1._db() as connection:
+            assert j1._claim_job(connection) == job_id
+        j1._work_job(job_id)
+    assert calls == [followup]
+    final = j1.research_status(job_id)
+    assert final["status"] == "completed"
+    assert final["queries_done"] == 2
+    assert final["pages_fetched"] == 1
+
+
+def _j1003_report_fixture(urls, *, canonical_urls=None, cohort=False):
+    context = {"make": "Lexus", "model": "RX200T", "engine": "8AR-FTS", "system": "fuel injection"}
+    created = j1.start_research("Investigate public technical evidence", automotive_context=context)
+    assert created["ok"], created
+    with j1._db() as connection:
+        for index, url in enumerate(urls):
+            canonical = canonical_urls[index] if canonical_urls else j1._canonical_url(url)
+            classification = j1.classify_source(canonical, title="Service manual", kind="pdf")
+            body = "Lexus RX200T 8AR-FTS fuel injection public technical reference " + str(index)
+            if cohort:
+                body += ". The study found fuel injection leakage in 12 of 100 vehicles."
+            connection.execute(
+                "INSERT INTO documents(id,job_id,url,canonical_url,title,kind,status,body,source_class,source_basis,"
+                "source_tier,created_at,retrieved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    f"{index + 1:032x}",
+                    created["job_id"],
+                    url,
+                    canonical,
+                    "Service manual",
+                    "pdf",
+                    "fetched",
+                    body,
+                    classification.source_class,
+                    classification.source_basis,
+                    classification.source_tier,
+                    j1._utcnow(),
+                    j1._utcnow(),
+                ),
+            )
+        connection.execute("UPDATE queries SET status='done' WHERE job_id=?", (created["job_id"],))
+        connection.execute("UPDATE jobs SET status='completed' WHERE id=?", (created["job_id"],))
+        connection.commit()
+    report = j1.research_report(created["job_id"])
+    assert report["ok"], report
+    return report["report"]
+
+
+@pytest.mark.parametrize(
+    "urls,canonical_urls",
+    [
+        (["https://static.nhtsa.gov/a.pdf", "https://www.nhtsa.gov/b.pdf"], None),
+        (
+            ["https://redirect-one.example/a.pdf", "https://redirect-two.example/b.pdf"],
+            ["https://static.nhtsa.gov/a.pdf", "https://www.nhtsa.gov/b.pdf"],
+        ),
+    ],
+)
+def test_j1003_report_groups_source_authority_aliases(j1003_offline, urls, canonical_urls):
+    report = _j1003_report_fixture(urls, canonical_urls=canonical_urls)
+    assert report["evidence_confidence"]["independent_domains"] == 1
+    assert report["evidence_confidence"]["level"] == "moderate"
+    assert report["evidence_confidence"]["source_tiers"]["A"] == 2
+
+
+def test_j1003_report_does_not_promote_unknown_manual_provenance(j1003_offline):
+    urls = [
+        "https://unknown-upload.example/a-service-manual.pdf",
+        "https://another-upload.example/b-service-manual.pdf",
+    ]
+    assert all(j1.classify_source(url, title="Service manual", kind="pdf").source_tier == "B" for url in urls)
+    report = _j1003_report_fixture(urls, cohort=True)
+    assert report["evidence_confidence"]["level"] == "low"
+    assert report["frequency"]["status"] == "not_measured"
+    assert {source["source_tier"] for source in report["sources"]} == {"D"}
+    assert {source["source_basis"] for source in report["sources"]} == {"heuristic:technical_pdf"}
+    assert all(source["source_tier_basis"] != "discovery_registry" for source in report["sources"])
+    assert report["fitment_confirmed"] is False
+    assert report["crm_written"] is False
+
+
+def test_j1003_report_preserves_checked_manufacturer_evidence(j1003_offline):
+    report = _j1003_report_fixture(["https://www.denso.com/a.pdf", "https://bosch.com/b.pdf"], cohort=True)
+    assert report["evidence_confidence"]["independent_domains"] == 2
+    assert report["evidence_confidence"]["level"] == "high"
+    assert report["frequency"]["status"] == "measured_in_source"
+    assert {source["source_tier"] for source in report["sources"]} == {"B"}
+    assert all(source["source_basis"].startswith("registry:technical:") for source in report["sources"])

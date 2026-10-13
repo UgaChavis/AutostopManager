@@ -27,7 +27,9 @@ _ATTESTATION_HEADER = "autostop-j1-browser-isolation-v2"
 _REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 MAX_TEXT_CHARS = 50_000
 MAX_TIMEOUT_SECONDS = 25
-_MAX_MESSAGE_BYTES = 96_000
+# Each JSON string character can require six bytes; reserve URL, title and envelope.
+_MAX_MESSAGE_BYTES = 6 * (MAX_TEXT_CHARS + 2_048 + 200) + 1_024
+_MAX_REQUEST_BYTES = 6 * 2_048 + 1_024
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
@@ -97,7 +99,7 @@ def active_release_revision(release_root: str | None = None) -> tuple[str, str]:
         return "", "browser_release_revision_unavailable"
     try:
         resolved_root = Path(root).resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return "", "browser_release_revision_unavailable"
     revision = _read_root_owned_file(str(resolved_root / "REVISION"), maximum_bytes=80)
     if revision is None:
@@ -277,6 +279,8 @@ def render_page(
     }
     try:
         encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(encoded) > _MAX_REQUEST_BYTES:
+            return _failure("browser_request_invalid", retryable=False)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout + 2)
             connection.connect(target_socket)

@@ -33,7 +33,7 @@ from .j1_fetch import (
     redact_sensitive,
     search_public,
 )
-from .j1_sources import classify_source
+from .j1_sources import classify_source, discovery_domain
 
 SCHEMA = "autostop.j1.research.v1"
 REPORT_SCHEMA = "autostop.j1.report.v1"
@@ -165,6 +165,8 @@ def _db(*, readonly: bool = False) -> Iterator[sqlite3.Connection]:
         if not readonly:
             connection.execute("PRAGMA foreign_keys=ON")
             _init_schema(connection)
+            # Backfill writes must finish before callers start their transaction.
+            connection.commit()
         yield connection
     finally:
         connection.close()
@@ -1016,8 +1018,11 @@ def _report_error(code: str, *, job_id: str = "") -> dict[str, Any]:
     return result
 
 
-def _report_source_tier(stored_tier: str, source_class: str) -> tuple[str, str]:
-    """Use the discovery registry tier, with a safe fallback for old jobs."""
+def _report_source_tier(stored_tier: str, source_class: str, source_basis: str = "") -> tuple[str, str]:
+    """Use discovery tiers without treating guessed PDF type as authority."""
+
+    if source_basis == "heuristic:technical_pdf":
+        return "D", "unverified_technical_pdf"
 
     if stored_tier in {"A", "B", "C", "D"}:
         return stored_tier, "discovery_registry"
@@ -1064,7 +1069,9 @@ def _evidence_confidence(tier: str, applicability: str) -> str:
 
 
 def _report_source_item(row: sqlite3.Row, context: dict[str, str]) -> dict[str, Any]:
-    tier, tier_basis = _report_source_tier(str(row["source_tier"] or ""), row["source_class"])
+    tier, tier_basis = _report_source_tier(
+        str(row["source_tier"] or ""), row["source_class"], str(row["source_basis"] or "")
+    )
     applicability, matched = _context_matches(row, context)
     return {
         "document_id": row["id"],
@@ -1194,12 +1201,9 @@ def _overall_confidence(sources: list[dict[str, Any]]) -> str:
 def _source_domains(sources: list[dict[str, Any]]) -> int:
     domains: set[str] = set()
     for source in sources:
-        try:
-            hostname = (urlsplit(str(source["url"])).hostname or "").casefold()
-        except ValueError:
-            hostname = ""
-        if hostname:
-            domains.add(hostname)
+        domain = discovery_domain(str(source.get("canonical_url") or source["url"]))
+        if domain:
+            domains.add(domain)
     return len(domains)
 
 
@@ -1532,6 +1536,8 @@ def _work_job(job_id: str) -> None:
 
         prune_vin()
         with _db() as conn:
+            # Serialize claims and completion with cancellation/query additions.
+            conn.execute("BEGIN IMMEDIATE")
             job = conn.execute("SELECT status,max_pages FROM jobs WHERE id=?", (job_id,)).fetchone()
             if job is None or job["status"] != "running":
                 return

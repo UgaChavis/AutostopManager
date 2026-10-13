@@ -25,7 +25,7 @@ from threading import BoundedSemaphore, Thread
 from typing import Any
 from urllib.parse import urlsplit
 
-from .j1_browser import _public_http_url
+from .j1_browser import _MAX_MESSAGE_BYTES, _MAX_REQUEST_BYTES, _public_http_url
 from .j1_fetch import USER_AGENT, redact_sensitive
 
 
@@ -36,9 +36,9 @@ DEFAULT_CONTROL_CIDR = "172.31.250.0/29"
 DEFAULT_CHROMIUM_BINARY = "/usr/bin/chromium-browser"
 MAX_TEXT_CHARS = 50_000
 MAX_DOM_BYTES = 2_000_000
-MAX_REQUEST_BYTES = 4096
+MAX_REQUEST_BYTES = _MAX_REQUEST_BYTES
 MAX_TIMEOUT_SECONDS = 25
-_MAX_RESPONSE_BYTES = 96_000
+_MAX_RESPONSE_BYTES = _MAX_MESSAGE_BYTES
 _MAX_CONCURRENT_RENDERS = 2
 _CHROMIUM_NOFILE_LIMIT = 1_024
 _CHROMIUM_FILE_SIZE_LIMIT = 16 * 1024 * 1024

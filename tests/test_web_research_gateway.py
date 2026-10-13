@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from urllib.parse import quote
 
 import autostop_manager.web_research_gateway as web_gateway
 from autostop_manager.web_research_gateway import (
@@ -12,6 +13,119 @@ from autostop_manager.web_research_gateway import (
     research_part_public_evidence,
     search_web_multi,
 )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost/report",
+        "http://127.0.0.1/report",
+        "https://10.0.0.1/report",
+        "https://[::1]/report",
+        "https://docs.example.internal/report",
+        "https://example.org:22/report",
+        "https://example.org/?token=synthetic-secret-value",
+        "https://example.org/?token%253Dsynthetic-secret-value",
+    ],
+)
+@pytest.mark.parametrize("capability", ["fetch_page_excerpt", "fetch_page_browser"])
+def test_page_facade_rejects_non_public_urls_before_invocation(url, capability):
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {"ok": True, "url": url, "excerpt": "Synthetic evidence"}
+
+    adapter = CapabilityWebResearchGatewayAdapter(invoke)
+    install_web_research_gateway(adapter)
+    try:
+        result = getattr(web_gateway, capability)(url=url)
+    finally:
+        install_web_research_gateway(None)
+
+    assert not calls
+    assert result["ok"] is False
+    assert result["error"]["code"] == "web_page_url_invalid"
+    assert "synthetic-secret-value" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "brake pads api_key=synthetic-secret-value",
+        quote("brake pads token=synthetic-secret-value"),
+        quote(quote("brake pads password=synthetic-secret-value")),
+        "brake pads Bearer synthetic-secret-value",
+        "brake pads https://127.0.0.1/report",
+    ],
+)
+@pytest.mark.parametrize("entrypoint", ["capability", "local", "installed", "part", "normalize"])
+def test_public_query_secret_is_rejected_without_forwarding_or_echo(query, entrypoint):
+    calls = []
+
+    def invoke(name, arguments):
+        calls.append((name, arguments))
+        return {"ok": True, "results": []}
+
+    def search(value, **kwargs):
+        calls.append((value, kwargs))
+        return {"results": []}
+
+    adapter = CapabilityWebResearchGatewayAdapter(invoke)
+    if entrypoint == "capability":
+        result = adapter.search_web_multi(query=query)
+    elif entrypoint == "local":
+        result = DuckDuckGoWebResearchGateway(search).search_web_multi(query=query)
+    elif entrypoint == "normalize":
+        result = web_gateway.normalize_web_research_response({"results": []}, query=query, limit=5)
+    else:
+        install_web_research_gateway(adapter)
+        try:
+            method = search_web_multi if entrypoint == "installed" else research_part_public_evidence
+            result = method(query=query)
+        finally:
+            install_web_research_gateway(None)
+
+    assert not calls
+    assert result["ok"] is False
+    assert result["query"] == ""
+    assert result["error"] == {"code": "web_research_private_query_rejected", "retryable": False}
+    assert "synthetic-secret-value" not in str(result)
+
+
+def test_search_result_privacy_uses_same_public_url_and_text_guards():
+    result = web_gateway.normalize_web_research_response(
+        {
+            "results": [
+                {"url": "http://127.0.0.1/report", "title": "Private endpoint"},
+                {"url": "https://example.org/?token=synthetic-secret-value", "title": "Private token"},
+                {
+                    "url": "https://example.org/public",
+                    "title": "token=synthetic-secret-value",
+                    "snippet": "Synthetic owner@example.org api_key=synthetic-secret-value",
+                },
+            ]
+        },
+        query="Renault 7700100008",
+        limit=5,
+    )
+
+    assert result["ok"] is True
+    assert len(result["results"]) == 1
+    assert result["results"][0]["url"] == "https://example.org/public"
+    assert result["query"] == "Renault 7700100008"
+    assert "synthetic-secret-value" not in str(result)
+    assert "owner@example.org" not in str(result)
+
+
+def test_public_article_text_preserves_existing_vin_guard_and_redacts_private_data():
+    text = "Renault 7700100008 цена Красноярск WBA00000000000000 api_key=synthetic-secret-value"
+    result, vin_redacted = web_gateway._public_page_text(text, limit=2500)
+
+    assert "Renault 7700100008 цена Красноярск" in result
+    assert "WBA00000000000000" not in result
+    assert "synthetic-secret-value" not in result
+    assert vin_redacted is True
 
 
 @pytest.mark.parametrize("payload", [None, [], "invalid", {}, {"ok": True, "data": []}, {"results": "invalid"}])
