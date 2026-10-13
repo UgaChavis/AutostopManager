@@ -7,8 +7,14 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from .automotive_contracts import finite_number
 from .config import get_db_path
-from .work_pricing_research import collect_public_work_pricing_research, legacy_work_evidence_row
+from .work_pricing_research import (
+    _dedupe_quote_rows,
+    _parse_bool,
+    collect_public_work_pricing_research,
+    legacy_work_evidence_row,
+)
 
 ROUNDING_STEP_RUB = 100
 KRASNOYARSK_MARKUP = 1.45
@@ -107,13 +113,28 @@ def _redact_identifier(value: Any) -> str:
     return f"{compact[:3]}***{compact[-3:]}"
 
 
-def _replace_identifiers(value: Any, identifiers: list[str], replacement: str) -> Any:
+def _replace_identifiers(
+    value: Any, identifiers: list[str], replacement: str, *, normalize_whitespace: bool = True
+) -> Any:
+    if isinstance(value, dict):
+        return {
+            _replace_identifiers(
+                key, identifiers, replacement, normalize_whitespace=normalize_whitespace
+            ): _replace_identifiers(child, identifiers, replacement, normalize_whitespace=normalize_whitespace)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _replace_identifiers(child, identifiers, replacement, normalize_whitespace=normalize_whitespace)
+            for child in value
+        ]
     if not isinstance(value, str):
         return value
     text = value
-    for identifier in identifiers:
-        text = text.replace(identifier, replacement)
-    return re.sub(r"\s+", " ", text).strip()
+    if identifiers:
+        pattern = "|".join(re.escape(identifier) for identifier in identifiers)
+        text = re.sub(pattern, lambda _match: replacement, text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip() if normalize_whitespace else text
 
 
 def _public_vehicle_context(vehicle_context: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +146,9 @@ def _public_vehicle_context(vehicle_context: dict[str, Any]) -> dict[str, Any]:
         public["vin"] = _redact_identifier(vehicle_context.get("vin"))
     if vehicle_context.get("chassis"):
         public["chassis"] = _redact_identifier(vehicle_context.get("chassis"))
+    year = public.get("year")
+    if isinstance(year, int) and not isinstance(year, bool) and str(year) in identifiers:
+        public["year"] = "[REDACTED_IDENTIFIER]"
     return public
 
 
@@ -133,9 +157,10 @@ def _research_vehicle_context(vehicle_context: dict[str, Any]) -> dict[str, Any]
     public = dict(vehicle_context)
     public["vin"] = None
     public["chassis"] = None
-    for key in ("vehicle", "make", "model", "engine", "transmission"):
-        public[key] = _replace_identifiers(public.get(key), identifiers, "")
-    return public
+    year = public.get("year")
+    if isinstance(year, int) and not isinstance(year, bool) and str(year) in identifiers:
+        public["year"] = ""
+    return _replace_identifiers(public, identifiers, "")
 
 
 def _operation_category(text: str) -> str:
@@ -264,36 +289,23 @@ def _find_labor_experience(
     return [row for _, row in matches[: max(0, limit)]]
 
 
-def _parse_bool(value: Any) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = _clean_text(str(value))
-    if text in {"1", "true", "yes", "y", "да", "истина", "включая", "included"}:
-        return True
-    if text in {"0", "false", "no", "n", "нет", "ложь", "не включая", "excluded"}:
-        return False
-    return None
-
-
 def _coerce_price(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
-        price = round(float(value))
+        number = finite_number(value)
+        if number is None:
+            return None
+        price = round(number)
         return price if price > 0 else None
     text = str(value).replace(",", ".")
-    match = re.search(r"\d+(?:[ .]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?", text)
+    match = re.search(r"(?:[-+−]\s*)?\d+(?:[ .]\d{3})*(?:\.\d+)?|(?:[-+−]\s*)?\d+(?:\.\d+)?", text)
     if not match:
         return None
-    raw = match.group(0).replace(" ", "")
-    try:
-        price = round(float(raw))
-    except ValueError:
+    number = finite_number(match.group(0).replace(" ", "").replace("−", "-"))
+    if number is None:
         return None
+    price = round(number)
     return price if price > 0 else None
 
 
@@ -374,36 +386,52 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_quote_sample(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    adapted = [legacy_work_evidence_row(row) for row in rows]
+    identities = [
+        {**normalized, "operation_name": normalized["normalized_operation"]}
+        for normalized in (_normalize_quote(row) for row in adapted)
+    ]
+    return [_normalize_quote(row) for row in _dedupe_quote_rows(adapted, identities=identities)]
+
+
 def _coerce_hours(value: Any) -> tuple[float | None, list[float] | None]:
     if isinstance(value, bool) or value is None:
         return None, None
     if isinstance(value, (int, float)):
-        hours = round(float(value), 2)
+        number = finite_number(value)
+        if number is None:
+            return None, None
+        hours = round(number, 2)
         return (hours, [hours, hours]) if 0 < hours <= 80 else (None, None)
     if isinstance(value, (list, tuple)) and len(value) >= 2:
-        try:
-            start = round(float(str(value[0]).replace(",", ".")), 2)
-            end = round(float(str(value[1]).replace(",", ".")), 2)
-        except ValueError:
+        low, high = finite_number(value[0]), finite_number(value[1])
+        if low is None or high is None:
             return None, None
+        start, end = round(low, 2), round(high, 2)
         if 0 < start <= end <= 80:
             return round((start + end) / 2, 2), [start, end]
         return None, None
 
-    text = str(value).replace(",", ".")
-    number = r"(?<![\d.])\d+(?:\.\d+)?(?![\d.])"
-    range_match = re.search(rf"({number})\s*[-–]\s*({number})", text)
+    text = str(value).replace(",", ".").replace("−", "-")
+    number_pattern = r"(?<![\d.])(?:[-+]\s*)?\d+(?:\.\d+)?(?![\d.])"
+    range_match = re.search(rf"({number_pattern})\s*[-–]\s*({number_pattern})", text)
     if range_match:
-        start = round(float(range_match.group(1)), 2)
-        end = round(float(range_match.group(2)), 2)
+        low, high = (finite_number(re.sub(r"\s+", "", group)) for group in range_match.groups())
+        if low is None or high is None:
+            return None, None
+        start, end = round(low, 2), round(high, 2)
         if 0 < start <= end <= 80:
             return round((start + end) / 2, 2), [start, end]
         return None, None
 
-    match = re.search(number, text)
+    match = re.search(number_pattern, text)
     if not match:
         return None, None
-    hours = round(float(match.group(0)), 2)
+    parsed = finite_number(re.sub(r"\s+", "", match.group(0)))
+    if parsed is None:
+        return None, None
+    hours = round(parsed, 2)
     return (hours, [hours, hours]) if 0 < hours <= 80 else (None, None)
 
 
@@ -461,9 +489,11 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _round_to_100(value: float | int | None) -> int | None:
-    if value is None:
+    number = finite_number(value)
+    if number is None:
         return None
-    return int(((float(value) + ROUNDING_STEP_RUB / 2) // ROUNDING_STEP_RUB) * ROUNDING_STEP_RUB)
+    rounded = finite_number(((number + ROUNDING_STEP_RUB / 2) // ROUNDING_STEP_RUB) * ROUNDING_STEP_RUB)
+    return int(rounded) if rounded is not None else None
 
 
 def _outlier_filter(quotes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -693,6 +723,16 @@ def _operation_estimate(
     }
 
 
+def _rounded_labor_rate(price: int | None, hours: float | None) -> int | None:
+    if price is None or not hours:
+        return None
+    try:
+        number = finite_number(price / hours)
+    except OverflowError:
+        return None
+    return round(number) if number is not None else None
+
+
 def _operation_labor_time_analysis(
     *,
     operation: dict[str, Any],
@@ -726,10 +766,13 @@ def _operation_labor_time_analysis(
     else:
         confidence = "blocked"
 
-    market_rate = round(russia_average_rub / average_hours) if russia_average_rub and average_hours else None
-    autostop_rate = round(autostop_price_rub / average_hours) if autostop_price_rub and average_hours else None
+    market_rate = _rounded_labor_rate(russia_average_rub, average_hours)
+    autostop_rate = _rounded_labor_rate(autostop_price_rub, average_hours)
     if average_hours is None:
         cross_check = "blocked"
+    elif autostop_price_rub is not None and autostop_rate is None:
+        # Positive-rate overflow still proves the existing upper-bound conflict.
+        cross_check = "too_high" if average_hours > 0 and autostop_price_rub > average_hours * 12_000 else "blocked"
     elif autostop_rate is not None and autostop_rate < 500:
         cross_check = "too_low"
     elif autostop_rate is not None and autostop_rate > 12_000:
@@ -887,7 +930,11 @@ def _finalize_evidence_confidence(
     recommendation = estimate.get("recommended_price_rub")
     if recommendation is None:
         confidence = "blocked"
-    elif family_count >= 3 and not estimate.get("missing_context"):
+    elif (
+        family_count >= 3
+        and not estimate.get("missing_context")
+        and labor_analysis.get("cross_check") not in {"too_high", "too_low"}
+    ):
         confidence = "high"
     elif family_count >= 2:
         confidence = "medium"
@@ -1247,6 +1294,7 @@ def estimate_repair_work_cost(
     vehicle_context["vehicle_class"] = _vehicle_class(vehicle_context)
 
     normalized_operations, complaint_only = _normalize_operations(raw_work_items, complaint)
+    identifiers = _identifier_variants(vin, chassis)
     experience_snapshot: dict[str, Any] | None
     if isinstance(internal_experience_json, dict):
         experience_snapshot = internal_experience_json
@@ -1268,13 +1316,13 @@ def estimate_repair_work_cost(
         if supplied_evidence is not None
         else collect_public_work_pricing_research(
             vehicle_context=_research_vehicle_context(vehicle_context),
-            operations=normalized_operations,
-            city=city,
+            operations=_replace_identifiers(normalized_operations, identifiers, "", normalize_whitespace=False),
+            city=_replace_identifiers(city, identifiers, "", normalize_whitespace=False),
             auto_research=bool(auto_research and not manual_quote_rows),
             labor_time_policy=labor_time_policy,
         )
     )
-    quote_sample = [_normalize_quote(row) for row in [*manual_quote_rows, *research.get("quotes", [])]]
+    quote_sample = _normalize_quote_sample([*manual_quote_rows, *research.get("quotes", [])])
     labor_time_sample = [
         _normalize_labor_time_row(row) for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
     ]
@@ -1398,7 +1446,7 @@ def estimate_repair_work_cost(
         else [target_market_region, alternate_market_region]
     )
 
-    return {
+    response = {
         "ok": True,
         "mode": "diagnostic_first" if complaint_only else "work_estimate",
         "read_only": True,
@@ -1525,3 +1573,4 @@ def estimate_repair_work_cost(
         "playbook": ".agents/skills/manage-autostop-store/SKILL.md",
         "source_catalog": "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
     }
+    return _replace_identifiers(response, identifiers, "[REDACTED_IDENTIFIER]", normalize_whitespace=False)

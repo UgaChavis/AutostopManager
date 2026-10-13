@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+import json
+from urllib.parse import quote
+
 import pytest
 
 from autostop_manager import j1_fetch
+
+
+@pytest.mark.parametrize("key", ["api_key", "token", "password", "secret"])
+@pytest.mark.parametrize("representation", ["json", "mapping"])
+def test_quoted_secret_keys_are_rejected_and_redacted(key: str, representation: str) -> None:
+    credential = "synthetic-sentinel-credential"
+    payload = json.dumps({key: credential}) if representation == "json" else str({key: credential})
+
+    assert j1_fetch.contains_sensitive(payload)
+    assert credential not in j1_fetch.redact_sensitive(payload)
+    encoded = quote(payload, safe="")
+    assert j1_fetch.public_url("https://example.org/report?context=" + encoded) == ""
+    assert j1_fetch.public_url("https://example.org/report?context=" + quote(encoded, safe="")) == ""
 
 
 def test_public_bulletin_pdf_is_allowed_and_not_redacted() -> None:

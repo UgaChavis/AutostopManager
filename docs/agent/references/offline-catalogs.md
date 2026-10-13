@@ -10,6 +10,12 @@
 
 Находка — кандидат: сверяй vehicle modification, engine, market, размеры и VIN/OEM fitment. XLSX числовые форматы могут отличаться от отображаемого артикула; формулы не исполняются, внешние ссылки не читаются. Исходные PDF/XLSX не помещаются в Git.
 
+PDF locator учитывает только полный служебный marker `\f[PAGE N]` на отдельной строке
+или реальные form feeds старого текста. Обычная фраза с `[PAGE N]` не меняет страницу
+и OCR-происхождение совпадения. Ошибка разрешения root, включая symlink loop, возвращает
+`catalog_root_invalid`; такая ошибка отдельного text entry исключает только этот каталог
+и оставляет явные признаки неполного поиска.
+
 ## Pinned release sync
 
 Архив 25 каталогов: [GitHub catalogs-2026-09-25](https://github.com/UgaChavis/AutostopManager/releases/tag/catalogs-2026-09-25), `autostop-parts-catalogs-20260925-public.zip`, SHA-256 `b2b1e40510e91579a5e8e4be90e0d4a2b461122b6a73af27ec4600d4a1ff7ffe` (отдельный sha256 asset).

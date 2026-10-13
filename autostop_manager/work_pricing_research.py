@@ -3,11 +3,13 @@ from __future__ import annotations
 import html
 import re
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
+from .j1_fetch import contains_sensitive
 
 PUBLIC_RESEARCH_USER_AGENT = "AutostopManager/0.1 public labor research"
 PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
@@ -39,6 +41,21 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _parse_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = _clean_text(value).casefold()
+    if text in {"1", "true", "yes", "y", "да", "истина", "включая", "included"}:
+        return True
+    if text in {"0", "false", "no", "n", "нет", "ложь", "не включая", "excluded"}:
+        return False
+    return None
+
+
 def _strip_html(value: str) -> str:
     text = re.sub(r"<script\b.*?</script>", " ", value, flags=re.I | re.S)
     text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
@@ -58,6 +75,8 @@ def _safe_source_from_url(url: str) -> str:
 
 
 def _ddg_search(query: str, *, timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS) -> dict[str, Any]:
+    if contains_sensitive(query):
+        raise ValueError("sensitive_public_research_query")
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     request = Request(url, headers={"User-Agent": PUBLIC_RESEARCH_USER_AGENT})
     with urlopen(request, timeout=timeout_seconds) as response:
@@ -95,7 +114,8 @@ def build_public_research_queries(
     operations: list[dict[str, Any]],
     city: str,
 ) -> dict[str, list[str]]:
-    vehicle_bits = " ".join(
+    # Keep distinct metadata fields from becoming one apparent split VIN.
+    vehicle_bits = ", ".join(
         _clean_text(vehicle_context.get(key))
         for key in ("make", "model", "year", "engine", "transmission", "vehicle")
         if _clean_text(vehicle_context.get(key))
@@ -122,8 +142,8 @@ def build_public_research_queries(
             ]
         )
     return {
-        "labor_prices": _dedupe(price_queries),
-        "labor_times": _dedupe(labor_time_queries),
+        "labor_prices": _dedupe([query for query in price_queries if not contains_sensitive(query)]),
+        "labor_times": _dedupe([query for query in labor_time_queries if not contains_sensitive(query)]),
     }
 
 
@@ -141,8 +161,12 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _prices_from_text(text: str) -> list[int]:
     values: list[int] = []
-    for match in re.finditer(r"(?<!\d)(\d{3,6}(?:[ .]\d{3})?|\d{1,3}(?:[ .]\d{3})+)\s*(?:₽|руб|р\.)", text, flags=re.I):
-        raw = match.group(1).replace(" ", "").replace(".", "")
+    for match in re.finditer(
+        r"(?<![\d,.])((?:[-+−]\s*)?(?:\d{3,6}(?:[ .]\d{3})?|\d{1,3}(?:[ .]\d{3})+))\s*(?:₽|руб|р\.)",
+        text,
+        flags=re.I,
+    ):
+        raw = match.group(1).replace(" ", "").replace(".", "").replace("−", "-")
         try:
             price = int(raw)
         except ValueError:
@@ -163,28 +187,32 @@ def _labor_only_flags(text: str) -> tuple[bool | None, bool]:
 
 def _hours_from_text(text: str) -> list[tuple[float, float]]:
     values: list[tuple[float, float]] = []
-    decimal = r"(?<![\d,.])\d+(?:[,.]\d+)?(?![\d,.])"
+    decimal = r"(?<![\d,.])(?:[-+−]\s*)?\d+(?:[,.]\d+)?(?![\d,.])"
     patterns = [
         rf"({decimal})\s*[-–]\s*({decimal})\s*(?:н/?ч|нормо[- ]?час|час|ч\.)",
-        rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d]{{0,24}}({decimal})",
+        rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d+−-]{{0,24}}({decimal})",
         rf"({decimal})\s*(?:н/?ч|нормо[- ]?час|час(?:а|ов)?|ч\.)",
     ]
     range_spans: list[tuple[int, int]] = []
+    observed_spans: list[tuple[int, int]] = []
     for pattern_index, pattern in enumerate(patterns):
         for match in re.finditer(pattern, text, flags=re.I):
             if pattern_index == 0:
                 range_spans.append(match.span())
             elif any(match.start() < end and match.end() > start for start, end in range_spans):
                 continue
+            if any(match.start() < end and match.end() > start for start, end in observed_spans):
+                continue
             try:
                 if len(match.groups()) >= 2 and match.group(2):
-                    start = float(match.group(1).replace(",", "."))
-                    end = float(match.group(2).replace(",", "."))
+                    start = float(re.sub(r"\s+", "", match.group(1)).replace(",", ".").replace("−", "-"))
+                    end = float(re.sub(r"\s+", "", match.group(2)).replace(",", ".").replace("−", "-"))
                 else:
-                    start = end = float(match.group(1).replace(",", "."))
+                    start = end = float(re.sub(r"\s+", "", match.group(1)).replace(",", ".").replace("−", "-"))
             except (TypeError, ValueError):
                 continue
             if 0 < start <= end <= 80:
+                observed_spans.append(match.span())
                 values.append((round(start, 2), round(end, 2)))
     return values[:3]
 
@@ -201,7 +229,7 @@ def _observed_city(snippet: str) -> str:
 def parse_public_work_evidence(
     row: dict[str, Any], query: str, operations: list[dict[str, Any]], kind: str
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """One snippet parser for both acquisition paths; the query is not city evidence."""
+    """Bind amounts to observed operation segments, never to search intent."""
     snippet = " ".join(_clean_text(row.get(key)) for key in ("title", "snippet"))
     observed_at = datetime.now(UTC).isoformat()
     source = {
@@ -213,7 +241,6 @@ def parse_public_work_evidence(
         "fetched_at": observed_at,
     }
     common = {
-        "operation_name": _operation_name_for_query(query, operations),
         "source": source,
         "city": _observed_city(snippet),
         "captured_at": observed_at,
@@ -223,17 +250,33 @@ def parse_public_work_evidence(
         "official": False,
         "evidence": snippet[:180],
     }
-    if kind == "labor_prices":
-        includes_parts, labor_only = _labor_only_flags(snippet)
-        rows = [
-            {**common, "price_rub": price, "includes_parts": includes_parts, "labor_only": labor_only}
-            for price in _prices_from_text(snippet)
-        ]
-    else:
-        rows = [
-            {**common, "hours": round((low + high) / 2, 2), "range_hours": [low, high]}
-            for low, high in _hours_from_text(snippet)
-        ]
+    rows: list[dict[str, Any]] = []
+    title_operation = _title_operation_for_caption(
+        str(row.get("title") or ""), str(row.get("snippet") or ""), operations, kind
+    )
+    # The title can supply scope only for an unambiguous measurement caption.
+    for field in ("title", "snippet"):
+        for segment in _observed_operation_segments(str(row.get(field) or ""), operations):
+            items: list[dict[str, Any]]
+            if kind == "labor_prices":
+                items = [{"price_rub": price} for price in dict.fromkeys(_prices_from_text(segment))]
+            else:
+                items = [
+                    {"hours": round((low + high) / 2, 2), "range_hours": [low, high]}
+                    for low, high in dict.fromkeys(_hours_from_text(segment))
+                ]
+            operation_name = _observed_operation_name(segment, operations) if len(items) == 1 else ""
+            inherited_title = field == "snippet" and not operation_name and len(items) == 1 and title_operation
+            if inherited_title:
+                operation_name = title_operation
+            if kind == "labor_prices":
+                flags_text = (
+                    str(row.get("snippet") or "") if inherited_title else segment if operation_name else snippet
+                )
+                includes_parts, labor_only = _labor_only_flags(flags_text)
+                for item in items:
+                    item.update(includes_parts=includes_parts, labor_only=labor_only)
+            rows.extend({**common, "operation_name": operation_name, **item} for item in items)
     return rows, source
 
 
@@ -302,6 +345,7 @@ def collect_public_work_pricing_research(
                 URLError,
                 TimeoutError,
                 ValueError,
+                OSError,
             ) as exc:  # pragma: no cover - network-dependent safety rail
                 checked["status"] = "error"
                 checked["error"] = type(exc).__name__
@@ -326,13 +370,73 @@ def collect_public_work_pricing_research(
     return result
 
 
-def _operation_name_for_query(query: str, operations: list[dict[str, Any]]) -> str:
-    query_text = query.casefold()
+def _observed_operation_segments(text: str, operations: list[dict[str, Any]]) -> list[str]:
+    boundaries = {0, len(text)}
+    boundaries.update(
+        match.end() for match in re.finditer(r"(?<!руб\.)(?<!р\.)(?<!ч\.)(?<=[.!?;])\s+|[\r\n]+", text, flags=re.I)
+    )
+    markers = list(re.finditer(r"(?<!\w)(?:замена|ремонт|диагностика|снятие|установка)\s", text, flags=re.I))
+    if len(markers) > 1:
+        observed = _observed_operation_matches(text, operations)
+        boundaries.update(
+            match.start() for match in markers if not any(start < match.start() < end for start, end, _ in observed)
+        )
+    positions = sorted(boundaries)
+    return [_clean_text(text[start:end]) for start, end in pairwise(positions) if _clean_text(text[start:end])]
+
+
+def _observed_operation_matches(text: str, operations: list[dict[str, Any]]) -> list[tuple[int, int, str]]:
+    matches: list[tuple[int, int, str]] = []
     for operation in operations:
         name = _clean_text(operation.get("normalized_name") or operation.get("input"))
-        if name and name.casefold() in query_text:
-            return name
-    return _clean_text(operations[0].get("normalized_name") or operations[0].get("input")) if operations else ""
+        if not name:
+            continue
+        aliases = operation.get("aliases")
+        labels = [name, _clean_text(operation.get("input"))]
+        if isinstance(aliases, (list, tuple)):
+            labels.extend(_clean_text(alias) for alias in aliases)
+        for label in set(labels) - {""}:
+            for match in re.finditer(r"(?<!\w)" + re.escape(label) + r"(?!\w)", text, flags=re.I):
+                matches.append((match.start(), match.end(), name))
+    return matches
+
+
+def _observed_operation_name(text: str, operations: list[dict[str, Any]]) -> str:
+    matches = _observed_operation_matches(text, operations)
+    names = {
+        name
+        for start, end, name in matches
+        if not any(
+            other_start <= start and end <= other_end and (start, end) != (other_start, other_end)
+            for other_start, other_end, _ in matches
+        )
+    }
+    return names.pop() if len(names) == 1 else ""
+
+
+def _title_operation_for_caption(title: str, snippet: str, operations: list[dict[str, Any]], kind: str) -> str:
+    name = _observed_operation_name(title, operations)
+    if not name:
+        return ""
+    extract = _prices_from_text if kind == "labor_prices" else _hours_from_text
+    if extract(title) or len(extract(snippet)) != 1:
+        return ""
+    return name if all(_caption_is_metadata(text, operations, name) for text in (title, snippet)) else ""
+
+
+def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str) -> bool:
+    characters = list(text)
+    for start, end, observed in _observed_operation_matches(text, operations):
+        if observed == name:
+            characters[start:end] = [" "] * (end - start)
+    # A subject such as "свечи" is not price/time metadata, even without an operation verb.
+    caption = re.sub(r"[-+−]?\d+(?:[ ,.\-–]\d+)*", " ", "".join(characters).casefold())
+    caption = re.sub(
+        r"(?<!\w)(?:красноярск\w*|санкт[- ]петербург\w*|спб|только|за|работ(?:а|ы|у)?|без|учета|запчаст\w*|материал\w*|не|включ\w*|и|плюс|с|стоимость|цена|от|до|руб\w*|р|н|ч|нормо[- ]?час\w*|час\w*|норма|норматив|времени|трудоемкость|время|выполнения)(?!\w)",
+        " ",
+        caption,
+    )
+    return not re.search(r"[^\W\d_]", caption)
 
 
 def _observation_location(row: dict[str, Any]) -> tuple[str, str]:
@@ -358,11 +462,17 @@ def _dedupe_rows(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> list[di
     return result
 
 
-def _dedupe_quote_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _dedupe_quote_rows(
+    rows: list[dict[str, Any]], *, identities: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     fields = ("source", "operation_name", "price_rub")
     by_key: dict[tuple[str, ...], dict[str, Any]] = {}
-    for row in rows:
-        key = tuple(str(row.get(field, "")).casefold() for field in fields)
+    for row, identity in zip(rows, identities if identities is not None else rows, strict=True):
+        row = dict(row)
+        for field in ("includes_parts", "labor_only"):
+            if field in row:
+                row[field] = _parse_bool(row[field])
+        key = tuple(str(identity.get(field, "")).casefold() for field in fields)
         key += _observation_location(row)
         existing = by_key.get(key)
         if existing is None:
@@ -372,7 +482,12 @@ def _dedupe_quote_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if existing.get("includes_parts") is True or row.get("includes_parts") is True:
             existing["includes_parts"] = True
             existing["labor_only"] = False
-        elif existing.get("labor_only") is True or row.get("labor_only") is True:
+        elif (
+            existing.get("labor_only") is True
+            or row.get("labor_only") is True
+            or existing.get("includes_parts") is False
+            or row.get("includes_parts") is False
+        ):
             existing["includes_parts"] = False
             existing["labor_only"] = True
         else:
