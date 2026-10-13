@@ -1,10 +1,14 @@
 # Isolated client behaviour rehearsal
 
-This evaluation uses 36 synthetic conversations and fake evidence. It never
-connects to Telegram, CRM, Store, suppliers, public search or an OpenAI API.
-Production owner identity and configuration remain unchanged. The fixture is
-based on revision `e3d24d1b11498f33a24e3a80c3830bc4fcc6a3ee` and the full client
-skill, B1–B4, F4 and C6/C7. The runner supplies these instructions literally.
+The offline fixture and input/check helper use 36 synthetic conversations and
+fake evidence. They make no service connections or OpenAI API calls. A separate
+model rehearsal can use an existing Codex AppServer with ephemeral threads and
+all external tools disabled; the model itself may run remotely. This needs no
+direct API calls or key provisioning by the helper. Telegram, CRM, Store,
+suppliers and public search remain untouched. Production owner identity and
+configuration remain unchanged. The fixture is based on revision
+`e3d24d1b11498f33a24e3a80c3830bc4fcc6a3ee` and the full client skill, B1–B4,
+F4 and C6/C7. The runner supplies these instructions literally.
 
 ## Files and input preparation
 
