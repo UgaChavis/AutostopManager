@@ -6,6 +6,8 @@ import inspect
 from pathlib import Path
 
 import pytest
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from autostop_manager import config as manager_config
 from autostop_manager.catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES
@@ -56,6 +58,107 @@ class _FakeServer:
             return func
 
         return decorator
+
+
+@pytest.mark.parametrize("revision", [True, False, "1", "null", "false", 1.5])
+def test_native_automation_revision_rejects_original_invalid_types(tmp_path, monkeypatch, revision):
+    calls = []
+
+    class FakeAutomationClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return {"ok": True, "data": {}}
+
+    monkeypatch.setattr(mcp_tools_module, "AutomationControlClient", FakeAutomationClient)
+    server = FastMCP("strict-revision-input")
+    register_manager_tools(
+        server, StoreState(tmp_path / "memory.sqlite3"), include_tools={"manager_automation_control"}
+    )
+    tool = server._tool_manager.get_tool("manager_automation_control")
+    with pytest.raises(ToolError, match="expected_revision"):
+        asyncio.run(tool.run({"operation": "preview", "expected_revision": revision}))
+    assert calls == []
+
+
+@pytest.mark.parametrize("revision", [None, 1])
+def test_native_automation_preserves_valid_revision_and_encoded_payload(tmp_path, monkeypatch, revision):
+    calls = []
+
+    class FakeAutomationClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def request(self, operation, payload, **kwargs):
+            calls.append((operation, payload, kwargs))
+            return {"ok": True, "data": {"operation": operation}}
+
+    monkeypatch.setattr(mcp_tools_module, "AutomationControlClient", FakeAutomationClient)
+    server = FastMCP("valid-revision-input")
+    register_manager_tools(
+        server, StoreState(tmp_path / "memory.sqlite3"), include_tools={"manager_automation_control"}
+    )
+    result = asyncio.run(
+        server._tool_manager.get_tool("manager_automation_control").run(
+            {"operation": "preview", "expected_revision": revision, "payload": '{"job_id":"synthetic"}'}
+        )
+    )
+    assert result["ok"] is True
+    assert calls == [("preview", {"job_id": "synthetic"}, {"idempotency_key": None, "expected_revision": revision})]
+
+
+@pytest.mark.parametrize("field", ["model_year", "production_year", "transmission_speeds", "source_confidence"])
+@pytest.mark.parametrize("value", ["null", "1", True])
+def test_native_vehicle_identity_rejects_original_strict_scalars(tmp_path, monkeypatch, field, value):
+    calls = []
+
+    async def fake_decode(identifier, **kwargs):
+        calls.append((identifier, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", fake_decode)
+    server = FastMCP("strict-identity-input")
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"), include_tools={"decode_vehicle_identity"})
+    with pytest.raises(ToolError, match=field):
+        asyncio.run(
+            server._tool_manager.get_tool("decode_vehicle_identity").run({"identifier": "synthetic", field: value})
+        )
+    assert calls == []
+
+
+def test_native_vehicle_identity_preserves_null_numbers_and_encoded_options(tmp_path, monkeypatch):
+    calls = []
+
+    async def fake_decode(identifier, **kwargs):
+        calls.append((identifier, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_tools_module, "decode_vehicle_identity_async", fake_decode)
+    server = FastMCP("valid-identity-input")
+    register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"), include_tools={"decode_vehicle_identity"})
+    result = asyncio.run(
+        server._tool_manager.get_tool("decode_vehicle_identity").run(
+            {
+                "identifier": "synthetic",
+                "model_year": None,
+                "production_year": 2020,
+                "transmission_speeds": 6,
+                "source_confidence": 0.5,
+                "options": '["synthetic"]',
+                "live_vpic": False,
+                "live_wmi": False,
+            }
+        )
+    )
+    assert result["ok"] is True
+    context = calls[0][1]["crm_context"]
+    assert context["model_year"] is None
+    assert context["production_year"] == 2020
+    assert context["transmission_speeds"] == 6
+    assert context["source_confidence"] == 0.5
+    assert context["options"] == ["synthetic"]
 
 
 def test_decode_vehicle_identity_tool_forwards_live_wmi_toggle(tmp_path, monkeypatch):

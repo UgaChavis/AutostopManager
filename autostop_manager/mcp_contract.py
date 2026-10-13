@@ -109,13 +109,23 @@ def validate_manager_mcp_surface(
         return {**base, "warnings": ["manager_mcp_manifest_invalid_structure"]}
 
     expected_raw = payload.get("expected_tool_names")
-    expected = sorted({str(name) for name in expected_raw}) if isinstance(expected_raw, list) else []
+    valid_names = (
+        isinstance(expected_raw, list)
+        and bool(expected_raw)
+        and all(isinstance(name, str) and bool(name.strip()) for name in expected_raw)
+    )
+    expected = sorted(expected_raw) if isinstance(expected_raw, list) and valid_names else []
     declared_count = payload.get("expected_tool_count")
     manifest_fingerprint = str(payload.get("schema_fingerprint") or "")
     manifest_warnings: list[str] = []
     if payload.get("format") != "mcp_surface_manifest_v1":
         manifest_warnings.append("manager_mcp_manifest_format_mismatch")
-    if not expected or declared_count != len(expected):
+    if (
+        not valid_names
+        or len(set(expected)) != len(expected)
+        or type(declared_count) is not int
+        or declared_count != len(expected)
+    ):
         manifest_warnings.append("manager_mcp_manifest_tool_count_mismatch")
     if re.fullmatch(r"[0-9a-f]{64}", manifest_fingerprint) is None:
         manifest_warnings.append("manager_mcp_manifest_fingerprint_invalid")

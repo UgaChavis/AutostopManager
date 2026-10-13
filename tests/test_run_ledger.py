@@ -5,7 +5,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event, current_thread
 
 import pytest
 
@@ -156,6 +156,95 @@ def test_external_step_exact_retry_compares_sanitized_refs_and_preserves_state(t
     assert result["deduplicated"] is True
     assert result["status"] == ("completed" if completed else "pending")
     assert store.get_manager_run(started["id"])["item"] == before
+
+
+@pytest.mark.parametrize("operation", ["register", "complete"])
+@pytest.mark.parametrize("use_cas", [False, True])
+def test_concurrent_external_step_retry_returns_consistent_run_version(monkeypatch, tmp_path, operation, use_cas):
+    store = StoreState(tmp_path / "memory.sqlite3")
+    started = store.start_workflow_run(
+        workflow_id="synthetic_workflow", intent="synthetic_workflow", idempotency_key="concurrent-external-step"
+    )
+    executing = store.transition_workflow_run(started["id"], status="executing", expected_state_version=1)
+    request = {"step_id": "step-1", "connector": "gmail", "action": "send", "request_refs": {"thread_id": "thread-1"}}
+    initial = executing
+    if operation == "complete":
+        initial = store.register_external_step(started["id"], **request)
+    expected_version = initial["state_version"] if use_cas else None
+    reader_observed = Event()
+    release_reader = Event()
+    writer_started = Event()
+    reader_transactions = []
+    connect = sqlite3.connect
+
+    class ObservedRow:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            cursor = super().execute(sql, *args, **kwargs)
+            if current_thread().name == "snapshot-reader" and sql == "SELECT * FROM manager_runs WHERE id = ? LIMIT 1":
+                row = cursor.fetchone()
+                cursor.close()
+                reader_transactions.append(self.in_transaction)
+                reader_observed.set()
+                assert release_reader.wait(5), "synthetic reader was not released"
+                return ObservedRow(row)
+            return cursor
+
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *args, **kwargs: connect(*args, **kwargs, factory=ObservedConnection)
+    )
+
+    def invoke(role):
+        current_thread().name = role
+        if role == "snapshot-writer":
+            writer_started.set()
+        if operation == "register":
+            return store.register_external_step(started["id"], expected_state_version=expected_version, **request)
+        return store.complete_external_step(
+            started["id"],
+            step_id="step-1",
+            result_refs={"message_id": "message-1"},
+            expected_state_version=expected_version,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reader = pool.submit(invoke, "snapshot-reader")
+        try:
+            assert reader_observed.wait(2)
+            writer = pool.submit(invoke, "snapshot-writer")
+            assert writer_started.wait(2)
+            if not reader_transactions[0]:
+                # Reproduce the old mixed snapshot deterministically. A proper
+                # transaction may block the writer, so release that reader
+                # without waiting for a commit that needs its SQLite lock.
+                writer.result(timeout=3)
+        finally:
+            release_reader.set()
+        results = [reader.result(timeout=3), writer.result(timeout=3)]
+
+    current = store.get_manager_run(started["id"], include_events=False, include_external_steps=True)["item"]
+    successes = [result for result in results if result["ok"]]
+    assert len(successes) == (1 if use_cas else 2)
+    assert current["state_version"] == initial["state_version"] + 1
+    assert all(result["state_version"] == current["state_version"] for result in successes)
+    assert sum(result["deduplicated"] is False for result in successes) == 1
+    assert len(current["external_steps"]) == 1
+    assert current["external_steps"][0]["status"] == ("pending" if operation == "register" else "completed")
+    if use_cas:
+        conflict = next(result for result in results if not result["ok"])
+        assert conflict == {
+            "ok": False,
+            "error": "workflow_state_conflict",
+            "run_id": started["id"],
+            "expected_state_version": expected_version,
+            "current_state_version": current["state_version"],
+        }
 
 
 def test_store_quote_conductor_uses_one_active_target_and_guarded_ledger(tmp_path):

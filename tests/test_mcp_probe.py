@@ -5,18 +5,24 @@ import io
 import json
 import os
 import socket
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import anyio
 import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.fastmcp import FastMCP
+from mcp import types
+from mcp.shared.message import SessionMessage
 
 from autostop_manager import config
 from autostop_manager import catalog_clients
+from autostop_manager import mcp_probe
 from autostop_manager.catalog_adapters import CATALOG_STAGES, catalog_provider_status
 import autostop_manager.web_research_gateway as web_gateway
 import autostop_manager.store_api as store_api
@@ -28,6 +34,215 @@ from autostop_manager.mcp_probe import (
 )
 from autostop_manager.mcp_contract import MANAGER_MCP_CATALOG_PATH
 from autostop_manager.mcp_server import build_server
+
+
+def _memory_probe_peer(monkeypatch, *, stall_method=None, slow_pages=False, stall_write_before=None):
+    """Answer synthetic JSON-RPC over memory streams, never opening a socket."""
+    requests = []
+
+    @asynccontextmanager
+    async def transport(_url, *, http_client):
+        del http_client
+        response_writer, response_reader = anyio.create_memory_object_stream[SessionMessage](10)
+        request_writer, request_reader = anyio.create_memory_object_stream[SessionMessage](
+            0 if stall_write_before else 10
+        )
+
+        async def peer():
+            if stall_write_before == "initialize":
+                await asyncio.Event().wait()
+            async for envelope in request_reader:
+                request = envelope.message.root
+                if not isinstance(request, types.JSONRPCRequest):
+                    if (
+                        stall_write_before == "ping"
+                        and isinstance(request, types.JSONRPCNotification)
+                        and request.method == "notifications/initialized"
+                    ):
+                        await asyncio.Event().wait()
+                    continue
+                requests.append(request.method)
+                if request.method == stall_method:
+                    continue
+                if request.method == "initialize":
+                    result = types.InitializeResult(
+                        protocolVersion=types.LATEST_PROTOCOL_VERSION,
+                        capabilities=types.ServerCapabilities(tools=types.ToolsCapability()),
+                        serverInfo=types.Implementation(name="synthetic-memory-peer", version="1"),
+                    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+                elif request.method == "ping":
+                    result = {}
+                elif request.method == "tools/list":
+                    page = requests.count("tools/list")
+                    if slow_pages:
+                        await asyncio.sleep(0.03)
+                    result = types.ListToolsResult(
+                        tools=[types.Tool(name=f"fixture_{page}", inputSchema={"type": "object"})],
+                        nextCursor=str(page) if slow_pages and page < 3 else None,
+                    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+                else:
+                    pytest.fail(f"Unexpected RPC: {request.method}")
+                await response_writer.send(
+                    SessionMessage(
+                        types.JSONRPCMessage(types.JSONRPCResponse(jsonrpc="2.0", id=request.id, result=result))
+                    )
+                )
+                if stall_write_before == "initialized" and request.method == "initialize":
+                    await asyncio.Event().wait()
+
+        async with response_writer, response_reader, request_writer, request_reader:
+            task = asyncio.create_task(peer())
+            try:
+                yield response_reader, request_writer, None
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    monkeypatch.setattr(mcp_probe, "streamable_http_client", transport)
+    return requests
+
+
+@pytest.mark.parametrize("stall_method", ["initialize", "ping", "tools/list"])
+def test_probe_bounds_stalled_session_rpc_with_real_memory_transport(monkeypatch, stall_method):
+    requests = _memory_probe_peer(monkeypatch, stall_method=stall_method)
+
+    async def run():
+        return await asyncio.wait_for(async_probe_manager_mcp("http://synthetic.invalid/mcp", timeout=0.03), 0.5)
+
+    report = asyncio.run(run())
+
+    assert stall_method in requests
+    assert report["ok"] is False
+    assert report["diagnostic"] == "transport_failure"
+    assert report["checks"]["transport"]["ok"] is False
+
+
+@pytest.mark.parametrize("stall_write_before", ["initialize", "initialized", "ping"])
+def test_probe_bounds_handshake_backpressure_before_response_wait(monkeypatch, stall_write_before):
+    _memory_probe_peer(monkeypatch, stall_write_before=stall_write_before)
+
+    async def run():
+        return await asyncio.wait_for(
+            async_probe_manager_mcp("http://synthetic.invalid/mcp", timeout=0.03, browser_check=True), 0.5
+        )
+
+    report = asyncio.run(run())
+
+    assert report["ok"] is False
+    assert report["diagnostic"] == "transport_failure"
+    assert report["checks"]["transport"]["ok"] is False
+    assert "native_ping" not in report["checks"]
+
+
+def test_probe_call_bounds_backpressure_before_sdk_response_timeout():
+    async def run():
+        response_writer, response_reader = anyio.create_memory_object_stream[SessionMessage](0)
+        request_writer, request_reader = anyio.create_memory_object_stream[SessionMessage](0)
+        async with response_writer, response_reader, request_writer, request_reader:
+            async with ClientSession(response_reader, request_writer) as session:
+                guard = asyncio.timeout(0.5)
+                async with guard:
+                    with pytest.raises(TimeoutError):
+                        await mcp_probe._call(session, "synthetic_tool", {}, timeout=0.03)
+                assert not guard.expired()
+
+    asyncio.run(run())
+
+
+def test_probe_tools_list_has_one_deadline_across_slow_pages(monkeypatch):
+    requests = _memory_probe_peer(monkeypatch, slow_pages=True)
+
+    async def run():
+        return await asyncio.wait_for(async_probe_manager_mcp("http://synthetic.invalid/mcp", timeout=0.05), 0.5)
+
+    report = asyncio.run(run())
+
+    assert report["ok"] is False
+    assert report["diagnostic"] == "transport_failure"
+    assert report["checks"]["transport"]["ok"] is False
+    assert 1 <= requests.count("tools/list") < 3
+
+
+@pytest.mark.parametrize("cursor_cycle", [["same", "same"], ["first", "second", "first"]])
+def test_tools_list_rejects_cursor_cycles_before_another_request(cursor_cycle):
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        async def list_tools(self, *, cursor=None):
+            self.calls += 1
+            assert self.calls <= 64, "tools/list exceeded its request bound"
+            await asyncio.sleep(0)
+            return SimpleNamespace(tools=[], nextCursor=cursor_cycle[(self.calls - 1) % len(cursor_cycle)])
+
+    session = Session()
+    with pytest.raises(ValueError, match="pagination"):
+        asyncio.run(asyncio.wait_for(mcp_probe._list_all_tools(session), 0.5))
+    assert session.calls == len(cursor_cycle)
+
+
+def test_tools_list_rejects_exhaustion_with_always_unique_cursors():
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        async def list_tools(self, *, cursor=None):
+            self.calls += 1
+            assert self.calls <= 64, "tools/list exceeded its request bound"
+            return SimpleNamespace(tools=[], nextCursor=str(self.calls))
+
+    session = Session()
+    with pytest.raises(ValueError, match="pagination"):
+        asyncio.run(mcp_probe._list_all_tools(session))
+    assert session.calls == 64
+
+
+@pytest.mark.parametrize("page_count", [2, 64])
+def test_tools_list_preserves_normal_pagination_and_last_allowed_page(page_count):
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        async def list_tools(self, *, cursor=None):
+            assert cursor == (str(self.calls) if self.calls else None)
+            self.calls += 1
+            return SimpleNamespace(tools=[self.calls], nextCursor=str(self.calls) if self.calls < page_count else None)
+
+    session = Session()
+    assert asyncio.run(mcp_probe._list_all_tools(session)) == list(range(1, page_count + 1))
+
+
+def test_probe_browser_keeps_explicit_timeout_with_bounded_session(monkeypatch):
+    _memory_probe_peer(monkeypatch)
+    monkeypatch.setattr(mcp_probe, "validate_manager_mcp_surface", lambda _: {"ok": True, "diagnostic": "ok"})
+    calls = []
+
+    async def call(_session, name, _arguments, *, timeout):
+        calls.append((name, timeout))
+        payload = {
+            "catalog_provider_status": {"ok": True, "providers": [], "stage": "catalog_cross"},
+            "resolve_vin_oem_parts": {
+                "status": "planned",
+                "calls": [{"operation": "vin_decode", "dry_run": True}],
+                "live_call_count": 0,
+                "oem_candidates": [],
+            },
+            "fetch_page_browser": {
+                "ok": True,
+                "capability": "fetch_page_browser",
+                "read_only": True,
+                "mode": "browser",
+                "domain": "example.com",
+                "excerpt": "synthetic excerpt",
+            },
+        }[name]
+        return False, payload
+
+    monkeypatch.setattr(mcp_probe, "_call", call)
+    report = asyncio.run(async_probe_manager_mcp("http://synthetic.invalid/mcp", timeout=0.5, browser_check=True))
+
+    assert report["ok"] is True
+    assert calls == [("catalog_provider_status", 0.5), ("resolve_vin_oem_parts", 0.5), ("fetch_page_browser", 90.0)]
 
 
 def test_catalog_provider_status_native_transport_preserves_both_json_channels_compactly(tmp_path, monkeypatch):

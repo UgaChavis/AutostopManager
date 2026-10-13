@@ -3000,6 +3000,8 @@ class StoreState:
             }
         now = _now()
         with self.connect() as conn:
+            # Keep the workflow version and idempotent step lookup together.
+            conn.execute("BEGIN IMMEDIATE")
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}
@@ -3137,6 +3139,8 @@ class StoreState:
             return {"ok": False, "error": "at least one external result reference is required"}
         now = _now()
         with self.connect() as conn:
+            # Keep the workflow version and idempotent step lookup together.
+            conn.execute("BEGIN IMMEDIATE")
             run = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not run:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}

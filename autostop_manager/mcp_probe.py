@@ -20,6 +20,7 @@ SYNTHETIC_IDENTIFIER = "SYNTHETCVVN000001"
 GLOW_PLUG_QUERY = "свечи накаливания"
 BROWSER_SMOKE_URL = "https://example.com/"
 BROWSER_CHECK_TIMEOUT_SECONDS = 90.0
+MAX_TOOL_LIST_PAGES = 64
 # These tools can change Manager or Store state even when a particular call
 # only reads or previews. Check the serialized live annotations as well as the
 # input schemas so an older deployment cannot silently advertise them as reads.
@@ -176,12 +177,17 @@ def _payload_contains(payload: Any, marker: str) -> bool:
 async def _list_all_tools(session: ClientSession) -> list[Any]:
     tools: list[Any] = []
     cursor: str | None = None
-    while True:
+    seen_cursors: set[str] = set()
+    for _ in range(MAX_TOOL_LIST_PAGES):
         page = await session.list_tools(cursor=cursor)
         tools.extend(page.tools)
         cursor = page.nextCursor
         if not cursor:
             return tools
+        if cursor in seen_cursors:
+            raise ValueError("manager_mcp_tools_pagination_cycle")
+        seen_cursors.add(cursor)
+    raise ValueError("manager_mcp_tools_pagination_limit")
 
 
 def _effectful_annotation_mismatches(tools: list[Any]) -> list[str]:
@@ -200,7 +206,9 @@ def _effectful_annotation_mismatches(tools: list[Any]) -> list[str]:
 async def _call(
     session: ClientSession, name: str, arguments: dict[str, Any], *, timeout: float
 ) -> tuple[bool, dict[str, Any] | None]:
-    result = await session.call_tool(name, arguments, read_timeout_seconds=timedelta(seconds=timeout))
+    # The SDK's response timeout starts after send; include writer backpressure.
+    async with asyncio.timeout(timeout):
+        result = await session.call_tool(name, arguments, read_timeout_seconds=timedelta(seconds=timeout))
     return bool(getattr(result, "isError", False)), _payload_from_tool_result(result)
 
 
@@ -266,16 +274,18 @@ async def async_probe_manager_mcp(
     try:
         async with httpx.AsyncClient(timeout=transport_timeout, follow_redirects=False) as http_client:
             async with streamable_http_client(url, http_client=http_client) as (read, write, _):
-                async with ClientSession(read, write) as session:
-                    initialized = await session.initialize()
-                    await session.send_ping()
+                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout)) as session:
+                    async with asyncio.timeout(timeout):
+                        initialized = await session.initialize()
+                        await session.send_ping()
                     server_info = getattr(initialized, "serverInfo", None)
                     report["checks"]["native_ping"] = {
                         "ok": True,
                         "server_name": str(getattr(server_info, "name", "")) or None,
                     }
 
-                    listed_tools = await _list_all_tools(session)
+                    async with asyncio.timeout(timeout):
+                        listed_tools = await _list_all_tools(session)
                     tool_schemas = {
                         str(tool.name): getattr(tool, "inputSchema", None)
                         for tool in listed_tools

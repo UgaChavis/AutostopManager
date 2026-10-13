@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from contextlib import closing
 from copy import deepcopy
 from datetime import UTC, datetime
+from functools import partial
 import hashlib
 import io
 import json
@@ -329,7 +331,11 @@ def g1_native_tools(tmp_path, monkeypatch, isolated_http):
         StoreState(tmp_path / "unused-manager.sqlite3"),
         include_tools=("manager_automations", "manager_automation_control"),
     )
-    tools = {name: tool.fn for name, tool in server._tool_manager._tools.items()}
+
+    def invoke(name, **arguments):
+        return asyncio.run(server._tool_manager.get_tool(name).run(arguments))
+
+    tools = {name: partial(invoke, name) for name in server._tool_manager._tools}
     annotations = {name: tool.annotations for name, tool in server._tool_manager._tools.items()}
     return tools, registry, service, clock, requests, annotations
 

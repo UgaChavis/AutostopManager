@@ -55,6 +55,32 @@ Busy/timeout возвращают безопасные `error`, `stage`, `adapte
 остановку потока; его слот удерживается до реального завершения. Статические
 правила и сверка готовых данных остаются локальными вызовами.
 
+`search_web_multi`, `fetch_page_excerpt` и `fetch_page_browser` используют отдельный
+пул: два workers, два ожидающих вызова и максимум 90 секунд ожидания.
+При отказе очереди сохраняется web-формат `schema/capability/read_only` и
+`error={code,retryable}`; `retryable=false`, исходные непроверенные аргументы не
+возвращаются. Код причины — `provider_busy`, `provider_wait_timeout`,
+`provider_executor_unavailable` или `provider_execution_failed`.
+`manager_automations` и `manager_automation_control` имеют независимые два workers,
+два ожидающих вызова и 30 секунд ожидания, чтобы зависший веб-источник не мешал
+управлению. Отмена и timeout также сохраняют занятый слот до завершения backend;
+отменённый ожидающий вызов не начинает backend. Ошибка очереди управления сохраняет
+`automation_control_unavailable`; поля `adapter_started` и `adapter_may_continue`
+показывают, могло ли действие начаться. Не повторяй неизвестный исход мутации:
+сначала проверь результат, затем используй прежнее тело и ключ идемпотентности.
+
+MCP проверяет `manager_automation_control.expected_revision` как исходное JSON-число
+целого типа: bool и строки не превращаются в revision. У `decode_vehicle_identity`
+строгие поля `model_year`, `production_year`, `transmission_speeds`, `source_confidence`
+сохраняют исходный тип, включая различие между JSON `null` и строкой `"null"`.
+JSON-строки вложенных `payload` и `options` остаются совместимыми с SDK.
+
+В `mcp-probe` timeout ограничивает handshake и весь обход `tools/list`, включая
+ожидание отправки запроса и ответа. Обход принимает до 64 страниц, отклоняет
+повтор cursor и превышение общего deadline; отдельная browser-проверка сохраняет
+90 секунд. Manifest требует уникальные непустые строковые имена и целочисленный
+count без приведения bool, чисел и строк к другому типу.
+
 Синхронные vPIC и каталожные HTTP-чтения имеют общий deadline для заголовков
 и тела, лимит размера и два transport workers на процесс. Незавершённый DNS
 cleanup удерживает слот после timeout; `provider_transport_busy` не повторяется.
