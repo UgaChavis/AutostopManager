@@ -209,6 +209,8 @@ def _public_source_url(value: Any) -> tuple[str, str] | None:
         or not host
         or parsed.username is not None
         or parsed.password is not None
+        or host in {"localhost", "localhost.localdomain"}
+        or host.endswith((".localhost", ".local", ".internal", ".onion"))
         or (address is not None and not address.is_global)
         or (address is None and not _DOMAIN.fullmatch(host))
     ):

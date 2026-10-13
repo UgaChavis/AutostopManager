@@ -9,6 +9,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 
 from .automotive_contracts import MAX_ROWS, content_digest, finite_number, invalid, result
+from .j1_fetch import contains_sensitive
 
 UNITS = {
     "hours": 1.0,
@@ -119,9 +120,9 @@ def normalize_labor_time(
 
 def _public_safe(value: Any) -> bool:
     text = str(value)
-    return not re.search(
-        r"[A-HJ-NPR-Z0-9]{17}|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+7|8)[\s()-]*\d[\d\s()-]{8,}", text, re.I
-    )
+    if re.search(r"[A-HJ-NPR-Z0-9]{17}|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:\+7|8)[\s()-]*\d[\d\s()-]{8,}", text, re.I):
+        return False
+    return not contains_sensitive(text)
 
 
 def collect_work_price_evidence(

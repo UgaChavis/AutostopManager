@@ -25,7 +25,7 @@ MAX_SEARCH_SECONDS = 20.0
 MAX_EXCERPT_CHARS = 360
 _CATALOG_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,79}\Z")
 _VIN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Za-hj-npr-z0-9]{17}(?![A-Za-z0-9])")
-_PAGE_MARKER = re.compile(r"\[PAGE\s+(\d+)\]")
+_PAGE_MARKER = re.compile(r"\A\f\[PAGE[ \t]+(\d+)\][ \t]*\r?\n?\Z")
 
 
 def _catalog_root() -> Path | None:
@@ -33,7 +33,10 @@ def _catalog_root() -> Path | None:
     root = Path(configured).expanduser() if configured else get_db_path().parent / "offline_parts_catalogs"
     if not root.is_absolute() or ".." in root.parts:
         return None
-    return root.resolve()
+    try:
+        return root.resolve()
+    except (OSError, RuntimeError):
+        return None
 
 
 def _source_url(value: Any) -> str:
@@ -54,7 +57,10 @@ def _safe_text_path(root: Path, entry: dict[str, Any]) -> Path | None:
     name = Path(raw_path).name
     if Path(name).stem != catalog_id or Path(name).suffix.lower() not in {".txt", ".tsv"}:
         return None
-    path = (root / "text" / name).resolve()
+    try:
+        path = (root / "text" / name).resolve()
+    except (OSError, RuntimeError):
+        return None
     return path if path.is_relative_to(root) else None
 
 
