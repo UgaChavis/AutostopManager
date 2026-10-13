@@ -100,12 +100,18 @@ def _isolated_runner(tmp_path: Path, inbox: Path, mode: str) -> Path:
     model.mkdir(mode=0o700)
     runner = tmp_path / "native-media-runner"
     source = Path(__file__).resolve().parents[1]
+    runtime_site = Path(av.__file__).resolve().parents[1]
     script = f"""#!{sys.executable}
 import sys
+sys.dont_write_bytecode = True
 from pathlib import Path
 from types import SimpleNamespace
 import json
+sys.path.insert(0, {str(runtime_site)!r})
 sys.path.insert(0, {str(source)!r})
+import av
+assert av.__version__ == {av.__version__!r}
+assert Path(av.__file__).resolve().parents[1] == Path({str(runtime_site)!r})
 from autostop_manager import telegram_transcribe as module
 INBOX = Path({str(inbox)!r})
 MODEL = Path({str(model)!r})
