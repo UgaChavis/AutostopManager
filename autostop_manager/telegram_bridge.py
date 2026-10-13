@@ -1945,6 +1945,19 @@ def _message_reply_to_id(message: Any) -> int:
         return 0
 
 
+def _outgoing_message_matches(message: Any, *, peer_id: int, message_id: int) -> bool:
+    """A matching body alone cannot prove delivery to the intended private peer."""
+    return (
+        message is not None
+        and type(getattr(message, "id", None)) is int
+        and message.id == message_id
+        and type(getattr(message, "chat_id", None)) is int
+        and message.chat_id == peer_id
+        and getattr(message, "is_private", None) is True
+        and getattr(message, "out", None) is True
+    )
+
+
 async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[str, Any] | None:
     if message_id == 0:
         return None
@@ -2562,7 +2575,11 @@ async def _handle_send_text_to_entity(
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
-    if readback is None or str(readback.message or "") != text or _message_reply_to_id(readback) != reply_to_message_id:
+    if (
+        not _outgoing_message_matches(readback, peer_id=int(target["id"]), message_id=message_id)
+        or str(readback.message or "") != text
+        or _message_reply_to_id(readback) != reply_to_message_id
+    ):
         raise BridgeError("send_readback_failed")
     idempotency[idempotency_key]["readback_verified"] = True
     _save_idempotency(idempotency_path, idempotency)
@@ -2861,6 +2878,8 @@ async def _handle_owner_notification_readback(
         raise BridgeError("owner_notification_not_found")
     if not bool(getattr(message, "out", False)):
         raise BridgeError("owner_notification_not_outgoing")
+    if not _outgoing_message_matches(message, peer_id=int(target["id"]), message_id=message_id):
+        raise BridgeError("owner_notification_readback_mismatch")
     text_sha256 = hashlib.sha256(str(getattr(message, "message", None) or "").encode("utf-8")).hexdigest()
     if text_sha256 != expected_text_sha256:
         raise BridgeError("owner_notification_readback_mismatch")
