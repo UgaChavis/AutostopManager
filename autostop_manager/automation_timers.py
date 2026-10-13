@@ -86,6 +86,23 @@ def _systemctl(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, text=True, timeout=5, check=False, env=child_environment)
 
 
+def _systemd_duration_minutes(value: str) -> int | None:
+    """Read the complete systemctl timespan with exact minute precision."""
+
+    units = {"d": 86_400_000_000, "h": 3_600_000_000, "min": 60_000_000, "s": 1_000_000, "ms": 1000, "us": 1}
+    parts = value.split()
+    if not parts:
+        return None
+    total_microseconds = 0
+    for part in parts:
+        match = re.fullmatch(r"([0-9]+)(d|h|min|s|ms|us)", part)
+        if match is None:
+            return None
+        total_microseconds += int(match.group(1)) * units[match.group(2)]
+    minutes, remainder = divmod(total_microseconds, 60_000_000)
+    return minutes if remainder == 0 else None
+
+
 class SystemTimerController:
     def __init__(
         self,
@@ -139,12 +156,9 @@ class SystemTimerController:
         monotonic = properties.get("TimersMonotonic", [])
         period_minutes: int | None = None
         for value in monotonic:
-            match = re.search(r"OnUnitActiveUSec=(\d+)(s|min|h)\b", value)
+            match = re.search(r"\bOnUnitActiveUSec=([^;{}]+);", value)
             if match:
-                amount = int(match.group(1))
-                seconds = amount * {"s": 1, "min": 60, "h": 3600}[match.group(2)]
-                if seconds % 60 == 0:
-                    period_minutes = seconds // 60
+                period_minutes = _systemd_duration_minutes(match.group(1))
                 break
         last_run = one("LastTriggerUSec") or None
         next_run = one("NextElapseUSecRealtime") or None
@@ -378,7 +392,10 @@ class SystemTimerController:
         }
 
     def _systemctl_action(self, *arguments: str) -> None:
-        result = self.runner(["systemctl", *arguments, "--no-pager"])
+        try:
+            result = self.runner(["systemctl", *arguments, "--no-pager"])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise AutomationError("system_timer_apply_failed") from exc
         if result.returncode != 0:
             raise AutomationError("system_timer_apply_failed")
 

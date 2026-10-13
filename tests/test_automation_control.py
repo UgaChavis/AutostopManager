@@ -24,6 +24,39 @@ from autostop_manager.automation_control import (
 from autostop_manager.automation_registry import AutomationError, AutomationStore
 
 
+@pytest.mark.parametrize(
+    "actual_period,reconcile_state,error_code",
+    [
+        (None, "inspection_error", "system_timer_inspection_failed"),
+        (20, "in_sync", None),
+        (30, "drift", "system_timer_drift"),
+    ],
+)
+def test_timer_readback_requires_a_known_period_to_match_saved_schedule(
+    tmp_path, actual_period, reconcile_state, error_code
+):
+    controller = SimpleNamespace(
+        list_status=lambda: [
+            {
+                "timer_id": "crm_digest_timer",
+                "name": "Synthetic timer",
+                "control_mode": "managed",
+                "locked": False,
+                "inspection_ok": True,
+                "state": {"actual_state": "active", "period_minutes": actual_period},
+            }
+        ]
+    )
+    service = AutomationControlService(AutomationStore(tmp_path / "registry.sqlite3"), timer_controller=controller)
+    result = service._timer_statuses(
+        [{"timer_id": "crm_digest_timer", "desired_state": "on", "period_minutes": 20, "revision": 1}]
+    )[0]
+
+    assert result["actual_period_minutes"] == actual_period
+    assert result["reconcile_state"] == reconcile_state
+    assert result["error_code"] == error_code
+
+
 def test_unix_protocol_round_trip_and_peer_credentials(tmp_path: Path):
     async def scenario():
         socket_path = tmp_path / "control.sock"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sqlite3
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -229,7 +230,7 @@ def test_daemon_delivers_test_notification_once_through_verified_owner_target(tm
     assert state == ("sent", "ok")
     assert notifier.calls == [
         ("preview", TEST_NOTIFICATION_TEXT),
-        ("apply", TEST_NOTIFICATION_TEXT, "test-token", "notification-test:notify-test-0001"),
+        ("apply", TEST_NOTIFICATION_TEXT, "test-token", claim["idempotency_key"]),
     ]
 
 
@@ -296,7 +297,8 @@ def test_outbox_revision_change_is_cancelled_before_telegram_preview(tmp_path: P
     assert notifier.calls == []
 
 
-def test_expired_uncertain_outbox_uses_lookup_without_resend(tmp_path: Path):
+@pytest.mark.parametrize("legacy_key", [False, True])
+def test_expired_uncertain_outbox_uses_lookup_without_resend(tmp_path: Path, legacy_key: bool):
     path = tmp_path / "manager.sqlite3"
     store = AutomationStore(path)
     service = AutomationControlService(store)
@@ -308,6 +310,12 @@ def test_expired_uncertain_outbox_uses_lookup_without_resend(tmp_path: Path):
         "notify-unknown-lookup-0001",
         job["revision"],
     )
+    if legacy_key:
+        with store.connect() as connection:
+            connection.execute(
+                "UPDATE manager_automation_outbox SET idempotency_key = ? WHERE outbox_id = ?",
+                ("notification-test:notify-unknown-lookup-0001", queued["outbox_id"]),
+            )
     first_daemon = AutomationDaemon(store=store, notifier=FakeNotifier(uncertain=True))
     first_claim = store.claim_outbox(owner=first_daemon.owner)
     assert first_claim
@@ -340,7 +348,8 @@ def test_expired_uncertain_outbox_uses_lookup_without_resend(tmp_path: Path):
             (queued["outbox_id"],),
         ).fetchone()
     assert state == ("sent", "ok")
-    assert verifier.calls == [("lookup", "notification-test:notify-unknown-lookup-0001", expected_hash)]
+    assert recovery_claim["idempotency_key"] == first_claim["idempotency_key"]
+    assert verifier.calls == [("lookup", first_claim["idempotency_key"], expected_hash)]
 
 
 def test_expired_uncertain_outbox_not_found_is_visibly_blocked(tmp_path: Path):
@@ -813,6 +822,91 @@ def test_daemon_run_initializes_adopts_serves_and_stops_cleanly(monkeypatch):
     assert "READY=1" in events
     assert "STOPPING=1" in events
     assert events[-1] == "close"
+
+
+@pytest.mark.parametrize("work_kind", ["run", "outbox"])
+def test_daemon_shutdown_drains_active_work_and_preserves_next_intent(monkeypatch, tmp_path, work_kind):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    service = AutomationControlService(store)
+    job = create_digest(service)
+    operation = "run_now" if work_kind == "run" else "test_notification"
+    queued = command(service, operation, {"job_id": job["job_id"]}, "shutdown-work-0001", job["revision"])
+    pending = []
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    shutdown_reported = asyncio.Event()
+    closed = []
+
+    def executor(_claim):
+        calls.append("execute")
+        started.set()
+        assert release.wait(5), "synthetic executor was not released"
+        return {"ok": True, "result_code": "ok"}
+
+    class Notifier(FakeNotifier):
+        def apply(self, *args, **kwargs):
+            executor({})
+            return super().apply(*args, **kwargs)
+
+    class Timers:
+        def adopt_all_current(self):
+            pass
+
+    class Server:
+        async def start(self):
+            pass
+
+        async def close(self):
+            closed.append(True)
+
+    def notify(message):
+        if message == "STOPPING=1":
+            shutdown_reported.set()
+
+    daemon = AutomationDaemon(
+        store=store,
+        timer_controller=Timers(),
+        control_server=Server(),
+        executors={"crm_digest_v1": executor},
+        notifier=Notifier(),
+    )
+    monkeypatch.setattr(automation_daemon, "notify_systemd", notify)
+
+    async def scenario():
+        running = asyncio.create_task(daemon.run())
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            pending.append(
+                command(service, "test_notification", {"job_id": job["job_id"]}, "shutdown-work-0002", job["revision"])
+            )
+            daemon.stopping.set()
+            await asyncio.wait_for(shutdown_reported.wait(), timeout=2)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not running.done(), "daemon returned while its worker was still active"
+            assert not closed
+            assert store.status()["controller"]["state"] != "stopped"
+        finally:
+            release.set()
+            await asyncio.wait_for(running, timeout=2)
+
+    asyncio.run(scenario())
+
+    assert calls == ["execute"]
+    assert closed == [True]
+    assert store.status()["controller"]["state"] == "stopped"
+    table = "manager_automation_runs" if work_kind == "run" else "manager_automation_outbox"
+    reference = "run_id" if work_kind == "run" else "outbox_id"
+    with store.connect() as connection:
+        completed = connection.execute(
+            f"SELECT status, result_code FROM {table} WHERE {reference} = ?", (queued[reference],)
+        ).fetchone()
+        next_intent = connection.execute(
+            "SELECT status FROM manager_automation_outbox WHERE outbox_id = ?", (pending[0]["outbox_id"],)
+        ).fetchone()
+    assert tuple(completed) == ("succeeded" if work_kind == "run" else "sent", "ok")
+    assert next_intent["status"] == "queued"
 
 
 def test_daemon_main_loads_runtime_and_runs_production_daemon(monkeypatch):

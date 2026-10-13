@@ -388,11 +388,14 @@ def test_client_status_contract_and_quiescence_guards(monkeypatch):
         automation_release._wait_quiescent(
             SequenceClient(),  # type: ignore[arg-type]
             _socket_status(attempt=attempt, sending=1),
+            attempt_hash=automation_release._attempt_hash(attempt),
         )
         == ready
     )
     with pytest.raises(AutomationError, match="automation_release_quiescence_unavailable"):
-        automation_release._wait_quiescent(SequenceClient(), {**ready, "readiness": None})  # type: ignore[arg-type]
+        automation_release._wait_quiescent(
+            SequenceClient(), {**ready, "readiness": None}, attempt_hash=automation_release._attempt_hash(attempt)
+        )  # type: ignore[arg-type]
 
 
 def test_wait_quiescent_stops_after_bounded_busy_retries(monkeypatch):
@@ -408,7 +411,7 @@ def test_wait_quiescent_stops_after_bounded_busy_retries(monkeypatch):
 
     monkeypatch.setattr(automation_release.time, "sleep", lambda _seconds: None)
     with pytest.raises(AutomationError, match="automation_release_not_quiescent"):
-        automation_release._wait_quiescent(BusyClient(), busy)  # type: ignore[arg-type]
+        automation_release._wait_quiescent(BusyClient(), busy, attempt_hash=automation_release._attempt_hash(attempt))  # type: ignore[arg-type]
     assert calls == 49
 
 
@@ -507,6 +510,34 @@ def test_socket_hold_rejects_preexisting_or_unverifiable_state(monkeypatch, tmp_
     monkeypatch.setattr(automation_release, "_socket_client", lambda _path: client)
     with pytest.raises(AutomationError, match="automation_release_hold_readback_failed"):
         automation_release.hold(release_attempt_key=attempt)
+
+
+@pytest.mark.parametrize("replacement", ["off", "maintenance", "other_attempt"])
+@pytest.mark.parametrize("lost_sending", [0, 1])
+def test_socket_hold_rejects_ownership_loss_during_quiescence_wait(monkeypatch, replacement, lost_sending):
+    attempt = "release-wait-ownership-0001"
+    busy = _socket_status(attempt=attempt, sending=1)
+    if replacement == "off":
+        lost = _socket_status(attempt=attempt, enabled=False, reason=None, revision=2, sending=lost_sending)
+    elif replacement == "maintenance":
+        lost = _socket_status(attempt=attempt, reason="maintenance", revision=2, sending=lost_sending)
+    else:
+        lost = _socket_status(attempt="release-other-ownership-0001", revision=2, sending=lost_sending)
+    statuses = [busy, busy, lost, _socket_status(attempt=attempt)]
+
+    class ScriptedClient:
+        def request(self, operation, payload, **_kwargs):
+            assert operation == "status"
+            return {"ok": True, "data": statuses.pop(0)}
+
+    monkeypatch.setattr(automation_release, "_socket_available", lambda _path: True)
+    monkeypatch.setattr(automation_release, "_socket_client", lambda _path: ScriptedClient())
+    monkeypatch.setattr(automation_release.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(AutomationError, match="automation_release_hold_ownership_lost"):
+        automation_release.hold(release_attempt_key=attempt)
+
+    assert len(statuses) == 1, "ownership loss must stop before another status can hide it"
 
 
 def test_socket_seed_and_release_fail_closed_on_bad_ack_or_readback(monkeypatch, tmp_path: Path):

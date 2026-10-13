@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,6 +13,7 @@ from autostop_manager.automation_registry import (
     AutomationError,
     AutomationStore,
     is_in_active_window,
+    next_active_time,
     next_scheduled_time,
 )
 
@@ -265,6 +266,142 @@ def test_next_run_respects_daytime_and_overnight_windows():
         timezone="Asia/Krasnoyarsk",
         active_window=overnight,
     )
+
+
+@pytest.mark.parametrize(
+    "timezone,at,window,expected",
+    [
+        ("Europe/Berlin", "2026-03-29T00:45:00Z", {"start": "02:30", "end": "03:15"}, "2026-03-29T01:00:00Z"),
+        ("Europe/Berlin", "2026-03-29T00:45:00Z", {"start": "02:10", "end": "02:20"}, "2026-03-30T00:10:00Z"),
+        ("Europe/Berlin", "2026-03-28T20:00:00Z", {"start": "02:10", "end": "02:20"}, "2026-03-30T00:10:00Z"),
+        ("Europe/Berlin", "2026-10-25T00:45:00Z", {"start": "02:00", "end": "02:30"}, "2026-10-25T01:00:00Z"),
+        ("Europe/Berlin", "2026-10-25T00:25:00Z", {"start": "02:10", "end": "02:20"}, "2026-10-25T01:10:00Z"),
+        ("Europe/Berlin", "2026-10-25T00:45:00Z", {"start": "01:30", "end": "02:15"}, "2026-10-25T01:00:00Z"),
+        ("Europe/Berlin", "2026-10-25T00:45:00Z", {"start": "22:00", "end": "02:15"}, "2026-10-25T01:00:00Z"),
+        ("Australia/Lord_Howe", "2026-10-03T15:15:00Z", {"start": "02:15", "end": "02:45"}, "2026-10-03T15:30:00Z"),
+        ("Australia/Lord_Howe", "2026-10-03T08:00:00Z", {"start": "02:05", "end": "02:15"}, "2026-10-04T15:05:00Z"),
+        ("Pacific/Apia", "2011-12-29T20:00:00Z", {"start": "09:00", "end": "10:00"}, "2011-12-30T19:00:00Z"),
+    ],
+)
+def test_next_active_time_uses_first_real_window_across_clock_changes(timezone, at, window, expected):
+    now = datetime.fromisoformat(at)
+    result = next_active_time(now, timezone=timezone, active_window=window)
+
+    assert result == datetime.fromisoformat(expected)
+    assert is_in_active_window(result, timezone=timezone, active_window=window)
+    assert not is_in_active_window(result - timedelta(seconds=1), timezone=timezone, active_window=window)
+
+
+@pytest.mark.parametrize("operation", ["run_now", "test_notification"])
+@pytest.mark.parametrize("revision_kind", ["missing", "stale"])
+def test_effect_commands_require_current_revision_without_creating_intent(tmp_path, operation, revision_kind):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    service = AutomationControlService(store)
+    job = enable_digest(service, create_digest(service))
+    revision = None if revision_kind == "missing" else job["revision"] - 1
+    code = "expected_revision_required" if revision_kind == "missing" else "automation_revision_conflict"
+
+    with pytest.raises(AutomationError, match=code):
+        request(
+            service,
+            operation,
+            {"job_id": job["job_id"]},
+            idempotency_key=f"guard-{operation}-{revision_kind}-0001",
+            expected_revision=revision,
+        )
+
+    with store.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM manager_automation_runs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM manager_automation_outbox").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("reason", ["operator", "maintenance"])
+@pytest.mark.parametrize("actor_id", ["release-owner", "other-operator"])
+def test_release_hold_cannot_be_reclassified_without_releasing_owned_attempt(tmp_path, reason, actor_id):
+    service = AutomationControlService(AutomationStore(tmp_path / "manager.sqlite3"))
+    held = request(
+        service,
+        "set_global_hold",
+        {"enabled": True, "reason": "release", "attempt_hash": "a" * 64},
+        idempotency_key="owned-release-hold-0001",
+        expected_revision=0,
+        actor={"kind": "system", "id": "release-owner", "is_admin": True},
+    )["global_hold"]
+
+    with pytest.raises(AutomationError, match="automation_global_hold_ownership_lost"):
+        request(
+            service,
+            "set_global_hold",
+            {"enabled": True, "reason": reason},
+            idempotency_key="reclassify-release-hold-0001",
+            expected_revision=held["revision"],
+            actor={"kind": "system", "id": actor_id, "is_admin": True},
+        )
+
+    current = request(service, "status")["global_hold"]
+    assert {key: current[key] for key in held} == held
+
+
+@pytest.mark.parametrize("operation,payload_kind", [("status", "exact"), ("status", "list"), ("readiness", "exact")])
+def test_archived_job_supports_technical_readback_but_rejects_new_effects(tmp_path, operation, payload_kind):
+    service = AutomationControlService(AutomationStore(tmp_path / "manager.sqlite3"))
+    job = create_digest(service)
+    archived = request(
+        service,
+        "archive",
+        {"job_id": job["job_id"]},
+        idempotency_key="archive-for-readback-0001",
+        expected_revision=job["revision"],
+    )
+    payload = {"include_archived": True} if payload_kind == "list" else {"job_id": job["job_id"]}
+
+    result = request(service, operation, payload)
+    packet = result["readiness"]["execution_packet"] if operation == "status" else result["execution_packet"]
+    assert packet["jobs"][0]["job_id"] == job["job_id"]
+    if operation == "status":
+        assert result["jobs"][0]["archived_at"] is not None
+    with pytest.raises(AutomationError, match="automation_job_not_found"):
+        request(
+            service,
+            "test_notification",
+            {"job_id": job["job_id"]},
+            idempotency_key="archived-effect-rejected-0001",
+            expected_revision=archived["revision"],
+        )
+
+
+def test_notification_idempotency_is_scoped_by_source_and_preserves_command_replay(tmp_path):
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    service = AutomationControlService(store)
+    job = create_digest(service)
+    payload = {"job_id": job["job_id"]}
+    results = []
+    for kind in ("codex", "telegram_owner"):
+        actor = {"kind": kind, "id": "test-owner", "is_admin": True}
+        result = request(
+            service,
+            "test_notification",
+            payload,
+            idempotency_key="shared-notification-key-0001",
+            expected_revision=job["revision"],
+            actor=actor,
+        )
+        replay = request(
+            service,
+            "test_notification",
+            payload,
+            idempotency_key="shared-notification-key-0001",
+            expected_revision=job["revision"],
+            actor=actor,
+        )
+        assert replay["outbox_id"] == result["outbox_id"]
+        results.append(result)
+
+    assert results[0]["outbox_id"] != results[1]["outbox_id"]
+    with store.connect() as connection:
+        keys = connection.execute("SELECT idempotency_key FROM manager_automation_outbox").fetchall()
+    assert len(keys) == 2
+    assert keys[0][0] != keys[1][0]
 
 
 def test_missed_interval_is_coalesced_to_window_opening(monkeypatch, tmp_path: Path):

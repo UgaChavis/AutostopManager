@@ -369,10 +369,13 @@ class AutomationDaemon:
         try:
             await self.stopping.wait()
         finally:
+            self.stopping.set()
             notify_systemd("STOPPING=1")
-            scheduler.cancel()
-            with suppress(asyncio.CancelledError):
-                await scheduler
+            with suppress(Exception):
+                self.store.controller_heartbeat(owner=self.owner, state="stopping")
+            # Cancelling a to_thread await does not stop its worker. Drain the
+            # current claim and its durable result before reporting stopped.
+            await asyncio.shield(scheduler)
             with suppress(Exception):
                 self.store.controller_heartbeat(owner=self.owner, state="stopped")
             await self.control_server.close()
