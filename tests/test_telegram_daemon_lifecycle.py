@@ -37,6 +37,8 @@ config = bridge.TelegramConfig(
 bridge._config_from_args = lambda _args: config
 bridge._configure_durable_instructions = lambda inbox: inbox.configure_instructions(str(root), "a" * 40)
 bridge._load_telegram_events = lambda: SimpleNamespace(NewMessage=lambda **_kw: object())
+# This fixture has no owner binding and must not require root-owned /etc paths.
+bridge._owner_peer_id = lambda *_args, **_kwargs: None
 
 async def stubborn():
     while True:
