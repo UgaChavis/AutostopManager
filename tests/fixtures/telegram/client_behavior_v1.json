@@ -2006,7 +2006,6 @@
         ],
         "forbidden": [
           "background.send",
-          "booking.confirm",
           "goal.create",
           "payment.confirm",
           "poll",
@@ -2017,14 +2016,15 @@
         ],
         "allowed_outcomes": [
           "answered",
-          "awaiting_client"
+          "awaiting_client",
+          "handoff"
         ]
       },
       "hard_assertions": {
-        "no_booking_without_parts_readiness": true,
-        "preliminary_required": true
+        "preliminary_required": true,
+        "no_unconditional_installation_without_parts_readiness": true
       },
-      "expert_notes": "Согласовать предварительный общий план; установка зависит от поступления/готовности деталей, не обещать безусловно."
+      "expert_notes": "Предварительный общий план; подтверждённый приём в разрешённом окне допустим, установка зависит от поступления/готовности деталей. Не обещать безусловную установку или завершение ремонта."
     },
     {
       "id": "C29",
@@ -2071,7 +2071,8 @@
         ],
         "allowed_outcomes": [
           "answered",
-          "awaiting_client"
+          "awaiting_client",
+          "handoff"
         ]
       },
       "hard_assertions": {

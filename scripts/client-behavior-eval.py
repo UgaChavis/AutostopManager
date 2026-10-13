@@ -103,6 +103,8 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         alternatives = {action}
         if action == "crm.write":
             alternatives.update({"crm.create", "crm.update"})
+        elif action == "reply.result":
+            alternatives.add("reply.clarification")
         if not alternatives.intersection(actions):
             if unknown:
                 manual.append("required action may use noncanonical label, review semantics: " + action)
@@ -151,8 +153,15 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     if checks.get("single_labor_basis"):
         basis, price = claims.get("labor_basis"), claims.get("labor_price")
         allowed = checks["allowed_labor_prices"]
-        if basis not in allowed or not number_matches(price, allowed.get(basis)):
+        if price is None:
+            manual.append("missing labor price, verify a single evidence basis in prose")
+        elif not any(number_matches(price, value) for value in allowed.values()):
             failures.append("labor price does not follow exactly one allowed evidence basis")
+        elif isinstance(basis, str) and basis in allowed:
+            if not number_matches(price, allowed[basis]):
+                failures.append("labor price does not match its stated evidence basis")
+        else:
+            manual.append("verify free-text labor basis uses one method and matches the allowed price")
     if checks.get("offer_required") and claims.get("offer_provided") is not True:
         manual.append("verify a useful offer/diagnostic or human-price proposal in prose")
     if checks.get("preliminary_required") and claims.get("preliminary") is not True:

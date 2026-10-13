@@ -66,6 +66,14 @@ Do not change the runtime or force a false terminal result to satisfy an oracle.
 If a trace proposes another verified human handoff, evaluate that evidence and
 the actual recipient/transfer separately.
 
+For C28, a verified appointment within the allowed window is a reception time.
+It may be confirmed while installation explicitly remains conditional on parts
+readiness. An unconditional installation or completion promise fails review.
+For C29, explicit purchase consent permits verified CRM handoff while payment
+remains unconfirmed; it does not authorize procurement or a payment receipt.
+An appropriate clarification can serve as the useful result of a bounded turn.
+Free-text labour evidence is reviewed semantically, without requiring enum labels.
+
 Expert review grades understanding, context, accuracy, usefulness and natural
 Russian from 0 to 3. Every dimension must score at least 2, and all critical
 hard assertions must hold. Review the meaning of uncertain offers, VIN requests,
