@@ -61,7 +61,7 @@ def _validate_private_audio(path: Path, *, inbox_dir: Path = DEFAULT_INBOX_DIR) 
         if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
             raise TranscriptionError("audio_inbox_permissions_invalid")
         try:
-            audio_fd = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=inbox_fd)
+            audio_fd = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=inbox_fd)
         except OSError as exc:
             raise TranscriptionError("audio_unavailable") from exc
         try:

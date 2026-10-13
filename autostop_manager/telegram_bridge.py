@@ -1209,7 +1209,7 @@ def _read_private_download(path: Path, *, inbox_dir: Path) -> bytes:
         if inbox_stat.st_uid != os.geteuid() or stat.S_IMODE(inbox_stat.st_mode) != 0o700:
             raise BridgeError("download_inbox_permissions_invalid")
         try:
-            descriptor = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=inbox_fd)
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=inbox_fd)
         except OSError as exc:
             raise BridgeError("download_unavailable") from exc
         try:
@@ -1272,7 +1272,7 @@ def _load_validated_photo_file(
         try:
             file_fd = os.open(
                 path.name,
-                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=outbox_fd,
             )
         except OSError as exc:
@@ -1571,7 +1571,7 @@ def _load_validated_document_file(
         try:
             file_fd = os.open(
                 path.name,
-                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=outbox_fd,
             )
         except OSError as exc:

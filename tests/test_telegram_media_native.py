@@ -71,6 +71,7 @@ def _media_message(
 
 @pytest.fixture
 def media_case(tmp_path, monkeypatch):
+    original_resolve_peer = bridge._resolve_peer
     outbox = tmp_path / "run" / "outbox"
     outbox.mkdir(parents=True, mode=0o700)
     config = bridge.TelegramConfig(
@@ -134,7 +135,13 @@ def media_case(tmp_path, monkeypatch):
     def request(kind):
         return {"operation": "send_" + kind, "peer": "42", kind: str(paths[kind]), "caption": "<b>native</b>"}
 
-    return SimpleNamespace(config=config, client=Client(), content=content, request=request)
+    return SimpleNamespace(
+        config=config,
+        client=Client(),
+        content=content,
+        request=request,
+        original_resolve_peer=original_resolve_peer,
+    )
 
 
 def _invoke(case, request, *, monitor=None):
@@ -267,11 +274,27 @@ def test_personal_download_retains_exact_group_channel_and_both_directions(media
         media=private.media,
     )
 
-    async def resolve(_client, requested):
-        assert requested == str(client.source.chat_id)
-        return client.source.chat_id, {"id": client.source.chat_id, "kind": peer_kind}
+    entity = (
+        tl.Chat(
+            id=42,
+            title="Synthetic group",
+            photo=tl.ChatPhotoEmpty(),
+            participants_count=2,
+            date=datetime.now(UTC),
+            version=1,
+        )
+        if peer_kind == "group"
+        else tl.Channel(
+            id=42, title="Synthetic channel", photo=tl.ChatPhotoEmpty(), date=datetime.now(UTC), broadcast=True
+        )
+    )
 
-    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    async def get_entity(requested):
+        assert requested == client.source.chat_id
+        return entity
+
+    client.get_entity = get_entity
+    monkeypatch.setattr(bridge, "_resolve_peer", media_case.original_resolve_peer)
     request = {"operation": "download", "peer": str(client.source.chat_id), "message_id": 100}
     dry = _invoke(media_case, request)
     applied = _apply(media_case, request, dry)
