@@ -224,17 +224,23 @@ def capture_oem_evidence(
     ):
         return invalid("capture_oem_evidence", "number_or_source_or_scope")
     missing = source_metadata_errors(source)
-    if normalize_part_number(str(source.get("part_number") or "")) != normalize_part_number(part_number):
+    normalized_number = normalize_part_number(part_number)
+    if not normalized_number or normalize_part_number(str(source.get("part_number") or "")) != normalized_number:
         missing.append("source_part_number")
     if not isinstance(brand, str) or not brand.strip() or str(source.get("brand") or "").casefold() != brand.casefold():
         missing.append("source_brand")
     if source.get("scope") != scope:
         missing.append("source_scope")
-    primary = not _public_catalog_source(source) and source.get("document_kind") in {
-        "official_epc",
-        "oem_catalog_document",
-        "physical_oe_marking",
-    }
+    primary = (
+        not _public_catalog_source(source)
+        and isinstance(source.get("document_kind"), str)
+        and source.get("document_kind")
+        in {
+            "official_epc",
+            "oem_catalog_document",
+            "physical_oe_marking",
+        }
+    )
     if not primary or source.get("declares_oem") is not True:
         missing.append("primary_oem_evidence")
     if scope == "exact_identifier" and (
@@ -248,7 +254,7 @@ def capture_oem_evidence(
     missing.extend(_native_catalog_gaps(source, vehicle_binding if scope != "exact_identifier" else None, scope=scope))
     candidate = {
         "raw_number": part_number,
-        "normalized_number": normalize_part_number(part_number),
+        "normalized_number": normalized_number,
         "brand": brand,
         "kind": "oem" if not missing else "unknown",
         "scope": scope,
@@ -269,17 +275,19 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     kind = row.get("type", "unknown")
     missing = []
     evidence = row.get("evidence") or []
-    if kind not in {"cross", "analog", "oe_reference", "supersession"}:
+    if not isinstance(kind, str) or kind not in {"cross", "analog", "oe_reference", "supersession"}:
         kind = "unknown"
         missing.append("relation_type")
     if kind == "supersession":
         primary = any(
             isinstance(item, dict)
+            and isinstance(item.get("document_kind"), str)
             and item.get("document_kind") in {"manufacturer_supersession", "official_epc"}
             and not source_metadata_errors(item)
             and item.get("direction") == row.get("direction")
             and all(
                 isinstance(item.get(key), dict)
+                and bool(normalize_part_number(row[key]["number"]))
                 and normalize_part_number(str(item[key].get("number") or ""))
                 == normalize_part_number(row[key]["number"])
                 and bool(row[key].get("brand"))
@@ -288,7 +296,11 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             )
             for item in evidence
         )
-        if not primary or row.get("direction") not in {"from_to", "to_from"}:
+        if (
+            not primary
+            or not isinstance(row.get("direction"), str)
+            or row.get("direction") not in {"from_to", "to_from"}
+        ):
             missing.append("supersession_direction_and_primary_evidence")
             kind = "unverified_supersession"
     normalized = {
@@ -300,6 +312,10 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         "fitment_confirmed": False,
     }
     return normalized, missing
+
+
+def _relation_endpoint_key(endpoint: dict[str, Any]) -> tuple[str, str]:
+    return endpoint["normalized_number"], str(endpoint.get("brand") or "").casefold()
 
 
 def compare_part_relations(relations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -323,20 +339,24 @@ def compare_part_relations(relations: list[dict[str, Any]]) -> dict[str, Any]:
         value, unknown = _relation(row)
         normalized.append(value)
         missing.extend(f"relations[{index}].{field}" for field in unknown)
-    for row in normalized:
-        if row["type"] != "supersession":
-            continue
+    replacements = [
+        (row["from"], row["to"]) if row["direction"] == "from_to" else (row["to"], row["from"])
+        for row in normalized
+        if row["type"] == "supersession"
+    ]
+    for origin, replacement in replacements:
         alternatives = [
-            other
-            for other in normalized
-            if other["type"] == "supersession" and other["from"] == row["from"] and other["to"] != row["to"]
+            other_replacement
+            for other_origin, other_replacement in replacements
+            if _relation_endpoint_key(other_origin) == _relation_endpoint_key(origin)
+            and _relation_endpoint_key(other_replacement) != _relation_endpoint_key(replacement)
         ]
         if alternatives:
             conflicts.append(
                 {
                     "code": "supersession_branches",
-                    "from": row["from"],
-                    "alternatives": [row["to"], *[other["to"] for other in alternatives]],
+                    "from": origin,
+                    "alternatives": [replacement, *alternatives],
                 }
             )
     return result(
@@ -502,6 +522,7 @@ def _fitment_sources(
         for index, row in matched
         if row.get("fitment_assertion") is True
         and not _public_catalog_source(row)
+        and isinstance(row.get("document_kind"), str)
         and row.get("document_kind") in {"official_epc", "manufacturer_fitment_catalog"}
         and not source_metadata_errors(row)
         and _fitment_scope_bound(row, vehicle, profile, scope)

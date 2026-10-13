@@ -142,6 +142,59 @@ literal replacement учитывает смешанный регистр, а ч�
 оба disposable J1 paths до callbacks. Публикация требует независимой окончательной
 приёмки, полного `release-gates.sh` и CI точных head/main SHA.
 
+## Забег 005 — VIN/OEM: свидетельства и транспорт
+
+База: `2c25c7e47abe6769a2546fd82a3df4be92f6fb31`. Перед началом повторно проверены
+HEAD, NUL status и контрольные суммы исходных 20 WIP-файлов; семь связанных
+VIN/E2/E4 worktrees чистые, их HEAD входят в опубликованную историю.
+Это не подтверждает завершение или принадлежность WIP. Пять пересекающихся
+source paths, пять tests и шесть docs/catalog paths исключены из изменений;
+незавершённые планы не используются как действующие инструкции.
+
+| ID | Подтверждённая проблема | Исправление |
+| --- | --- | --- |
+| VIN005-01 | Некоторые Unicode и длинные catalog IDs обрывали проверку исключением | Общая безопасная проверка сохраняет numeric ID и нулевые category IDs |
+| VIN005-02 | Supersession branches игнорировали направление/нормализацию, а пустой canonical number становился primary evidence | Направленная замена требует непустых canonical endpoints; raw evidence сохраняется |
+| VIN005-03 | Строковые field statuses обходили conflict/query guard или обрывали readiness | Общая проекция статуса в policy/planner; неподходящий контейнер не подтверждает modification readiness |
+| VIN005-04 | Array/object вместо enum relation или document kind вызывал TypeError | Существующие unknown/unverified evidence paths принимают неподходящий тип |
+| VIN005-05 | Локальная нехватка worker/HTTP connections ошибочно меняла здоровье провайдера | Exact local failures не повторяются и не ухудшают/восстанавливают circuit |
+| VIN005-06 | Malformed evidence aliases падали до существующей проверки или partial fallback | Проверка выполняется до lineage, совместимые fallback paths сохраняются |
+
+Проверки используют переданные синтетические профили и свидетельства, временные
+DB/runtime/cache roots, fake transports и настоящий httpx/httpcore pool с in-memory
+backend. Последний проверяет поддерживаемый supplied-client путь; он не доказывает
+перегрузку стандартного пула в рабочем процессе. Реальные providers, decoder,
+рабочие VIN jobs и клиентские данные не используются. Registry/status/planner
+заглушены явно: этот забег не объявляет весь VIN/OEM pipeline проверенным.
+Positive controls сохраняют направление и независимость источника, family scope,
+vehicle binding, неизвестную применимость, genuine network/timeout/429 retry,
+отмену и удержание worker admission до фактического завершения.
+Проверены оба публичных VIN/WMI decode paths через fake urlopen: genuine HTTPError
+имеет приоритет над local reason strings. Пустой нормализованный OEM номер остаётся
+неподтверждённым; unsupported source-part-number collection coercion отмечен отдельно
+как наблюдение с неуточнённой политикой типов, без объявления исправленным дефектом.
+Planner не передаёт спорный engine/year/model в manual queries и сохраняет
+согласованные family candidates, valid fields и исходные witness payloads.
+
+Итоговый изолированный профиль: 448 passed за 5.91s, external operation attempts `[]`.
+Новые регрессии и positive controls: 91 evidence/readiness, 36 transport/VIN/WMI,
+8 planner. Отдельно сохраняются исходные before failures и дополнительные
+tests-first воспроизведения найденных при review ошибок. Один предупреждающий
+Anyio pytest-rewrite сигнал связан с предварительным импортом в guarded runner.
+Приёмка каждого опубликованного участка дополнительно требует полного
+`release-gates.sh` и CI точных head/main SHA.
+
+В отдельной очереди остаются две baseline P2 в неизменённых MCP/public labor IO
+путях: синхронные labor roots блокируют event loop, а idle timeout не ограничивает
+wall time медленного body read. Изолированные SDK/socketpair controls подтверждены;
+исправления требуют отдельного общего review бюджета и lifecycle. Историческая
+неопределённость раннего VIN expiry prune остаётся открытой и не используется
+как доказательство отсутствия побочного эффекта. Обновление сервера выполняется
+только отдельным поручением пользователя.
+
 ## Следующие участки
 
-VIN/OEM после сверки параллельной работы → Telegram → упаковка и инструкции. После обхода продолжается углублённая проверка связей. Реестр публикаций с точными PR/SHA и открытые вопросы ведутся в техническом журнале M2 и состоянии кампании.
+Telegram после сверки параллельной работы → упаковка и инструкции. Отдельный followup
+MCP/public labor проверяет подтверждённые P2 бюджета и lifecycle. После обхода
+продолжается углублённая проверка связей. Реестр публикаций с точными PR/SHA и открытые
+вопросы ведутся в техническом журнале M2 и состоянии кампании.

@@ -180,6 +180,8 @@ def field_origins(envelope: dict[str, Any], field: str, value: Any) -> list[dict
     if isinstance(declared, dict) and isinstance(declared.get(field), str):
         return [{"value": value, "primary_lineage": declared[field], "independent": False}]
     supplied = envelope.get("evidence") or envelope.get("evidence_sources") or []
+    if not isinstance(supplied, list):
+        supplied = []
     # A mixed result does not establish which primary source supplied this field.
     known = {
         origin
@@ -221,16 +223,22 @@ def source_metadata_errors(source: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _valid_catalog_id(value: Any, *, minimum: int = 1) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return False
+    try:
+        return str(value).isdigit() and int(value) >= minimum
+    except ValueError:
+        return False
+
+
 def catalog_ref(value: Any, *, namespace: str, entity_kind: str) -> bool:
     return (
         isinstance(value, dict)
         and value.get("provider") == "partsapi_ru"
         and value.get("namespace") == namespace
         and value.get("entity_kind") == entity_kind
-        and isinstance(value.get("id"), (str, int))
-        and not isinstance(value.get("id"), bool)
-        and str(value["id"]).isdigit()
-        and int(value["id"]) > 0
+        and _valid_catalog_id(value.get("id"))
         and (namespace != "tecdoc" or value.get("carType") in ("PC", "CV", "Motorcycle"))
     )
 
@@ -444,12 +452,7 @@ def catalog_parameter_errors(params: dict[str, Any]) -> list[str]:
             "LANG",
         }:
             minimum = 0 if name in {"TopCategoryId", "SubCategoryId", "TopCatId", "SubCatId"} else 1
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (str, int))
-                or not str(value).isdigit()
-                or int(value) < minimum
-            ):
+            if not _valid_catalog_id(value, minimum=minimum):
                 errors.append("invalid_" + name)
     return errors
 

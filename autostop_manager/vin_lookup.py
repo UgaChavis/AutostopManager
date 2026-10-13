@@ -397,14 +397,14 @@ def _vpic_request_json(request_url: str, *, timeout: float, data: bytes | None =
 
 
 def _vpic_failure_details(exc: BaseException) -> tuple[str, bool]:
-    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
-        return "provider_busy", False
-    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
-        return "provider_executor_unavailable", False
     if isinstance(exc, HTTPError):
         if int(exc.code) == 429:
             return "provider_throttled", True
         return ("provider_http_5xx", True) if 500 <= int(exc.code) <= 599 else ("provider_http_4xx", False)
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_busy":
+        return "provider_busy", False
+    if isinstance(exc, URLError) and exc.reason == "provider_transport_unavailable":
+        return "provider_executor_unavailable", False
     if isinstance(exc, TimeoutError):
         return "timeout", True
     if isinstance(exc, (URLError, OSError)):

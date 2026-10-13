@@ -167,6 +167,8 @@ def _profile(row: dict[str, Any]) -> dict[str, Any]:
 
 def _source_lineage(row: dict[str, Any], index: int) -> str:
     evidence = row.get("evidence") or row.get("evidence_sources") or []
+    if not isinstance(evidence, list):
+        return f"supplied_result_{index}"
     primary = sorted(
         {
             str(item.get("primary_lineage") or item.get("provider") or item.get("source"))
@@ -412,6 +414,9 @@ def reconcile_vehicle_identity(
         if data.get("input_binding") != expected and wmi != prepared["identifier"][:3]:
             conflicts.append({"field": "identifier", "code": "result_binding_mismatch", "result_index": index})
             continue
+        supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
+        if not isinstance(supplied_evidence, list) or any(not isinstance(item, dict) for item in supplied_evidence):
+            return invalid("reconcile_vehicle_identity", "results.evidence")
         lineage = _source_lineage(row, index)
         row_variants, error = _reconciliation_variants(row, data, lineage, index)
         if error:
@@ -425,9 +430,6 @@ def reconcile_vehicle_identity(
             row_variants[0]["model_year_candidates"] = row_years
             year_candidates.extend(item for item in row_years if item not in year_candidates)
         profile = _profile(row)
-        supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
-        if not isinstance(supplied_evidence, list) or any(not isinstance(item, dict) for item in supplied_evidence):
-            return invalid("reconcile_vehicle_identity", "results.evidence")
         for field in FIELDS:
             if profile.get(field) not in (None, "") and (
                 not wmi or field in {"make", "manufacturer", "country", "manufacturer_country", "vehicle_type"}

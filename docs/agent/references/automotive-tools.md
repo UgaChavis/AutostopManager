@@ -101,3 +101,26 @@ Release/rollback — [deployment](deployment.md); current/previous coherent tupl
 Общие поля результата, происхождение, границы применения и полномочия — [E1](../modules/E1.md).
 input_binding — односторонний SHA(kind:normalized_identifier); в технические отчёты его не сохраняй.
 Reuse проверяет binding/kind и relevant engine/KPP/date/market контекст до provider call.
+
+Числовые catalog IDs проверяются до преобразования: неподходящий тип, нечисловой
+Unicode и превышение предела integer parsing возвращают существующий отказ.
+Нулевые category IDs и допустимые положительные decimal IDs сохраняются.
+Неизвестные типы relation/document kind остаются непроверенными свидетельствами.
+
+`field_statuses` может содержать строковый статус либо объект с `status`.
+`disputed` блокирует vehicle lookup в обеих формах; readiness модификации требует
+`supported` для model_year, engine, transmission и market. Неподдерживаемая форма
+карты статусов не подтверждает readiness модификации. Эти признаки не дают
+права записи в CRM и не подтверждают точную применимость детали.
+Спорные поля исключаются из manual search queries в обеих формах статуса;
+спорная модель также исключает её canonical model_family, сохраняя отдельные family candidates.
+Supersession учитывает объявленное направление `from_to`/`to_from`; ветви сравниваются
+по нормализованному номеру и бренду. Разные подтверждённые замены одного исходного
+номера сохраняются как конфликт, а raw endpoints остаются в результате.
+Пустой результат нормализации номера не устанавливает primary OEM/supersession
+и не считается совпадением двух endpoints.
+
+Локальная нехватка HTTP worker или соединений возвращает существующие
+`provider_busy`/`provider_executor_unavailable` без автоматического повтора.
+Такой отказ не ухудшает и не восстанавливает состояние provider circuit;
+ошибки сети, ответа поставщика и их retry правила сохраняются.

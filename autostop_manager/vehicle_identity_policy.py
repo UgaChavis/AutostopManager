@@ -11,6 +11,10 @@ def _scope(scope: str) -> str:
     return "family" if scope == "family" else "vehicle"
 
 
+def _field_status(value: Any) -> Any:
+    return value.get("status") if isinstance(value, dict) else value
+
+
 def identity_has_blocking_conflicts(identity: dict[str, Any], scope: str = "vehicle") -> bool:
     """Honor explicit scopes; preserve conservative handling of legacy conflicts."""
     scope = _scope(scope)
@@ -32,9 +36,7 @@ def identity_has_blocking_conflicts(identity: dict[str, Any], scope: str = "vehi
             return True
     if scope == "vehicle":
         statuses = identity.get("field_statuses") or {}
-        if isinstance(statuses, dict) and any(
-            isinstance(item, dict) and item.get("status") == "disputed" for item in statuses.values()
-        ):
+        if isinstance(statuses, dict) and any(_field_status(item) == "disputed" for item in statuses.values()):
             return True
     return False
 
@@ -70,10 +72,12 @@ def build_parts_lookup_readiness(identity: dict[str, Any]) -> dict[str, Any]:
         and not identity_has_blocking_conflicts(identity, "vehicle")
     )
     statuses = identity.get("field_statuses") or {}
+    if not isinstance(statuses, dict):
+        statuses = {}
     modification_ready = bool(
         vehicle_ready
         and all(
-            (statuses.get(field) or {}).get("status") == "supported"
+            _field_status(statuses.get(field)) == "supported"
             for field in ("model_year", "engine", "transmission", "market")
         )
     )
