@@ -40,6 +40,12 @@ observation follows the original fixture contract: `case_id`, `client_replies`,
 `actions` with semantic `action` and optional string `data`, `outcome`, `claims`
 and `unresolved`. No returned field is executed.
 
+`client_replies.kind` describes the meaning of the draft message. A semantic
+`handoff` closing does not request the native Telegram effect kind `handoff`.
+The native client closing uses `kind=result`; the separately verified owner
+notification supplies the handoff receipt. Review an ambiguous semantic label
+manually and check native recipient, effect kind and receipts independently.
+
 `score` reports clear policy violations, missing cases and semantic checks that
 need expert review. Alternative action labels are reviewed for meaning rather
 than automatically called behaviour failures. The supplied role/full skill

@@ -1641,7 +1641,8 @@
           "timer.create"
         ],
         "allowed_outcomes": [
-          "answered"
+          "answered",
+          "handoff"
         ]
       },
       "hard_assertions": {
@@ -1705,7 +1706,8 @@
           "timer.create"
         ],
         "allowed_outcomes": [
-          "answered"
+          "answered",
+          "handoff"
         ]
       },
       "hard_assertions": {
