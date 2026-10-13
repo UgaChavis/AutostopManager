@@ -70,6 +70,9 @@ def test_public_request_rejects_vin_redirect_before_next_connection(monkeypatch:
         def getheaders(self) -> list[tuple[str, str]]:
             return [("Location", "/%25255A%25255A%25255A00000000000000")]
 
+        def close(self) -> None:
+            self.closed = True
+
     class FakeConnection:
         def __init__(self, *_args: object) -> None:
             pass

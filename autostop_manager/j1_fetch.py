@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 from html.parser import HTMLParser
 import http.client
+import io
 import ipaddress
 import json
 import math
@@ -73,12 +74,12 @@ _RETRYABLE_DOCUMENT_ERRORS = frozenset(
 )
 
 
-def contains_sensitive(value: str) -> bool:
+def contains_sensitive(value: str, *, include_vin: bool = True) -> bool:
     """Reject sensitive user input before sending or persisting it."""
 
     decoded = _decode_percent_layers(value)
     return bool(
-        any(_looks_like_vin(match.group()) for match in _VIN.finditer(decoded))
+        (include_vin and any(_looks_like_vin(match.group()) for match in _VIN.finditer(decoded)))
         or any(pattern.search(decoded) for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET))
     )
 
@@ -153,14 +154,15 @@ def _hostname_contains_sensitive(host: str) -> bool:
     return any(_VIN_TOKEN.fullmatch(label) and _is_full_url_vin(label) for label in host.casefold().split("."))
 
 
-def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS) -> str:
+def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS, include_vin: bool = True) -> str:
     text = str(value or "")[: max(0, limit * 2)]
-    text = _VIN.sub(
-        lambda match: (
-            "[redacted]" if _looks_like_vin(match.group()) and _is_full_url_vin(match.group()) else match.group()
-        ),
-        text,
-    )
+    if include_vin:
+        text = _VIN.sub(
+            lambda match: (
+                "[redacted]" if _looks_like_vin(match.group()) and _is_full_url_vin(match.group()) else match.group()
+            ),
+            text,
+        )
     for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET):
         text = pattern.sub("[redacted]", text)
     return text[:limit]
@@ -217,13 +219,67 @@ def _public_address(host: str, port: int) -> str:
     return sorted(addresses)[0]
 
 
+def _deadline_timeout(timeout: float | None, deadline: float | None) -> float | None:
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("public_http_deadline")
+    return min(timeout, remaining) if timeout is not None else remaining
+
+
+class _DeadlineReader(io.RawIOBase):
+    """Apply a wall deadline to every raw read, including headers and chunks."""
+
+    def __init__(self, sock: socket.socket, deadline: float) -> None:
+        super().__init__()
+        self._raw = sock.makefile("rb", buffering=0)
+        self._sock = sock
+        self._deadline = deadline
+        self._idle_timeout = sock.gettimeout()
+
+    def readable(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return self._raw.fileno()
+
+    def readinto(self, buffer: Any) -> int | None:
+        self._sock.settimeout(_deadline_timeout(self._idle_timeout, self._deadline))
+        return self._raw.readinto(buffer)
+
+    def close(self) -> None:
+        try:
+            self._raw.close()
+        finally:
+            super().close()
+
+
+def _deadline_response_class(deadline: float) -> type[http.client.HTTPResponse]:
+    class Response(http.client.HTTPResponse):
+        def __init__(
+            self, sock: socket.socket, debuglevel: int = 0, method: str | None = None, url: str | None = None
+        ) -> None:
+            super().__init__(sock, debuglevel=debuglevel, method=method, url=url)
+            assert self.fp is not None
+            self.fp.close()
+            self.fp = io.BufferedReader(_DeadlineReader(sock, deadline))
+
+    return Response
+
+
 class _PinnedHTTP(http.client.HTTPConnection):
     def __init__(self, host: str, ip: str, port: int, timeout: float) -> None:
         super().__init__(host, port, timeout=timeout)
         self._pinned_ip = ip
+        self._j1_deadline: float | None = None
 
     def connect(self) -> None:
-        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), _deadline_timeout(self.timeout, self._j1_deadline)
+        )
+        if self._j1_deadline is not None:
+            self.sock.settimeout(_deadline_timeout(self.sock.gettimeout(), self._j1_deadline))
 
 
 class _PinnedHTTPS(http.client.HTTPSConnection):
@@ -231,13 +287,23 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
         self._j1_ssl_context = ssl.create_default_context()
         super().__init__(host, port, timeout=timeout, context=self._j1_ssl_context)
         self._pinned_ip = ip
+        self._j1_deadline: float | None = None
 
     def connect(self) -> None:
-        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        sock = socket.create_connection(
+            (self._pinned_ip, self.port), _deadline_timeout(self.timeout, self._j1_deadline)
+        )
         try:
+            if self._j1_deadline is not None:
+                sock.settimeout(_deadline_timeout(sock.gettimeout(), self._j1_deadline))
             self.sock = self._j1_ssl_context.wrap_socket(sock, server_hostname=self.host)
+            if self._j1_deadline is not None:
+                self.sock.settimeout(_deadline_timeout(self.sock.gettimeout(), self._j1_deadline))
         except Exception:
             sock.close()
+            if self.sock is not None:
+                self.sock.close()
+                self.sock = None
             raise
 
 
@@ -253,13 +319,17 @@ def _request_public(
     if not current:
         raise ValueError("unsafe_url")
     for _ in range(4):
+        deadline = time.monotonic() + timeout
         parsed = urlsplit(current)
         host = parsed.hostname or ""
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         ip = _public_address(host, port)
-        connection: http.client.HTTPConnection = (
+        connection = (
             _PinnedHTTPS(host, ip, port, timeout) if parsed.scheme == "https" else _PinnedHTTP(host, ip, port, timeout)
         )
+        connection._j1_deadline = deadline
+        connection.response_class = _deadline_response_class(deadline)
+        response: http.client.HTTPResponse | None = None
         try:
             target = parsed.path or "/"
             if parsed.query:
@@ -299,7 +369,11 @@ def _request_public(
                 raise ValueError("document_too_large")
             return status, headers, body, current
         finally:
-            connection.close()
+            try:
+                if response is not None:
+                    response.close()
+            finally:
+                connection.close()
     raise ValueError("too_many_redirects")
 
 

@@ -6,11 +6,13 @@ import json
 from types import SimpleNamespace
 from pathlib import Path
 import stat
+import socket
+from typing import cast
 import subprocess
 
 import pytest
 
-from autostop_manager import j1_browser, j1_ocr
+from autostop_manager import j1_browser, j1_browser_renderer, j1_fetch, j1_ocr
 
 
 class _ChunkSocket:
@@ -251,3 +253,167 @@ def test_ocr_pipeline_redacts_sensitive_text_and_rejects_empty_result(monkeypatc
         "retryable": False,
         "extraction_method": "pdf_ocr",
     }
+
+
+@pytest.mark.parametrize(
+    "char_limit,page_text,expected_pages",
+    [(80, b"Technical text. " * 6, 1), (80, b"Technical text. " * 2, 3), (1000, b"Technical text. " * 2, 10)],
+)
+def test_ocr_reports_only_pages_read_before_the_character_budget(monkeypatch, char_limit, page_text, expected_pages):
+    monkeypatch.setattr(j1_ocr, "_ocr_languages_available", lambda: True)
+    monkeypatch.setattr(j1_ocr, "_prepare_workdir", lambda *_args: None)
+    extracted = []
+
+    def run(argv, *, timeout, stdout=None):
+        if argv[0] == "pdftoppm":
+            for page in range(1, 11):
+                Path(f"{argv[-1]}-{page:02}.jpg").write_bytes(b"synthetic image")
+        else:
+            extracted.append(argv[1])
+            stdout.write(page_text)
+        return True
+
+    monkeypatch.setattr(j1_ocr, "_run", run)
+    result = j1_ocr.extract_scanned_pdf(b"%PDF-1.4 synthetic", max_pages=10, max_chars=char_limit)
+    assert result["ok"] is True
+    assert len(extracted) == expected_pages
+    assert result["pages_processed"] == expected_pages
+
+
+class _BudgetWire:
+    def __init__(self):
+        self.payload = b""
+
+    def sendall(self, value):
+        self.payload += value
+
+    def recv(self, size):
+        result, self.payload = self.payload[:size], self.payload[size:]
+        return result
+
+
+@pytest.mark.parametrize("symbol", ["x", "я", "😀", "\x01", '"', "\\"])
+def test_browser_character_budget_survives_utf8_and_json_wire_expansion(symbol):
+    text = symbol * j1_browser.MAX_TEXT_CHARS
+    prefix = "https://example.org/"
+    url = prefix + "😀" * (2048 - len(prefix))
+    title = "😀" * 200
+    rendered = {
+        "ok": True,
+        "schema": j1_browser_renderer.SCHEMA,
+        "url": url,
+        "title": title,
+        "text": text,
+        "kind": "browser",
+        "extraction_method": "browser_dom",
+    }
+    wire = _BudgetWire()
+    j1_browser_renderer._write_response(cast(socket.socket, wire), rendered)
+    received = json.loads(j1_browser._read_message(cast(socket.socket, wire)))
+    assert received == rendered
+    normalized = j1_browser._normalize_response(received, requested_url=url, max_chars=j1_browser.MAX_TEXT_CHARS)
+    assert normalized["ok"] is True
+    assert normalized["text"] == text
+    assert normalized["title"] == title
+    assert normalized["url"] == url
+
+
+def test_browser_response_still_rejects_unbounded_payload():
+    wire = _BudgetWire()
+    j1_browser_renderer._write_response(
+        cast(socket.socket, wire), {"ok": True, "text": "x" * (j1_browser_renderer._MAX_RESPONSE_BYTES + 1)}
+    )
+    result = json.loads(j1_browser._read_message(cast(socket.socket, wire)))
+    assert result["ok"] is False
+    assert result["error"] == "browser_response_too_large"
+
+
+@pytest.mark.parametrize("operation", ["revision", "status"])
+def test_browser_release_symlink_loop_returns_structured_unavailable(tmp_path, monkeypatch, operation):
+    release = tmp_path / "release"
+    release.symlink_to("release")
+    if operation == "revision":
+        assert j1_browser.active_release_revision(str(release)) == ("", "browser_release_revision_unavailable")
+    else:
+        monkeypatch.setenv("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", str(release))
+        result = j1_browser.browser_status()
+        assert result["browser_ready"] is False
+        assert result["browser_reason"] == "browser_release_revision_unavailable"
+
+
+class _RequestPeer:
+    def __init__(self, request):
+        self.request = request
+        self.response = b""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def settimeout(self, _timeout):
+        pass
+
+    def recv(self, size):
+        result, self.request = self.request[:size], self.request[size:]
+        return result
+
+    def sendall(self, value):
+        self.response += value
+
+
+@pytest.mark.parametrize("symbol", ["x", "я", "😀"])
+@pytest.mark.parametrize("component", ["path", "query"])
+def test_native_browser_accepts_same_size_unicode_url_over_bounded_request_wire(monkeypatch, symbol, component):
+    prefix = "https://example.org/" if component == "path" else "https://example.org/?term="
+    url = prefix + symbol * (2048 - len(prefix))
+    assert len(url) == 2048
+    assert j1_fetch.public_url(url) == url
+    rendered_urls = []
+    request_sizes = []
+    server = j1_browser_renderer.RendererServer("/tmp/synthetic-j1-wire.sock")
+
+    def chromium(target, **_kwargs):
+        rendered_urls.append(target)
+        return b"<p>Public technical evidence with sufficient words. " + b"x" * 200 + b"</p>", ""
+
+    class NativeSocket:
+        def __init__(self):
+            self.response = b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, _timeout):
+            pass
+
+        def connect(self, target):
+            assert target == "/tmp/synthetic-j1-wire.sock"
+
+        def sendall(self, value):
+            request_sizes.append(len(value))
+            peer = _RequestPeer(value)
+            server._handle_connection(cast(socket.socket, peer))
+            self.response = peer.response
+
+        def recv(self, size):
+            result, self.response = self.response[:size], self.response[size:]
+            return result
+
+    monkeypatch.setattr(j1_browser, "isolation_verified", lambda: True)
+    monkeypatch.setattr(j1_browser_renderer, "_peer_allowed", lambda _connection: True)
+    monkeypatch.setattr(j1_browser_renderer, "_run_chromium", chromium)
+    monkeypatch.setattr(j1_browser.socket, "socket", lambda *_args, **_kwargs: NativeSocket())
+    result = j1_browser.render_page(url, max_chars=200, timeout_seconds=3, socket_path="/tmp/synthetic-j1-wire.sock")
+    assert result["ok"] is True, {"result": result, "wire_bytes": request_sizes[0]}
+    assert result["url"] == url
+    assert rendered_urls == [url]
+
+
+def test_browser_request_still_rejects_unbounded_wire():
+    peer = _RequestPeer(b"x" * (j1_browser_renderer.MAX_REQUEST_BYTES + 1) + b"\n")
+    assert j1_browser_renderer._read_line(cast(socket.socket, peer)) == b""

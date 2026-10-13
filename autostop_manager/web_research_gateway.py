@@ -15,6 +15,7 @@ import re
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .j1_fetch import contains_sensitive, contains_unsafe_url, public_url, redact_sensitive
 from .j1_fetch import fetch_browser_document as fetch_j1_browser_page
 from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS, _ddg_search
 
@@ -196,22 +197,15 @@ def _public_page_url(value: Any) -> str:
     url = str(value or "").strip()
     if not url or len(url) > 2048 or _VIN_LIKE_TOKEN.search(unquote(unquote(url))) or _contains_private_contact(url):
         return ""
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname
-        username = parsed.username
-        password = parsed.password
-    except ValueError:
-        return ""
-    if parsed.scheme.casefold() not in {"http", "https"} or not host or username is not None or password is not None:
+    if not public_url(url):
         return ""
     return url
 
 
 def _public_page_text(value: Any, *, limit: int) -> tuple[str, bool]:
-    text = _compact(value, limit=limit)
+    text = " ".join(str(value or "").split())
     redacted, count = _VIN_LIKE_TOKEN.subn("[vin-redacted]", text)
-    return redacted, bool(count)
+    return redact_sensitive(redacted, limit=limit, include_vin=False), bool(count)
 
 
 def redact_vin_like_text(value: Any, *, limit: int = 1000) -> tuple[str, int]:
@@ -419,7 +413,17 @@ def _invalid_query_response(
     )
 
 
-def _contact_query_failure(*, capability: str, adapter: str) -> dict[str, Any]:
+def _private_query_failure(query: str, *, capability: str, adapter: str) -> dict[str, Any] | None:
+    # VIN removal remains supported; reject other private data before truncating
+    # or handing a query to either an injected adapter or the local fallback.
+    decoded = unquote(unquote(str(query or "")))
+    without_vin = _VIN_LIKE_TOKEN.sub(" ", decoded)
+    if _contains_private_contact(query):
+        code = "web_research_personal_contact_rejected"
+    elif contains_sensitive(without_vin, include_vin=False) or contains_unsafe_url(without_vin):
+        code = "web_research_private_query_rejected"
+    else:
+        return None
     return _gateway_response(
         ok=False,
         query="",
@@ -431,7 +435,7 @@ def _contact_query_failure(*, capability: str, adapter: str) -> dict[str, Any]:
         adapter=adapter,
         capability=capability,
         vin_redacted=False,
-        error={"code": "web_research_personal_contact_rejected", "retryable": False},
+        error={"code": code, "retryable": False},
     )
 
 
@@ -447,6 +451,8 @@ def normalize_web_research_response(
 ) -> dict[str, Any]:
     """Normalize plain CRM Web Research Gateway data or an ``invoke_web_research`` envelope to V1."""
 
+    if failure := _private_query_failure(query, capability=capability, adapter=adapter):
+        return failure
     safe_query, removed = _sanitize_query(query)
     normalized_domains = _normalize_domains(allowed_domains)
     normalized_limit = _bounded_int(limit, default=_DEFAULT_LIMIT, minimum=1, maximum=_MAX_LIMIT)
@@ -669,8 +675,8 @@ class CapabilityWebResearchGatewayAdapter:
         timeout_seconds: float,
         max_pages: int | None = None,
     ) -> dict[str, Any]:
-        if _contains_private_contact(query):
-            return _contact_query_failure(capability=capability, adapter="capability_adapter")
+        if failure := _private_query_failure(query, capability=capability, adapter="capability_adapter"):
+            return failure
         safe_query, removed = _sanitize_query(query)
         normalized_domains = _normalize_domains(allowed_domains)
         normalized_providers = _normalize_providers(providers)
@@ -864,8 +870,8 @@ class DuckDuckGoWebResearchGateway:
         providers: Sequence[str] | None,
         timeout_seconds: float,
     ) -> dict[str, Any]:
-        if _contains_private_contact(query):
-            return _contact_query_failure(capability=capability, adapter="local_duckduckgo_fallback")
+        if failure := _private_query_failure(query, capability=capability, adapter="local_duckduckgo_fallback"):
+            return failure
         safe_query, removed = _sanitize_query(query)
         normalized_domains = _normalize_domains(allowed_domains)
         if not safe_query:
@@ -1031,8 +1037,8 @@ def search_web_multi(
 ) -> dict[str, Any]:
     """Call generic CRM Web Research Gateway search through the installed read-only adapter."""
 
-    if _contains_private_contact(query):
-        return _contact_query_failure(capability=SEARCH_WEB_MULTI_CAPABILITY, adapter="gateway_boundary")
+    if failure := _private_query_failure(query, capability=SEARCH_WEB_MULTI_CAPABILITY, adapter="gateway_boundary"):
+        return failure
     safe_query, removed = _sanitize_query(query)
     domains = _normalize_domains(allowed_domains)
     provider_order = _normalize_providers(providers)
@@ -1162,8 +1168,10 @@ def research_part_public_evidence(
 ) -> dict[str, Any]:
     """Prefer CRM Web Research Gateway part evidence; use generic search only for a legacy adapter."""
 
-    if _contains_private_contact(query):
-        return _contact_query_failure(capability=RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY, adapter="gateway_boundary")
+    if failure := _private_query_failure(
+        query, capability=RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY, adapter="gateway_boundary"
+    ):
+        return failure
     safe_query, removed = _sanitize_query(query)
     domains = _normalize_domains(allowed_domains)
     provider_order = _normalize_providers(providers)

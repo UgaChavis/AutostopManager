@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$gate_dir/tmp"
+mkdir -p "$gate_dir/tmp" "$gate_dir/j1" "$gate_dir/j1-vin"
 export AUTOSTOP_MANAGER_DB="$gate_dir/preflight.sqlite3"
 export AUTOSTOP_MANAGER_ENV_FILE=/dev/null
 export COVERAGE_FILE="$gate_dir/.coverage"
@@ -28,6 +28,10 @@ export MYPY_CACHE_DIR="$gate_dir/mypy-cache"
 export RUFF_CACHE_DIR="$gate_dir/ruff-cache"
 export TMPDIR="$gate_dir/tmp"
 export PYTHONDONTWRITEBYTECODE=1
+export AUTOSTOP_J1_CACHE_DIR="$gate_dir/j1"
+export AUTOSTOP_J1_VIN_CACHE_DIR="$gate_dir/j1-vin"
+export AUTOSTOP_J1_VIN_RESEARCH_ENABLED=0
+export AUTOSTOP_J1_SEARXNG_URL=
 
 json_gate() {
   local name="$1"

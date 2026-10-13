@@ -31,7 +31,19 @@ static J1 reader без browser или большой research job. На404 эт
 Текст live HTML/PDF, ранее извлечённый текст и поисковый snippet — разные свидетельства;
 snippet и шаблон динамического OE-раздела не подтверждают прочитанный оригинальный номер.
 
+Общий веб-фасад и прямой J1 reader проверяют URL до передачи адаптеру: приватные адреса,
+нестандартные порты, контакты и секреты запрещены. Поисковый запрос с контактом,
+секретом или небезопасной встроенной ссылкой отклоняется без отправки и отражения
+исходного запроса. Прежнее удаление полного VIN из legacy search и обычные артикулы
+сохраняются; приватные данные из возвращённого текста также скрываются.
+
 Automotive context: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`; полный VIN, контакты и секреты не передаются. Automotive profile — до 12 запросов/60 страниц; общий — 30/300. Лимиты: 50 000 символов документа, cache 250 МБ/семь дней. `canonical_url` удаляет только tracking; дубли не индексируются. Sources: A — OEM/регулятор/TSB, B — component manufacturer, C — catalog, D — форум/контекст. D не доказательство; частота оценивается лишь по измеримой совокупности A/B, иначе `not_measured`. Отчёт различает `exact/analog/general`, доступ, confidence и gaps.
+
+Название неизвестного PDF может помочь поиску, но не подтверждает авторитет источника:
+обычный отчёт оставляет такой heuristic в D с `unverified_technical_pdf`. Проверенные
+источники A/B сохраняют свой уровень. Независимость источников учитывает canonical URL
+и известные алиасы одного домена. Завершение обычной job согласовано с принятой отменой
+и добавлением запросов; сетевое чтение выполняется вне этой короткой транзакции.
 
 Обычный `start` создаёт job в `AUTOSTOP_J1_CACHE_DIR`; сеть затем читает worker.
 Отдельная VIN-job хранит приватные основания в tmpfs. Status/results/report не ищут и не получают
@@ -49,6 +61,18 @@ Jobs не являются долговременной customer memory. Лок�
 ## Runtime и guards
 
 Static search использует loopback `AUTOSTOP_J1_SEARXNG_URL`, может иметь fallback. Fetch HTML/PDF соблюдает robots/rate limits и URL/privacy guards. Static J1 работает без browser. Browser использует Unix socket renderer и отдельный egress proxy; запрещены login/cookies/CAPTCHA. Проверяются Docker networks, DNS/private-address guards, socket и SHA-bound marker `root:root 0600`. Отсутствие prerequisite отключает browser path; marker вручную не создаётся.
+
+Static HTTP ограничивает время отдельного обмена, включая чтение заголовков, тела,
+chunk sizes и trailers; непрерывная передача по байту не продлевает этот deadline.
+Это не общий deadline DNS, всех redirect/robots checks и rate-limit ожиданий.
+Ответ закрывается и при отказе от чтения тела. OCR сообщает число реально обработанных
+страниц, а не всех отрендеренных перед остановкой по лимиту символов. Browser IPC
+принимает допустимый Unicode в пределах прежних символьных лимитов и конечных byte caps.
+
+Для локальных проверок изолируй оба `AUTOSTOP_J1_CACHE_DIR` и `AUTOSTOP_J1_VIN_CACHE_DIR`:
+ordinary worker вызывает private housekeeping даже при выключенном VIN feature flag.
+`release-gates.sh` задаёт disposable paths до callbacks и отключает унаследованный
+SearXNG endpoint; специальные VIN tests сами создают свои synthetic tmpfs fixtures.
 
 VIN-mode допускает только scoped static fetch с исходным VIN. URL с VIN в browser запрещён;
 обезличенные страницы могут использовать прежний attested browser. Наличие feature flag или
