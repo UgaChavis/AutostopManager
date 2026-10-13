@@ -17,6 +17,7 @@ import sqlite3
 import stat
 import struct
 import sys
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -66,6 +67,7 @@ MONITOR_VOICE_STAGE_CLEANUP_RETRIES = 3
 MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS = 15
 DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
+DAEMON_CLEANUP_TIMEOUT_SECONDS = 15.0
 OWNER_NOTIFICATION_KINDS = ("help", "approval", "error", "completion")
 OWNER_NOTIFICATION_HISTORY_LIMIT = 20
 OWNER_NOTIFICATION_HISTORY_SECONDS = 24 * 60 * 60
@@ -4319,7 +4321,54 @@ async def _route_or_capture_incoming_event(
     await _capture_incoming_event(monitor, event)
 
 
-async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) -> None:
+def _abort_daemon_cleanup() -> None:
+    # Cleanup may be stuck behind a shielded task, cancellation-resistant
+    # handler, or asyncio.run's final task cancellation. Exit the service rather
+    # than leave an active process with a closed IPC listener. No action replays.
+    try:
+        descriptor = sys.stderr.fileno()
+        os.set_blocking(descriptor, False)
+        os.write(descriptor, b"telegram_bridge_cleanup_timeout=true\n")
+    except (OSError, ValueError):
+        pass
+    finally:
+        os._exit(1)
+
+
+def _daemon_cleanup_watchdog() -> threading.Timer:
+    watchdog = threading.Timer(DAEMON_CLEANUP_TIMEOUT_SECONDS, _abort_daemon_cleanup)
+    watchdog.daemon = True
+    return watchdog
+
+
+def _start_daemon_cleanup_watchdog(watchdog: threading.Timer) -> None:
+    if watchdog.ident is None:
+        watchdog.start()
+
+
+def _unlink_daemon_socket(path: Path, identity: tuple[int, int] | None) -> None:
+    # An old process must not remove a listener installed by its replacement.
+    try:
+        current = path.lstat()
+        if identity == (current.st_dev, current.st_ino):
+            path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+async def _await_daemon_task(task: asyncio.Future[Any]) -> None:
+    try:
+        await task
+    except BridgeError:
+        raise
+    except Exception as exc:
+        raise BridgeError("telegram_transport_disconnected") from exc
+
+
+async def run_daemon(
+    config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
+) -> None:
+    watchdog = _cleanup_watchdog or _daemon_cleanup_watchdog()
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
     config.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4388,52 +4437,69 @@ async def run_daemon(config: TelegramConfig, *, monitor_incoming: bool = False) 
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
     except BaseException:
-        if isinstance(inbound_monitor, DurableInboundMonitor):
-            inbound_monitor.inbox.close()
-        with suppress(Exception):
-            await client.disconnect()
+        _start_daemon_cleanup_watchdog(watchdog)
+        try:
+            if isinstance(inbound_monitor, DurableInboundMonitor):
+                inbound_monitor.inbox.close()
+            with suppress(Exception):
+                await client.disconnect()
+        finally:
+            if _cleanup_watchdog is None:
+                watchdog.cancel()
         raise
     if isinstance(inbound_monitor, DurableInboundMonitor):
         inbound_monitor.transport_ready = True
         inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
         inbound_monitor.request_reconciliation()
-    server = await asyncio.start_unix_server(
-        lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
-        path=str(config.socket_path),
-    )
-    os.chmod(config.socket_path, 0o600)
     tasks: list[asyncio.Task[Any]] = []
+    socket_identity: tuple[int, int] | None = None
     try:
+        server = await asyncio.start_unix_server(
+            lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
+            path=str(config.socket_path),
+        )
+        socket_stat = config.socket_path.lstat()
+        socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
+        os.chmod(config.socket_path, 0o600)
         async with server:
-            tasks.append(asyncio.create_task(server.serve_forever()))
-            if isinstance(inbound_monitor, DurableInboundMonitor):
-                tasks.append(asyncio.create_task(_reconcile_incoming_loop(client, config, inbound_monitor)))
-                tasks.append(asyncio.create_task(_await_intake_failure(inbound_monitor)))
-            disconnected = getattr(client, "disconnected", None)
-            if disconnected is not None:
-                tasks.append(asyncio.ensure_future(asyncio.shield(disconnected)))
-                done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for finished in done:
-                    await finished
-                raise BridgeError("telegram_transport_disconnected")
-            await tasks[0]
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        if isinstance(inbound_monitor, DurableInboundMonitor):
-            inbound_monitor.transport_ready = False
             try:
-                with suppress(sqlite3.Error, InboxError, OSError):
-                    inbound_monitor.inbox.set_health(
-                        component="telegram", state="offline", error_code="telegram_transport_disconnected"
-                    )
+                tasks.append(asyncio.create_task(server.serve_forever()))
+                if isinstance(inbound_monitor, DurableInboundMonitor):
+                    tasks.append(asyncio.create_task(_reconcile_incoming_loop(client, config, inbound_monitor)))
+                    tasks.append(asyncio.create_task(_await_intake_failure(inbound_monitor)))
+                disconnected = getattr(client, "disconnected", None)
+                if disconnected is not None:
+                    tasks.append(asyncio.ensure_future(asyncio.shield(disconnected)))
+                    done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for finished in done:
+                        await _await_daemon_task(finished)
+                    raise BridgeError("telegram_transport_disconnected")
+                await tasks[0]
             finally:
-                inbound_monitor.inbox.close()
+                # Server.__aexit__ can itself await accepted clients. Arm the
+                # deadline and remove only our pathname before that await.
+                _start_daemon_cleanup_watchdog(watchdog)
+                _unlink_daemon_socket(config.socket_path, socket_identity)
+    finally:
+        _start_daemon_cleanup_watchdog(watchdog)
         try:
+            _unlink_daemon_socket(config.socket_path, socket_identity)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if isinstance(inbound_monitor, DurableInboundMonitor):
+                inbound_monitor.transport_ready = False
+                try:
+                    with suppress(sqlite3.Error, InboxError, OSError):
+                        inbound_monitor.inbox.set_health(
+                            component="telegram", state="offline", error_code="telegram_transport_disconnected"
+                        )
+                finally:
+                    inbound_monitor.inbox.close()
             await client.disconnect()
         finally:
-            config.socket_path.unlink(missing_ok=True)
+            if _cleanup_watchdog is None:
+                watchdog.cancel()
 
 
 async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
@@ -5061,7 +5127,15 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
     try:
         if args.command == "daemon":
             config = _config_from_args(args)
-            asyncio.run(run_daemon(config, monitor_incoming=_monitor_incoming_from_args(args)))
+            watchdog = _daemon_cleanup_watchdog()
+            try:
+                asyncio.run(
+                    run_daemon(config, monitor_incoming=_monitor_incoming_from_args(args), _cleanup_watchdog=watchdog)
+                )
+            finally:
+                # Keep the deadline active through Runner shutdown: timing out
+                # an await of Telethon's shield does not stop its cleanup task.
+                watchdog.cancel()
             return 0
         if args.command == "job-subscribe":
             try:

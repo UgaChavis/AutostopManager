@@ -4566,7 +4566,8 @@ def test_owner_notification_cli_never_accepts_or_emits_a_target(monkeypatch, cap
 def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch) -> None:
     selected: list[bool] = []
 
-    async def daemon(_config, *, monitor_incoming):
+    async def daemon(_config, *, monitor_incoming, _cleanup_watchdog):
+        assert _cleanup_watchdog.daemon and not _cleanup_watchdog.is_alive()
         selected.append(monitor_incoming)
 
     monkeypatch.setattr(telegram_bridge, "_config_from_args", lambda args: SimpleNamespace(account=args.account))
