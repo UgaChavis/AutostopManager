@@ -109,9 +109,17 @@ def _require_quiescent(status: dict[str, Any]) -> None:
         raise AutomationError("automation_release_not_quiescent")
 
 
-def _wait_quiescent(client: AutomationControlClient, initial: dict[str, Any]) -> dict[str, Any]:
+def _wait_quiescent(client: AutomationControlClient, initial: dict[str, Any], *, attempt_hash: str) -> dict[str, Any]:
     status = initial
     for attempt in range(50):
+        hold_state = status.get("global_hold")
+        if (
+            not isinstance(hold_state, dict)
+            or hold_state.get("enabled") is not True
+            or hold_state.get("reason") != "release"
+            or hold_state.get("attempt_hash") != attempt_hash
+        ):
+            raise AutomationError("automation_release_hold_ownership_lost")
         try:
             _require_quiescent(status)
         except AutomationError as exc:
@@ -176,7 +184,7 @@ def hold(*, release_attempt_key: str) -> dict[str, Any]:
             or hold_state.get("attempt_hash") != attempt_hash
         ):
             raise AutomationError("automation_release_hold_readback_failed")
-        readback = _wait_quiescent(client, readback)
+        readback = _wait_quiescent(client, readback, attempt_hash=attempt_hash)
         hold_state = readback["global_hold"]
         return {"ok": True, "mode": "socket", "quiescent": True, "global_hold": hold_state}
 

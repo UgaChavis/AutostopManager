@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import subprocess
@@ -450,3 +451,193 @@ def test_enable_readback_failure_restores_previous_enabled_and_active_state(tmp_
     assert runner.actual == "active"
     assert any(call[0] == "enable" for call in runner.calls)
     assert any(call[0] == "start" for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    "duration,expected_minutes",
+    [
+        ("1h 15min", 75),
+        ("1h 30min", 90),
+        ("23h 59min", 1439),
+        ("1d", 1440),
+        ("4500s", 75),
+        ("1min 30s", None),
+        ("1min 1ms", None),
+        ("1min 1us", None),
+        ("1h nonsense", None),
+        ("1h 15min trailing", None),
+        ("1h 15mins", None),
+        ("1h -15min", None),
+        ("infinity", None),
+    ],
+)
+def test_timer_duration_readback_is_complete_and_exact(tmp_path: Path, duration: str, expected_minutes: int | None):
+    def runner(command):
+        assert command[:2] == ["systemctl", "show"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n"
+                "NextElapseUSecRealtime=\nLastTriggerUSec=\nResult=success\n"
+                f"TimersMonotonic={{ OnUnitActiveUSec={duration} ; next_elapse=15min }}\n"
+            ),
+            stderr="",
+        )
+
+    controller = SystemTimerController(runner=runner, dropin_root=tmp_path)
+
+    assert controller.inspect("managed_pc_health")["state"]["period_minutes"] == expected_minutes
+
+
+@pytest.mark.parametrize(
+    "every_minutes,duration", [(75, "1h 15min"), (90, "1h 30min"), (1439, "23h 59min"), (1440, "1d")]
+)
+def test_compound_schedule_readback_accepts_the_exact_applied_period(tmp_path: Path, every_minutes: int, duration: str):
+    target = tmp_path / "autostop-managed-pc-health.timer.d" / "50-autostop-automation.conf"
+    calls = []
+
+    def runner(command):
+        calls.append(command[1])
+        if command[1] != "show":
+            assert command[1] in {"daemon-reload", "restart"}
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        observed_duration = duration if target.exists() else "15min"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n"
+                "NextElapseUSecRealtime=\nLastTriggerUSec=\nResult=success\n"
+                f"TimersMonotonic={{ OnUnitActiveUSec={observed_duration} ; next_elapse=15min }}\n"
+            ),
+            stderr="",
+        )
+
+    controller = SystemTimerController(runner=runner, dropin_root=tmp_path)
+
+    result = controller.set_schedule("managed_pc_health", every_minutes=every_minutes)
+
+    assert result["state"]["period_minutes"] == every_minutes
+    assert f"OnUnitActiveSec={every_minutes}min\n" in target.read_text(encoding="utf-8")
+    assert calls.count("daemon-reload") == calls.count("restart") == 1
+
+
+def _raise_timer_transport_failure(command, failure: str) -> None:
+    if failure == "timeout":
+        raise subprocess.TimeoutExpired(command, timeout=5)
+    raise OSError("synthetic timer transport unavailable")
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unavailable"])
+@pytest.mark.parametrize("failure_phase", ["apply", "restore-enable", "restore-start"])
+def test_enable_transport_failure_restores_state_or_reports_failed_rollback(
+    tmp_path: Path, failure: str, failure_phase: str
+):
+    state = {"enabled": True, "active": True}
+    calls = []
+
+    def runner(command):
+        action = command[1]
+        calls.append(action)
+        if action == "show":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "LoadState=loaded\n"
+                    f"ActiveState={'active' if state['active'] else 'inactive'}\n"
+                    f"UnitFileState={'enabled' if state['enabled'] else 'disabled'}\n"
+                    "Result=success\nTimersMonotonic={ OnUnitActiveUSec=15min ; next_elapse=15min }\n"
+                ),
+                stderr="",
+            )
+        if action == "disable":
+            state.update(enabled=False, active=False)
+            _raise_timer_transport_failure(command, failure)
+        elif action == "enable":
+            state["enabled"] = True
+            if failure_phase == "restore-enable":
+                _raise_timer_transport_failure(command, failure)
+        elif action == "start":
+            state["active"] = True
+            if failure_phase == "restore-start":
+                _raise_timer_transport_failure(command, failure)
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    controller = SystemTimerController(runner=runner, dropin_root=tmp_path)
+    error = "system_timer_apply_failed" if failure_phase == "apply" else "system_timer_rollback_failed"
+
+    with pytest.raises(AutomationError, match=error):
+        controller.set_enabled("managed_pc_health", enabled=False)
+
+    assert "disable" in calls and "enable" in calls
+    if failure_phase != "restore-enable":
+        assert "start" in calls
+    if failure_phase == "apply":
+        assert state == {"enabled": True, "active": True}
+        assert calls[-1] == "show"
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unavailable"])
+@pytest.mark.parametrize("failure_phase", ["apply-reload", "apply-restart", "restore-reload", "restore-restart"])
+@pytest.mark.parametrize("prior_present", [False, True])
+def test_schedule_transport_failure_restores_dropin_or_reports_failed_rollback(
+    tmp_path: Path, failure: str, failure_phase: str, prior_present: bool
+):
+    target = tmp_path / "autostop-managed-pc-health.timer.d" / "50-autostop-automation.conf"
+    original_content = b"# Previous operator settings\n[Timer]\nOnUnitActiveSec=15min\nAccuracySec=2min\n"
+    expected_sha256 = None
+    if prior_present:
+        target.parent.mkdir()
+        target.write_bytes(original_content)
+        target.chmod(0o640)
+        expected_sha256 = hashlib.sha256(original_content).hexdigest()
+    calls = []
+
+    def runner(command):
+        action = command[1]
+        calls.append(action)
+        if action == "show":
+            changed = target.exists() and b"OnUnitActiveSec=20min" in target.read_bytes()
+            period = 20 if changed else 15
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nResult=success\n"
+                    f"TimersMonotonic={{ OnUnitActiveUSec={period}min ; next_elapse=15min }}\n"
+                ),
+                stderr="",
+            )
+        if action == "daemon-reload":
+            count = calls.count(action)
+            if (failure_phase == "apply-reload" and count == 1) or (failure_phase == "restore-reload" and count == 2):
+                _raise_timer_transport_failure(command, failure)
+            if failure_phase == "restore-reload" and count == 1:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        elif action == "restart":
+            count = calls.count(action)
+            if (failure_phase == "apply-restart" and count == 1) or (failure_phase == "restore-restart" and count == 2):
+                _raise_timer_transport_failure(command, failure)
+            if failure_phase == "restore-restart" and count == 1:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    controller = SystemTimerController(runner=runner, dropin_root=tmp_path)
+    error = "system_timer_apply_failed" if failure_phase.startswith("apply-") else "system_timer_rollback_failed"
+
+    with pytest.raises(AutomationError, match=error):
+        controller.set_schedule("managed_pc_health", every_minutes=20, expected_dropin_sha256=expected_sha256)
+
+    assert target.exists() is prior_present
+    if prior_present:
+        assert target.read_bytes() == original_content
+        assert target.stat().st_mode & 0o777 == 0o640
+    assert calls.count("daemon-reload") == 2
+    if failure_phase.startswith("apply-"):
+        assert calls[-1] == "show"

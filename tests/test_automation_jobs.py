@@ -287,6 +287,90 @@ def test_unknown_send_with_stored_idempotency_is_read_back_then_acked(tmp_path: 
     assert all(item["value"] is None for item in store.get_cursors(job_id=job["job_id"]).values())
 
 
+def test_known_pre_send_rejection_retries_digest_with_original_key_and_body(monkeypatch, tmp_path):
+    store, service, job, claim = claimed_digest_run(tmp_path)
+    source = FakeSource()
+    requests = []
+    applies = []
+
+    def local_request(_socket, payload, *, timeout_seconds):
+        requests.append(dict(payload))
+        if payload["operation"] == "owner_notification_readback":
+            return {
+                "ok": True,
+                "verified": True,
+                "message_id": payload["message_id"],
+                "text_sha256": payload["expected_text_sha256"],
+            }
+        assert payload["operation"] == "send_owner_notification"
+        if payload["mode"] == "dry_run":
+            return {
+                "ok": True,
+                "mode": "dry_run",
+                "text_sha256": hashlib.sha256(payload["text"].encode()).hexdigest(),
+                "contract_token": f"contract-{len(requests)}",
+            }
+        applies.append(dict(payload))
+        if len(applies) == 1:
+            return {"ok": False, "error": "conversation_changed_since_dry_run"}
+        return {"ok": True, "verified": True, "message_id": 42}
+
+    monkeypatch.setattr("autostop_manager.automation_jobs.send_local_request", local_request)
+    notifier = TelegramOwnerNotifier(tmp_path / "unused.sock")
+    executor = CrmDigestExecutor(store=store, source=source, notifier=notifier)
+
+    first = executor(claim)
+
+    assert first == {
+        "ok": False,
+        "result_code": "automation_notification_preview_stale",
+        "outcome_uncertain": False,
+    }
+    assert store.get_cursors(job_id=job["job_id"])["delivery_state"]["value"] == "prepared"
+    assert not any(call[0] == "ack" for call in source.calls)
+    assert store.finish_run(
+        job_id=job["job_id"],
+        run_id=claim["run_id"],
+        owner="worker-a",
+        fencing_token=claim["fencing_token"],
+        succeeded=False,
+        result_code=first["result_code"],
+    )
+    command(service, "run_now", {"job_id": job["job_id"]}, "retry-known-pre-send-0001", job["revision"])
+    second_claim = store.claim_next_run(owner="worker-a")
+    assert second_claim
+
+    second = executor({**second_claim, "lease_owner": "worker-a"})
+
+    assert second["ok"] is True
+    assert len(applies) == 2
+    assert applies[0]["idempotency_key"] == applies[1]["idempotency_key"]
+    assert applies[0]["text"] == applies[1]["text"]
+    assert applies[0]["contract_token"] != applies[1]["contract_token"]
+    assert ("ack", "full-window-ack") in source.calls
+    assert all(item["value"] is None for item in store.get_cursors(job_id=job["job_id"]).values())
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"ok": False, "error": "telegram_operation_failed"},
+        {"ok": False, "error": "send_readback_failed"},
+        {"ok": False, "error": "idempotency_key_conflict"},
+        {"error": "conversation_changed_since_dry_run"},
+        {"ok": False, "error": ["conversation_changed_since_dry_run"]},
+    ],
+)
+def test_owner_notifier_keeps_unproven_apply_rejections_uncertain(monkeypatch, tmp_path, response):
+    monkeypatch.setattr("autostop_manager.automation_jobs.send_local_request", lambda *_args, **_kwargs: response)
+    notifier = TelegramOwnerNotifier(tmp_path / "unused.sock")
+
+    with pytest.raises(AutomationJobError, match="automation_telegram_outcome_unknown") as error:
+        notifier.apply("digest body", contract_token="token", idempotency_key="digest-review-key")
+
+    assert error.value.outcome_uncertain is True
+
+
 def test_revision_change_during_preview_aborts_before_apply_or_ack(tmp_path: Path):
     store, service, job, claim = claimed_digest_run(tmp_path)
     source = FakeSource()

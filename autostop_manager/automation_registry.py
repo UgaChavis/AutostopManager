@@ -163,7 +163,7 @@ def is_in_active_window(at: datetime, *, timezone: str, active_window: Any) -> b
     return current >= start or current < end
 
 
-def _local_boundary(local: datetime, *, start_seconds: int, add_days: int = 0) -> datetime:
+def _local_boundary(local: datetime, *, start_seconds: int, add_days: int = 0, fold: int = 0) -> datetime:
     boundary_date = local.date() + timedelta(days=add_days)
     candidate = datetime(
         boundary_date.year,
@@ -172,7 +172,7 @@ def _local_boundary(local: datetime, *, start_seconds: int, add_days: int = 0) -
         start_seconds // 3600,
         (start_seconds % 3600) // 60,
         tzinfo=local.tzinfo,
-        fold=0,
+        fold=fold,
     )
     # Normalize nonexistent local times (DST spring-forward) through UTC.
     return candidate.astimezone(UTC).astimezone(local.tzinfo)
@@ -188,14 +188,36 @@ def next_active_time(at: datetime, *, timezone: str, active_window: Any) -> date
     local = candidate.astimezone(zone)
     if is_in_active_window(candidate, timezone=timezone, active_window=window):
         return candidate
-    current = local.hour * 3600 + local.minute * 60 + local.second
     start = _clock_seconds(window["start"])
     end = _clock_seconds(window["end"])
-    add_days = 1 if start < end and current >= end else 0
-    boundary = _local_boundary(local, start_seconds=start, add_days=add_days).astimezone(UTC)
-    if boundary <= candidate:
-        boundary = _local_boundary(local, start_seconds=start, add_days=add_days + 1).astimezone(UTC)
-    return boundary
+    boundaries = set()
+    # Today's window may be over while tomorrow's disappears in a clock gap.
+    for add_days in (0, 1, 2):
+        for seconds in (start, end):
+            folds = [
+                _local_boundary(local, start_seconds=seconds, add_days=add_days, fold=fold).astimezone(UTC)
+                for fold in (0, 1)
+            ]
+            if seconds == start:
+                boundaries.update(folds)
+            lower, upper = sorted(int(value.timestamp()) for value in folds)
+            if lower == upper:
+                continue
+            # A gap/fold can open the window at the offset transition itself,
+            # even when the configured opening is nonexistent or already past.
+            offset_before = datetime.fromtimestamp(lower, UTC).astimezone(zone).utcoffset()
+            while upper - lower > 1:
+                midpoint = (lower + upper) // 2
+                if datetime.fromtimestamp(midpoint, UTC).astimezone(zone).utcoffset() == offset_before:
+                    lower = midpoint
+                else:
+                    upper = midpoint
+            boundaries.add(datetime.fromtimestamp(upper, UTC))
+    return min(
+        boundary
+        for boundary in boundaries
+        if boundary > candidate and is_in_active_window(boundary, timezone=timezone, active_window=window)
+    )
 
 
 def next_scheduled_time(
@@ -599,12 +621,12 @@ class AutomationStore:
         )
 
     @staticmethod
-    def _require_job(connection: sqlite3.Connection, job_id: str) -> sqlite3.Row:
+    def _require_job(connection: sqlite3.Connection, job_id: str, *, include_archived: bool = False) -> sqlite3.Row:
         if JOB_ID_PATTERN.fullmatch(job_id) is None:
             raise AutomationError("automation_job_id_invalid")
         row = connection.execute(
-            "SELECT * FROM manager_automations WHERE job_id = ? AND archived_at IS NULL",
-            (job_id,),
+            "SELECT * FROM manager_automations WHERE job_id = ? AND (? OR archived_at IS NULL)",
+            (job_id, include_archived),
         ).fetchone()
         if not row:
             raise AutomationError("automation_job_not_found")
@@ -836,8 +858,7 @@ class AutomationStore:
         trigger_kind: str = "manual",
     ) -> dict[str, Any]:
         row = self._require_job(connection, job_id)
-        if expected_revision is not None:
-            self._require_revision(row, expected_revision)
+        self._require_revision(row, expected_revision)
         if row["desired_state"] != "on":
             raise AutomationError("automation_not_enabled")
         pending = connection.execute(
@@ -881,8 +902,7 @@ class AutomationStore:
         idempotency_key: str,
     ) -> dict[str, Any]:
         row = self._require_job(connection, job_id)
-        if expected_revision is not None:
-            self._require_revision(row, expected_revision)
+        self._require_revision(row, expected_revision)
         now = isoformat(utc_now())
         outbox_id = f"out_{uuid4().hex}"
         connection.execute(
@@ -895,7 +915,7 @@ class AutomationStore:
             (
                 outbox_id,
                 job_id,
-                f"notification-test:{idempotency_key}",
+                f"notification-test:{command_id}",
                 canonical_json({"template": "automation_notification_test_v1", "command_id": command_id}),
                 now,
                 now,
@@ -1205,7 +1225,7 @@ class AutomationStore:
             outbox_filter = ""
             runs_filter = ""
             if job_id is not None:
-                self._require_job(connection, job_id)
+                self._require_job(connection, job_id, include_archived=True)
                 cursor_filter = "WHERE job_id = ?"
                 outbox_filter = "WHERE job_id = ?"
                 runs_filter = "WHERE job_id = ?"
@@ -2107,7 +2127,7 @@ class AutomationStore:
         if bool(row["hold_enabled"]):
             same_owner = row["hold_owner_hash"] == actor_hash
             same_attempt = (row["hold_attempt_hash"] or None) == normalized_attempt
-            if not enabled and row["hold_reason"] == "release" and not (same_owner and same_attempt):
+            if row["hold_reason"] == "release" and not (same_owner and same_attempt):
                 raise AutomationError("automation_global_hold_ownership_lost")
             if enabled and (row["hold_reason"] or None) == normalized_reason and not (same_owner and same_attempt):
                 raise AutomationError("automation_global_hold_ownership_lost")

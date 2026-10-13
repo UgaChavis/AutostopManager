@@ -53,6 +53,12 @@ Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` 
 - `crm_digest_v1` — единственный allowlisted singleton template, по умолчанию OFF. Он читает CRM change feed за окно и может отправить owner сводку через work Telegram. Расписание/timezone читай из `status.jobs[].schedule`, не из имени или старого снимка. Не включай ради smoke; справка конструктора сама не запускает job.
 - `database_backup` и `app_watchdog` — system timers с `control_mode=read_only`: G1 показывает drift, не меняет их.
 - `managed_pc_health`, `managed_pc_fleet_health`, `managed_pc_pending_cleanup` имеют `control_mode=managed`; изменение требует своего текущего scope/revision.
+
+Активное окно относится к местному времени выбранного timezone. При переводе часов выбирается ближайшее реально существующее окно: повторное открытие не пропускается, полностью отсутствующее окно переносится на следующий подходящий день. Штатная остановка scheduler дожидается текущего run/outbox и сохранения результата перед `stopped`; новые задания после начала остановки не захватываются.
+
+Составные периоды systemd, например `1h 15min`, читаются целиком. Неразобранный фактический период при известном желаемом периоде не доказывает `in_sync`. Ошибка или timeout изменения запускает откат; неуспешный откат возвращает `system_timer_rollback_failed`.
+
+Доказанный отказ bridge `conversation_changed_since_dry_run` происходит до send intent и возвращает digest в `prepared`: повтор сохраняет исходные тело и ключ. Другие неизвестные исходы требуют точного readback без повторной отправки. Ключи уже сохранённых outbox не меняются при обновлении; новые тестовые уведомления получают ключ из своего command ID, сохраняя независимость источников команд.
 - `database_backup` относится к Store: `autostop24-db-backup.timer` → `/usr/local/sbin/autostop24-db-backup` → PostgreSQL `autostop-db` → `/var/backups/autostop24/database`. Текущее расписание проверяй через `TimersCalendar`. CRM backup имеет отдельный [runbook](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
 Readiness из `/tmp`:
@@ -83,5 +89,7 @@ Automation использует один `--release-attempt-key ATTEMPT` для 
 2. `scripts/backup-manager-automation-state.py --output NEW_PATH`: online registry backup в root-owned `0700`; отдельно снимки scheduler unit, managed timer drop-ins и Telegram duty.
 3. Только active immutable release: `scripts/install-manager-automation.sh --activate-under-hold --release-attempt-key ATTEMPT --manager-revision SHA --crm-revision CRM_SHA [--crm-version CRM_VERSION]`.
 4. Scheduler/socket/readiness, пять timers, CRM/Telegram bounded smoke/readback; затем `python -m autostop_manager.automation_release release-hold --release-attempt-key ATTEMPT`.
+
+Активный release hold сохраняет владельца и attempt до разрешённого снятия; смена причины не передаёт владение. Ожидание `quiescent=true` сверяет удержание на каждом readback и завершается ошибкой при его потере или замене.
 
 При ошибке сохраняй hold/work pause и восстанавливай компоненты штатным rollback. Старую registry нельзя класть поверх новых операций без отдельного решения о state recovery. Диагностируй systemd, Unix socket/peer permissions, App Server/archived chat, schema/contract, Telegram transport и business workflow отдельно. Задержка ответа сама не основание перезапускать bridge/wake.

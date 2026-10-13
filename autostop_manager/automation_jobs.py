@@ -181,6 +181,16 @@ class TelegramOwnerNotifier:
                 "automation_telegram_outcome_unknown" if apply_started else "automation_telegram_unavailable",
                 outcome_uncertain=apply_started,
             ) from exc
+        if (
+            isinstance(response, dict)
+            and response.get("ok") is False
+            and payload.get("operation") == "send_owner_notification"
+            and payload.get("mode") == "apply"
+            and response.get("error") == "conversation_changed_since_dry_run"
+        ):
+            # The bridge raises this only before saving a send intent, with no
+            # previous idempotency entry. Other apply errors remain uncertain.
+            raise AutomationJobError("automation_notification_preview_stale")
         if not isinstance(response, dict) or response.get("ok") is not True:
             raise AutomationJobError(
                 "automation_telegram_outcome_unknown" if apply_started else "automation_telegram_rejected",
@@ -614,11 +624,16 @@ class CrmDigestExecutor:
         self._heartbeat(claim)
         self._require_current_claim(claim)
         self._set_cursor(claim, "delivery_state", "sending")
-        applied = self.notifier.apply(
-            text,
-            contract_token=contract_token,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            applied = self.notifier.apply(
+                text,
+                contract_token=contract_token,
+                idempotency_key=idempotency_key,
+            )
+        except AutomationJobError as exc:
+            if exc.code == "automation_notification_preview_stale" and not exc.outcome_uncertain:
+                self._set_cursor(claim, "delivery_state", "prepared")
+            raise
         message_id = applied.get("message_id")
         if applied.get("verified") is not True or type(message_id) is not int or message_id <= 0:
             raise AutomationJobError("automation_telegram_outcome_unknown", outcome_uncertain=True)

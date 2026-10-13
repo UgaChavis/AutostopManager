@@ -150,7 +150,11 @@ class AutomationControlService:
             desired_period = saved.get("period_minutes", state.get("period_minutes"))
             actual_state = state.get("actual_state", "unknown")
             expected_actual = "active" if desired_state == "on" else "inactive"
-            inspection_error = None if live.get("inspection_ok") else "system_timer_inspection_failed"
+            inspection_error = (
+                None
+                if live.get("inspection_ok") and (desired_period is None or state.get("period_minutes") is not None)
+                else "system_timer_inspection_failed"
+            )
             drift = bool(
                 live.get("inspection_ok")
                 and (
