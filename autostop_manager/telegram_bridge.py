@@ -2064,7 +2064,12 @@ async def _handle_send_photo(
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
-    if readback is None or str(readback.message or "") != caption or readback.media is None:
+    if (
+        not _outgoing_message_matches(readback, peer_id=target["id"], message_id=message_id)
+        or str(readback.message or "") != caption
+        or readback.media is None
+        or _message_media_metadata(readback)["mime_type"] not in {"image/jpeg", "image/png", "image/webp"}
+    ):
         raise BridgeError("send_readback_failed")
     if effect is not None and _message_reply_to_id(readback) != reply_to:
         raise BridgeError("send_readback_failed")
@@ -2213,6 +2218,8 @@ async def _handle_send_document(
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
+    if not _outgoing_message_matches(readback, peer_id=target["id"], message_id=message_id):
+        raise BridgeError("send_document_readback_failed")
     await _verify_document_readback(
         client,
         readback,
@@ -2318,9 +2325,7 @@ async def _handle_send_voice(
     readback = await client.get_messages(entity, ids=message_id)
     metadata = _message_media_metadata(readback)
     if (
-        readback is None
-        or getattr(readback, "id", None) != message_id
-        or getattr(readback, "out", False) is not True
+        not _outgoing_message_matches(readback, peer_id=target["id"], message_id=message_id)
         or getattr(readback, "media", None) is None
         or str(getattr(readback, "message", None) or "") != caption
         or metadata.get("voice") is not True
@@ -2342,7 +2347,14 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     peer, message_id, mode, idempotency_key = validate_download_request(request)
     entity, target = await _resolve_peer(client, peer)
     message = await client.get_messages(entity, ids=message_id)
-    if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+    if (
+        message is None
+        or type(getattr(message, "id", None)) is not int
+        or message.id != message_id
+        or type(getattr(message, "chat_id", None)) is not int
+        or message.chat_id != target["id"]
+        or (target["kind"] == "private" and getattr(message, "is_private", None) is not True)
+    ):
         raise BridgeError("message_not_found")
     metadata = _message_media_metadata(message)
     if not metadata["downloadable"]:

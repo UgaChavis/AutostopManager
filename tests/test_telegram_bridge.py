@@ -2095,7 +2095,15 @@ def test_send_photo_uploads_the_bytes_that_were_validated(monkeypatch, tmp_path)
 
         async def get_messages(self, _entity, *, ids):
             assert ids == 30
-            return SimpleNamespace(message="caption", media=object())
+            return SimpleNamespace(
+                id=30,
+                chat_id=10,
+                is_private=True,
+                out=True,
+                message="caption",
+                media=object(),
+                file=SimpleNamespace(mime_type="image/jpeg", name=photo.name, size=len(original)),
+            )
 
     client = Client()
     dry_run = asyncio.run(
@@ -2263,6 +2271,9 @@ def test_send_document_uploads_validated_bytes_and_independently_reads_back(monk
             return SimpleNamespace(
                 id=30,
                 message="Car ready",
+                chat_id=10,
+                is_private=True,
+                out=True,
                 media=SimpleNamespace(),
                 file=SimpleNamespace(
                     name="order-813.pdf",
@@ -3260,6 +3271,8 @@ def test_download_media_requires_dry_run_and_saves_private_verified_file(monkeyp
     content = b"%PDF-1.7\nexample"
     message = SimpleNamespace(
         id=44,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="inspection.pdf", mime_type="application/pdf", size=len(content)),
     )
@@ -3327,6 +3340,8 @@ def test_telegram_voice_is_downloadable_when_duration_is_bounded(monkeypatch, tm
     audio_attribute.voice = True
     message = SimpleNamespace(
         id=46,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=len(content)),
         document=SimpleNamespace(attributes=[audio_attribute]),
@@ -3384,6 +3399,8 @@ def test_telegram_voice_over_ten_minutes_is_not_downloadable(monkeypatch, tmp_pa
     audio_attribute.voice = True
     message = SimpleNamespace(
         id=47,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="audio.ogg", mime_type="audio/ogg", size=100),
         document=SimpleNamespace(attributes=[audio_attribute]),
@@ -3419,6 +3436,8 @@ def test_telegram_short_mp4_video_is_downloadable(monkeypatch, tmp_path) -> None
     video_attribute.h = 1080
     message = SimpleNamespace(
         id=48,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=len(content)),
         document=SimpleNamespace(attributes=[video_attribute]),
@@ -3488,6 +3507,8 @@ def test_telegram_mp4_video_requires_bounded_duration(monkeypatch, tmp_path, dur
     video_attribute.h = 720
     message = SimpleNamespace(
         id=49,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="clip.mp4", mime_type="video/mp4", size=100),
         document=SimpleNamespace(attributes=[video_attribute]),
@@ -3526,6 +3547,8 @@ def test_download_rejects_unsupported_or_oversized_media(monkeypatch, tmp_path) 
     entity = object()
     message = SimpleNamespace(
         id=45,
+        chat_id=10,
+        is_private=True,
         media=SimpleNamespace(),
         file=SimpleNamespace(name="archive.zip", mime_type="application/zip", size=100),
     )
