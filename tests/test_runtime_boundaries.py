@@ -230,8 +230,8 @@ def test_probe_failure_stages_with_synthetic_transport(monkeypatch, failure):
         yield None, None, None
 
     class Session:
-        def __init__(self, *a):
-            pass
+        def __init__(self, *a, read_timeout_seconds):
+            assert 0 < read_timeout_seconds.total_seconds() <= 90
 
         async def __aenter__(self):
             return self
@@ -368,8 +368,8 @@ def test_probe_browser_check_uses_dedicated_timeout_and_retains_no_page_text(
         yield None, None, None
 
     class Session:
-        def __init__(self, *_args):
-            pass
+        def __init__(self, *_args, read_timeout_seconds):
+            assert 0 < read_timeout_seconds.total_seconds() <= 90
 
         async def __aenter__(self):
             return self

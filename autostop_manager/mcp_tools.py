@@ -81,24 +81,38 @@ class _OriginalJsonMetadata(FuncMetadata):
 
     The SDK pre-parser otherwise turns a string ``"null"`` into ``None`` before
     validating optional StrictInt filters, or a string ``"false"`` into False.
-    Other tools keep the SDK's support for JSON-encoded nested arguments.
+    Selected scalar fields retain their original value while nested arguments
+    keep the SDK's support for JSON-encoded objects and lists.
     """
 
+    original_fields: frozenset[str] | None = None
+
     def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
-        return data.copy()
+        if self.original_fields is None:
+            return data.copy()
+        parsed = super().pre_parse_json(data)
+        for name in self.original_fields:
+            if name in data:
+                parsed[name] = data[name]
+        return parsed
 
 
 def _preserve_original_json_inputs(server: Any) -> None:
     manager = getattr(server, "_tool_manager", None)
     if manager is None:
         return
-    for name in (
-        "avito_search_listings",
-        "avito_read_listing",
-        "j1_research_vin",
-        "j1_research_record_facts",
-        "j1_research_document",
-    ):
+    fields: dict[str, frozenset[str] | None] = {
+        "avito_search_listings": None,
+        "avito_read_listing": None,
+        "j1_research_vin": None,
+        "j1_research_record_facts": None,
+        "j1_research_document": None,
+        "manager_automation_control": frozenset({"expected_revision"}),
+        "decode_vehicle_identity": frozenset(
+            {"model_year", "production_year", "transmission_speeds", "source_confidence"}
+        ),
+    }
+    for name, original_fields in fields.items():
         tool = manager.get_tool(name)
         if tool is None:
             continue
@@ -108,6 +122,7 @@ def _preserve_original_json_inputs(server: Any) -> None:
             output_schema=metadata.output_schema,
             output_model=metadata.output_model,
             wrap_output=metadata.wrap_output,
+            original_fields=original_fields,
         )
 
 
@@ -234,7 +249,7 @@ def register_manager_tools(  # noqa: C901
         ],
         payload: dict[str, Any] | None = None,
         idempotency_key: str = "",
-        expected_revision: int | None = None,
+        expected_revision: StrictInt | None = None,
     ) -> dict[str, Any]:
         return automation_request(
             operation,

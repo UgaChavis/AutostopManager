@@ -74,3 +74,39 @@ def test_server_startup_fails_closed_when_registry_is_not_available():
 
     with pytest.raises(ManagerMcpContractError, match="registry_unavailable"):
         assert_manager_mcp_surface(server)
+
+
+@pytest.mark.parametrize(
+    "names,count,tool_name",
+    [
+        (["fixture", "fixture"], 1, "fixture"),
+        (["fixture"], True, "fixture"),
+        (["fixture"], 1.0, "fixture"),
+        ([123], 1, "123"),
+        ([None], 1, "None"),
+        ([""], 1, ""),
+        ([" "], 1, " "),
+        ([], 0, "fixture"),
+        ("fixture", 1, "fixture"),
+    ],
+)
+def test_contract_rejects_original_manifest_names_and_count_types(tmp_path, names, count, tool_name):
+    manifest = tmp_path / "manager_mcp_catalog.json"
+    schemas = {tool_name: {"type": "object"}}
+    manifest.write_text(
+        json.dumps(
+            {
+                "format": "mcp_surface_manifest_v1",
+                "expected_tool_count": count,
+                "expected_tool_names": names,
+                "schema_fingerprint": mcp_schema_fingerprint(schemas),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_manager_mcp_surface(schemas, manifest_path=manifest)
+
+    assert report["ok"] is False
+    assert report["diagnostic"] == "manifest_invalid"
+    assert report["warnings"]

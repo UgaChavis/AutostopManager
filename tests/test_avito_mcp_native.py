@@ -181,13 +181,27 @@ def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_t
         "j1_research_record_facts",
         "j1_research_document",
     }
+    partial_protected = {
+        "manager_automation_control": (
+            {"expected_revision": "null", "payload": "{}"},
+            {"expected_revision": "null", "payload": {}},
+        ),
+        "decode_vehicle_identity": (
+            {"model_year": "null", "options": "[]"},
+            {"model_year": "null", "options": []},
+        ),
+    }
     for name, tool in tools.items():
         if name in protected:
             assert isinstance(tool.fn_metadata, mcp_tools._OriginalJsonMetadata)
             assert tool.fn_metadata.pre_parse_json({"price_min": "null"}) == {"price_min": "null"}
+        elif name in partial_protected:
+            original, expected = partial_protected[name]
+            assert tool.fn_metadata.pre_parse_json(original) == expected
         else:
             assert type(tool.fn_metadata) is FuncMetadata
     assert protected <= tools.keys()
+    assert partial_protected.keys() <= tools.keys()
     assessment = tools["assess_avito_price_sample"]
     assert assessment.fn_metadata.pre_parse_json({"listings": "[]"}) == {"listings": []}
 
