@@ -304,7 +304,16 @@ def _retry_after(value: str | None) -> float | None:
 
 def _http_failure(exc: BaseException) -> dict[str, Any]:
     retry_after: float | None = None
-    if isinstance(exc, (HTTPError, httpx.HTTPStatusError)):
+    if isinstance(exc, httpx.PoolTimeout):
+        outcome, retryable = "provider_busy", False
+    elif (
+        isinstance(exc, URLError)
+        and not isinstance(exc, HTTPError)
+        and isinstance(exc.reason, str)
+        and exc.reason in {"provider_transport_busy", "provider_transport_unavailable"}
+    ):
+        outcome, retryable = lookup._vpic_failure_details(exc)
+    elif isinstance(exc, (HTTPError, httpx.HTTPStatusError)):
         status = int(exc.code) if isinstance(exc, HTTPError) else exc.response.status_code
         headers = exc.headers if isinstance(exc, HTTPError) else exc.response.headers
         if status in {429, 503}:
@@ -327,8 +336,8 @@ def _http_failure(exc: BaseException) -> dict[str, Any]:
 
 
 def _record(result: dict[str, Any]) -> None:
-    if result.get("outcome") == "deadline_exceeded":
-        # A caller's exhausted budget neither fails nor recovers the provider.
+    if result.get("outcome") in {"deadline_exceeded", "provider_busy", "provider_executor_unavailable"}:
+        # Caller deadlines and local admission failures neither fail nor recover the provider.
         return
     _PROVIDER_CIRCUIT.record(
         transient=bool(result.get("retryable")),

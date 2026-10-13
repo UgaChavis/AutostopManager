@@ -9,7 +9,7 @@ from .catalog_clients import PARTSAPI_METHOD_KEY_ENV_NAMES, PARTSAPI_OPERATIONS,
 from .config import load_runtime_env
 from .drom_listings import drom_listings_enabled
 from .parts_intent import normalize_part_intent
-from .vehicle_identity_policy import identity_allows_lookup
+from .vehicle_identity_policy import _field_status, identity_allows_lookup
 from .vin_sources import AMAYAMA_SOURCE_ID, PARTSOUQ_SOURCE_ID, PUBLIC_CATALOG_SOURCE_ALIASES
 from .vin_lookup import classify_identifier
 
@@ -604,11 +604,7 @@ def build_oem_parts_provider_plan(
         if isinstance(item, dict) and isinstance(item.get("field"), str)
     }
     if isinstance(field_statuses, dict):
-        query_disputes.update(
-            field
-            for field, status in field_statuses.items()
-            if isinstance(status, dict) and status.get("status") == "disputed"
-        )
+        query_disputes.update(field for field, status in field_statuses.items() if _field_status(status) == "disputed")
     if "model" in query_disputes:
         query_disputes.add("model_family")
     query_profile = {key: value for key, value in profile.items() if key not in query_disputes}
