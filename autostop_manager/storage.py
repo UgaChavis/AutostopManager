@@ -44,7 +44,9 @@ _VERIFICATION_FAILURE_CONTEXT_TOKENS = {
     "verify",
     "readback",
     "check",
+    "checks",
 }
+_VERIFICATION_SUCCESS_BOOL_KEYS = _VERIFICATION_FAILURE_BOOL_KEYS | {"ok", "success"}
 _VERIFICATION_FAILURE_STRINGS = {
     "blocked",
     "error",
@@ -377,16 +379,26 @@ def _decode_json(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-def _verification_failure_paths(value: Any, *, prefix: str = "") -> list[str]:
+def _verification_failure_paths(value: Any, *, prefix: str = "", technical_context: bool = False) -> list[str]:
     """Return explicit executor/readback failure markers from completion evidence."""
 
     failures: list[str] = []
     if isinstance(value, dict):
+        # Success applies to this technical node, not the domain state it read.
+        # Keep inspecting direct contradictions; generic children stop inheriting
+        # its context, while explicitly named technical children establish their own.
+        positive_node = any(
+            nested is True
+            and str(raw_key or "").strip().casefold().replace("-", "_") in _VERIFICATION_SUCCESS_BOOL_KEYS
+            for raw_key, nested in value.items()
+        )
+        child_context = technical_context and not positive_node
         for raw_key, nested in value.items():
             key = str(raw_key or "").strip().casefold().replace("-", "_")
             path = f"{prefix}.{key}" if prefix else key
-            path_tokens = set(path.replace(".", "_").split("_"))
-            failure_context = bool(path_tokens & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
+            key_tokens = set(re.sub(r"\[\d+\]", "", key).replace(".", "_").split("_"))
+            key_context = bool(key_tokens & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
+            failure_context = technical_context or key_context
             if nested is False and (
                 key in _VERIFICATION_FAILURE_BOOL_KEYS
                 or bool(set(key.split("_")) & _VERIFICATION_FAILURE_CONTEXT_TOKENS)
@@ -399,10 +411,14 @@ def _verification_failure_paths(value: Any, *, prefix: str = "") -> list[str]:
                 and (failure_context or key in {"executor", "execution", "verification", "readback"})
             ):
                 failures.append(path)
-            failures.extend(_verification_failure_paths(nested, prefix=path))
+            failures.extend(
+                _verification_failure_paths(nested, prefix=path, technical_context=child_context or key_context)
+            )
     elif isinstance(value, list):
         for index, nested in enumerate(value):
-            failures.extend(_verification_failure_paths(nested, prefix=f"{prefix}[{index}]"))
+            failures.extend(
+                _verification_failure_paths(nested, prefix=f"{prefix}[{index}]", technical_context=technical_context)
+            )
     return failures
 
 
@@ -1503,6 +1519,9 @@ class StoreState:
 
                 """
             )
+            # executescript commits implicitly. Acquire the migration writer lock
+            # afterwards so check-and-ALTER is one transaction across processes.
+            conn.execute("BEGIN IMMEDIATE")
             self._ensure_columns(conn)
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_runs_idempotency "
@@ -2693,6 +2712,13 @@ class StoreState:
                         "run_id": run_id,
                         "forbidden_keys": list(dict.fromkeys(store_forbidden)),
                     }
+            invalid_keys = _find_forbidden_body_keys(verification)
+            if invalid_keys:
+                return {
+                    "ok": False,
+                    "error": "raw_external_body_not_allowed_in_manager_ledger",
+                    "forbidden_keys": invalid_keys,
+                }
             conflict = _workflow_state_conflict(
                 run_id,
                 expected_state_version=expected_state_version,
@@ -3346,6 +3372,7 @@ class StoreState:
         self.initialize()
         limit = max(1, min(limit, 100))
         with self.connect() as conn:
+            conn.execute("BEGIN")
             rows = conn.execute(
                 "SELECT * FROM manager_runs ORDER BY started_at DESC LIMIT ?",
                 (limit,),
@@ -3378,6 +3405,7 @@ class StoreState:
     ) -> dict[str, Any]:
         self.initialize()
         with self.connect() as conn:
+            conn.execute("BEGIN")
             row = conn.execute("SELECT * FROM manager_runs WHERE id = ? LIMIT 1", (run_id,)).fetchone()
             if not row:
                 return {"ok": False, "error": "manager run not found", "run_id": run_id}

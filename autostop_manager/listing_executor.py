@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import ContextVar
 import math
 import threading
 import time
@@ -13,6 +14,9 @@ from typing import Any
 MAX_WORKERS = 2
 MAX_WAITING_CALLS = 2
 TOTAL_WAIT_SECONDS = 30.0
+# Optional absolute acquisition budget, copied into an admitted MCP worker.
+# A queue wait consumes it; neither the worker nor a nested adapter restarts it.
+read_execution_deadline: ContextVar[float | None] = ContextVar("read_execution_deadline", default=None)
 
 
 class ListingExecutionError(RuntimeError):
@@ -66,6 +70,9 @@ class BoundedListingExecutor:
 
     async def run(self, operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         deadline = time.monotonic() + self._timeout_seconds
+        request_deadline = read_execution_deadline.get()
+        if request_deadline is not None:
+            deadline = min(deadline, request_deadline)
         abandoned = threading.Event()
         started = threading.Event()
         job_lock = threading.Lock()

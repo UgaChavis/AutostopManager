@@ -15,6 +15,16 @@ estimate_repair_work_cost совместим: defaults auto_research=true/use_in
 auto_research=false сам по себе не запрещает legacy experience read; pure helper не делает его вообще.
 Exact signatures/примеры/ошибки — карточки tools; inputSchema — текущая MCP registration.
 
+Native MCP выполняет collector, legacy estimate и OEM web verification в ограниченном
+веб-пуле вне общего event loop. У collector исходный `deadline_seconds` включает очередь;
+после неё оставшийся acquisition budget не начинается заново. Его `max_queries`
+принимает только JSON integer 1–4; encoded nested JSON сохраняется. При отказе collector
+сохраняет automotive envelope, а legacy estimate — своё плоское семейство ответа.
+Не начавшийся worker имеет известные нулевые reads; после старта при timeout counts
+неизвестны (`null`). Подробности cancellation/admission — [Manager runtime](manager-runtime.md).
+Timeout-параметр отдельного labor HTTP read ещё не гарантирует общий wall deadline
+на заголовки и тело: начатый поток может продолжиться и удерживает admission до завершения.
+
 Обычный публичный поиск цен сохраняет общий privacy guard: VIN, контакты и секреты
 не отправляются провайдеру и не отражаются в списке поисковых запросов. Явно переданные
 VIN/номер кузова удаляются из всех частей research query и обезличиваются в ответе;

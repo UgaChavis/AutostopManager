@@ -55,12 +55,30 @@ Busy/timeout возвращают безопасные `error`, `stage`, `adapte
 остановку потока; его слот удерживается до реального завершения. Статические
 правила и сверка готовых данных остаются локальными вызовами.
 
-`search_web_multi`, `fetch_page_excerpt` и `fetch_page_browser` используют отдельный
-пул: два workers, два ожидающих вызова и максимум 90 секунд ожидания.
-При отказе очереди сохраняется web-формат `schema/capability/read_only` и
+`search_web_multi`, `fetch_page_excerpt`, `fetch_page_browser`,
+`collect_work_price_evidence`, `estimate_repair_work_cost` и `verify_oem_candidates_web`
+используют отдельный общий веб-пул: два workers, два ожидающих вызова и максимум
+90 секунд ожидания. Отказ admission/worker сохраняет семейство ответа инструмента:
+у E15 — web-формат `schema/capability/read_only` и
 `error={code,retryable}`; `retryable=false`, исходные непроверенные аргументы не
 возвращаются. Код причины — `provider_busy`, `provider_wait_timeout`,
 `provider_executor_unavailable` или `provider_execution_failed`.
+Collector сохраняет automotive envelope; estimator — плоский ответ оценки;
+OEM verifier — `OemCandidatePublicEvidenceV1`. У этих трёх инструментов отказ
+до старта worker возвращает `execution.network_calls=0` и `attempts=[]`.
+После старта worker оба поля равны `null`: timeout или исключение не доказывают
+отсутствия уже начатых HTTP reads. Непроверенные аргументы и тексты исключений
+в ответе и telemetry отсутствуют; queued abandoned работа не запускает адаптер.
+
+`collect_work_price_evidence.deadline_seconds` ограничивает ожидание admission
+и acquisition одним исходным абсолютным сроком: время в очереди расходует бюджет,
+а worker получает только оставшееся время. Пороги `[0.1,60]`, default 20 секунд
+и `max_queries` 1–4 сохраняются. Pure/provided aggregate режимы тех же roots
+также проходят admission, сохраняя отсутствие acquisition.
+Общий медленный HTTP reader labor/research ещё не гарантирует жёсткий wall deadline
+на заголовки и всё тело. При его зависании MCP остаётся отзывчивым, caller получает
+timeout, а занятый worker удерживает слот до реального завершения.
+
 `manager_automations` и `manager_automation_control` имеют независимые два workers,
 два ожидающих вызова и 30 секунд ожидания, чтобы зависший веб-источник не мешал
 управлению. Отмена и timeout также сохраняют занятый слот до завершения backend;
@@ -73,7 +91,10 @@ MCP проверяет `manager_automation_control.expected_revision` как и�
 целого типа: bool и строки не превращаются в revision. У `decode_vehicle_identity`
 строгие поля `model_year`, `production_year`, `transmission_speeds`, `source_confidence`
 сохраняют исходный тип, включая различие между JSON `null` и строкой `"null"`.
-JSON-строки вложенных `payload` и `options` остаются совместимыми с SDK.
+`collect_work_price_evidence.max_queries` тоже требует исходный JSON integer;
+bool, float, строка и `null` отклоняются до исполнения. JSON-строки вложенных
+`payload`, `options`, `work_items`, `vehicle_context` и `aggregate_evidence`
+остаются совместимыми с SDK. Публичные input schemas/fingerprint сохраняются.
 
 В `mcp-probe` timeout ограничивает handshake и весь обход `tools/list`, включая
 ожидание отправки запроса и ответа. Обход принимает до 64 страниц, отклоняет

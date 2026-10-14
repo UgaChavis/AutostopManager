@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 
 from .automotive_contracts import MAX_ROWS, content_digest, finite_number, invalid, result
 from .j1_fetch import contains_sensitive
+from .listing_executor import read_execution_deadline
 
 UNITS = {
     "hours": 1.0,
@@ -169,11 +170,15 @@ def collect_work_price_evidence(
     attempts: list[dict[str, Any]] = []
     warnings: list[str] = []
     started = time.monotonic()
+    deadline_at = started + deadline
+    request_deadline = read_execution_deadline.get()
+    if request_deadline is not None:
+        deadline_at = min(deadline_at, request_deadline)
     if "public_web" in chosen:
         queries = research.build_public_research_queries(vehicle_context=context, operations=operations, city=city)
         selected = [(kind, query) for kind, values in queries.items() for query in values][:max_queries]
         for kind, query in selected:
-            remaining = deadline - (time.monotonic() - started)
+            remaining = deadline_at - time.monotonic()
             if remaining <= 0:
                 warnings.append("deadline_exceeded")
                 break

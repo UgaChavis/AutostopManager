@@ -190,6 +190,10 @@ def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_t
             {"model_year": "null", "options": "[]"},
             {"model_year": "null", "options": []},
         ),
+        "collect_work_price_evidence": (
+            {"max_queries": "null", "sources": '["provided_aggregate"]', "vehicle_context": '{"make":"DEMO"}'},
+            {"max_queries": "null", "sources": ["provided_aggregate"], "vehicle_context": {"make": "DEMO"}},
+        ),
     }
     for name, tool in tools.items():
         if name in protected:
@@ -202,6 +206,8 @@ def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_t
             assert type(tool.fn_metadata) is FuncMetadata
     assert protected <= tools.keys()
     assert partial_protected.keys() <= tools.keys()
+    collector = tools["collect_work_price_evidence"]
+    assert collector.fn_metadata.pre_parse_json({"max_queries": 4}) == {"max_queries": 4}
     assessment = tools["assess_avito_price_sample"]
     assert assessment.fn_metadata.pre_parse_json({"listings": "[]"}) == {"listings": []}
 

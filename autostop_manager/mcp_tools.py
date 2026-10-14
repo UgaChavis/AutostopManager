@@ -108,6 +108,7 @@ def _preserve_original_json_inputs(server: Any) -> None:
         "j1_research_record_facts": None,
         "j1_research_document": None,
         "manager_automation_control": frozenset({"expected_revision"}),
+        "collect_work_price_evidence": frozenset({"max_queries"}),
         "decode_vehicle_identity": frozenset(
             {"model_year", "production_year", "transmission_speeds", "source_confidence"}
         ),
@@ -117,6 +118,11 @@ def _preserve_original_json_inputs(server: Any) -> None:
         if tool is None:
             continue
         metadata = tool.fn_metadata
+        if name == "collect_work_price_evidence":
+            # Keep the reviewed integer JSON schema and public Python signature.
+            # Wire scalars must also survive Pydantic's otherwise coercive int model.
+            metadata.arg_model.model_fields["max_queries"].metadata.extend(Field(strict=True).metadata)
+            metadata.arg_model.model_rebuild(force=True)
         tool.fn_metadata = _OriginalJsonMetadata(
             arg_model=metadata.arg_model,
             output_schema=metadata.output_schema,
