@@ -27,5 +27,7 @@ Defaults: `{"context":null,"detail":"full","identifier_type":"auto"}`.
 - До500 переданных результатов, network_calls=0; input_binding должен совпадать с identifier (WMI ограничен manufacturer-family).
 - Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context.
 - Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям.
+- Все пары фактов проверяются независимо от порядка; transmission_speeds сохраняется отдельно. Неверные типы/диапазоны полей не становятся canonical/supported; исходные variants и причины сохраняются. Correct 3/6-character WMI остаётся manufacturer-family.
+- Blank outer context fields сохраняют источник вложенного факта; непустой explicit override сохраняет приоритет. Это не добавляет независимого свидетельства copied provider данным.
 
 Подробный контракт: [справочник](../references/vehicle-identity.md).

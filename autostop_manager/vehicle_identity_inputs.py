@@ -178,6 +178,15 @@ def _validate_confidence(value: Any, errors: list[dict[str, str]]) -> float | No
     return number
 
 
+def _positive_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 def _clean_fields(context: dict[str, Any], errors: list[dict[str, str]], notes: list[dict[str, str]]) -> dict[str, Any]:
     cleaned: dict[str, Any] = {}
     for key, value in context.items():
@@ -197,7 +206,7 @@ def _clean_fields(context: dict[str, Any], errors: list[dict[str, str]], notes: 
             if normalized_confidence is not None:
                 cleaned[key] = normalized_confidence
         elif key in TECHNICAL_NUMERIC_FIELDS:
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            if not _positive_finite_number(value):
                 errors.append(_issue("expected_positive_finite_number", key))
             else:
                 cleaned[key] = value
@@ -214,6 +223,21 @@ def _clean_fields(context: dict[str, Any], errors: list[dict[str, str]], notes: 
     if "production_date" in cleaned:
         _validate_date(cleaned["production_date"], errors)
     return cleaned
+
+
+def _retain_context_origins(cleaned: dict[str, Any], original: Any) -> None:
+    from .automotive_contracts import context_field_evidence
+
+    if not isinstance(original, dict):
+        return
+    origins = {ALIASES.get(row["field"], row["field"]): row for row in context_field_evidence(original)}
+    provenance = {
+        field: [{**origins[field], "field": field, "value": value}]
+        for field, value in cleaned.items()
+        if field in origins and origins[field].get("derived")
+    }
+    if provenance:
+        cleaned["provenance"] = provenance
 
 
 def validate_identity_input(
@@ -241,6 +265,8 @@ def validate_identity_input(
     cleaned = _clean_fields(context, errors, notes)
     if alias_conflicts:
         cleaned["input_alias_conflicts"] = alias_conflicts
+    if not errors:
+        _retain_context_origins(cleaned, crm_context)
     return {
         "ok": not errors,
         "identifier": identifier.strip(),

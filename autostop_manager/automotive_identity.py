@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
+import threading
 import time
+from contextvars import copy_context
 from datetime import UTC, datetime
 from collections.abc import Callable
 from typing import Any, Literal
@@ -19,9 +23,13 @@ from .automotive_contracts import (
     primary_lineage,
     result,
 )
-from .vehicle_identity import _checked_vpic_diagnostics, identity_values_agree
-from .vehicle_identity_inputs import validate_identity_input
+from .vehicle_identity import _checked_vpic_diagnostics, _vpic_has_clean_diagnostics, identity_values_agree
+from .vehicle_identity_inputs import CONTEXT_FIELDS, validate_identity_input
 from .vehicle_identity_policy import build_parts_lookup_readiness
+from .vehicle_identity_transport import wmi_for_vin
+from .listing_executor import BoundedListingExecutor, ListingExecutionError, read_execution_deadline
+
+_BATCH_READ_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=120)
 
 FIELDS = (
     "make",
@@ -37,6 +45,7 @@ FIELDS = (
     "power_hp",
     "power_kw",
     "transmission",
+    "transmission_speeds",
     "drivetrain",
     "market",
     "modification",
@@ -47,6 +56,84 @@ FIELDS = (
     "manufacturer_country",
     "vehicle_type",
 )
+
+
+def _validated_profile(profile: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
+    """Apply the same scalar/year/options guards as direct E2 input before reuse."""
+    profile = dict(profile)
+    speeds = profile.get("transmission_speeds")
+    if isinstance(speeds, str) and re.fullmatch(r"[0-9]{1,2}", speeds.strip()):
+        # The main E2 provider merge historically retains vPIC's numeric string.
+        profile["transmission_speeds"] = int(speeds.strip())
+    prepared = validate_identity_input("", {key: value for key, value in profile.items() if key in FIELDS})
+    cleaned = prepared["context"]
+    errors = list(prepared["errors"])
+    for field in FIELDS:
+        value = profile.get(field)
+        if field in CONTEXT_FIELDS or value in (None, ""):
+            continue
+        if not isinstance(value, str):
+            errors.append({"field": field, "code": "expected_string", "stage": "input_validation"})
+        elif value.strip():
+            cleaned[field] = value.strip()
+    for error in errors:
+        cleaned.pop(error["field"], None)
+    return cleaned, errors, prepared["normalization_notes"]
+
+
+def _vpic_profile(response: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw = response.get("vehicle")
+    if not isinstance(raw, dict):
+        return {}, []
+    fields = {
+        "manufacturername": "manufacturer",
+        "modelyear": "model_year",
+        "enginemodel": "engine",
+        "transmissionstyle": "transmission",
+        "transmissionspeeds": "transmission_speeds",
+        "drivetype": "drivetrain",
+        "displacementcc": "displacement_cc",
+        "enginehp": "power_hp",
+        "vehicletype": "vehicle_type",
+        "bodyclass": "body_class",
+        "plantcountry": "plant_country",
+        "plantcity": "plant_city",
+        "plantcompanyname": "plant_company_name",
+        "plantstate": "plant_state",
+        "engineconfiguration": "engine_configuration",
+        "enginecylinders": "engine_cylinders",
+        "displacementl": "engine_displacement_l",
+        "fueltypeprimary": "fuel_type",
+        "fueltypesecondary": "fuel_type_secondary",
+        "vehicledescriptor": "vehicle_descriptor",
+        "series2": "series2",
+    }
+    family_fields = {
+        "make",
+        "manufacturer",
+        "manufacturername",
+        "model",
+        "vehicletype",
+        "bodyclass",
+        "plantcountry",
+        "plantcity",
+        "plantcompanyname",
+        "plantstate",
+        "vehicledescriptor",
+    }
+    profile = {
+        fields.get(str(key), str(key)): value
+        for key, value in raw.items()
+        if key != "vin" and (_vpic_has_clean_diagnostics(response) or key in family_fields)
+    }
+    for field in ("transmission_speeds", "displacement_cc", "power_hp"):
+        if field in profile:
+            number = finite_number(profile[field], minimum=0)
+            if number is not None:
+                profile[field] = int(number) if field == "transmission_speeds" and number.is_integer() else number
+    cleaned, errors, _notes = _validated_profile(profile)
+    profile = {**{key: value for key, value in profile.items() if key not in FIELDS}, **cleaned}
+    return profile, errors
 
 
 def inspect_vehicle_identifier(identifier: str, identifier_type: str = "auto") -> dict[str, Any]:
@@ -86,9 +173,11 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
             "country": wmi_profile.get("country"),
             "vehicle_type": wmi_profile.get("vehicletype"),
         }
-        profile = {
-            key: value for key, value in profile.items() if key in {"manufacturer", "make", "country", "vehicle_type"}
-        }
+        profile, field_errors, _notes = _validated_profile(profile)
+        # Preserve the public WMI shape; null slots remain unknown family fields.
+        profile = {field: profile.get(field) for field in ("manufacturer", "make", "country", "vehicle_type")}
+    else:
+        profile, field_errors = _vpic_profile(response)
     bound = response.get("identifier_binding") or {}
     if bound.get("status") in {"mismatch", "unverified", "missing"}:
         outcome = "partial"
@@ -118,7 +207,14 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
         "identifier_binding": bound,
         "diagnostics": diagnostics,
     }
-    return result(
+    if response.get("model_year_hint_requested") is not None:
+        data["model_year_hint_requested"] = response["model_year_hint_requested"]
+        if identity_values_agree("model_year", profile.get("model_year"), response["model_year_hint_requested"]):
+            data["field_statuses"] = {"model_year": "candidate"}
+    if field_errors:
+        outcome = "partial"
+        data["field_validation_errors"] = field_errors
+    response = result(
         tool_id,
         str(outcome),
         data,
@@ -127,6 +223,7 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
         attempts=[{"provider": "nhtsa_vpic", "method": tool_id, "outcome": outcome}],
         missing_fields=[field for field in ("make",) if profile.get(field) in (None, "")],
     )
+    return response if wmi else vin_lookup._redact_identifier_payload(response, vin_lookup.normalize_vin(identifier))
 
 
 def decode_vin_vpic(
@@ -241,6 +338,21 @@ def _reconciliation_years(data: dict[str, Any]) -> tuple[list[Any], str | None]:
             return [], "results." + path
         years.extend(item for item in supplied if item not in years)
     return years, None
+
+
+def _reconciliation_profile(
+    row: dict[str, Any], variant: dict[str, Any], conflicts: list[dict[str, Any]], index: int
+) -> dict[str, Any]:
+    profile, errors, notes = _validated_profile(_profile(row))
+    if errors:
+        conflicts.extend(
+            {**error, "code": "invalid_vehicle_field", "reason": error["code"], "result_index": index}
+            for error in errors
+        )
+        variant["field_validation_errors"] = errors
+    if notes:
+        variant["normalization_notes"] = notes
+    return profile
 
 
 def _present_reconciliation_summary(response: dict[str, Any], identifier: str) -> dict[str, Any]:
@@ -411,7 +523,13 @@ def reconcile_vehicle_identity(
             warnings.append(f"result_{index}_not_usable_as_vehicle_facts")
             continue
         wmi = data.get("wmi")
-        if data.get("input_binding") != expected and wmi != prepared["identifier"][:3]:
+        classified = vin_lookup.classify_identifier(prepared["identifier"], identifier_type=identifier_type)
+        wmi_matches = (
+            isinstance(wmi, str)
+            and classified.kind == "vin"
+            and wmi.strip().upper() == wmi_for_vin(classified.normalized)
+        )
+        if data.get("input_binding") != expected and not wmi_matches:
             conflicts.append({"field": "identifier", "code": "result_binding_mismatch", "result_index": index})
             continue
         supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
@@ -429,7 +547,7 @@ def reconcile_vehicle_identity(
         if row_years:
             row_variants[0]["model_year_candidates"] = row_years
             year_candidates.extend(item for item in row_years if item not in year_candidates)
-        profile = _profile(row)
+        profile = _reconciliation_profile(row, row_variants[0], conflicts, index)
         for field in FIELDS:
             if profile.get(field) not in (None, "") and (
                 not wmi or field in {"make", "manufacturer", "country", "manufacturer_country", "vehicle_type"}
@@ -463,7 +581,11 @@ def reconcile_vehicle_identity(
     for field, observations in values.items():
         if not observations:
             continue
-        if any(not identity_values_agree(field, observations[0]["value"], row["value"]) for row in observations[1:]):
+        if any(
+            not identity_values_agree(field, left["value"], right["value"])
+            for index, left in enumerate(observations)
+            for right in observations[index + 1 :]
+        ):
             conflicts.append({"field": field, "code": "conflicting_vehicle_fields", "alternatives": observations})
             statuses[field] = "disputed"
         else:
@@ -539,12 +661,10 @@ def compare_vehicle_modifications(context: dict[str, Any], candidates: list[dict
     )
 
 
-def decode_vehicle_batch(
-    items: list[dict[str, Any] | str], decoder: str, deadline_seconds: float = 30
-) -> dict[str, Any]:
+def _selected_decoders() -> dict[str, Callable[..., dict[str, Any]]]:
     from . import automotive_offline
 
-    decoders: dict[str, Callable[..., dict[str, Any]]] = {
+    return {
         "decode_vin_vpic": decode_vin_vpic,
         "decode_wmi_vpic": decode_wmi_vpic,
         **{
@@ -558,6 +678,119 @@ def decode_vehicle_batch(
             )
         },
     }
+
+
+def _expired_batch_row(decoder: str) -> dict[str, Any]:
+    return result(decoder, "deadline_exceeded", {}, warnings=["batch_deadline_exceeded"])
+
+
+class _QueuedDecode:
+    """Serialize admission with abandonment while the real executor owns the worker."""
+
+    def __init__(self, item: dict[str, Any] | str, decoder: str, run: Callable[..., dict[str, Any]], expires: float):
+        self.item, self.decoder, self.run, self.expires = item, decoder, run, expires
+        self.lock = threading.Lock()
+        self.abandoned = False
+        self.started = False
+        self.completed: dict[str, Any] | None = None
+        self.finished_at: float | None = None
+
+    def execute(self) -> dict[str, Any]:
+        identifier = self.item.get("identifier") if isinstance(self.item, dict) else self.item
+        with self.lock:
+            remaining = self.expires - time.monotonic()
+            timed = self.decoder in {"decode_vin_vpic", "decode_wmi_vpic", "corgi_decode"}
+            if self.abandoned or remaining <= 0 or (timed and remaining < 0.1):
+                return _expired_batch_row(self.decoder)
+            if not isinstance(identifier, str):
+                return invalid(self.decoder, "identifier")
+            options = {"timeout_seconds": min(8, remaining)} if timed else {}
+            self.started = True
+        try:
+            row = self.run(identifier, **options)
+        except (OSError, ValueError, TypeError) as exc:
+            network = self.decoder in {"decode_vin_vpic", "decode_wmi_vpic"}
+            row = result(
+                self.decoder,
+                "provider_error",
+                {},
+                warnings=[type(exc).__name__],
+                network_calls=int(network),
+                attempts=[{"method": self.decoder, "outcome": "unknown"}] if network else [],
+            )
+        with self.lock:
+            self.completed, self.finished_at = row, time.monotonic()
+        return row
+
+    def abandon(self) -> dict[str, Any]:
+        with self.lock:
+            self.abandoned = True
+            if self.completed is not None and self.finished_at is not None and self.finished_at <= self.expires:
+                return self.completed
+            row = _expired_batch_row(self.decoder)
+            if self.completed is not None:
+                row["execution"] = dict(self.completed["execution"])
+            elif self.started and self.decoder in {"decode_vin_vpic", "decode_wmi_vpic"}:
+                row["execution"] = {
+                    "network_calls": None,
+                    "network_calls_lower_bound": 0,
+                    "decoder_started": True,
+                    "attempts": [{"method": self.decoder, "outcome": "unknown"}],
+                }
+                row["warnings"].append("Issued synchronous read may continue; its network count is not yet known.")
+            return row
+
+
+def _batch_response(decoder: str, rows: list[dict[str, Any]], deadline: float) -> dict[str, Any]:
+    known_calls = sum(row["result"]["execution"].get("network_calls") or 0 for row in rows)
+    unknown = any(row["result"]["execution"].get("network_calls") is None for row in rows)
+    response = result(
+        "decode_vehicle_batch",
+        "partial" if any(row["result"]["outcome"] != "success" for row in rows) else "success",
+        {"decoder": decoder, "items": rows, "deadline_seconds": deadline},
+        network_calls=known_calls,
+        attempts=[attempt for row in rows for attempt in row["result"]["execution"]["attempts"]],
+        warnings=[
+            "Already-issued synchronous transport is bounded by its timeout; disconnect does not prove cancellation upstream."
+        ],
+    )
+    if unknown:
+        response["execution"].update(network_calls=None, network_calls_lower_bound=known_calls)
+    return response
+
+
+async def _run_batch_read(work: _QueuedDecode) -> dict[str, Any]:
+    token = read_execution_deadline.set(work.expires)
+    context = copy_context()
+    try:
+        return await _BATCH_READ_EXECUTOR.run(lambda: context.run(work.execute))
+    except ListingExecutionError as error:
+        row = work.abandon()
+        if error.code != "provider_wait_timeout":
+            outcome = (
+                error.code if error.code in {"provider_busy", "provider_executor_unavailable"} else "provider_error"
+            )
+            row.update(ok=False, outcome=outcome, warnings=[error.code])
+        row.update(
+            error=error.code,
+            stage=error.stage,
+            adapter_started=work.started,
+            adapter_may_continue=error.adapter_may_continue,
+            retry_attempted=False,
+            retryable=False,
+        )
+        return row
+    except asyncio.CancelledError:
+        work.abandon()
+        raise
+    finally:
+        read_execution_deadline.reset(token)
+
+
+def decode_vehicle_batch(
+    items: list[dict[str, Any] | str], decoder: str, deadline_seconds: float = 30
+) -> dict[str, Any]:
+    decoders = _selected_decoders()
     deadline = finite_number(deadline_seconds, minimum=0.1)
     if (
         not isinstance(items, list)
@@ -567,80 +800,39 @@ def decode_vehicle_batch(
         or deadline > 120
     ):
         return invalid("decode_vehicle_batch", "items_or_decoder_or_deadline")
-    started = time.monotonic()
+    expires = time.monotonic() + deadline
     rows: list[dict[str, Any]] = []
-    network_calls = 0
-    attempts: list[dict[str, Any]] = []
     for index, item in enumerate(items):
-        remaining = deadline - (time.monotonic() - started)
-        identifier = item.get("identifier") if isinstance(item, dict) else item
-        if remaining <= 0:
-            row = result(decoder, "deadline_exceeded", {}, warnings=["batch_deadline_exceeded"])
-        elif not isinstance(identifier, str):
-            row = invalid(decoder, "identifier")
-        else:
-            options: dict[str, Any] = (
-                {"timeout_seconds": min(8, remaining)}
-                if decoder in {"decode_vin_vpic", "decode_wmi_vpic", "corgi_decode"}
-                else {}
-            )
-            try:
-                row = decoders[decoder](identifier, **options)
-            except (OSError, ValueError, TypeError) as exc:
-                network = decoder in {"decode_vin_vpic", "decode_wmi_vpic"}
-                row = result(
-                    decoder,
-                    "provider_error",
-                    {},
-                    warnings=[type(exc).__name__],
-                    network_calls=int(network),
-                    attempts=[{"method": decoder, "outcome": "unknown"}] if network else [],
-                )
+        row = _QueuedDecode(item, decoder, decoders[decoder], expires).execute()
         rows.append({"item_index": index, "result": row})
-        network_calls += row["execution"]["network_calls"]
-        attempts.extend(row["execution"]["attempts"])
-    return result(
-        "decode_vehicle_batch",
-        "partial" if any(row["result"]["outcome"] != "success" for row in rows) else "success",
-        {"decoder": decoder, "items": rows, "deadline_seconds": deadline},
-        network_calls=network_calls,
-        attempts=attempts,
-        warnings=[
-            "Already-issued synchronous transport is bounded by its timeout; disconnect does not prove cancellation upstream."
-        ],
-    )
+    return _batch_response(decoder, rows, deadline)
 
 
 async def decode_vehicle_batch_async(
     items: list[dict[str, Any] | str], decoder: str, deadline_seconds: float = 30
 ) -> dict[str, Any]:
-    """Stop issuing rows when the request is cancelled; an issued read retains its transport timeout."""
-    import asyncio
-
+    """Queue wait uses the original deadline; abandoned rows cannot acquire admission."""
+    decoders = _selected_decoders()
     deadline = finite_number(deadline_seconds, minimum=0.1)
-    if not isinstance(items, list) or len(items) > MAX_ROWS or deadline is None or deadline > 120:
+    if (
+        not isinstance(items, list)
+        or len(items) > MAX_ROWS
+        or decoder not in decoders
+        or deadline is None
+        or deadline > 120
+    ):
         return invalid("decode_vehicle_batch", "items_or_deadline")
     rows: list[dict[str, Any]] = []
-    started = time.monotonic()
-    calls = 0
-    attempts: list[dict[str, Any]] = []
+    expires = time.monotonic() + deadline
+    inherited_deadline = read_execution_deadline.get()
+    if inherited_deadline is not None:
+        expires = min(expires, inherited_deadline)
     for index, item in enumerate(items):
-        remaining = deadline - (time.monotonic() - started)
+        remaining = expires - time.monotonic()
         if remaining <= 0:
-            row = result("decode_vehicle_batch", "deadline_exceeded", {})
+            row = _expired_batch_row(decoder)
         else:
-            # One row per await means cancellation prevents all subsequent rows.
-            one = await asyncio.to_thread(decode_vehicle_batch, [item], decoder, remaining)
-            if one["outcome"] == "invalid_input":
-                return one
-            row = one["data"]["items"][0]["result"]
+            work = _QueuedDecode(item, decoder, decoders[decoder], expires)
+            row = await _run_batch_read(work)
         rows.append({"item_index": index, "result": row})
-        calls += row["execution"]["network_calls"]
-        attempts.extend(row["execution"]["attempts"])
-    return result(
-        "decode_vehicle_batch",
-        "partial" if any(row["result"]["outcome"] != "success" for row in rows) else "success",
-        {"decoder": decoder, "items": rows, "deadline_seconds": deadline},
-        network_calls=calls,
-        attempts=attempts,
-    )
+    return _batch_response(decoder, rows, deadline)

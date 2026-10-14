@@ -4375,7 +4375,7 @@
       },
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
-        "vehicle_profile/input_binding/wmi(null)/identifier_binding/diagnostics",
+        "vehicle_profile с canonical E2 именами model_year/engine/transmission/transmission_speeds/drivetrain/displacement_cc/power_hp; input_binding/wmi(null)/identifier_binding/diagnostics; raw VIN не возвращается",
         "evidence содержит provider/primary_lineage/method/fetched_at/locator/scope; alternatives и field provenance этим инструментом не строятся"
       ],
       "errors": [
@@ -4386,7 +4386,8 @@
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
         "Corgi и vPIC имеют одну первичную базу; два результата не два независимых свидетельства.",
         "Один выбранный VIN endpoint; extended явно выбирает расширенный endpoint. WMI/PartsAPI fallback отсутствует.",
-        "model_year — целое 1900..следующий год UTC; это подсказка, не дата производства."
+        "model_year — целое 1900..следующий год UTC; это подсказка, не дата производства.",
+        "Нечистая диагностика не поддерживает поля модификации; совпадение model_year с подсказкой остаётся candidate, а binding/диагностика сохраняются."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
@@ -4432,7 +4433,8 @@
       ],
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
-        "Один выбранный WMI endpoint; модель/двигатель не восстанавливаются из WMI."
+        "Один выбранный WMI endpoint; модель/двигатель не восстанавливаются из WMI.",
+        "Публичный WMI-ключ 3/6 символов сохраняется целиком для manufacturer-family reconciliation; VIN-route redaction не маскирует этот ключ."
       ],
       "example": {
         "wmi": "WVW"
@@ -4706,7 +4708,9 @@
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
         "До500 переданных результатов, network_calls=0; input_binding должен совпадать с identifier (WMI ограничен manufacturer-family).",
         "Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context.",
-        "Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям."
+        "Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям.",
+        "Все пары фактов проверяются независимо от порядка; transmission_speeds сохраняется отдельно. Неверные типы/диапазоны полей не становятся canonical/supported; исходные variants и причины сохраняются. Correct 3/6-character WMI остаётся manufacturer-family.",
+        "Blank outer context fields сохраняют источник вложенного факта; непустой explicit override сохраняет приоритет. Это не добавляет независимого свидетельства copied provider данным."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
@@ -4794,7 +4798,7 @@
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
         "decoder/items[{item_index,result}]/deadline_seconds; порядок и число строк сохраняются",
-        "execution суммирует network_calls/attempts дочернего выбранного decoder"
+        "execution суммирует известные network_calls/attempts; при неизвестном счётчике начатого sync read network_calls=null и network_calls_lower_bound содержит известную сумму"
       ],
       "errors": [
         "invalid_input для decoder/items/deadline; отдельная плохая строка получает invalid_input/provider_error",
@@ -4803,7 +4807,9 @@
       "limitations": [
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
         "decoder: decode_vin_vpic/decode_wmi_vpic/decode_wmi_local/decode_frame_local/vin_brand_details/vininfo_decode/corgi_decode. До500 строк, deadline_seconds в [0.1,120].",
-        "Один явно выбранный decoder, без fallback. Network только для vPIC. Отмена останавливает следующие строки; уже выданный sync read ограничен transport timeout."
+        "Один явно выбранный decoder, без fallback. Network только для vPIC. Отмена останавливает следующие строки; уже выданный sync read ограничен transport timeout.",
+        "Очередь native async-вызова расходует исходный монотонный deadline; просроченные/отменённые строки не запускаются позже. Входной минимум проверяется один раз; малый остаток даёт строковый deadline_exceeded, сохраняя прежние строки и counters. Начатый decoder держит настоящий worker до завершения, upstream cancellation не утверждается.",
+        "Native async использует отдельный bounded pool: 2 workers + 2 ожидающих незавершённых admissions. Отмена не отменяет concurrent future и не освобождает слот до фактического завершения; abandoned queued callback не начинает decoder. Busy/executor unavailable до начала дают envelope без input echo/network/retry; ContextVar сохраняет исходный absolute deadline."
       ],
       "example": {
         "items": [
@@ -5042,7 +5048,8 @@
         "Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.",
         "Для подтверждения source: provider/primary_lineage/method/locator/fetched_at(valid ISO с timezone), matching part_number/brand/scope, declares_oem=true и document_kind official_epc/oem_catalog_document/physical_oe_marking.",
         "exact_identifier requires valid hash binding in vehicle_binding and source.identifier_binding. modification requires the same valid catalog ref in vehicle_binding and source.catalog_ref: either typed TecDoc numeric ID/carType, or a native Elcats/Japancats/SsangYong provider/namespace/entry_id/vehicle_context ref. Preserve the native namespace; OEM confirmation remains separate from fitment.",
-        "A public catalog row is not primary OEM evidence. Native catalog refs identify the bound modification and do not themselves make a public provider official_epc; primary document/source metadata and all remaining evidence gates still apply."
+        "A public catalog row is not primary OEM evidence. Native catalog refs identify the bound modification and do not themselves make a public provider official_epc; primary document/source metadata and all remaining evidence gates still apply.",
+        "source.part_number array/object/boolean не связывается с одним номером и не конкатенируется; существующее преобразование numeric scalar, включая integer 1234, сохраняется."
       ],
       "example": {
         "part_number": "DEMO-OEM-001",
@@ -5186,7 +5193,8 @@
         "Primary source: fitment_assertion=true, official_epc/manufacturer_fitment_catalog, matching part_number/brand/scope и provider/lineage/method/locator/aware ISO fetched_at.",
         "exact_identifier requires matching valid input_binding; modification requires matching typed TecDoc catalog_ref (numeric ID/carType) or matching native Elcats/Japancats/SsangYong refs with their provider/namespace/entry_id/vehicle_context preserved and checked against the vehicle profile. evidence.conditions and inherited/unparsed restrictions are checked with caller criteria; missing/invalid conditions remain unknown.",
         "production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.",
-        "Native public catalog refs can bind supplied catalog context and restrictions, but public rows do not become primary fitment proof. supported still requires independently supplied matching official_epc/manufacturer_fitment_catalog evidence with fitment_assertion=true; native context/parent/source mismatch remains unresolved."
+        "Native public catalog refs can bind supplied catalog context and restrictions, but public rows do not become primary fitment proof. supported still requires independently supplied matching official_epc/manufacturer_fitment_catalog evidence with fitment_assertion=true; native context/parent/source mismatch remains unresolved.",
+        "Совместимость broad/specific не доказывает конкретное условие: Automatic без известного числа передач не подтверждает 6AT, ROW не подтверждает Europe; семейная модель не подтверждает поколение. Диапазоны принимают только from/to; дополнительные неизвестные keys оставляют unknown."
       ],
       "example": {
         "vehicle": {

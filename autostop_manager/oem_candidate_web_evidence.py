@@ -469,6 +469,25 @@ def _gateway_authorized_source(row: Mapping[str, Any], url: str) -> dict[str, st
     }
 
 
+def _part_number_reference(number: str, text: str) -> bool:
+    # Formatting may separate groups within one number, but never fuse words or fields.
+    normalized = normalize_part_number(number)
+    if not normalized:
+        return False
+    groups = re.findall(r"[A-Z0-9]+", number.upper())
+    boundaries, offset = set(), 0
+    for group in groups[:-1]:
+        offset += len(group)
+        boundaries.add(offset)
+    pieces = [normalized[0]]
+    for index, char in enumerate(normalized[1:], 1):
+        previous = normalized[index - 1]
+        space = index in boundaries or char.isdigit() or previous.isdigit()
+        pieces.extend((r"[ .\-/]*" if space else r"[.\-/]*", char))
+    pattern = r"(?<![\w.\-/])" + "".join(pieces) + r"(?!\w|[.\-/]+[A-Z0-9])"
+    return re.search(pattern, text.upper()) is not None
+
+
 def _safe_search_result(row: Any, *, candidate: Mapping[str, Any]) -> tuple[dict[str, Any] | None, int]:
     if not isinstance(row, Mapping):
         return None, 0
@@ -482,7 +501,10 @@ def _safe_search_result(row: Any, *, candidate: Mapping[str, Any]) -> tuple[dict
     allowed_source = _gateway_authorized_source(row, url) or _allowlisted_source_for_url(url)
     if allowed_source is None:
         return None, removed
-    reference_text = normalize_part_number(" ".join((title, snippet, url)))
+    number = str(candidate["part_number"])
+    parsed = urlparse(url)
+    url_values = [unquote(segment) for segment in parsed.path.split("/")]
+    url_values.extend(value for values in parse_qs(parsed.query).values() for value in values)
     return (
         {
             "source": allowed_source["source"],
@@ -492,7 +514,9 @@ def _safe_search_result(row: Any, *, candidate: Mapping[str, Any]) -> tuple[dict
             "title": title,
             "snippet": snippet,
             "search_result_source": source or urlparse(url).hostname or "public_web_search",
-            "part_number_reference_found": str(candidate["normalized_part_number"]) in reference_text,
+            "part_number_reference_found": any(
+                _part_number_reference(number, value) for value in (title, snippet, *url_values)
+            ),
             "evidence_scope": "public_search_snippet",
         },
         removed,

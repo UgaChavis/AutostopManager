@@ -484,11 +484,22 @@ def context_field_evidence(
     lineage = context_lineage(context, inherited)
     rows: list[dict[str, Any]] = []
     provenance: dict[str, Any] = context["provenance"] if isinstance(context.get("provenance"), dict) else {}
+    field_provenance = context.get("field_provenance")
+    field_provenance = field_provenance if isinstance(field_provenance, dict) else {}
     for key in ("vehicle_profile", "vehicle_profile_compact", "crm_vehicle_profile"):
         nested = context.get(key)
+        if isinstance(nested, str):
+            try:
+                nested = json.loads(nested)
+            except (ValueError, TypeError):
+                nested = None
         if isinstance(nested, dict):
             rows.extend(context_field_evidence(nested, inherited=lineage, depth=depth + 1))
     for field, value in context.items():
+        # Match flatten_identity_context: a blank outer value retains the nested fact.
+        # A nonempty explicit override still wins, even over a declared provider origin.
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
         declared = provenance.get(field) or []
         origins = (
             [
@@ -499,7 +510,9 @@ def context_field_evidence(
             if isinstance(declared, list)
             else []
         )
-        origin = next((str(item) for item in origins if item), lineage)
+        field_origin = field_provenance.get(field)
+        field_origin = field_origin.strip() if isinstance(field_origin, str) and field_origin.strip() else lineage
+        origin = next((str(item) for item in origins if item), field_origin)
         rows.append(
             {
                 "field": field,

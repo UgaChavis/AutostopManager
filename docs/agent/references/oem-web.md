@@ -13,3 +13,9 @@ Ssangyong сохраняет отдельный provider и ограничени
 Маршруты берутся из [automotive sources](../automotive_sources/automotive_repair_sources_catalog.json) с `include_licensed=False`: paid/login/registration/subscription не выдаются. Ответ содержит OEM, имя, ссылки, условия применимости, противоречия, статус и следующий ручной шаг. Gateway failure возвращает `search_failed` без внутренних ошибок.
 
 Ссылка/snippet оставляет результат кандидатом до доверенной EPC-проверки. Конфликт или неудачная проверка — «не подтверждён». E6 не пишет CRM, не заказывает и не покупает детали. Source: [oem_candidate_web_evidence.py](../../../autostop_manager/oem_candidate_web_evidence.py).
+
+Упоминание номера проверяется целиком внутри title, snippet или отдельного
+компонента URL. Допустимое оформление пробелами, точками, дефисами и `/`
+сохраняется; префикс/суффикс другого номера и склейка слов или разных полей
+не дают `part_number_reference_found`. Исходная безопасная ссылка сохраняется
+и при отсутствии совпадения. Эта проверка не повышает OEM/fitment подтверждение.

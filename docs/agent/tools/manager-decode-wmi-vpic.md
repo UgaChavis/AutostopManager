@@ -25,5 +25,6 @@ Defaults: `{"timeout_seconds":8}`.
 
 - Модельный год отдельно от даты производства; WMI не определяет двигатель.
 - Один выбранный WMI endpoint; модель/двигатель не восстанавливаются из WMI.
+- Публичный WMI-ключ 3/6 символов сохраняется целиком для manufacturer-family reconciliation; VIN-route redaction не маскирует этот ключ.
 
 Подробный контракт: [справочник](../references/vehicle-identity.md).

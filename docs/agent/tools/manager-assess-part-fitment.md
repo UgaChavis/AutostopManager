@@ -28,5 +28,6 @@ Defaults: `{"scope":"modification"}`.
 - exact_identifier requires matching valid input_binding; modification requires matching typed TecDoc catalog_ref (numeric ID/carType) or matching native Elcats/Japancats/SsangYong refs with their provider/namespace/entry_id/vehicle_context preserved and checked against the vehicle profile. evidence.conditions and inherited/unparsed restrictions are checked with caller criteria; missing/invalid conditions remain unknown.
 - production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.
 - Native public catalog refs can bind supplied catalog context and restrictions, but public rows do not become primary fitment proof. supported still requires independently supplied matching official_epc/manufacturer_fitment_catalog evidence with fitment_assertion=true; native context/parent/source mismatch remains unresolved.
+- Совместимость broad/specific не доказывает конкретное условие: Automatic без известного числа передач не подтверждает 6AT, ROW не подтверждает Europe; семейная модель не подтверждает поколение. Диапазоны принимают только from/to; дополнительные неизвестные keys оставляют unknown.
 
 Подробный контракт: [справочник](../references/partsapi.md).

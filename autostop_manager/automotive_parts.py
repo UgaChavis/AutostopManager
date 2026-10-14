@@ -23,7 +23,12 @@ from .automotive_contracts import (
     valid_binding,
 )
 from .parts_intent import normalize_part_intent
-from .vehicle_identity import identity_values_agree
+from .vehicle_identity import (
+    _identity_tokens,
+    _normalized_identity_value,
+    _transmission_signature,
+    identity_values_agree,
+)
 from .vin_lookup import normalize_part_number
 
 
@@ -209,6 +214,11 @@ def _unresolved_restrictions(row: dict[str, Any], *, prefix: str = "") -> list[s
     ]
 
 
+def _source_part_number(value: Any) -> str:
+    # A structured collection is not one number. Preserve existing scalar conversion.
+    return "" if isinstance(value, (bool, list, dict)) else normalize_part_number(str(value or ""))
+
+
 def capture_oem_evidence(
     part_number: str,
     source: dict[str, Any],
@@ -225,7 +235,7 @@ def capture_oem_evidence(
         return invalid("capture_oem_evidence", "number_or_source_or_scope")
     missing = source_metadata_errors(source)
     normalized_number = normalize_part_number(part_number)
-    if not normalized_number or normalize_part_number(str(source.get("part_number") or "")) != normalized_number:
+    if not normalized_number or _source_part_number(source.get("part_number")) != normalized_number:
         missing.append("source_part_number")
     if not isinstance(brand, str) or not brand.strip() or str(source.get("brand") or "").casefold() != brand.casefold():
         missing.append("source_brand")
@@ -402,7 +412,7 @@ def _date_range_criterion(expected: dict[str, Any], actual: Any) -> str:
 
 
 def _range_criterion(field: str, expected: dict[str, Any], actual: Any) -> str:
-    if expected.get("from") is None and expected.get("to") is None:
+    if set(expected) - {"from", "to"} or (expected.get("from") is None and expected.get("to") is None):
         return "unknown"
     if field == "production_date":
         return _date_range_criterion(expected, actual)
@@ -453,18 +463,49 @@ def _pr_codes_criterion(expected: Any, actual: Any, *, complete: bool) -> str:
     return "rejected" if "rejected" in states else "unknown" if "unknown" in states else "supported"
 
 
+def _identity_criterion(field: str, expected: Any, actual: Any) -> str:
+    """Compatibility may reject a fact; support also requires its stated specificity."""
+    if not identity_values_agree(field, expected, actual):
+        return "rejected"
+    if field == "transmission":
+        _required_kind, required_gears, required_codes = _transmission_signature(expected)
+        _actual_kind, actual_gears, actual_codes = _transmission_signature(actual)
+        if not required_gears <= actual_gears or not required_codes <= actual_codes:
+            return "unknown"
+    elif field == "market":
+        broad = {"global", "row", "europeglobal", "europerow"}
+        if (
+            _normalized_identity_value(field, actual) in broad
+            and _normalized_identity_value(field, expected) not in broad
+        ):
+            return "unknown"
+    elif field == "model" and len(_identity_tokens(actual)) < len(_identity_tokens(expected)):
+        return "unknown"
+    return "supported"
+
+
 def _criterion(field: str, expected: Any, actual: Any, *, pr_codes_complete: bool = False) -> str:
     if field == "pr_codes":
         return _pr_codes_criterion(expected, actual, complete=pr_codes_complete)
     if actual is None or actual == "" or expected is None or expected == "" or expected == []:
         return "unknown"
     if isinstance(expected, list):
-        return "supported" if any(identity_values_agree(field, value, actual) for value in expected) else "rejected"
+        states = [_criterion(field, value, actual) for value in expected]
+        return "supported" if "supported" in states else "unknown" if "unknown" in states else "rejected"
     if isinstance(expected, dict):
         if "from" not in expected and "to" not in expected:
             return "unknown"
         return _range_criterion(field, expected, actual)
-    return "supported" if identity_values_agree(field, expected, actual) else "rejected"
+    return _identity_criterion(field, expected, actual)
+
+
+def _condition_actual(profile: dict[str, Any], field: str) -> Any:
+    actual = profile.get(field)
+    if field == "transmission" and isinstance(actual, str):
+        speeds = finite_number(profile.get("transmission_speeds"), minimum=1)
+        if speeds is not None and speeds.is_integer() and speeds <= 30:
+            return f"{int(speeds)}-speed {actual}"
+    return actual
 
 
 def _checked_conditions(
@@ -476,7 +517,10 @@ def _checked_conditions(
             "required": expected,
             "actual": profile.get(field),
             "state": _criterion(
-                field, expected, profile.get(field), pr_codes_complete=profile.get("pr_codes_complete") is True
+                field,
+                expected,
+                _condition_actual(profile, field),
+                pr_codes_complete=profile.get("pr_codes_complete") is True,
             ),
             **({"actual_complete": profile.get("pr_codes_complete") is True} if field == "pr_codes" else {}),
             **({"source_index": source_index} if source_index is not None else {}),
@@ -513,7 +557,7 @@ def _fitment_sources(
         for index, row in enumerate(evidence)
         if number
         and brand
-        and normalize_part_number(str(row.get("part_number") or "")) == number
+        and _source_part_number(row.get("part_number")) == number
         and str(row.get("brand") or "").casefold() == brand
         and row.get("scope") == scope
     ]
