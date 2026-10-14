@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -59,9 +60,9 @@ def backup(source: Path, output: Path) -> dict[str, object]:
     os.fchmod(descriptor, 0o600)
     os.close(descriptor)
     try:
-        source_uri = f"file:{source.as_posix()}?mode=ro"
-        with sqlite3.connect(source_uri, uri=True, timeout=10) as origin:
-            with sqlite3.connect(temporary, timeout=10) as destination:
+        source_uri = source.absolute().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(source_uri, uri=True, timeout=10)) as origin, origin:
+            with closing(sqlite3.connect(temporary, timeout=10)) as destination, destination:
                 origin.backup(destination)
                 check = destination.execute("PRAGMA quick_check").fetchone()
                 version = destination.execute(
@@ -72,7 +73,10 @@ def backup(source: Path, output: Path) -> dict[str, object]:
         os.chmod(temporary, 0o600, follow_symlinks=False)
         with temporary.open("rb") as backup_file:
             os.fsync(backup_file.fileno())
-        os.replace(temporary, output)
+        try:
+            os.link(temporary, output, follow_symlinks=False)
+        except FileExistsError:
+            raise ValueError("automation_backup_output_exists") from None
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         if hasattr(os, "O_NOFOLLOW"):
             directory_flags |= os.O_NOFOLLOW
