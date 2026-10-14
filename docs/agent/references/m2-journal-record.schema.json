@@ -19,7 +19,7 @@
       "minLength": 1,
       "maxLength": 8000,
       "pattern": "^(?![\\s\\S]*\u0000)(?![\\s\\S]*```m2-record)[\\s\\S]*\\S[\\s\\S]*$",
-      "description": "Complete replacement of current-state.md; preserve all other open issues and limitations from a fresh read."
+      "description": "Complete replacement body of current-state.md, excluding the heading added by the writer; preserve all other open issues and limitations from a fresh read."
     }
   },
   "$defs": {

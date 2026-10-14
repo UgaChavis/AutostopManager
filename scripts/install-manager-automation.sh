@@ -147,34 +147,46 @@ fi
 finish_install() {
   exit_code=$?
   set +e
+  rollback_failed=0
   if [[ -n "${temporary_config:-}" ]]; then
     rm -f -- "${temporary_config}"
   fi
   if [[ "${exit_code}" -ne 0 && "${rollback_armed}" -eq 1 ]]; then
     if [[ "${unit_existed}" -eq 1 ]]; then
-      cp --archive --no-dereference "${rollback_dir}/unit" "${UNIT_PATH}"
+      cp --archive --no-dereference "${rollback_dir}/unit" "${UNIT_PATH}" || rollback_failed=1
     else
-      rm -f -- "${UNIT_PATH}"
+      rm -f -- "${UNIT_PATH}" || rollback_failed=1
     fi
     if [[ "${config_existed}" -eq 1 ]]; then
-      cp --archive --no-dereference "${rollback_dir}/config" "${CONFIG_PATH}"
+      cp --archive --no-dereference "${rollback_dir}/config" "${CONFIG_PATH}" || rollback_failed=1
     else
-      rm -f -- "${CONFIG_PATH}"
+      rm -f -- "${CONFIG_PATH}" || rollback_failed=1
     fi
-    systemctl daemon-reload
-    if [[ "${service_was_enabled}" -eq 1 ]]; then
-      systemctl enable "${UNIT_NAME}"
-    else
-      systemctl disable "${UNIT_NAME}"
+    if [[ "${rollback_failed}" -eq 0 ]]; then
+      systemctl daemon-reload || rollback_failed=1
+    fi
+    if [[ "${rollback_failed}" -eq 0 ]]; then
+      if [[ "${service_was_enabled}" -eq 1 ]]; then
+        systemctl enable "${UNIT_NAME}" || rollback_failed=1
+      else
+        systemctl disable "${UNIT_NAME}" || rollback_failed=1
+      fi
     fi
     if [[ "${service_was_active}" -eq 1 ]]; then
-      systemctl restart "${UNIT_NAME}"
+      if [[ "${rollback_failed}" -eq 0 ]]; then
+        systemctl restart "${UNIT_NAME}" || rollback_failed=1
+      fi
     else
-      systemctl stop "${UNIT_NAME}"
+      systemctl stop "${UNIT_NAME}" || rollback_failed=1
     fi
     echo "manager_automation_installer_rollback_attempted=true" >&2
   fi
-  rm -rf -- "${rollback_dir}"
+  if [[ "${rollback_failed}" -eq 0 ]]; then
+    rm -rf -- "${rollback_dir}"
+  else
+    echo "manager_automation_installer_rollback_incomplete=true" >&2
+    echo "manager_automation_installer_rollback_backup=${rollback_dir}" >&2
+  fi
   exit "${exit_code}"
 }
 trap finish_install EXIT
