@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -137,7 +138,7 @@ def _probe_video(path: Path) -> dict[str, Any]:
         raise VideoPreviewError("video_dimensions_invalid")
     return {
         "codec": codec,
-        "duration_seconds": round(duration, 3),
+        "duration_seconds": duration,
         "width": width,
         "height": height,
         "audio_present": bool(audio_streams),
@@ -192,7 +193,7 @@ def _render_storyboard(video_path: Path, output_path: Path, *, duration: float, 
                 "-sn",
                 "-dn",
                 "-t",
-                f"{duration:.3f}",
+                format(Decimal(str(duration)), "f"),
                 "-vf",
                 filter_graph,
                 "-frames:v",
@@ -260,6 +261,7 @@ def build_private_video_storyboard(
         "preview_path": str(output_path),
         "frame_count": frame_count,
         **probe,
+        "duration_seconds": round(float(probe["duration_seconds"]), 3),
     }
 
 

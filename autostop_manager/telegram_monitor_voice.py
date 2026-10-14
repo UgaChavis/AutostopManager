@@ -23,7 +23,10 @@ _HANDLE_PATTERN = re.compile(r"[A-Za-z0-9_-]{24,128}")
 _SUFFIXES = frozenset({".m4a", ".mp3", ".ogg", ".opus"})
 _LANGUAGE_PATTERN = re.compile(r"[a-z]{2,8}")
 _ERROR_PATTERN = re.compile(r"[a-z0-9_]{3,96}")
-_MAX_RUNNER_OUTPUT_BYTES = 64 * 1024
+_MAX_TRANSCRIPT_CHARS = 32 * 1024
+# JSON can escape each valid transcript character into six bytes. Reserve
+# space for the native result metadata while retaining a bounded envelope.
+_MAX_RUNNER_OUTPUT_BYTES = 6 * _MAX_TRANSCRIPT_CHARS + 4 * 1024
 _MONITOR_VOICE_STAGE_RPC_TIMEOUT_SECONDS = MONITOR_VOICE_STAGE_TIMEOUT_SECONDS + 15
 
 
@@ -109,7 +112,7 @@ def _run_transcriber(path: Path, *, language: str) -> dict[str, Any]:
         )
     transcript = payload.get("text")
     language_value = payload.get("language")
-    if not isinstance(transcript, str) or not transcript.strip() or len(transcript) > 32 * 1024:
+    if not isinstance(transcript, str) or not transcript.strip() or len(transcript) > _MAX_TRANSCRIPT_CHARS:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")
     if not isinstance(language_value, str) or _LANGUAGE_PATTERN.fullmatch(language_value) is None:
         raise MonitorVoiceError("monitor_voice_transcription_invalid")

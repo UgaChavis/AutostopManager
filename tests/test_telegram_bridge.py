@@ -4720,7 +4720,7 @@ def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> N
         async def serve_forever(self):
             state["served"] = True
 
-    async def start_unix_server(callback, *, path):
+    async def start_unix_server(callback, *, path, **_kwargs):
         assert callable(callback)
         assert path == str(config.socket_path)
         config.socket_path.touch()
@@ -4773,7 +4773,7 @@ def test_work_daemon_registers_inbound_handler_before_connect(monkeypatch, tmp_p
         async def serve_forever(self):
             state["served"] = True
 
-    async def start_unix_server(_callback, *, path):
+    async def start_unix_server(_callback, *, path, **_kwargs):
         assert path == str(config.socket_path)
         config.socket_path.touch()
         return Server()

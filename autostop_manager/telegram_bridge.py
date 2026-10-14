@@ -46,6 +46,9 @@ WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
 WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
 WORK_TRANSCRIPTION_MODEL_DIR = Path("/opt/autostop-work-telegram-models/faster-whisper-small")
 MAX_REQUEST_BYTES = 128 * 1024
+# A read batch can contain 100 messages of 4096 characters; JSON escaping alone
+# can expand their text to 2.4 MiB, with room still needed for bounded metadata.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_MESSAGE_CHARS = 4096
 MAX_CAPTION_CHARS = 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
@@ -1147,6 +1150,7 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
             raise BridgeError("download_existing_conflict")
         return output_path, digest
     temp_path = inbox_dir / f".{message_id}-{secrets.token_hex(8)}.tmp"
+    committed = False
     try:
         descriptor = os.open(
             temp_path,
@@ -1158,8 +1162,10 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_path, output_path)
+        committed = True
     finally:
-        temp_path.unlink(missing_ok=True)
+        if not committed:
+            temp_path.unlink(missing_ok=True)
     return output_path, digest
 
 
@@ -1183,6 +1189,7 @@ def _save_monitor_voice_stage(content: bytes, *, handle: str, suffix: str, inbox
     if output_path.exists() or output_path.is_symlink():
         raise BridgeError("inbound_voice_stage_conflict")
     temp_path = inbox_dir / f".monitor-{secrets.token_urlsafe(18)}.tmp"
+    committed = False
     try:
         descriptor = os.open(
             temp_path,
@@ -1194,8 +1201,10 @@ def _save_monitor_voice_stage(content: bytes, *, handle: str, suffix: str, inbox
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_path, output_path)
+        committed = True
     finally:
-        temp_path.unlink(missing_ok=True)
+        if not committed:
+            temp_path.unlink(missing_ok=True)
     return output_path
 
 
@@ -3148,7 +3157,7 @@ async def _expire_monitor_voice_stage(
                     return
                 try:
                     removed = _discard_private_download(staged.path, inbox_dir=config.socket_path.parent / "inbox")
-                except BridgeError:
+                except (BridgeError, OSError):
                     pass
                 else:
                     if removed:
@@ -3194,6 +3203,7 @@ async def _handle_monitor_voice_stage(
             raise BridgeError("download_size_mismatch")
         _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
         handle = secrets.token_urlsafe(24)
+        monitor.require_open(event_id)
         path = _save_monitor_voice_stage(
             content,
             handle=handle,
@@ -4122,7 +4132,10 @@ async def _serve_client_request(
     except Exception:  # noqa: BLE001 - RPC boundary must not leak Telegram or transport details.
         response = {"ok": False, "error": "telegram_operation_failed"}
     try:
-        writer.write(_canonical_json(response) + b"\n")
+        encoded_response = _canonical_json(response) + b"\n"
+        if len(encoded_response) > MAX_RESPONSE_BYTES:
+            encoded_response = _canonical_json({"ok": False, "error": "response_invalid"}) + b"\n"
+        writer.write(encoded_response)
         await writer.drain()
     finally:
         writer.close()
@@ -4457,6 +4470,7 @@ async def run_daemon(
         server = await asyncio.start_unix_server(
             lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
             path=str(config.socket_path),
+            limit=MAX_REQUEST_BYTES,
         )
         socket_stat = config.socket_path.lstat()
         socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
@@ -4819,14 +4833,20 @@ def send_local_request(
             connection.connect(str(socket_path))
             connection.sendall(encoded)
             chunks = bytearray()
-            while b"\n" not in chunks and len(chunks) <= MAX_REQUEST_BYTES:
-                part = connection.recv(65536)
+            complete = False
+            while len(chunks) <= MAX_RESPONSE_BYTES:
+                part = connection.recv(min(65536, MAX_RESPONSE_BYTES + 1 - len(chunks)))
                 if not part:
+                    break
+                newline = part.find(b"\n")
+                if newline != -1:
+                    chunks.extend(part[: newline + 1])
+                    complete = True
                     break
                 chunks.extend(part)
     except OSError as exc:
         raise BridgeError("bridge_unavailable") from exc
-    if not chunks or len(chunks) > MAX_REQUEST_BYTES:
+    if not complete or len(chunks) > MAX_RESPONSE_BYTES:
         raise BridgeError("response_invalid")
     try:
         response = json.loads(bytes(chunks).split(b"\n", 1)[0])
