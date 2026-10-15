@@ -12,6 +12,7 @@ from urllib.request import Request
 
 from .bounded_http_read import BufferedResponse, urlopen as bounded_urlopen
 from .j1_fetch import contains_sensitive
+from .work_operation_matching import OperationMatcher
 
 PUBLIC_RESEARCH_USER_AGENT = "AutostopManager/0.1 public labor research"
 PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
@@ -323,7 +324,12 @@ def _observed_city(snippet: str) -> str:
 
 
 def parse_public_work_evidence(
-    row: dict[str, Any], query: str, operations: list[dict[str, Any]], kind: str
+    row: dict[str, Any],
+    query: str,
+    operations: list[dict[str, Any]],
+    kind: str,
+    *,
+    operation_matcher: OperationMatcher | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Bind amounts to observed operation segments, never to search intent."""
     snippet = " ".join(_clean_text(row.get(key)) for key in ("title", "snippet"))
@@ -347,8 +353,9 @@ def parse_public_work_evidence(
         "evidence": snippet[:180],
     }
     rows: list[dict[str, Any]] = []
+    matcher = operation_matcher or OperationMatcher()
     title_operation = _title_operation_for_caption(
-        str(row.get("title") or ""), str(row.get("snippet") or ""), operations, kind
+        str(row.get("title") or ""), str(row.get("snippet") or ""), operations, kind, matcher
     )
     # The title can supply scope only for an unambiguous measurement caption.
     for field in ("title", "snippet"):
@@ -362,7 +369,9 @@ def parse_public_work_evidence(
                     {"hours": round((low + high) / 2, 2), "range_hours": [low, high]}
                     for low, high in dict.fromkeys(_hours_from_text(segment))
                 ]
-            operation_name = _observed_operation_name(segment, operations) if bindable and len(items) == 1 else ""
+            operation_name = (
+                _observed_operation_name(segment, operations, matcher) if bindable and len(items) == 1 else ""
+            )
             inherited_title = (
                 bindable and field == "snippet" and not operation_name and len(items) == 1 and title_operation
             )
@@ -376,7 +385,7 @@ def parse_public_work_evidence(
                 # Keep parts-inclusive evidence from the same unambiguous caption.
                 if (
                     title_operation
-                    and operation_name == title_operation
+                    and matcher.matches(operation_name, title_operation)
                     and _labor_only_flags(str(row.get("title") or ""))[0] is True
                 ):
                     includes_parts, labor_only = True, False
@@ -432,6 +441,7 @@ def collect_public_work_pricing_research(
     if labor_time_policy != "public_only":
         result["warnings"].append("Only public_only labor-time policy is supported in this implementation.")
 
+    operation_matcher = OperationMatcher(vehicle_context)
     searches = 0
     for query_type, query_list in (("labor_prices", queries["labor_prices"]), ("labor_times", queries["labor_times"])):
         for query in query_list:
@@ -460,7 +470,9 @@ def collect_public_work_pricing_research(
 
             rows_found = 0
             for row in search["results"]:
-                parsed, _ = parse_public_work_evidence(row, query, operations, query_type)
+                parsed, _ = parse_public_work_evidence(
+                    row, query, operations, query_type, operation_matcher=operation_matcher
+                )
                 target = "quotes" if query_type == "labor_prices" else "labor_time_sample"
                 result[target].extend(legacy_work_evidence_row(item) for item in parsed)
                 rows_found += len(parsed)
@@ -597,39 +609,50 @@ def _observed_operation_matches(text: str, operations: list[dict[str, Any]]) -> 
         if not name:
             continue
         aliases = operation.get("aliases")
-        labels = [name, _clean_text(operation.get("input"))]
+        labels = {name.casefold(): name}
+        literal_input = _clean_text(operation.get("input"))
+        if literal_input:
+            labels[literal_input.casefold()] = literal_input
         if isinstance(aliases, (list, tuple)):
-            labels.extend(_clean_text(alias) for alias in aliases)
-        for label in set(labels) - {""}:
+            for alias in aliases:
+                labels.setdefault(_clean_text(alias).casefold(), name)
+        for label, observed_name in labels.items():
+            if not label:
+                continue
             for match in re.finditer(r"(?<!\w)" + re.escape(label) + r"(?!\w)", text, flags=re.I):
-                matches.append((match.start(), match.end(), name))
+                matches.append((match.start(), match.end(), observed_name))
     return matches
 
 
-def _observed_operation_name(text: str, operations: list[dict[str, Any]]) -> str:
+def _observed_operation_name(
+    text: str, operations: list[dict[str, Any]], matcher: OperationMatcher | None = None
+) -> str:
+    matcher = matcher or OperationMatcher()
     matches = _observed_operation_matches(text, operations)
     names = {
-        name
+        matcher.identity(name): name
         for start, end, name in matches
         if not any(
             other_start <= start and end <= other_end and (start, end) != (other_start, other_end)
             for other_start, other_end, _ in matches
         )
     }
-    return names.pop() if len(names) == 1 else ""
+    return next(iter(names.values())) if len(names) == 1 else ""
 
 
-def _title_operation_for_caption(title: str, snippet: str, operations: list[dict[str, Any]], kind: str) -> str:
-    name = _observed_operation_name(title, operations)
+def _title_operation_for_caption(
+    title: str, snippet: str, operations: list[dict[str, Any]], kind: str, matcher: OperationMatcher
+) -> str:
+    name = _observed_operation_name(title, operations, matcher)
     if not name:
         return ""
     extract = _prices_from_text if kind == "labor_prices" else _hours_from_text
     if extract(title) or len(extract(snippet)) != 1:
         return ""
-    return name if all(_caption_is_metadata(text, operations, name) for text in (title, snippet)) else ""
+    return name if all(_caption_is_metadata(text, operations, name, matcher) for text in (title, snippet)) else ""
 
 
-def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str) -> bool:
+def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str, matcher: OperationMatcher) -> bool:
     characters = list(text)
     noun = r"(?:запчаст\w*|материал\w*)"
     connector = r"(?:\s+(?:и|плюс)\s+|\s*[,+/]\s*)"
@@ -656,7 +679,7 @@ def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str)
                     end = noun_lists[index][1]
             characters[start:end] = [" "] * (end - start)
     for start, end, observed in _observed_operation_matches(text, operations):
-        if observed == name:
+        if matcher.matches(observed, name):
             characters[start:end] = [" "] * (end - start)
     # A subject such as "свечи" is not price/time metadata, even without an operation verb.
     caption = re.sub(r"[-+−]?\d+(?:[ ,.\-–]\d+)*", " ", "".join(characters).casefold())

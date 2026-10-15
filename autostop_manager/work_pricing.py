@@ -9,6 +9,7 @@ from typing import Any
 
 from .automotive_contracts import finite_number
 from .config import get_db_path
+from .work_operation_matching import OperationMatcher
 from .work_pricing_research import (
     _dedupe_quote_rows,
     _observation_location,
@@ -228,22 +229,6 @@ def _significant_tokens(value: str) -> set[str]:
     return {token for token in tokens if token not in COMMON_OPERATION_WORDS}
 
 
-def _operations_match(operation_name: str, quote_operation_name: str) -> bool:
-    op = _canonical_operation(operation_name)
-    quote_op = _canonical_operation(quote_operation_name)
-    if not op or not quote_op:
-        return False
-    if op == quote_op:
-        return True
-    if _operation_category(op) != _operation_category(quote_op):
-        return False
-    operation_tokens = _significant_tokens(op)
-    quote_tokens = _significant_tokens(quote_op)
-    return bool(operation_tokens and quote_tokens) and (
-        operation_tokens <= quote_tokens or quote_tokens <= operation_tokens
-    )
-
-
 def _load_labor_experience(path: Path | None = None) -> dict[str, Any] | None:
     """Read optional aggregates beside the persistent Manager database."""
 
@@ -397,10 +382,10 @@ def _normalize_quote(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_quote_sample(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_quote_sample(rows: list[dict[str, Any]], matcher: OperationMatcher) -> list[dict[str, Any]]:
     adapted = [legacy_work_evidence_row(row) for row in rows]
     identities = [
-        {**normalized, "operation_name": normalized["normalized_operation"]}
+        {**normalized, "operation_name": matcher.identity(normalized["operation_name"])}
         for normalized in (_normalize_quote(row) for row in adapted)
     ]
     return [_normalize_quote(row) for row in _dedupe_quote_rows(adapted, identities=identities)]
@@ -639,6 +624,7 @@ def _operation_estimate(
     operation: dict[str, Any],
     quotes: list[dict[str, Any]],
     vehicle_context: dict[str, Any],
+    matcher: OperationMatcher,
 ) -> dict[str, Any]:
     operation_name = str(operation.get("input") or operation.get("normalized_name") or "")
     matched: list[dict[str, Any]] = []
@@ -649,7 +635,7 @@ def _operation_estimate(
             row["exclude_reason"] = ",".join(row.get("reasons", []))
             excluded.append(row)
             continue
-        if not _operations_match(operation_name, str(quote.get("operation_name") or "")):
+        if not matcher.matches(operation_name, str(quote.get("operation_name") or "")):
             continue
         row = dict(quote)
         row["matched_operation"] = operation_name
@@ -777,15 +763,16 @@ def _operation_labor_time_analysis(
     labor_time_rows: list[dict[str, Any]],
     russia_average_rub: int | None,
     autostop_price_rub: int | None,
+    matcher: OperationMatcher,
 ) -> dict[str, Any]:
-    operation_name = str(operation.get("normalized_name") or operation.get("input") or "")
+    operation_name = str(operation.get("input") or operation.get("normalized_name") or "")
     matched: list[dict[str, Any]] = []
     invalid: list[dict[str, Any]] = []
     for row in labor_time_rows:
         if not row.get("valid_input"):
             invalid.append(row)
             continue
-        if not _operations_match(operation_name, str(row.get("operation_name") or "")):
+        if not matcher.matches(operation_name, str(row.get("operation_name") or "")):
             continue
         matched.append(row)
 
@@ -1361,7 +1348,8 @@ def estimate_repair_work_cost(
             labor_time_policy=labor_time_policy,
         )
     )
-    quote_sample = _normalize_quote_sample([*manual_quote_rows, *research.get("quotes", [])])
+    matcher = OperationMatcher(vehicle_context)
+    quote_sample = _normalize_quote_sample([*manual_quote_rows, *research.get("quotes", [])], matcher)
     labor_time_sample = _normalize_labor_time_sample(
         [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
     )
@@ -1373,7 +1361,7 @@ def estimate_repair_work_cost(
         missing_context.append("exact_work_items")
 
     operation_estimates = [
-        _operation_estimate(operation=operation, quotes=quote_sample, vehicle_context=vehicle_context)
+        _operation_estimate(operation=operation, quotes=quote_sample, vehicle_context=vehicle_context, matcher=matcher)
         for operation in normalized_operations
     ]
     labor_time_analysis = [
@@ -1382,6 +1370,7 @@ def estimate_repair_work_cost(
             labor_time_rows=labor_time_sample,
             russia_average_rub=estimate.get("russia_average_rub"),
             autostop_price_rub=estimate.get("autostop_price_rub"),
+            matcher=matcher,
         )
         for operation, estimate in zip(normalized_operations, operation_estimates, strict=False)
     ]
