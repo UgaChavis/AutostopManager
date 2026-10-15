@@ -64,7 +64,7 @@ _SIMPLE_OBJECTS = {
 
 def _tokens(value: str) -> tuple[str, ...]:
     value = re.sub(r"[,/+&]", " и ", value.casefold().replace("ё", "е"))
-    return tuple(_WORDS.get(word, word) for word in re.findall(r"[a-z0-9а-я]+", value))
+    return tuple(_WORDS.get(word, word) for word in re.findall(r"[^\W_]+", value))
 
 
 @dataclass(frozen=True)
@@ -157,3 +157,15 @@ class OperationMatcher:
             return False
         left_axes, right_axes = dict(left.qualifiers), dict(right.qualifiers)
         return all(left_axes[axis] == right_axes[axis] for axis in left_axes.keys() & right_axes.keys())
+
+    def matches_known_qualification(self, requested: object, observed: object) -> bool:
+        """Extend exact-name consumers only for a strictly more qualified simple work."""
+        if not isinstance(requested, str) or not isinstance(observed, str):
+            return False
+        left, right = self._profile(requested), self._profile(observed)
+        return (
+            left.simple
+            and right.simple
+            and left.core == right.core
+            and (left.qualifiers < right.qualifiers or right.qualifiers < left.qualifiers)
+        )

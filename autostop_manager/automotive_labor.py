@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from .automotive_contracts import MAX_ROWS, content_digest, finite_number, invalid, result
 from .j1_fetch import contains_sensitive
 from .listing_executor import read_execution_deadline
+from .work_operation_matching import OperationMatcher
 
 UNITS = {
     "hours": 1.0,
@@ -164,6 +165,7 @@ def collect_work_price_evidence(
     if "provided_aggregate" in chosen and not isinstance(aggregate_evidence, dict):
         return invalid("collect_work_price_evidence", "aggregate_evidence")
     operations = [{"normalized_name": name, "input": name} for name in work_items]
+    operation_matcher = OperationMatcher(context)
     observations: list[dict[str, Any]] = []
     labor: list[dict[str, Any]] = []
     evidence: list[dict[str, Any]] = []
@@ -192,7 +194,9 @@ def collect_work_price_evidence(
                 continue
             attempts.append(attempt)
             for row in found.get("results", []):
-                parsed, source = research.parse_public_work_evidence(row, query, operations, kind)
+                parsed, source = research.parse_public_work_evidence(
+                    row, query, operations, kind, operation_matcher=operation_matcher
+                )
                 evidence.append(source)
                 if kind == "labor_prices":
                     observations.extend(parsed)
@@ -228,7 +232,11 @@ def _price_round(value: float, quantum: float) -> float:
 
 
 def _operation_price(
-    row: dict[str, Any], rate: float | None, observations: list[dict[str, Any]], basis: str
+    row: dict[str, Any],
+    rate: float | None,
+    observations: list[dict[str, Any]],
+    basis: str,
+    matcher: OperationMatcher,
 ) -> tuple[float | None, list[float] | None]:
     if basis == "hourly_rate":
         hours = finite_number(row.get("hours"))
@@ -246,7 +254,10 @@ def _operation_price(
     sample = [
         finite_number(item.get("price_rub"))
         for item in observations
-        if item.get("operation_name") == row.get("operation_name")
+        if (
+            item.get("operation_name") == row.get("operation_name")
+            or matcher.matches_known_qualification(row.get("operation_name"), item.get("operation_name"))
+        )
         and item.get("labor_only") is True
         and item.get("includes_parts") is False
     ]
@@ -297,6 +308,7 @@ def calculate_work_price(
     exclusions: list[dict[str, Any]] = []
     missing = list(unknown_costs or [])
     seen: set[str] = set()
+    operation_matcher = OperationMatcher()
     included = {str(operation) for row in labor for operation in row.get("included_operations", [])}
     for index, row in enumerate(labor):
         key = _operation_key(row, row.get("operation_name") or index)
@@ -308,7 +320,7 @@ def calculate_work_price(
             missing.append(key + ".overlap_adjustment")
             exclusions.append({"operation_id": key, "reason": "unresolved_overlap"})
             continue
-        price, bounds = _operation_price(row, rate, sample, str(basis))
+        price, bounds = _operation_price(row, rate, sample, str(basis), operation_matcher)
         if price is None or bounds is None:
             missing.append(key + ".price_basis")
             exclusions.append({"operation_id": key, "reason": "unknown_labor_or_price"})

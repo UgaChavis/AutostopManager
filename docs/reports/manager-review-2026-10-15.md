@@ -401,6 +401,69 @@ collectors и ready estimate работают через синтетическ�
 Проверка числа числовых упоминаний не доказывает полноту такого названия и не
 восстанавливает текст, уже отброшенный capture caps HTML gateway.
 
+## 011 — полный захваченный состав операции
+
+Граница: общий resolver direct/title→caption, сохранение observed qualifiers,
+контекст второго collector и непосредственный pure consumer. Baseline
+`8cdc561` имеет то же дерево, что и исходный `b21ba64`.
+Два независимых review и refresh на четырёх LF blobs подтвердили: найденный
+короткий label терял неизвестную деталь, действие, отрицание, код или год.
+Три составных цены по 5000 руб. назначались одиночному запросу как 7300;
+нормочасы также создавали ложный fallback. Уточнения «передние» и DSG 7
+превращались в generic, после чего evidence подходило противоположному запросу.
+
+Один resolver проверяет весь captured scope после существующего DAG.
+Максимальные фактические literal/alias spans защищены; известная metadata
+подтверждается на исходных координатах. Wildcard-интервал prefix-hours не
+считается metadata: покрываются число, доказанная единица и заголовок.
+Неизвестные слова, Unicode, числа, отрицания и dangling connectors остаются
+в составе операции. После удаления чисел или labels новая metadata-фраза
+не создаётся. Одна и та же проверка применяется к direct и caption;
+raw cardinality010, caps, provenance, flags и разграничение записей сохранены.
+Layout slash удаляется только на уже доказанной внутренней границе DAG;
+настоящий конечный slash остаётся частью неизвестного scope.
+
+Возвращается прежний target только при strict identity полного наблюдения.
+Допустимый дополнительный axle/side/DSG qualifier сохраняется в observed name.
+Matcher удерживает Unicode word tokens вместо молчаливого удаления неизвестного
+алфавита. Alternate collector передаёт тот же проверяемый vehicle context.
+Полные literal/normalized/declared-alias роли009, в том числе составные имена
+со словами «без», «и материалов», числом ТО 2 или символами №/#, сохраняются.
+Неизвестные символы проверяются только вне фактически захваченных полных
+labels; это не разрешает внешний неизвестный объект, код или знак.
+
+Pure calculator сохраняет буквальное равенство имён. Дополнительное сопоставление
+ограничено двумя строками с known simple профилями, одинаковым core и strict
+proper-subset qualifiers: generic↔front, front↔front-left, DSG↔DSG 7/0AM.
+Case-only, alias-only, противоположные qualifiers и несравнимые DSG 7↔0AM
+не получают нового правила. Matcher кешируется в пределах одного расчёта;
+цены, median, flags, округление, IDs и overlap не меняются.
+
+Root и свежая приёмка обнаружили потерю консервативного parts veto для
+заголовков с недопустимыми `1000 $` и `$1000`. Отдельная negative-only ветка
+учитывает доказанную monetary annotation только для veto явно названной работы
+в caption. Символы Unicode Sc берутся из самого текста; поддерживаются обе
+стороны числа и один знак с полными token/number boundaries. Уже принятая
+RUB-цена в заголовке сохраняет прежнее разграничение самостоятельных записей.
+Это не разрешает positive inheritance и не скрывает чужие объекты/коды.
+Служебные фразы должны существовать целиком в исходном тексте, включая
+«без запчастей» и «только работа».
+
+478 новых случаев: исходный код даёт **257 failed / 221 passed**.
+Расширенный исправленный профиль: **2501 passed**; Ruff/format и mypy
+98 files PASS. Проверены обе collector→estimate/ready/pure цепочки, qualifier
+reuse и конфликты, unknown residual, title parts veto, foreign amounts,
+защищённые full names/aliases, исходные metadata spans, replay/provenance,
+immutability и raw-count010. Тесты используют синтетические HTML и источники;
+скрытые network/private acquisition запрещены. Ускорение не заявляется.
+
+Граница доказательства — захваченный текст и существующий словарь aliases/
+qualifiers/metadata; хвост за HTML caps не восстанавливается. Следующий участок:
+pure public-observation binding при пустом или нестроковом operation_name.
+Literal fallback исторически допускает такую цену; новый qualifier fallback
+не расширяет это поведение. Source/URI policy, дополнительные lexing формы и
+непроверенные обязанности файлов остаются в очереди.
+
 ## Реестр охвата и очередь
 
 Здесь отмечаются именно проверенные ответственности; review транспорта не
@@ -409,12 +472,12 @@ collectors и ready estimate работают через синтетическ�
 По умолчанию каждый tracked path снимка остаётся в очереди, кроме явно описанной
 ответственности. Выполнение теста не означает review его исходного текста.
 Полный технический inventory поддерживается вместе с контекстом кампании;
-baseline `e437e33` содержит 577 tracked paths, текущий участок добавляет один
+baseline `8cdc561` содержит 578 tracked paths, текущий участок добавляет один
 тестовый файл. Частичный review файла оставляет остальные его функции в очереди.
 
 | Направление | Проверенный участок / следующее основание |
 | --- | --- |
-| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. Далее — direct compound parser, URI/source validation и длины полей. |
+| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. 011: полный captured scope, original metadata, сохранённые qualifiers, context parity и узкий pure consumer. Далее — пустые имена pure binding, URI/source validation и длины полей. |
 | Рынок деталей и объявления | В очереди: идентичность, давность, регион, дубли. |
 | Store | В очереди: один write/readback/uncertain-outcome переход за итерацию. |
 | Telegram | В очереди: lease, replay, восстановление и wake. |
