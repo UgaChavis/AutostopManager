@@ -292,6 +292,7 @@ def calculate_work_price(
     sample = observations or []
     if (
         not policy.get("version")
+        or not isinstance(basis, str)
         or basis not in {"hourly_rate", "public_observations"}
         or coefficient is None
         or quantum is None

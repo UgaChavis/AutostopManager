@@ -496,6 +496,35 @@ partial/unknown_costs и неизменность входов. Сеть и priv
 native coercion scalar-аргументов и переполнение конечных чисел остаются
 отдельными основаниями. Внешняя schema и normalize_labor_time не изменены.
 
+## 013 — тип основания расчёта до membership
+
+Граница: порядок policy validation в `calculate_work_price` и его native MCP
+envelope. Baseline — дерево `0c6be59`. Два независимых review и refresh на
+текущем 012 подтвердили: при truthy version list/dict в policy.basis вызывает
+TypeError в API и ToolError в native raw/JSON-encoded вызове. Остальные неверные
+JSON-типы возвращают штатный invalid_input; false/missing version раньше
+маскирует исключение.
+
+Один str type guard добавлен непосредственно перед set membership, после
+прежней проверки version. Неверный basis получает существующие invalid_input,
+missing_fields policy_version_basis_rate, пустые data и нулевую execution.
+Нет str-coercion, trim/casefold, расширения enum или изменения внешней schema.
+Outer validation остаётся первой, проверки observations/labor structure и
+unknown_costs — после policy. Неверная policy не становится частичной сметой.
+
+79 новых случаев: baseline **17 failed / 62 passed**, исправленный расширенный
+профиль **2672 passed**. Ruff/format14files и mypy98files PASS. Проверены все
+основные JSON-типы basis, native raw/encoded nested JSON и text/structured
+parity, false/missing version, конфликтующие поздние ошибки и outer schema.
+Контроли сохраняют hourly/public, defaults, известный ноль, median/coefficient/
+rounding/range, partial/subtotal/unknown_costs, имена012 и неизменность входов.
+Сеть и private acquisition запрещены; ускорение не заявляется.
+
+Следующий кандидат — ограниченная классификация region в рыночной оценке
+детали: входы, локальный/РФ сегменты и влияние на медиану. Native scalar
+coercion, truthy non-string version, finite arithmetic overflow, дополнительные
+lexing/URI/source правила и остаточные обязанности остаются в очереди.
+
 ## Реестр охвата и очередь
 
 Здесь отмечаются именно проверенные ответственности; review транспорта не
@@ -504,13 +533,13 @@ native coercion scalar-аргументов и переполнение коне
 По умолчанию каждый tracked path снимка остаётся в очереди, кроме явно описанной
 ответственности. Выполнение теста не означает review его исходного текста.
 Полный технический inventory поддерживается вместе с контекстом кампании;
-baseline `e88ca4a` содержит 579 tracked paths, текущий участок добавляет один
+baseline `0c6be59` содержит 580 tracked paths, текущий участок добавляет один
 тестовый файл. Частичный review файла оставляет остальные его функции в очереди.
 
 | Направление | Проверенный участок / следующее основание |
 | --- | --- |
-| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. 011: полный captured scope, original metadata, сохранённые qualifiers, context parity и узкий pure consumer. 012: непустые строковые имена public-observation binding. Далее — policy.basis validation, URI/source validation и длины полей. |
-| Рынок деталей и объявления | В очереди: идентичность, давность, регион, дубли. |
+| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. 011: полный captured scope, original metadata, сохранённые qualifiers, context parity и узкий pure consumer. 012: непустые строковые имена public-observation binding. 013: тип policy.basis до membership с прежним validation order. В очереди — scalar coercion, арифметика, URI/source validation и длины полей. |
+| Рынок деталей и объявления | Следующий кандидат: классификация региона и её влияние на сегменты/медиану. В очереди: идентичность, давность, прочие региональные переходы и дубли. |
 | Store | В очереди: один write/readback/uncertain-outcome переход за итерацию. |
 | Telegram | В очереди: lease, replay, восстановление и wake. |
 | Автоматизации | В очереди: расписания, reconciliation, outbox и восстановление. |
