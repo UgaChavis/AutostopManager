@@ -526,6 +526,106 @@ def test_title_only_parts_included_price_retains_parts_veto():
     assert parsed[0]["labor_only"] is False
 
 
+@pytest.mark.parametrize("explicit_name", [False, True])
+@pytest.mark.parametrize("marker", ["с запчастями", "С МАТЕРИАЛАМИ", "с\u00a0запчастями"])
+@pytest.mark.parametrize("scope", ["Только работа", "Без учета запчастей"])
+def test_caption_parts_veto_survives_a_conflicting_price_snippet(explicit_name, marker, scope):
+    title = f"Замена масла {marker}"
+    snippet = f"Красноярск. {OPERATION + ': ' if explicit_name else ''}{scope} 5000 руб."
+    row = {**public_rows()[0], "title": title, "snippet": snippet}
+    parsed, source = research.parse_public_work_evidence(
+        row, "произвольный запрос", [{"normalized_name": OPERATION}], "labor_prices"
+    )
+    assert len(parsed) == 1
+    observation = parsed[0]
+    assert (observation["operation_name"], observation["price_rub"]) == (OPERATION, 5000)
+    assert (observation["includes_parts"], observation["labor_only"]) == (True, False)
+    assert observation["source"] == source
+    assert source["primary_lineage"] == row["source"] and source["locator"] == row["url"]
+    assert observation["evidence"] == (title.replace("\u00a0", " ") + " " + snippet)[:180]
+
+
+@pytest.mark.parametrize("explicit_name", [False, True])
+def test_caption_keeps_title_parts_evidence_when_price_scope_is_unknown(explicit_name):
+    snippet = f"Красноярск. {OPERATION + ': ' if explicit_name else ''}Цена 5000 руб."
+    row = {**public_rows()[0], "title": "Замена масла с запчастями", "snippet": snippet}
+    parsed, _ = research.parse_public_work_evidence(row, "цена", [{"normalized_name": OPERATION}], "labor_prices")
+    assert (parsed[0]["includes_parts"], parsed[0]["labor_only"]) == (True, False)
+
+
+@pytest.mark.parametrize("amount", ["200 руб.", "300000 руб.", "-9000 руб.", "1000 $"])
+def test_caption_veto_is_conservative_when_title_amount_is_not_an_accepted_price(amount):
+    row = {**public_rows()[0], "title": "Замена масла с запчастями " + amount}
+    parsed, _ = research.parse_public_work_evidence(row, "цена", [{"normalized_name": OPERATION}], "labor_prices")
+    quote = next(item for item in parsed if item["price_rub"] == 5000)
+    assert (quote["includes_parts"], quote["labor_only"]) == (True, False)
+
+
+@pytest.mark.parametrize(
+    "title, snippet",
+    [
+        ("Замена свечей с запчастями", "Красноярск. Замена масла: только работа 5000 руб."),
+        ("Замена масла с запчастями 9000 руб.", "Красноярск. Замена масла: только работа 5000 руб."),
+        ("Замена масла и свечей с запчастями", "Красноярск. Замена масла: только работа 5000 руб."),
+        ("Замена масла с запчастями", "Красноярск. Замена масла: только работа 5000 руб.; только работа 6000 руб."),
+    ],
+)
+def test_caption_veto_does_not_cross_operation_or_separate_price_scope(title, snippet):
+    row = {**public_rows()[0], "title": title, "snippet": snippet}
+    parsed, _ = research.parse_public_work_evidence(row, "цена", [{"normalized_name": OPERATION}], "labor_prices")
+    quote = next(item for item in parsed if item["operation_name"] == OPERATION and item["price_rub"] == 5000)
+    assert (quote["includes_parts"], quote["labor_only"]) == (False, True)
+
+
+def test_caption_does_not_transfer_positive_labor_only_from_title():
+    row = {**public_rows()[0], "title": "Замена масла, только работа", "snippet": "Цена 5000 руб."}
+    parsed, _ = research.parse_public_work_evidence(row, "цена", [{"normalized_name": OPERATION}], "labor_prices")
+    assert (parsed[0]["includes_parts"], parsed[0]["labor_only"]) == (None, False)
+
+
+@pytest.mark.parametrize("marker", ["с запчастями", "с материалами"])
+def test_caption_parts_scope_does_not_change_labor_time(marker):
+    row = {**public_rows()[0], "title": "Замена масла " + marker, "snippet": "Норма времени 2 часа."}
+    parsed, source = research.parse_public_work_evidence(row, "норма", [{"normalized_name": OPERATION}], "labor_times")
+    assert parsed[0]["operation_name"] == OPERATION
+    assert parsed[0]["range_hours"] == [2.0, 2.0]
+    assert "includes_parts" not in parsed[0] and "labor_only" not in parsed[0]
+    assert parsed[0]["source"] == source
+
+
+def test_caption_parts_veto_accepts_the_same_explicit_operation_alias():
+    name = "замена рулевой рейки"
+    row = {**public_rows()[0], "title": "Рулевая рейка с запчастями", "snippet": "Только работа 5000 руб."}
+    parsed, _ = research.parse_public_work_evidence(
+        row, "цена", [{"normalized_name": name, "aliases": ["рулевая рейка"]}], "labor_prices"
+    )
+    assert parsed[0]["operation_name"] == name
+    assert (parsed[0]["includes_parts"], parsed[0]["labor_only"]) == (True, False)
+
+
+@pytest.mark.parametrize("explicit_name", [False, True])
+@pytest.mark.parametrize("parts_in_title", [False, True])
+def test_caption_price_scope_reaches_legacy_and_pure_calculators(explicit_name, parts_in_title):
+    observations = []
+    for row in public_rows():
+        row["title"] = "Замена масла" + (" с запчастями" if parts_in_title else "")
+        row["snippet"] = f"Красноярск. {OPERATION + ': ' if explicit_name else ''}Только работа 5000 руб."
+        parsed, _ = research.parse_public_work_evidence(row, "цена", [{"normalized_name": OPERATION}], "labor_prices")
+        observations.extend(parsed)
+    legacy = estimate([research.legacy_work_evidence_row(item) for item in observations])
+    pure = labor.calculate_work_price(
+        [{"operation_name": OPERATION}],
+        {"basis": "public_observations", "version": "test-v1"},
+        observations=observations,
+    )
+    expected = (None, None) if parts_in_title else (7300, 5000)
+    assert (legacy["autostop_price_rub"], pure["data"]["total"]) == expected
+    sample = legacy["operation_estimates"][0]["sample"]
+    assert sample["valid_count"] == (0 if parts_in_title else 3)
+    if parts_in_title:
+        assert all("includes_parts" in item["reasons"] for item in sample["invalid_quotes"])
+
+
 @pytest.mark.parametrize(
     ("snippet", "city"),
     [
