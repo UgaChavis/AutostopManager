@@ -15,7 +15,7 @@ from urllib.request import Request
 import pytest
 
 from autostop_manager import bounded_http_read as bounded
-from autostop_manager import catalog_clients, vin_lookup
+from autostop_manager import catalog_clients, vin_lookup, work_pricing_research
 
 
 @pytest.fixture
@@ -61,20 +61,33 @@ def local_http(monkeypatch):
                 else:
                     status = 302 if self.path == "/redirect" else 429 if self.path == "/quota" else 200
                     body = b'{"msg":"quota"}' if status == 429 else b"0123456789"
+                    if self.path.startswith("/prefix/"):
+                        size = int(self.path.rsplit("/", 1)[1])
+                        body = b'<div class="result results_links"><a class="result__a" href="https://fixture.invalid/">Synthetic</a></div></div>'
+                        body += b" " * (size - len(body))
+                    elif self.path == "/prefix-stall":
+                        body = b"x" * 250_000
                     self.send_response(status)
-                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Content-Length", str(len(body) + (self.path == "/prefix-stall")))
                     if status == 302:
                         self.send_header("Location", "/success")
                     self.end_headers()
                     self.wfile.write(body)
-                    return
-                while not stopped.is_set():
+                    self.wfile.flush()
+                    if self.path != "/prefix-stall":
+                        return
+                # A broken transport must fail the regression, not hang pytest forever.
+                finish_at = time.monotonic() + 1.2
+                while not stopped.is_set() and time.monotonic() < finish_at:
                     if self.client_closed():
                         return
-                    self.connection.sendall(b"x")
+                    if self.path != "/prefix-stall":
+                        self.connection.sendall(b"x")
                     time.sleep(0.02)
-            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+            except OSError:
                 closed.set()
+                self.close_connection = True
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
@@ -122,14 +135,71 @@ def test_no_redirect_and_error_body_keep_http_error_compatibility(local_http):
     assert quota.value.code == 429 and json.loads(quota.value.read()) == {"msg": "quota"}
 
 
-@pytest.mark.parametrize("facade", [catalog_clients, vin_lookup])
+@pytest.mark.parametrize("facade", [catalog_clients, vin_lookup, work_pricing_research])
 def test_existing_facade_read_uses_whole_allocated_deadline(local_http, facade):
     base, closed, _, _ = local_http
     started = time.monotonic()
     with pytest.raises(TimeoutError, match="provider_total_deadline_exceeded"):
-        facade.urlopen(Request(base + "/body-trickle"), timeout=0.45)
+        with facade.urlopen(Request(base + "/body-trickle"), timeout=0.45):
+            pass
     assert time.monotonic() - started < 0.85
     assert closed.wait(1)
+
+
+@pytest.mark.parametrize("path", ["/headers-trickle", "/body-trickle", "/shared-budget", "/delayed-headers"])
+def test_public_labor_search_owns_the_entire_http_deadline(local_http, monkeypatch, path):
+    base, closed, _, _ = local_http
+    monkeypatch.setattr(work_pricing_research, "Request", lambda _url, **kwargs: Request(base + path, **kwargs))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="provider_total_deadline_exceeded"):
+        work_pricing_research._ddg_search("synthetic labor deadline", timeout_seconds=0.45)
+    assert time.monotonic() - started < 0.85
+    assert closed.wait(1.1)
+
+
+@pytest.mark.parametrize("size", [249_999, 250_000, 250_001])
+def test_public_labor_search_preserves_the_bounded_html_prefix(local_http, monkeypatch, size):
+    base, _, _, _ = local_http
+    monkeypatch.setattr(
+        work_pricing_research, "Request", lambda _url, **kwargs: Request(base + f"/prefix/{size}", **kwargs)
+    )
+    result = work_pricing_research._ddg_search("synthetic labor prefix", timeout_seconds=2)
+    assert result["results"] == [
+        {"source": "fixture.invalid", "title": "Synthetic", "url": "https://fixture.invalid/", "snippet": "Synthetic"}
+    ]
+
+
+def test_public_labor_prefix_does_not_wait_for_an_extra_byte_or_eof(local_http):
+    base, closed, _, _ = local_http
+    started = time.monotonic()
+    with work_pricing_research.urlopen(Request(base + "/prefix-stall"), timeout=0.8) as response:
+        assert response.read(250_000) == b"x" * 250_000
+    assert time.monotonic() - started < 0.6
+    assert closed.wait(1)
+
+
+def test_public_labor_transport_keeps_redirect_and_http_error_contracts(local_http):
+    base, _, observed, _ = local_http
+    with work_pricing_research.urlopen(
+        Request(base + "/redirect", headers={"X-Test": "synthetic"}), timeout=2
+    ) as response:
+        assert response.read(250_000) == b"0123456789"
+        assert response.geturl() == base + "/success"
+    assert [item[1] for item in observed] == ["/redirect", "/success"]
+    with pytest.raises(HTTPError) as quota:
+        work_pricing_research.urlopen(Request(base + "/quota"), timeout=2)
+    assert quota.value.code == 429 and json.loads(quota.value.read()) == {"msg": "quota"}
+
+
+def test_opt_in_prefix_read_does_not_weaken_the_strict_transport_default(local_http):
+    base, _, _, _ = local_http
+    with bounded.urlopen(Request(base + "/success"), timeout=2, maximum=8, truncate=True) as response:
+        assert response.read() == b"01234567"
+    with pytest.raises(ValueError, match="provider_response_too_large"):
+        bounded.urlopen(Request(base + "/success"), timeout=2, maximum=8)
+    with pytest.raises(HTTPError) as quota:
+        bounded.urlopen(Request(base + "/quota"), timeout=2, maximum=8, truncate=True)
+    assert quota.value.code == 429 and json.loads(quota.value.read()) == {"msg": "quota"}
 
 
 def test_catalog_allocated_budget_does_not_change_public_timeout_clamp(monkeypatch):

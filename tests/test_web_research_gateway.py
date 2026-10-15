@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 
 import autostop_manager.web_research_gateway as web_gateway
@@ -292,6 +293,48 @@ def test_local_ddg_fallback_normalizes_provider_failure_without_error_text():
     assert result["ok"] is False
     assert result["fallback_used"] is True
     assert result["error"] == {"code": "web_search_provider_failed", "retryable": True}
+
+
+@pytest.mark.parametrize("method", ["search_web_multi", "research_part_public_evidence"])
+@pytest.mark.parametrize(
+    ("budget", "expected"),
+    [
+        (0.12, 0.12),
+        (0.5, 0.5),
+        (1.5, 1.5),
+        (2.9, 2.9),
+        (7, 7),
+        (90, 60),
+        (0, 1),
+        (-1, 1),
+        (True, 4),
+        (float("nan"), 4),
+        (float("inf"), 4),
+        (None, 4),
+    ],
+)
+def test_local_ddg_keeps_fractional_budgets_and_legacy_invalid_defaults(method, budget, expected):
+    seen = []
+
+    def search(_query, *, timeout_seconds):
+        seen.append(timeout_seconds)
+        return {"results": []}
+
+    getattr(DuckDuckGoWebResearchGateway(search), method)(query="synthetic labor budget", timeout_seconds=budget)
+    assert seen == [expected]
+
+
+@pytest.mark.parametrize("method", ["search_web_multi", "research_part_public_evidence"])
+@pytest.mark.parametrize("reason", ["provider_transport_busy", "provider_transport_unavailable"])
+@pytest.mark.parametrize("is_http_error", [False, True])
+def test_local_ddg_capacity_failure_is_not_a_retryable_provider_failure(method, reason, is_http_error):
+    def search(_query, *, timeout_seconds):
+        if is_http_error:
+            raise HTTPError("https://fixture.invalid/", 503, reason, None, None)
+        raise URLError(reason)
+
+    result = getattr(DuckDuckGoWebResearchGateway(search), method)(query="synthetic labor capacity")
+    assert result["error"] == {"code": "web_search_provider_failed", "retryable": is_http_error}
 
 
 def test_part_evidence_adapter_removes_separator_formatted_vin_before_invocation():
