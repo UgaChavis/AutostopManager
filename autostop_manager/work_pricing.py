@@ -71,6 +71,16 @@ def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value.casefold()).strip()
 
 
+def _source_count(rows: list[dict[str, Any]]) -> int:
+    """Fold source labels while preserving explicit scheme:// URI identities."""
+    sources: set[str] = set()
+    for row in rows:
+        source = str(row.get("source") or "").strip()
+        if source:
+            sources.add(source if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", source) else _clean_text(source))
+    return len(sources)
+
+
 def _normalize_key(value: str | None) -> str:
     text = _clean_text(value)
     return re.sub(r"[^a-z0-9а-яё]+", "_", text).strip("_")
@@ -672,7 +682,7 @@ def _operation_estimate(
     selected_method: str | None = None
     selected_multiplier: float | None = None
     for region in region_preference:
-        source_count = len({quote.get("source") for quote in regional_samples[region]["valid_quotes"]})
+        source_count = _source_count(regional_samples[region]["valid_quotes"])
         if (
             regional_samples[region]["valid_count"] >= MIN_CONFIDENT_QUOTES
             and source_count >= MIN_INDEPENDENT_QUOTE_SOURCES
@@ -703,7 +713,7 @@ def _operation_estimate(
     if not matched:
         missing_context.append("public_krasnoyarsk_or_saint_petersburg_labor_only_price_sample")
 
-    source_count = len({quote.get("source") for quote in selected_quotes if quote.get("source")})
+    source_count = _source_count(selected_quotes)
     low_quote_confidence = any(quote.get("confidence") == "low" for quote in selected_quotes)
     if not matched:
         confidence = "blocked"
@@ -781,7 +791,7 @@ def _operation_labor_time_analysis(
 
     ranges = [row["range_hours"] for row in matched if row.get("range_hours")]
     hours = [float(row["hours"]) for row in matched if row.get("hours") is not None]
-    source_count = len({row.get("source") for row in matched if row.get("source")})
+    source_count = _source_count(matched)
     average_hours = round(sum(hours) / len(hours), 2) if hours else None
     range_hours = [min(row[0] for row in ranges), max(row[1] for row in ranges)] if ranges else None
 
@@ -1530,7 +1540,7 @@ def estimate_repair_work_cost(
             "valid_count": len(valid_quotes),
             "invalid_count": len(invalid_quotes),
             "excluded_outliers": excluded_outliers,
-            "source_count": len({quote.get("source") for quote in valid_quotes if quote.get("source")}),
+            "source_count": _source_count(valid_quotes),
             "cities": sorted({quote.get("city_region") for quote in valid_quotes if quote.get("city_region")}),
             "sample_rules": [
                 "labor-only prices only",

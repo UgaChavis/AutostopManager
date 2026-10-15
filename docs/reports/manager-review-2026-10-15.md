@@ -263,6 +263,42 @@ budgets, malformed/omitted labor и порядок structural/context ошибо
 Это не доказательство размера ответа живого DDG. Ограничения длины отдельных
 полей и source metadata остаются отдельным участком.
 
+## 008 — Единый подсчёт источников
+
+Граница: четыре legacy source-count — admission региона, confidence выбранного
+рынка, confidence нормочасов и общий market sample. Два независимых исходных
+review подтвердили: разные написания имени одного сервиса после нормализации
+наблюдений снова считались независимыми. Два разных значения 1/3 часа от
+`Garage Alpha`/`GARAGE ALPHA` давали source_count=2/high и окончательные 8000 руб.;
+одинаковое написание давало source_count=1/low, рекомендацию 8000 и final=null.
+Три цены 1000/1100/1200 с вариантами имени одного источника ошибочно допускали
+Красноярск с ценой 1600, подавляя настоящую выборку СПб с ценой 3600.
+
+Общий `_source_count` применяет существующий pricing `_clean_text` к ключу
+обычного имени/доменной метки: Unicode casefold и сворачивание пробелов без
+потери пунктуации. Исходные source, provenance и наблюдения сохраняются.
+Locator не создаёт независимый источник. Явный ASCII `scheme://` остаётся
+opaque строкой после strip: регистр пути, query, fragment, host и scheme сохраняет
+прежнее различение. Это не новый URL canonicalizer или политика доверия.
+Формулы, округление, вес нескольких наблюдений одного источника, dedupe и выбор
+строк после region/outlier filtering не меняются. Теперь все четыре места
+используют одну нормализацию ключа.
+
+Baseline `e22ad34`: **116 failed / 1162 passed**; исправленный профиль с
+непосредственными consumers: **1278 passed**, Ruff/format и mypy 97 files PASS.
+143 новых случая проверяют manual/ready/combined, source/source_name и structured
+lineage/provider, кириллицу/NBSP/табуляцию и Straße/STRASSE, региональный admission
+и альтернативный город, hourly fallback, high threshold, общий count нескольких
+операций, сохранение различных имён/пунктуации/явных URI, разные locator,
+invalid/parts/foreign/outlier и low-confidence rows, оба публичных collector paths.
+Разные суммы и часы не дают dedupe скрыть дефект. Входы не изменяются; исходные
+источники и structured provenance сохранены. Ускорение не заявляется.
+
+Scheme-relative/encoded URI и URN, Unicode NFC/NFKC, URL host aliases, source type
+validation и политика реальной независимости требуют отдельных оснований.
+Существующий dedupe может сложить регистр полного URL source без отдельного
+locator при одинаковом измерении; этот участок не расширяет такое поведение.
+
 ## Реестр охвата и очередь
 
 Здесь отмечаются именно проверенные ответственности; review транспорта не
@@ -271,12 +307,12 @@ budgets, malformed/omitted labor и порядок structural/context ошибо
 По умолчанию каждый tracked path снимка остаётся в очереди, кроме явно описанной
 ответственности. Выполнение теста не означает review его исходного текста.
 Полный технический inventory поддерживается вместе с контекстом кампании;
-baseline `e1a2819` содержит 573 tracked paths, текущий участок добавляет один
+baseline `e22ad34` содержит 574 tracked paths, текущий участок добавляет один
 тестовый файл. Частичный review файла оставляет остальные его функции в очереди.
 
 | Направление | Проверенный участок / следующее основание |
 | --- | --- |
-| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. Далее — direct compound parser, legacy matcher, source-count и длины полей. |
+| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. Далее — direct compound parser, legacy matcher, URI/source validation и длины полей. |
 | Рынок деталей и объявления | В очереди: идентичность, давность, регион, дубли. |
 | Store | В очереди: один write/readback/uncertain-outcome переход за итерацию. |
 | Telegram | В очереди: lease, replay, восстановление и wake. |
@@ -293,9 +329,9 @@ baseline `e1a2819` содержит 573 tracked paths, текущий участ
   полное имя комплекса может назначить его цену/часы компоненту. Exact-only
   потеряет полезный контракт дополнительных позиционных уточнений; нужен
   отдельный небольшой участок с проверкой обоих consumers.
-- Source-count различает регистр одного источника при разных значениях часов;
-  длины полей ready evidence не ограничены отдельно. Эти основания не устраняются
-  exact-replay нормализацией из 006 и raw row budget из 007.
+- Длины полей ready evidence и тип source не ограничены отдельно. URI aliases,
+  дедупликация URL source и политика веса нескольких наблюдений одного источника
+  остаются отдельными от обычных label aliases из 008.
 - Общий HTTP transport ограничивает финальное тело, но httpx автоматически
   читает промежуточное redirect body до этого лимита. Общий deadline действует;
   ограничение памяти такого ответа требует отдельного небольшого участка.
