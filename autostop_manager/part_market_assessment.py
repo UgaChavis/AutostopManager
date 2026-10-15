@@ -17,6 +17,7 @@ _MAX_PRICE_RUB = 10_000_000
 _MAX_REGION_LENGTH = 100
 _CURRENT_OBSERVATION_MAX_AGE_DAYS = 7
 _ARTICLE_TOKEN = re.compile(r"[^\W_][\w._/\\-]*", re.UNICODE)
+_EXPLICIT_ARTICLE_LABEL = re.compile(r"(?<!\w)(?:sku|article|артикул)(?!\w)(?:\s*[:=#№]\s*|\s+)", re.IGNORECASE)
 _PRICE_IN_RUB = re.compile(
     r"(?<![\w.,:+\-−–—/'’‘\\])(?P<amount>[+\-−]?\s*[.,]?[^\W\d_]*\d[\w]*"
     r"(?:[\s.,:/'’‘\\\-−–—]+\d[\w]*)*[.,]?)\s*(?:₽|руб(?:\.|лей|ля)?|р\.?|rub)(?!\w)",
@@ -169,16 +170,25 @@ def _price_tied_to_article(
         if price != price_rub:
             continue
         preceding_tokens = [
-            (match.start(), _normalize_article(match.group()))
+            (match.start(), match.end(), _normalize_article(match.group()))
             for match in _ARTICLE_TOKEN.finditer(excerpt, 0, price_position)
         ]
-        article_positions = [position for position, token in preceding_tokens if token == article]
-        if not article_positions:
+        article_spans = [(start, end) for start, end, token in preceding_tokens if token == article]
+        if not article_spans:
             continue
-        last_article_position = article_positions[-1]
+        last_article_position, last_article_end = article_spans[-1]
+        allowed_spans = [(start, end) for start, end, token in preceding_tokens if token in allowed_articles]
+        explicit_articles = [
+            _normalize_article(match[0])
+            for label in _EXPLICIT_ARTICLE_LABEL.finditer(excerpt, last_article_end, price_position)
+            if not any(start <= label.start() < end for start, end in allowed_spans)
+            if (match := _ARTICLE_TOKEN.match(excerpt, label.end(), price_position))
+        ]
+        if any(token and token not in allowed_articles for token in explicit_articles):
+            continue
         if not any(
             position > last_article_position and token not in allowed_articles and _sku_like_token(token)
-            for position, token in preceding_tokens
+            for position, _end, token in preceding_tokens
         ):
             return True
     return False
