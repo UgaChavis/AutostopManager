@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import html
 import re
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 from itertools import pairwise
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -58,22 +58,132 @@ def _parse_bool(value: Any) -> bool | None:
     return None
 
 
-def _strip_html(value: str) -> str:
-    text = re.sub(r"<script\b.*?</script>", " ", value, flags=re.I | re.S)
-    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return html.unescape(_clean_text(text))
-
-
 def _safe_source_from_url(url: str) -> str:
-    if "uddg=" in url:
+    # A provider-controlled locator must not recurse or decode indefinitely.
+    for _ in range(8):
         match = re.search(r"[?&]uddg=([^&]+)", url)
-        if match:
-            return _safe_source_from_url(unquote(match.group(1)))
-    parsed = urlparse(url)
+        if not match:
+            break
+        url = unquote(match.group(1))
+    else:
+        return "public_web_search"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "public_web_search"
     if parsed.netloc:
         return parsed.netloc.removeprefix("www.")
     return "public_web_search"
+
+
+class _SearchResultsParser(HTMLParser):
+    """Extract complete links and their own snippets from a bounded HTML prefix."""
+
+    _VOID_TAGS = frozenset(
+        {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    )
+    _INERT_TAGS = frozenset({"script", "style", "template", "textarea", "noscript", "head", "iframe", "svg", "math"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, str]] = []
+        self._stack: list[str] = []
+        self._positions: dict[str, list[int]] = {}
+        self._container: int | None = None
+        self._hidden: int | None = None
+        self._row: dict[str, str] | None = None
+        self._capture: tuple[str, int] | None = None
+        self._text: list[str] = []
+
+    def _end_result(self) -> None:
+        self._row = None
+        self._capture = None
+        self._text = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        depth = len(self._stack)
+        if tag not in self._VOID_TAGS:
+            self._positions.setdefault(tag, []).append(depth)
+            self._stack.append(tag)
+        if self._hidden is not None:
+            return
+        values: dict[str, str | None] = {}
+        for key, value in attrs:
+            values.setdefault(key, value)
+        if tag in self._INERT_TAGS or "hidden" in values:
+            if self._capture:
+                self._text.append(" ")
+            if tag not in self._VOID_TAGS:
+                self._hidden = depth
+            return
+        classes = (values.get("class") or "").split()
+        if "result" in classes:
+            self._end_result()
+            self._container = depth if tag not in self._VOID_TAGS else None
+        # Nested anchors cannot complete a title or an anchor-shaped snippet.
+        # Links inside a div/span snippet remain ordinary snippet content.
+        if tag == "a" and self._capture and self._stack[self._capture[1]] == "a":
+            self._end_result()
+        if tag == "a" and "result__a" in classes:
+            self._end_result()
+            href = values.get("href") or ""
+            if href and len(self.results) < 5:
+                self._row = {"url": href, "title": "", "snippet": "", "source": ""}
+                self._capture = ("title", depth)
+        elif (
+            "result__snippet" in classes
+            and tag not in self._VOID_TAGS
+            and self._row
+            and self._row["title"]
+            and not self._capture
+        ):
+            self._capture = ("snippet", depth)
+            self._text = []
+        elif self._capture:
+            self._text.append(" ")
+
+    def _finish_capture(self, *, complete: bool) -> None:
+        assert self._capture is not None
+        kind, _ = self._capture
+        text = _clean_text("".join(self._text))
+        if kind == "title":
+            if complete and text and self._row:
+                self._row.update(source=_safe_source_from_url(self._row["url"]), title=text[:140], snippet=text[:240])
+                self.results.append(self._row)
+            else:
+                self._row = None
+        elif complete and text and self._row:
+            self._row["snippet"] = text[:240]
+        self._capture = None
+        self._text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        positions = self._positions.get(tag)
+        if not positions:
+            return
+        depth = positions[-1]
+        if self._hidden is not None and depth < self._hidden:
+            return
+        if self._capture and self._capture[1] >= depth:
+            self._finish_capture(complete=self._capture[1] == depth)
+        if self._container is not None and self._container >= depth:
+            self._end_result()
+            self._container = None
+        if self._hidden is not None and self._hidden >= depth:
+            self._hidden = None
+        if self._capture and self._hidden is None:
+            self._text.append(" ")
+        # Each open node is removed once, including malformed ancestor closes.
+        # Per-tag positions avoid repeatedly scanning a deep unmatched stack.
+        while len(self._stack) > depth:
+            popped = self._stack.pop()
+            self._positions[popped].pop()
+            if not self._positions[popped]:
+                del self._positions[popped]
+
+    def handle_data(self, data: str) -> None:
+        if self._capture and self._hidden is None:
+            self._text.append(data)
 
 
 def urlopen(request: Request, *, timeout: float) -> BufferedResponse:
@@ -89,31 +199,10 @@ def _ddg_search(query: str, *, timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_
     request = Request(url, headers={"User-Agent": PUBLIC_RESEARCH_USER_AGENT})
     with urlopen(request, timeout=timeout_seconds) as response:
         raw = response.read(MAX_PUBLIC_RESPONSE_BYTES).decode("utf-8", "ignore")
-    results: list[dict[str, str]] = []
-    blocks = re.findall(r"<div class=\"result(?: results_links)?\".*?</div>\s*</div>", raw, flags=re.I | re.S)
-    if not blocks:
-        blocks = re.findall(
-            r"<a rel=\"nofollow\" class=\"result__a\".*?</a>.*?(?:<a class=\"result__snippet\".*?</a>|</div>)",
-            raw,
-            flags=re.I | re.S,
-        )
-    for block in blocks[:5]:
-        link_match = re.search(r"class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>", block, flags=re.I | re.S)
-        snippet_match = re.search(r"class=\"result__snippet\"[^>]*>(.*?)</a>", block, flags=re.I | re.S)
-        if not link_match:
-            continue
-        url_value = html.unescape(link_match.group(1))
-        title = _strip_html(link_match.group(2))
-        snippet = _strip_html(snippet_match.group(1) if snippet_match else block)
-        results.append(
-            {
-                "source": _safe_source_from_url(url_value),
-                "title": title[:140],
-                "url": url_value,
-                "snippet": snippet[:240],
-            }
-        )
-    return {"query": query, "url": url, "results": results}
+    parser = _SearchResultsParser()
+    parser.feed(raw)
+    parser.close()
+    return {"query": query, "url": url, "results": parser.results}
 
 
 def build_public_research_queries(
