@@ -19,7 +19,7 @@ PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
 MAX_PUBLIC_SEARCHES = 4
 MAX_PUBLIC_RESPONSE_BYTES = 250_000
 _PRICE_PATTERN = r"(?<![\d,.])((?:[-+−]\s*)?(?:\d{3,6}(?:[ .]\d{3})?|\d{1,3}(?:[ .]\d{3})+))\s*(?:₽|руб|р\.)"
-_DECIMAL_PATTERN = r"(?<![\d,.])(?:[-+−]\s*)?\d+(?:[,.]\d+)?(?![\d,.])"
+_DECIMAL_PATTERN = r"(?<![\d,.])(?:[-+−]\s*)?\d+(?:[,.]\d+)?(?!\d|[,.][\d,.])"
 _HOUR_PATTERNS = (
     rf"({_DECIMAL_PATTERN})\s*[-–]\s*({_DECIMAL_PATTERN})\s*(?:н/?ч|нормо[- ]?час|час|ч\.)",
     rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d+−-]{{0,24}}({_DECIMAL_PATTERN})",
@@ -354,6 +354,8 @@ def parse_public_work_evidence(
     }
     rows: list[dict[str, Any]] = []
     matcher = operation_matcher or OperationMatcher()
+    # A rejected title amount can still veto parts on an explicitly named caption.
+    can_inherit_title = _measurements_are_unambiguous(str(row.get("title") or ""), kind, expected_count=0)
     title_operation = _title_operation_for_caption(
         str(row.get("title") or ""), str(row.get("snippet") or ""), operations, kind, matcher
     )
@@ -361,6 +363,7 @@ def parse_public_work_evidence(
     for field in ("title", "snippet"):
         segments = _observed_operation_segments(str(row.get(field) or ""), operations)
         for segment, bindable in segments:
+            can_bind = bindable and _measurements_are_unambiguous(segment, kind)
             items: list[dict[str, Any]]
             if kind == "labor_prices":
                 items = [{"price_rub": price} for price in dict.fromkeys(_prices_from_text(segment))]
@@ -370,10 +373,15 @@ def parse_public_work_evidence(
                     for low, high in dict.fromkeys(_hours_from_text(segment))
                 ]
             operation_name = (
-                _observed_operation_name(segment, operations, matcher) if bindable and len(items) == 1 else ""
+                _observed_operation_name(segment, operations, matcher) if can_bind and len(items) == 1 else ""
             )
             inherited_title = (
-                bindable and field == "snippet" and not operation_name and len(items) == 1 and title_operation
+                can_bind
+                and can_inherit_title
+                and field == "snippet"
+                and not operation_name
+                and len(items) == 1
+                and title_operation
             )
             if inherited_title:
                 operation_name = title_operation
@@ -530,6 +538,13 @@ def _raw_measurements(text: str) -> list[tuple[int, int, str]]:
     return sorted(spans + hours)
 
 
+def _measurements_are_unambiguous(text: str, kind: str, *, expected_count: int = 1) -> bool:
+    """Count logical mentions before numeric validation, caps or value deduplication."""
+    kinds = [measurement_kind for _, _, measurement_kind in _raw_measurements(text)]
+    own_kind = "price" if kind == "labor_prices" else "hours"
+    return kinds.count(own_kind) == expected_count and len(kinds) == len(set(kinds))
+
+
 def _forward_observation_headers(
     text: str, markers: list[tuple[int, int]], measurements: list[tuple[int, int, str]]
 ) -> list[int]:
@@ -647,7 +662,7 @@ def _title_operation_for_caption(
     if not name:
         return ""
     extract = _prices_from_text if kind == "labor_prices" else _hours_from_text
-    if extract(title) or len(extract(snippet)) != 1:
+    if not _measurements_are_unambiguous(snippet, kind) or extract(title) or len(extract(snippet)) != 1:
         return ""
     return name if all(_caption_is_metadata(text, operations, name, matcher) for text in (title, snippet)) else ""
 
