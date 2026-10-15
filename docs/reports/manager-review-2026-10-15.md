@@ -464,6 +464,38 @@ Literal fallback исторически допускает такую цену; 
 не расширяет это поведение. Source/URI policy, дополнительные lexing формы и
 непроверенные обязанности файлов остаются в очереди.
 
+## 012 — непустые строковые имена публичной цены
+
+Граница: только ветка public_observations в `_operation_price`, её partial
+consumer и зарегистрированный native MCP. Baseline — дерево `e88ca4a`.
+Два независимых review и refresh на final011 подтвердили, что буквальное
+равенство missing/null/пустых или нестроковых имён назначало 5000 руб.
+Срабатывало также Python-равенство True↔1, False↔0 и контейнеров. ID-only
+строки получали цену даже при разных IDs. Известные 2000 плюс такая строка
+ошибочно превращались в success/7000 вместо частичной сметы.
+
+После завершённой hourly-ветки requested name проверяется один раз на строку
+и непустой strip. Для каждого observation та же проверка предшествует literal
+equality и существующему known-qualification fallback011. Сравниваются исходные
+строки: str-coercion, trim/case/alias matching и новые правила именования не
+добавлены. Неизвестное основание возвращается через прежний partial-путь:
+известная часть сохраняется, total/range остаются null, отмечается price_basis.
+ID, included/duplicate и overlap сохраняют прежние роли.
+
+92 новых случая: baseline **41 failed / 51 passed**, исправленный расширенный
+профиль **2593 passed**. Ruff/format13files и mypy98files PASS. Проверены direct
+API и 18 настоящих registered Tool.run, включая JSON-encoded nested arguments
+и text/structured parity. Контроли сохраняют точные строки с пробелами, №/#,
+цифрами и пунктуацией, положительные и конфликтующие qualifiers011, hourly
+ID-only/zero/range, публичный ноль, flags, median, коэффициент, округление,
+partial/unknown_costs и неизменность входов. Сеть и private acquisition запрещены.
+Ускорение не заявляется; guard исключает неподходящие имена, а не меняет формулы.
+
+Следующий участок — policy.basis: list/dict при truthy version дают TypeError
+в API и ToolError в MCP вместо существующего invalid_input. Типизация версии,
+native coercion scalar-аргументов и переполнение конечных чисел остаются
+отдельными основаниями. Внешняя schema и normalize_labor_time не изменены.
+
 ## Реестр охвата и очередь
 
 Здесь отмечаются именно проверенные ответственности; review транспорта не
@@ -472,12 +504,12 @@ Literal fallback исторически допускает такую цену; 
 По умолчанию каждый tracked path снимка остаётся в очереди, кроме явно описанной
 ответственности. Выполнение теста не означает review его исходного текста.
 Полный технический inventory поддерживается вместе с контекстом кампании;
-baseline `8cdc561` содержит 578 tracked paths, текущий участок добавляет один
+baseline `e88ca4a` содержит 579 tracked paths, текущий участок добавляет один
 тестовый файл. Частичный review файла оставляет остальные его функции в очереди.
 
 | Направление | Проверенный участок / следующее основание |
 | --- | --- |
-| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. 011: полный captured scope, original metadata, сохранённые qualifiers, context parity и узкий pure consumer. Далее — пустые имена pure binding, URI/source validation и длины полей. |
+| Оценка работ и общий transport | 001: deadline/prefix/timeout/capacity. 002: HTML results и snippet/source boundaries. 003: parts veto общей подписи цены. 004: границы записей и обратные price/time mentions. 005: отдельные parts/material subjects в caption. 006: replay нормочасов и диапазоны collector. 007: raw ready labor budget. 008: единый source-count имён/доменных меток. 009: полное raw operation identity цены/часов и strict quote dedupe. 010: raw measurement cardinality до filter/cap/dedupe и наследования. 011: полный captured scope, original metadata, сохранённые qualifiers, context parity и узкий pure consumer. 012: непустые строковые имена public-observation binding. Далее — policy.basis validation, URI/source validation и длины полей. |
 | Рынок деталей и объявления | В очереди: идентичность, давность, регион, дубли. |
 | Store | В очереди: один write/readback/uncertain-outcome переход за итерацию. |
 | Telegram | В очереди: lease, replay, восстановление и wake. |
@@ -488,11 +520,11 @@ baseline `8cdc561` содержит 578 tracked paths, текущий участ
 
 Отдельные основания следующего review:
 
-- Составная работа может получить имя только одного компонента; незнакомый
-  предмет без action marker требует отдельной проверки scope.
-- Parser scope и дополнительные aliases требуют отдельных воспроизведений;
-  legacy matcher теперь сохраняет полный raw scope, известные одиночные
-  позиционные уточнения и проверяется на цене и нормочасах.
+- Новые aliases, qualifiers, metadata и дополнительные лексические формы
+  требуют отдельных воспроизведений; responsibilities 009-012 повторно
+  открываются при новом основании.
+- Policy validation, scalar coercion native MCP и переполнение арифметики
+  остаются отдельными от проверки имени public-observation.
 - Длины полей ready evidence и тип source не ограничены отдельно. URI aliases,
   дедупликация URL source и политика веса нескольких наблюдений одного источника
   остаются отдельными от обычных label aliases из 008.

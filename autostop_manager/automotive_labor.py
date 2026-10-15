@@ -251,13 +251,15 @@ def _operation_price(
         if "range_hours" in row:
             return None, None
         return (hours * rate, [hours * rate, hours * rate]) if hours is not None else (None, None)
+    requested_name = row.get("operation_name")
+    if not isinstance(requested_name, str) or not requested_name.strip():
+        return None, None
     sample = [
         finite_number(item.get("price_rub"))
         for item in observations
-        if (
-            item.get("operation_name") == row.get("operation_name")
-            or matcher.matches_known_qualification(row.get("operation_name"), item.get("operation_name"))
-        )
+        if isinstance(observed_name := item.get("operation_name"), str)
+        and observed_name.strip()
+        and (observed_name == requested_name or matcher.matches_known_qualification(requested_name, observed_name))
         and item.get("labor_only") is True
         and item.get("includes_parts") is False
     ]
