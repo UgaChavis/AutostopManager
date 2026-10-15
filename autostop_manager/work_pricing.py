@@ -11,6 +11,7 @@ from .automotive_contracts import finite_number
 from .config import get_db_path
 from .work_pricing_research import (
     _dedupe_quote_rows,
+    _observation_location,
     _parse_bool,
     collect_public_work_pricing_research,
     legacy_work_evidence_row,
@@ -486,6 +487,33 @@ def _normalize_labor_time_row(row: dict[str, Any]) -> dict[str, Any]:
         "valid_input": not reasons,
         "reasons": reasons,
     }
+
+
+def _normalize_labor_time_sample(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        row = legacy_work_evidence_row(row)
+        identity = _normalize_labor_time_row(row)
+        if identity["valid_input"]:
+            key = (
+                _clean_text(identity["source"]),
+                _clean_text(identity["operation_name"]),
+                identity["hours"],
+                tuple(identity["range_hours"]),
+                _clean_text(identity["city_region"]),
+                _observation_location(row)[1],
+                identity["confidence"],
+                _parse_bool(row.get("public_source")),
+                _parse_bool(row.get("official")),
+                identity["capture_method"],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+        # Keep every invalid input visible, including different failed values.
+        result.append(identity)
+    return result
 
 
 def _round_to_100(value: float | int | None) -> int | None:
@@ -1323,9 +1351,9 @@ def estimate_repair_work_cost(
         )
     )
     quote_sample = _normalize_quote_sample([*manual_quote_rows, *research.get("quotes", [])])
-    labor_time_sample = [
-        _normalize_labor_time_row(row) for row in [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
-    ]
+    labor_time_sample = _normalize_labor_time_sample(
+        [*embedded_labor_time_rows, *research.get("labor_time_sample", [])]
+    )
 
     missing_context: list[str] = []
     if not any((vehicle, make, model, vin, chassis)):
