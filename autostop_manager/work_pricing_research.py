@@ -371,6 +371,13 @@ def parse_public_work_evidence(
                     str(row.get("snippet") or "") if inherited_title else segment if operation_name else snippet
                 )
                 includes_parts, labor_only = _labor_only_flags(flags_text)
+                # Keep parts-inclusive evidence from the same unambiguous caption.
+                if (
+                    title_operation
+                    and operation_name == title_operation
+                    and _labor_only_flags(str(row.get("title") or ""))[0] is True
+                ):
+                    includes_parts, labor_only = True, False
                 for item in items:
                     item.update(includes_parts=includes_parts, labor_only=labor_only)
             rows.extend({**common, "operation_name": operation_name, **item} for item in items)
