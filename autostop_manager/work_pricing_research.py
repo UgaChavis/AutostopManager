@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from html.parser import HTMLParser
 from itertools import pairwise
 from typing import Any
+from unicodedata import category
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, unquote, urlparse
 from urllib.request import Request
@@ -359,6 +360,15 @@ def parse_public_work_evidence(
     title_operation = _title_operation_for_caption(
         str(row.get("title") or ""), str(row.get("snippet") or ""), operations, kind, matcher
     )
+    title_veto_operation = title_operation
+    if (
+        kind == "labor_prices"
+        and not title_veto_operation
+        and _labor_only_flags(str(row.get("title") or ""))[0] is True
+    ):
+        title_veto_operation = _title_parts_veto_operation(
+            str(row.get("title") or ""), str(row.get("snippet") or ""), operations, matcher
+        )
     # The title can supply scope only for an unambiguous measurement caption.
     for field in ("title", "snippet"):
         segments = _observed_operation_segments(str(row.get(field) or ""), operations)
@@ -392,8 +402,8 @@ def parse_public_work_evidence(
                 includes_parts, labor_only = _labor_only_flags(flags_text)
                 # Keep parts-inclusive evidence from the same unambiguous caption.
                 if (
-                    title_operation
-                    and matcher.matches(operation_name, title_operation)
+                    title_veto_operation
+                    and matcher.matches(operation_name, title_veto_operation)
                     and _labor_only_flags(str(row.get("title") or ""))[0] is True
                 ):
                     includes_parts, labor_only = True, False
@@ -614,7 +624,12 @@ def _split_observed_clause(text: str, markers: list[tuple[int, int]]) -> list[tu
     for layer in reversed(layers):
         end = layer[end][0][0]
         boundaries.append(end)
-    return [(text[start:end], True) for start, end in pairwise(reversed(boundaries))]
+    # A slash at a proved internal record boundary is layout, not a dangling
+    # operation connector. Keep an actual final slash visible to the resolver.
+    return [
+        (re.sub(r"\s+/\s*$", "", text[start:end]) if end < len(text) else text[start:end], True)
+        for start, end in pairwise(reversed(boundaries))
+    ]
 
 
 def _observed_operation_matches(text: str, operations: list[dict[str, Any]]) -> list[tuple[int, int, str]]:
@@ -643,16 +658,99 @@ def _observed_operation_name(
     text: str, operations: list[dict[str, Any]], matcher: OperationMatcher | None = None
 ) -> str:
     matcher = matcher or OperationMatcher()
+    captured = _operation_text(text, operations, matcher)
+    return _resolve_operation(captured, operations, matcher) if captured is not None else ""
+
+
+def _resolve_operation(
+    captured: tuple[str, list[str]], operations: list[dict[str, Any]], matcher: OperationMatcher
+) -> str:
+    observed, names = captured
+    if not observed:
+        return ""
+    if not names:
+        # A complete observed phrase may contain a known optional qualifier even
+        # when no literal label occurs, e.g. an axle inside the operation name.
+        names = [
+            name
+            for operation in operations
+            for key in ("input", "normalized_name")
+            if (name := _clean_text(operation.get(key)))
+        ]
+    compatible = [name for name in names if matcher.matches(name, observed)]
+    for name in compatible:
+        if matcher.identity(name) == matcher.identity(observed):
+            return name
+    # Retain explicit axle/side/gearbox qualifiers for subsequent matching and
+    # strict quote deduplication. A generic label must not erase this scope.
+    return observed if compatible else ""
+
+
+def _operation_text(
+    text: str,
+    operations: list[dict[str, Any]],
+    matcher: OperationMatcher,
+    *,
+    veto_annotations: list[tuple[int, int]] | None = None,
+) -> tuple[str, list[str]] | None:
     matches = _observed_operation_matches(text, operations)
-    names = {
-        matcher.identity(name): name
+    outer = [
+        (start, end, name)
         for start, end, name in matches
         if not any(
             other_start <= start and end <= other_end and (start, end) != (other_start, other_end)
             for other_start, other_end, _ in matches
         )
-    }
-    return next(iter(names.values())) if len(names) == 1 else ""
+    ]
+    names = {matcher.identity(name): name for _, _, name in outer}
+    if len(names) > 1:
+        return None
+    labels = sorted({(start, end): name for start, end, name in outer}.items())
+    if any(left[0][1] > right[0][0] for left, right in pairwise(labels)):
+        return None
+    protected = [span for span, _ in labels]
+    metadata = [
+        (start, end)
+        for start, end in [*_metadata_spans(text), *(veto_annotations or [])]
+        if not any(start < right and end > left for left, right in protected)
+    ]
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(metadata):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    # Conjunctions can join two proved metadata spans. Never discard a dangling
+    # connector beside an operation or invent a phrase across a masked label.
+    bridges = [
+        (left, right)
+        for (_, left), (right, _) in pairwise(merged)
+        if re.fullmatch(r"\s*(?:и|плюс|[,+/&])\s*", text[left:right], flags=re.I)
+        and not any(left < end and right > start for start, end in protected)
+    ]
+    characters = list(text)
+    for start, end in (*merged, *bridges):
+        characters[start:end] = [" "] * (end - start)
+    uncovered = characters.copy()
+    for start, end in protected:
+        uncovered[start:end] = [" "] * (end - start)
+    # The matcher accepts a few complete labor-only phrases. Do not let masking
+    # an intervening amount synthesize those phrases from unexplained words.
+    if re.search(r"(?<!\w)(?:без|только)(?!\w)", "".join(uncovered), flags=re.I):
+        return None
+    pieces: list[str] = []
+    previous = 0
+    for (start, end), name in labels:
+        pieces.extend(("".join(characters[previous:start]), name))
+        previous = end
+    pieces.append("".join(characters[previous:]))
+    # Validate unknown characters only outside declared labels and aliases.
+    # Their own symbols, such as a maintenance number, are already observed.
+    punctuation = r"[.;:|•()\[\]{}—–!?\-\"«»]"
+    observed = _clean_text(re.sub(punctuation, " ", " ".join(pieces))).strip(" ,")
+    if re.search(r"[^\w\s,+/&']", re.sub(punctuation, " ", "".join(uncovered))):
+        return None
+    return observed, list(names.values())
 
 
 def _title_operation_for_caption(
@@ -667,16 +765,67 @@ def _title_operation_for_caption(
     return name if all(_caption_is_metadata(text, operations, name, matcher) for text in (title, snippet)) else ""
 
 
+def _title_parts_veto_operation(
+    title: str, snippet: str, operations: list[dict[str, Any]], matcher: OperationMatcher
+) -> str:
+    """An unsupported title amount may only veto an independently bound price."""
+    if (
+        _prices_from_text(title)
+        or not _measurements_are_unambiguous(snippet, "labor_prices")
+        or len(_prices_from_text(snippet)) != 1
+    ):
+        return ""
+    explicit_name = _observed_operation_name(snippet, operations, matcher)
+    if not explicit_name:
+        return ""
+    # Full token boundaries prevent turning an identifier such as 0AM1000USD
+    # into a known gearbox code. These annotations never enter positive binding.
+    symbols = "".join(sorted({character for character in title if category(character) == "Sc"}))
+    currency = rf"(?:[{re.escape(symbols)}]|USD|EUR|GBP)" if symbols else r"(?:USD|EUR|GBP)"
+    number = r"(?:\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?:[,.]\d+)?"
+    sign = r"(?:[-+−]\s*)?"
+    annotations = [
+        match.span()
+        for match in re.finditer(
+            rf"(?<![\w,.+−-])(?:{sign}{number}\s*{currency}|{sign}{currency}\s*{number}|"
+            rf"{currency}\s*[-+−]\s*{number})(?![\w+−-]|[,.][\d,.])",
+            title,
+            flags=re.I,
+        )
+    ]
+    if len(annotations) != 1:
+        return ""
+    captured = _operation_text(title, operations, matcher, veto_annotations=annotations)
+    name = _resolve_operation(captured, operations, matcher) if captured is not None else ""
+    return name if matcher.matches(explicit_name, name) else ""
+
+
 def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str, matcher: OperationMatcher) -> bool:
-    characters = list(text)
+    captured = _operation_text(text, operations, matcher)
+    return captured is not None and (
+        not captured[0] or matcher.matches(name, _resolve_operation(captured, operations, matcher))
+    )
+
+
+def _metadata_spans(text: str) -> list[tuple[int, int]]:
+    """Prove metadata on the original text, before masking operation labels."""
+    spans = _measurement_metadata_spans(text)
+    spans.extend(
+        match.span()
+        for match in re.finditer(
+            r"(?<!\w)(?:(?:г\.?\s+)?(?:красноярск(?:е|а|у|ом)?|санкт[- ]петербург(?:е|а|у|ом)?|спб)"
+            r"|(?:стоимость|цена)(?:\s+работы)?|норматив\s+времени)(?!\w)",
+            text,
+            flags=re.I,
+        )
+    )
     noun = r"(?:запчаст\w*|материал\w*)"
     connector = r"(?:\s+(?:и|плюс)\s+|\s*[,+/]\s*)"
     noun_lists = [
         match.span() for match in re.finditer(rf"(?<!\w){noun}(?:{connector}{noun})*(?!\w)", text, flags=re.I)
     ]
     starts = [start for start, _ in noun_lists]
-    # Preserve only observed scope phrases, before masking operation labels.
-    # Locate their noun lists separately: a failed suffix must not rescan every prefix.
+    # Locate noun lists separately: a failed suffix must not rescan every prefix.
     for marker in (*LABOR_ONLY_MARKERS, *PARTS_INCLUDED_MARKERS):
         words = marker.split()
         pattern = r"\s+".join(re.escape(word) for word in words)
@@ -692,18 +841,37 @@ def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str,
                 index = bisect_left(starts, end) - 1
                 if index >= 0 and end <= noun_lists[index][1]:
                     end = noun_lists[index][1]
-            characters[start:end] = [" "] * (end - start)
-    for start, end, observed in _observed_operation_matches(text, operations):
-        if matcher.matches(observed, name):
-            characters[start:end] = [" "] * (end - start)
-    # A subject such as "свечи" is not price/time metadata, even without an operation verb.
-    caption = re.sub(r"[-+−]?\d+(?:[ ,.\-–]\d+)*", " ", "".join(characters).casefold())
-    caption = re.sub(
-        r"(?<!\w)(?:красноярск\w*|санкт[- ]петербург\w*|спб|только|за|работ(?:а|ы|у)?|без|учета|не|включ\w*|и|плюс|с|стоимость|цена|от|до|руб\w*|р|н|ч|нормо[- ]?час\w*|час\w*|норма|норматив|времени|трудоемкость|время|выполнения)(?!\w)",
-        " ",
-        caption,
-    )
-    return not re.search(r"[^\W\d_]", caption)
+            spans.append((start, end))
+    return spans
+
+
+def _measurement_metadata_spans(text: str) -> list[tuple[int, int]]:
+    # Raw mention spans deliberately include rejected values and, for prefix
+    # hours, arbitrary intervening text. Only numeric captures and proved units
+    # are metadata; an intervening "не" or another object must survive.
+    spans: list[tuple[int, int]] = []
+    currency = r"\s*(?:₽|руб(?:лей|ля|ль)?\.?|р\.)(?!\w)"
+    unit = r"\s*(?:н/?ч|нормо[- ]?час(?:а|ов)?|час(?:а|ов)?|ч\.)(?!\w)"
+    header = r"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)(?!\w)"
+    for match in re.finditer(_PRICE_PATTERN, text, flags=re.I):
+        suffix = re.match(currency, text[match.end(1) :], flags=re.I)
+        if suffix:
+            spans.append((match.start(1), match.end(1) + suffix.end()))
+    for index, pattern in enumerate(_HOUR_PATTERNS):
+        for match in re.finditer(pattern, text, flags=re.I):
+            if index == 1:
+                prefix = re.match(header, text[match.start() :], flags=re.I)
+                if prefix:
+                    spans.extend(((match.start(), match.start() + prefix.end()), match.span(1)))
+            else:
+                suffix = re.match(unit, text[match.end(2 if index == 0 else 1) :], flags=re.I)
+                if suffix:
+                    spans.append((match.start(1), match.end(2 if index == 0 else 1) + suffix.end()))
+    for start, _ in list(spans):
+        prefix = re.search(r"(?<!\w)(?:от|до|работа|работы|за работу)\s*$", text[:start], flags=re.I)
+        if prefix:
+            spans.append(prefix.span())
+    return spans
 
 
 def _observation_location(row: dict[str, Any]) -> tuple[str, str]:
