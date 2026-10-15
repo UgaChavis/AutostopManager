@@ -1239,6 +1239,7 @@ def _ready_price_evidence(
             or any(not isinstance(row, dict) for row in supplied_evidence["observations"])
             or not isinstance(supplied_evidence.get("vehicle_context", {}), dict)
             or not isinstance(supplied_evidence.get("labor", []), list)
+            or len(supplied_evidence.get("labor", [])) > MAX_LABOR_TIME_ROWS
             or any(not isinstance(row, dict) for row in supplied_evidence.get("labor", []))
         ):
             return None, "invalid_ready_price_evidence"
