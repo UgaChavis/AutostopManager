@@ -468,7 +468,9 @@ def collect_public_work_pricing_research(
             result["sources_checked"].append(checked)
 
     result["quotes"] = _dedupe_quote_rows(result["quotes"])
-    result["labor_time_sample"] = _dedupe_rows(result["labor_time_sample"], ("source", "operation_name", "hours"))
+    result["labor_time_sample"] = _dedupe_rows(
+        result["labor_time_sample"], ("source", "operation_name", "hours", "range_hours")
+    )
     if not result["labor_time_sample"]:
         result["warnings"].append("Public labor-time mentions were not found automatically.")
     if not any(quote.get("labor_only") is True and quote.get("includes_parts") is False for quote in result["quotes"]):
