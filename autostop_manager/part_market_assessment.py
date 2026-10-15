@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 _MAX_OBSERVATIONS = 60
 _MAX_PRICE_RUB = 10_000_000
+_MAX_REGION_LENGTH = 100
 _CURRENT_OBSERVATION_MAX_AGE_DAYS = 7
 _ARTICLE_TOKEN = re.compile(r"[^\W_][\w._/\\-]*", re.UNICODE)
 _PRICE_IN_RUB = re.compile(
@@ -67,6 +68,12 @@ _CONDITION_MODIFIER = re.compile(
     r"действительно|really|quite|entirely|totally|как|like|as))*[\s\-‐‑‒–—−\"'«»()\[\]:]+\Z",
     re.IGNORECASE,
 )
+_REGION_COUNTRY = r"(?:россия|российская федерация|рф|russia)"
+_REGION_COUNTRY_MARKER = re.compile(rf"(?<!\w){_REGION_COUNTRY}(?!\w)")
+_REGION_EXCLUSION = re.compile(
+    r"(?<!\w)(?:не|ни|нет|без|кроме|исключая|исключением|not|no|never|except|excluding|without)(?!\w)"
+)
+_REGION_SEPARATOR = r"(?:\s*[,;:/–—-]\s*|\s+)"
 _SEGMENT_ORDER = tuple(
     (kind, condition, region_scope)
     for kind in ("original", "analog")
@@ -295,11 +302,31 @@ def _condition_supported(excerpt: str, condition: str, *, articles: set[str], br
 
 
 def _region_scope(value: Any, target_region: str) -> str:
-    region = _compact(value, limit=100).casefold()
-    target = _compact(target_region, limit=100).casefold()
-    if target and target in region:
+    if not isinstance(value, str):
+        return ""
+    # Keep one extra character so an overlong field cannot become a valid prefix.
+    region = _compact(value, limit=_MAX_REGION_LENGTH + 1).casefold()
+    if not region or len(region) > _MAX_REGION_LENGTH or _REGION_EXCLUSION.search(region):
+        return ""
+
+    target = _compact(target_region, limit=_MAX_REGION_LENGTH).casefold()
+    city = rf"(?:г\.\s*|город\s+)?{re.escape(target)}"
+    country = _REGION_COUNTRY
+    local_label = region
+    if (region[0], region[-1]) in {("(", ")"), ("[", "]")}:
+        local_label = region[1:-1].strip()
+    local_layouts = (
+        city,
+        rf"{city}{_REGION_SEPARATOR}{country}",
+        rf"{country}{_REGION_SEPARATOR}{city}",
+        rf"{city}\s*\(\s*{country}\s*\)",
+        rf"{city}\s*\[\s*{country}\s*\]",
+        rf"{country}\s*\(\s*{city}\s*\)",
+        rf"{country}\s*\[\s*{city}\s*\]",
+    )
+    if target and any(re.fullmatch(layout, local_label) for layout in local_layouts):
         return "krasnoyarsk"
-    if any(marker in region for marker in ("россия", "российская федерация", "рф", "russia")):
+    if _REGION_COUNTRY_MARKER.search(region):
         return "rf"
     return ""
 
