@@ -629,13 +629,37 @@ def _title_operation_for_caption(title: str, snippet: str, operations: list[dict
 
 def _caption_is_metadata(text: str, operations: list[dict[str, Any]], name: str) -> bool:
     characters = list(text)
+    noun = r"(?:запчаст\w*|материал\w*)"
+    connector = r"(?:\s+(?:и|плюс)\s+|\s*[,+/]\s*)"
+    noun_lists = [
+        match.span() for match in re.finditer(rf"(?<!\w){noun}(?:{connector}{noun})*(?!\w)", text, flags=re.I)
+    ]
+    starts = [start for start, _ in noun_lists]
+    # Preserve only observed scope phrases, before masking operation labels.
+    # Locate their noun lists separately: a failed suffix must not rescan every prefix.
+    for marker in (*LABOR_ONLY_MARKERS, *PARTS_INCLUDED_MARKERS):
+        words = marker.split()
+        pattern = r"\s+".join(re.escape(word) for word in words)
+        if words[-1] in {"запчаст", "материал", "включ"}:
+            pattern += r"\w*"
+        for match in re.finditer(rf"(?<!\w){pattern}(?!\w)", text, flags=re.I):
+            start, end = match.span()
+            if words[0] in {"запчасти", "материалы"}:
+                index = bisect_left(starts, start + 1) - 1
+                if index >= 0 and start < noun_lists[index][1]:
+                    start = noun_lists[index][0]
+            if words[-1].startswith(("запчаст", "материал")):
+                index = bisect_left(starts, end) - 1
+                if index >= 0 and end <= noun_lists[index][1]:
+                    end = noun_lists[index][1]
+            characters[start:end] = [" "] * (end - start)
     for start, end, observed in _observed_operation_matches(text, operations):
         if observed == name:
             characters[start:end] = [" "] * (end - start)
     # A subject such as "свечи" is not price/time metadata, even without an operation verb.
     caption = re.sub(r"[-+−]?\d+(?:[ ,.\-–]\d+)*", " ", "".join(characters).casefold())
     caption = re.sub(
-        r"(?<!\w)(?:красноярск\w*|санкт[- ]петербург\w*|спб|только|за|работ(?:а|ы|у)?|без|учета|запчаст\w*|материал\w*|не|включ\w*|и|плюс|с|стоимость|цена|от|до|руб\w*|р|н|ч|нормо[- ]?час\w*|час\w*|норма|норматив|времени|трудоемкость|время|выполнения)(?!\w)",
+        r"(?<!\w)(?:красноярск\w*|санкт[- ]петербург\w*|спб|только|за|работ(?:а|ы|у)?|без|учета|не|включ\w*|и|плюс|с|стоимость|цена|от|до|руб\w*|р|н|ч|нормо[- ]?час\w*|час\w*|норма|норматив|времени|трудоемкость|время|выполнения)(?!\w)",
         " ",
         caption,
     )
