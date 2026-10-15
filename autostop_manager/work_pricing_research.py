@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from itertools import pairwise
@@ -16,6 +17,14 @@ PUBLIC_RESEARCH_USER_AGENT = "AutostopManager/0.1 public labor research"
 PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
 MAX_PUBLIC_SEARCHES = 4
 MAX_PUBLIC_RESPONSE_BYTES = 250_000
+_PRICE_PATTERN = r"(?<![\d,.])((?:[-+−]\s*)?(?:\d{3,6}(?:[ .]\d{3})?|\d{1,3}(?:[ .]\d{3})+))\s*(?:₽|руб|р\.)"
+_DECIMAL_PATTERN = r"(?<![\d,.])(?:[-+−]\s*)?\d+(?:[,.]\d+)?(?![\d,.])"
+_HOUR_PATTERNS = (
+    rf"({_DECIMAL_PATTERN})\s*[-–]\s*({_DECIMAL_PATTERN})\s*(?:н/?ч|нормо[- ]?час|час|ч\.)",
+    rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d+−-]{{0,24}}({_DECIMAL_PATTERN})",
+    rf"({_DECIMAL_PATTERN})\s*(?:н/?ч|нормо[- ]?час|час(?:а|ов)?|ч\.)",
+)
+_ObservationSignature = tuple[int, int, tuple[bool | None, bool]]
 LABOR_ONLY_MARKERS = (
     "без запчаст",
     "без учета запчаст",
@@ -258,11 +267,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _prices_from_text(text: str) -> list[int]:
     values: list[int] = []
-    for match in re.finditer(
-        r"(?<![\d,.])((?:[-+−]\s*)?(?:\d{3,6}(?:[ .]\d{3})?|\d{1,3}(?:[ .]\d{3})+))\s*(?:₽|руб|р\.)",
-        text,
-        flags=re.I,
-    ):
+    for match in re.finditer(_PRICE_PATTERN, text, flags=re.I):
         raw = match.group(1).replace(" ", "").replace(".", "").replace("−", "-")
         try:
             price = int(raw)
@@ -284,15 +289,9 @@ def _labor_only_flags(text: str) -> tuple[bool | None, bool]:
 
 def _hours_from_text(text: str) -> list[tuple[float, float]]:
     values: list[tuple[float, float]] = []
-    decimal = r"(?<![\d,.])(?:[-+−]\s*)?\d+(?:[,.]\d+)?(?![\d,.])"
-    patterns = [
-        rf"({decimal})\s*[-–]\s*({decimal})\s*(?:н/?ч|нормо[- ]?час|час|ч\.)",
-        rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d+−-]{{0,24}}({decimal})",
-        rf"({decimal})\s*(?:н/?ч|нормо[- ]?час|час(?:а|ов)?|ч\.)",
-    ]
     range_spans: list[tuple[int, int]] = []
     observed_spans: list[tuple[int, int]] = []
-    for pattern_index, pattern in enumerate(patterns):
+    for pattern_index, pattern in enumerate(_HOUR_PATTERNS):
         for match in re.finditer(pattern, text, flags=re.I):
             if pattern_index == 0:
                 range_spans.append(match.span())
@@ -353,7 +352,8 @@ def parse_public_work_evidence(
     )
     # The title can supply scope only for an unambiguous measurement caption.
     for field in ("title", "snippet"):
-        for segment in _observed_operation_segments(str(row.get(field) or ""), operations):
+        segments = _observed_operation_segments(str(row.get(field) or ""), operations)
+        for segment, bindable in segments:
             items: list[dict[str, Any]]
             if kind == "labor_prices":
                 items = [{"price_rub": price} for price in dict.fromkeys(_prices_from_text(segment))]
@@ -362,14 +362,16 @@ def parse_public_work_evidence(
                     {"hours": round((low + high) / 2, 2), "range_hours": [low, high]}
                     for low, high in dict.fromkeys(_hours_from_text(segment))
                 ]
-            operation_name = _observed_operation_name(segment, operations) if len(items) == 1 else ""
-            inherited_title = field == "snippet" and not operation_name and len(items) == 1 and title_operation
+            operation_name = _observed_operation_name(segment, operations) if bindable and len(items) == 1 else ""
+            inherited_title = (
+                bindable and field == "snippet" and not operation_name and len(items) == 1 and title_operation
+            )
             if inherited_title:
                 operation_name = title_operation
             if kind == "labor_prices":
-                flags_text = (
-                    str(row.get("snippet") or "") if inherited_title else segment if operation_name else snippet
-                )
+                flags_text = str(row.get("snippet") or "") if inherited_title else segment
+                if bindable and not operation_name and len(segments) == 1:
+                    flags_text = snippet
                 includes_parts, labor_only = _labor_only_flags(flags_text)
                 # Keep parts-inclusive evidence from the same unambiguous caption.
                 if (
@@ -474,19 +476,116 @@ def collect_public_work_pricing_research(
     return result
 
 
-def _observed_operation_segments(text: str, operations: list[dict[str, Any]]) -> list[str]:
+def _observed_operation_segments(text: str, operations: list[dict[str, Any]]) -> list[tuple[str, bool]]:
+    # Full labels protect internal verbs and punctuation, including aliases.
+    spans = {(start, end) for start, end, _ in _observed_operation_matches(text, operations)}
+    spans.update(
+        match.span()
+        for match in re.finditer(r"(?<!\w)(?:замена|ремонт|диагностика|снятие|установка)\s", text, flags=re.I)
+    )
+    markers: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if markers and start < markers[-1][1]:
+            markers[-1] = (markers[-1][0], max(end, markers[-1][1]))
+        else:
+            markers.append((start, end))
     boundaries = {0, len(text)}
     boundaries.update(
-        match.end() for match in re.finditer(r"(?<!руб\.)(?<!р\.)(?<!ч\.)(?<=[.!?;])\s+|[\r\n]+", text, flags=re.I)
+        match.end()
+        for match in re.finditer(r"(?<!руб\.)(?<!р\.)(?<!ч\.)(?<=[.!?])\s+|;+\s*|[\r\n\u2028\u2029]+", text, flags=re.I)
+        if not any(start < match.end() < end for start, end in markers)
     )
-    markers = list(re.finditer(r"(?<!\w)(?:замена|ремонт|диагностика|снятие|установка)\s", text, flags=re.I))
-    if len(markers) > 1:
-        observed = _observed_operation_matches(text, operations)
-        boundaries.update(
-            match.start() for match in markers if not any(start < match.start() < end for start, end, _ in observed)
-        )
-    positions = sorted(boundaries)
-    return [_clean_text(text[start:end]) for start, end in pairwise(positions) if _clean_text(text[start:end])]
+    result: list[tuple[str, bool]] = []
+    for start, end in pairwise(sorted(boundaries)):
+        clause = text[start:end]
+        local = [(left - start, right - start) for left, right in markers if start <= left < end]
+        result.extend(_split_observed_clause(clause, local))
+    return [(_clean_text(segment), bindable) for segment, bindable in result if _clean_text(segment)]
+
+
+def _raw_measurements(text: str) -> list[tuple[int, int, str]]:
+    """Locate logical mentions before value validation, deduplication or truncation."""
+    spans = [(*match.span(), "price") for match in re.finditer(_PRICE_PATTERN, text, flags=re.I)]
+    hours: list[tuple[int, int, str]] = []
+    range_pattern, prefix_pattern, suffix_pattern = _HOUR_PATTERNS
+    # Prefer a value's own unit over a prefix in an earlier operation's record.
+    for pattern in (range_pattern, suffix_pattern, prefix_pattern):
+        for match in re.finditer(pattern, text, flags=re.I):
+            if not any(match.start() < end and match.end() > start for start, end, _ in hours):
+                hours.append((*match.span(), "hours"))
+    return sorted(spans + hours)
+
+
+def _forward_observation_headers(
+    text: str, markers: list[tuple[int, int]], measurements: list[tuple[int, int, str]]
+) -> list[int]:
+    headers = []
+    for index, (_, end) in enumerate(markers):
+        limit = markers[index + 1][0] if index + 1 < len(markers) else len(text)
+        match = re.match(r"[^:;,|•.!?\r\n\u2028\u2029]*:", text[end:limit])
+        header = end + match.end() if match else 0
+        if any(end <= start < header for start, _, _ in measurements):
+            header = 0
+        headers.append(header)
+    return headers
+
+
+def _split_observed_clause(text: str, markers: list[tuple[int, int]]) -> list[tuple[str, bool]]:
+    if len(markers) < 2:
+        return [(text, True)]
+    measurements = _raw_measurements(text)
+    headers = _forward_observation_headers(text, markers, measurements)
+    starts = [start for start, _, _ in measurements]
+    separators = [match.end() for match in re.finditer(r"(?<!\d),|,(?!\d)|[|•]|\s+/\s+", text)]
+    cuts = [[0]]
+    for (_, left), (right, _) in pairwise(markers):
+        options = {right, *(cut for cut in separators if left <= cut <= right)}
+        options = {cut for cut in options if not any(start < cut < end for start, end, _ in measurements)}
+        # Excessively many alternatives stay visible as unbound evidence.
+        if len(options) > 64:
+            return [(text, False)]
+        cuts.append(sorted(options))
+    cuts.append([len(text)])
+
+    # A layered DAG keeps possible boundaries without enumerating partitions.
+    # Each record needs one raw mention per kind at most; price + time is valid.
+    layers: list[dict[int, list[tuple[int, _ObservationSignature]]]] = []
+    reachable = {0}
+    for index, candidates in enumerate(cuts[1:]):
+        layer: dict[int, list[tuple[int, _ObservationSignature]]] = {}
+        for end in candidates:
+            for start in reachable:
+                first, last = bisect_left(starts, start), bisect_left(starts, end)
+                observed = measurements[first:last]
+                if not observed and not (headers[index] or (index == len(markers) - 1 and headers[index - 1])):
+                    continue
+                if len(observed) > 2 or len({kind for _, _, kind in observed}) != len(observed):
+                    continue
+                # A forward header cannot take a preceding value, even when
+                # a different kind of measurement has filled the previous row.
+                if headers[index] and any(
+                    re.search(r"\d", text[left : min(right, headers[index])]) for left, right, _ in observed
+                ):
+                    continue
+                signature = (first, last, _labor_only_flags(text[start:end]))
+                layer.setdefault(end, []).append((start, signature))
+        if not layer:
+            return [(text, False)]
+        layers.append(layer)
+        reachable = set(layer)
+
+    reachable = {len(text)}
+    for layer in reversed(layers):
+        edges = [edge for end in reachable for edge in layer[end]]
+        if len({signature for _, signature in edges}) != 1:
+            return [(text, False)]
+        reachable = {start for start, _ in edges}
+    end = len(text)
+    boundaries = [end]
+    for layer in reversed(layers):
+        end = layer[end][0][0]
+        boundaries.append(end)
+    return [(text[start:end], True) for start, end in pairwise(reversed(boundaries))]
 
 
 def _observed_operation_matches(text: str, operations: list[dict[str, Any]]) -> list[tuple[int, int, str]]:
