@@ -43,7 +43,9 @@ class BufferedResponse(io.BytesIO):
         return self.headers
 
 
-async def _fetch(request: Request, *, deadline: float, maximum: int, follow_redirects: bool) -> BufferedResponse:
+async def _fetch(
+    request: Request, *, deadline: float, maximum: int, follow_redirects: bool, truncate: bool = False
+) -> BufferedResponse:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("provider_total_deadline_exceeded")
@@ -75,6 +77,9 @@ async def _fetch(request: Request, *, deadline: float, maximum: int, follow_redi
                     async for chunk in response.aiter_raw():
                         remaining_bytes = limit + 1 - len(body)
                         body.extend(chunk[:remaining_bytes])
+                        if truncate and not failed and len(body) >= limit:
+                            del body[limit:]
+                            break  # Prefix readers must not wait for an extra byte or EOF.
                         if len(body) > limit:
                             if failed:
                                 break  # A bounded error body is enough for quota/auth classification.
@@ -96,12 +101,15 @@ async def _fetch(request: Request, *, deadline: float, maximum: int, follow_redi
         raise URLError("provider_network_error") from exc
 
 
-def urlopen(request: Request, *, timeout: float, maximum: int, follow_redirects: bool = False) -> BufferedResponse:
+def urlopen(
+    request: Request, *, timeout: float, maximum: int, follow_redirects: bool = False, truncate: bool = False
+) -> BufferedResponse:
     """Urllib-compatible buffered response; its read() never waits on a socket.
 
     Run in an owned thread so the same synchronous entry point also works when
     called by a running event loop. Existing facade urlopen monkeypatchs stay at
     their current boundary and do not need to imitate httpx.
+    Prefix readers opt into truncate; the default still rejects oversized bodies.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("invalid_http_deadline")
@@ -117,7 +125,9 @@ def urlopen(request: Request, *, timeout: float, maximum: int, follow_redirects:
     def worker() -> None:
         try:
             response = asyncio.run(
-                _fetch(request, deadline=deadline, maximum=maximum, follow_redirects=follow_redirects)
+                _fetch(
+                    request, deadline=deadline, maximum=maximum, follow_redirects=follow_redirects, truncate=truncate
+                )
             )
             outcome.append((True, response))
         except BaseException as exc:  # noqa: BLE001 - hand the original exception back to the owning caller.

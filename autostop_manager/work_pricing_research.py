@@ -7,13 +7,15 @@ from itertools import pairwise
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, unquote, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
+from .bounded_http_read import BufferedResponse, urlopen as bounded_urlopen
 from .j1_fetch import contains_sensitive
 
 PUBLIC_RESEARCH_USER_AGENT = "AutostopManager/0.1 public labor research"
 PUBLIC_RESEARCH_TIMEOUT_SECONDS = 4
 MAX_PUBLIC_SEARCHES = 4
+MAX_PUBLIC_RESPONSE_BYTES = 250_000
 LABOR_ONLY_MARKERS = (
     "без запчаст",
     "без учета запчаст",
@@ -74,13 +76,19 @@ def _safe_source_from_url(url: str) -> str:
     return "public_web_search"
 
 
+def urlopen(request: Request, *, timeout: float) -> BufferedResponse:
+    return bounded_urlopen(
+        request, timeout=timeout, maximum=MAX_PUBLIC_RESPONSE_BYTES, follow_redirects=True, truncate=True
+    )
+
+
 def _ddg_search(query: str, *, timeout_seconds: float = PUBLIC_RESEARCH_TIMEOUT_SECONDS) -> dict[str, Any]:
     if contains_sensitive(query):
         raise ValueError("sensitive_public_research_query")
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     request = Request(url, headers={"User-Agent": PUBLIC_RESEARCH_USER_AGENT})
     with urlopen(request, timeout=timeout_seconds) as response:
-        raw = response.read(250_000).decode("utf-8", "ignore")
+        raw = response.read(MAX_PUBLIC_RESPONSE_BYTES).decode("utf-8", "ignore")
     results: list[dict[str, str]] = []
     blocks = re.findall(r"<div class=\"result(?: results_links)?\".*?</div>\s*</div>", raw, flags=re.I | re.S)
     if not blocks:

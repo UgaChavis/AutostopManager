@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import math
 import re
 from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .j1_fetch import contains_sensitive, contains_unsafe_url, public_url, redact_sensitive
@@ -175,13 +176,16 @@ def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(int(numeric), maximum))
 
 
-def _bounded_timeout(value: Any) -> int:
-    return _bounded_int(
-        value,
-        default=PUBLIC_RESEARCH_TIMEOUT_SECONDS,
-        minimum=1,
-        maximum=_MAX_TIMEOUT_SECONDS,
-    )
+def _bounded_timeout(value: Any) -> float:
+    if isinstance(value, bool):
+        return PUBLIC_RESEARCH_TIMEOUT_SECONDS
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return PUBLIC_RESEARCH_TIMEOUT_SECONDS
+    if not math.isfinite(numeric):
+        return PUBLIC_RESEARCH_TIMEOUT_SECONDS
+    return min(numeric, _MAX_TIMEOUT_SECONDS) if numeric > 0 else 1.0
 
 
 def _compact(value: Any, *, limit: int) -> str:
@@ -886,7 +890,12 @@ class DuckDuckGoWebResearchGateway:
         _ = _normalize_providers(providers)
         try:
             payload = self._search(safe_query, timeout_seconds=_bounded_timeout(timeout_seconds))
-        except (OSError, TimeoutError, ValueError):
+        except (OSError, TimeoutError, ValueError) as exc:
+            local_capacity_failure = (
+                isinstance(exc, URLError)
+                and not isinstance(exc, HTTPError)
+                and exc.reason in ("provider_transport_busy", "provider_transport_unavailable")
+            )
             return _gateway_response(
                 ok=False,
                 query=safe_query,
@@ -898,7 +907,7 @@ class DuckDuckGoWebResearchGateway:
                 adapter="local_duckduckgo_fallback",
                 capability=capability,
                 vin_redacted=bool(removed),
-                error={"code": "web_search_provider_failed", "retryable": True},
+                error={"code": "web_search_provider_failed", "retryable": not local_capacity_failure},
             )
         result = normalize_web_research_response(
             payload,
