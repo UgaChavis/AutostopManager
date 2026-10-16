@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import json
 import logging
@@ -2073,25 +2074,30 @@ async def select_worker(
         if model is not None and app.resumed_model != model:
             raise WakeError("wake_worker_model_mismatch")
         await app.request("thread/name/set", {"threadId": ident, "name": WORKER_TASK_NAME})
-        # Guard again after RPCs. A concurrent configuration change is not overwritten.
-        if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != expected_config_sha256:
-            raise WakeError("wake_config_changed")
-        temporary = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "w") as target:
-                json.dump(asdict(config), target)
-                target.write("\n")
-                target.flush()
-                os.fsync(target.fileno())
-            os.replace(temporary, CONFIG_PATH)
-            directory_fd = os.open(CONFIG_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+        # Keep the lock on a stable inode: publishing replaces CONFIG_PATH itself.
+        lock_path = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection.lock")
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        with os.fdopen(lock_fd, "a") as selection_lock:
+            fcntl.flock(selection_lock, fcntl.LOCK_EX)
+            # Guard again after RPCs. A concurrent configuration change is not overwritten.
+            if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != expected_config_sha256:
+                raise WakeError("wake_config_changed")
+            temporary = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.fsync(directory_fd)
+                with os.fdopen(fd, "w") as target:
+                    json.dump(asdict(config), target)
+                    target.write("\n")
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.replace(temporary, CONFIG_PATH)
+                directory_fd = os.open(CONFIG_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
             finally:
-                os.close(directory_fd)
-        finally:
-            temporary.unlink(missing_ok=True)
+                temporary.unlink(missing_ok=True)
         return {"ok": True, "selected": True, "separate_worker": True, "instruction_revision": instruction_revision}
     finally:
         await app.close()
