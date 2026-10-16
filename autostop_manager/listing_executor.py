@@ -36,6 +36,8 @@ class BoundedListingExecutor:
     items in ThreadPoolExecutor's unbounded queue. Abandoned queued jobs instead
     finish without calling the adapter when a worker reaches them. Only actual
     completion releases admission, including after the caller's loop has closed.
+    A failed submission disables this pool until it is recreated, while already
+    accepted work drains without cancellation.
     """
 
     def __init__(
@@ -54,6 +56,7 @@ class BoundedListingExecutor:
         self._timeout_seconds = timeout_seconds
         self._lock = threading.Lock()
         self._pending = 0
+        self._unavailable = False
 
     @property
     def pending_count(self) -> int:
@@ -77,6 +80,8 @@ class BoundedListingExecutor:
         started = threading.Event()
         job_lock = threading.Lock()
         with self._lock:
+            if self._unavailable:
+                raise ListingExecutionError("provider_executor_unavailable", stage="admission")
             if self._pending >= self._limit:
                 raise ListingExecutionError("provider_busy", stage="admission")
             self._pending += 1
@@ -88,11 +93,22 @@ class BoundedListingExecutor:
                 started.set()
             return operation()
 
-        try:
-            concurrent = self._pool.submit(execute)
-        except RuntimeError:
-            with self._lock:
-                self._pending -= 1
+        concurrent: Future[dict[str, Any]] | None = None
+        shutdown = False
+        # submit can queue execute before a new worker fails to start. Keep that
+        # work behind the gate until the submission outcome is known.
+        with job_lock:
+            try:
+                concurrent = self._pool.submit(execute)
+            except RuntimeError:
+                abandoned.set()
+                with self._lock:
+                    self._pending -= 1
+                    shutdown = not self._unavailable
+                    self._unavailable = True
+        if concurrent is None:
+            if shutdown:
+                self._pool.shutdown(wait=False, cancel_futures=False)
             raise ListingExecutionError("provider_executor_unavailable", stage="admission") from None
         concurrent.add_done_callback(self._completed)
         wrapped = asyncio.wrap_future(concurrent)
