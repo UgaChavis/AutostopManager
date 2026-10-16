@@ -716,6 +716,8 @@ def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
     if first.get("error") == "rate_limited":
         time.sleep(_bounded_retry_delay(first.get("retry_after_seconds")))
     second = _fetch_document_once(url, allow_browser=allow_browser)
+    if first.get("browser_attempted") is True:
+        second["browser_attempted"] = True
     # Retry timing is internal: preserve the original public result contract
     # and never surface a server-provided header through MCP.
     second.pop("retry_after_seconds", None)
