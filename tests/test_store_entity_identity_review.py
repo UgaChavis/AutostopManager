@@ -190,6 +190,17 @@ def test_conflicting_nonempty_id_aliases_do_not_establish_one_target(monkeypatch
     assert_rejected(wire, stage)
 
 
+@pytest.mark.parametrize("observed", [0, False, [], {}], ids=["zero", "false", "empty-array", "empty-object"])
+@pytest.mark.parametrize("invalid_alias,valid_alias", [("id", "entity_id"), ("entity_id", "id")])
+def test_falsy_nonstring_alias_cannot_hide_behind_a_matching_string(
+    monkeypatch, tmp_path, observed, invalid_alias, valid_alias
+):
+    wire = Wire(monkeypatch, tmp_path)
+    wire.after[valid_alias] = wire.target
+    wire.after[invalid_alias] = observed
+    assert_rejected(wire, "post")
+
+
 @pytest.mark.parametrize("target", ["123", "True", "1.5", "[1, 'x']", "{'slot': 1}", "Партия/А 24"])
 def test_opaque_string_identity_remains_supported(monkeypatch, tmp_path, target):
     assert_verified(Wire(monkeypatch, tmp_path, target))
