@@ -1025,8 +1025,12 @@ def _entity_field(payload: dict[str, Any], field: str) -> Any:
 def _entity_matches(payload: dict[str, Any], *, entity: str, entity_id: str) -> bool:
     item = _entity_payload(payload)
     observed_entity = str(item.get("entity") or item.get("entity_type") or "").strip().casefold()
-    observed_id = str(item.get("id") or item.get("entity_id") or "").strip()
-    return observed_entity == entity and observed_id == entity_id
+    observed_ids = [item.get(alias) for alias in ("id", "entity_id") if item.get(alias) not in (None, "")]
+    return (
+        observed_entity == entity
+        and bool(observed_ids)
+        and all(isinstance(value, str) and value.strip() == entity_id for value in observed_ids)
+    )
 
 
 def _version_advanced(before: str, after: str) -> bool:
