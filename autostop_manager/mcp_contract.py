@@ -17,12 +17,15 @@ class ManagerMcpContractError(RuntimeError):
     """Raised when the native Manager MCP surface does not match its manifest."""
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def mcp_schema_fingerprint(tool_schemas: Mapping[str, Any]) -> str:
     """Fingerprint an MCP tool surface without including runtime data."""
 
     surface = [{"name": str(name), "inputSchema": tool_schemas[name]} for name in sorted(tool_schemas)]
-    canonical = json.dumps(surface, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return hashlib.sha256(_canonical_json(surface).encode()).hexdigest()
 
 
 def manager_session_schema_evidence(
@@ -33,18 +36,18 @@ def manager_session_schema_evidence(
     tools_error: bool = False,
     declarations: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compare independent schema observations, never claiming a host refresh."""
-    expected = dict(expected_schemas)
+    """Compare canonical JSON observations, never claiming a host refresh."""
+    expected = {name: _canonical_json(schema) for name, schema in expected_schemas.items()}
     app_drift = sorted(
         name
         for name in expected.keys() | app_schemas.keys()
-        if name not in expected or name not in app_schemas or app_schemas[name] != expected[name]
+        if name not in expected or name not in app_schemas or _canonical_json(app_schemas[name]) != expected[name]
     )
     declaration_drift = (
         sorted(
             name
             for name in expected.keys() | declarations.keys()
-            if name not in expected or name not in declarations or declarations[name] != expected[name]
+            if name not in expected or name not in declarations or _canonical_json(declarations[name]) != expected[name]
         )
         if declarations is not None
         else None
