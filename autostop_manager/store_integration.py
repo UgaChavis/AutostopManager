@@ -599,13 +599,13 @@ class StoreIntegration:
                 summary={"contract_id": contract.get("contract_id")},
             )
         observed_updated_at = _entity_field(pre_state, "updated_at")
-        if not str(observed_updated_at or "").strip():
+        if not isinstance(observed_updated_at, str) or not observed_updated_at.strip():
             return _error_envelope(
                 "store_preflight_version_missing",
                 status="blocked",
                 summary={"contract_id": contract.get("contract_id")},
             )
-        pre_read_revision_mismatch = str(observed_updated_at) != canonical_expected_updated_at
+        pre_read_revision_mismatch = observed_updated_at != canonical_expected_updated_at
         if pre_read_revision_mismatch and normalized_mode != "apply":
             return _error_envelope(
                 "store_expected_updated_at_mismatch",
@@ -753,12 +753,10 @@ class StoreIntegration:
                 )
             post_updated_at = _entity_field(post_state, "updated_at")
             idempotency_replay = _dict(result.get("meta")).get("idempotency_replay") is True
-            if not str(post_updated_at or "").strip() or (
-                not idempotency_replay
-                and not _version_advanced(
-                    str(observed_updated_at),
-                    str(post_updated_at),
-                )
+            if (
+                not isinstance(post_updated_at, str)
+                or not post_updated_at.strip()
+                or (not idempotency_replay and not _version_advanced(observed_updated_at, post_updated_at))
             ):
                 return _error_envelope(
                     "store_apply_readback_version_not_advanced",
@@ -1034,18 +1032,18 @@ def _entity_matches(payload: dict[str, Any], *, entity: str, entity_id: str) -> 
 
 
 def _version_advanced(before: str, after: str) -> bool:
-    normalized_before = str(before or "").strip()
-    normalized_after = str(after or "").strip()
+    normalized_before = before.strip()
+    normalized_after = after.strip()
     if not normalized_before or not normalized_after or normalized_before == normalized_after:
         return False
     try:
         before_timestamp = datetime.fromisoformat(normalized_before.replace("Z", "+00:00"))
-        after_timestamp = datetime.fromisoformat(normalized_after.replace("Z", "+00:00"))
     except ValueError:
         return True
     try:
+        after_timestamp = datetime.fromisoformat(normalized_after.replace("Z", "+00:00"))
         return after_timestamp > before_timestamp
-    except TypeError:
+    except (ValueError, TypeError):
         return False
 
 
