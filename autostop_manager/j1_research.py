@@ -734,7 +734,12 @@ def _vin_api(job_id: str) -> Any:
 
 
 def research_status(job_id: str) -> dict[str, Any]:
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_status(job_id)
     if not _valid_id(job_id):
@@ -883,7 +888,12 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_results(job_id, query, cursor, limit)
     if not _valid_id(job_id):
@@ -946,7 +956,12 @@ def research_document(
     page: int | None = None,
     ocr: bool = False,
 ) -> dict[str, Any]:
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_document(job_id, document_id, offset, max_chars, page, ocr)
     if page is not None or ocr is not False:
@@ -1238,7 +1253,12 @@ def _report_limitations(
 
 def research_report(job_id: str) -> dict[str, Any]:
     """Build a read-only evidence ledger from a retained J1 research job."""
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _report_error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_report(job_id)
 
@@ -1358,7 +1378,12 @@ def research_report(job_id: str) -> dict[str, Any]:
 
 
 def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_add_queries(job_id, queries)
     if not _valid_id(job_id):
@@ -1407,7 +1432,12 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
 
 
 def research_cancel(job_id: str) -> dict[str, Any]:
-    vin = _vin_api(job_id)
+    from .j1_vin_store import VinJobError
+
+    try:
+        vin = _vin_api(job_id)
+    except VinJobError as exc:
+        return _error(exc.code, job_id=job_id)
     if vin is not None:
         return vin.research_cancel(job_id)
     if not _valid_id(job_id):

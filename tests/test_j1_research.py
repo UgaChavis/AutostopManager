@@ -9,9 +9,7 @@ import os
 import shutil
 import socket
 import sqlite3
-import sys
 from threading import Event, current_thread
-from types import ModuleType
 
 import pytest
 
@@ -1033,13 +1031,13 @@ def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPa
 
 @pytest.fixture
 def j1003_offline(tmp_path, monkeypatch):
+    from autostop_manager import j1_vin_store
+
     monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path))
     monkeypatch.delenv("AUTOSTOP_J1_SEARXNG_URL", raising=False)
     monkeypatch.setattr(j1, "_STOP", False)
     monkeypatch.setattr(j1, "_vin_api", lambda _job_id: None)
-    private_stub = ModuleType("autostop_manager.j1_vin_store")
-    private_stub.prune = lambda: None
-    monkeypatch.setitem(sys.modules, "autostop_manager.j1_vin_store", private_stub)
+    monkeypatch.setattr(j1_vin_store, "prune", lambda: None)
 
 
 def _j1003_legacy_document():
