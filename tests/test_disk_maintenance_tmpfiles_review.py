@@ -464,6 +464,7 @@ class ForeignRuleAfterAbsence:
         self.real_stat = os.stat
         self.real_lstat = os.lstat
         self.fired = False
+        self.command_depth = 0
         self.boundary = None
         self.foreign = None
 
@@ -492,7 +493,7 @@ class ForeignRuleAfterAbsence:
         try:
             return original(path, *args, **kwargs)
         except FileNotFoundError:
-            if not self.fired and self.matches(path):
+            if not self.fired and not self.command_depth and self.matches(path):
                 self.publish(boundary)
             raise
 
@@ -507,11 +508,22 @@ class ForeignRuleAfterAbsence:
             return self.real_open(path, flags, *args, **kwargs)
         except FileNotFoundError:
             writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC)
-            if not self.fired and not writing and self.matches(path):
+            if not self.fired and not self.command_depth and not writing and self.matches(path):
                 self.publish("read-only open")
             raise
 
     def attach(self, monkeypatch):
+        command = installer._command
+
+        def controlled_command(*args, **kwargs):
+            # Fake command observations must not masquerade as product reads.
+            self.command_depth += 1
+            try:
+                return command(*args, **kwargs)
+            finally:
+                self.command_depth -= 1
+
+        monkeypatch.setattr(installer, "_command", controlled_command)
         monkeypatch.setattr(os, "stat", self.stat)
         monkeypatch.setattr(os, "lstat", self.lstat)
         monkeypatch.setattr(os, "open", self.open)
