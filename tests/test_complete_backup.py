@@ -92,8 +92,21 @@ def layout(tmp_path):
         path.chmod(0o600)
     revision = tmp_path / "REVISION"
     revision.write_text("a" * 40)
+    store_source = tmp_path / "store-source"
+    store_source.mkdir(mode=0o700)
     return backup.Layout(
-        root, crm, manager, scheduler, roles, uploads, photos, daily, tmp_path / "postgres.lock", revision
+        root,
+        crm,
+        manager,
+        scheduler,
+        roles,
+        uploads,
+        photos,
+        daily,
+        tmp_path / "postgres.lock",
+        revision,
+        store_source=store_source,
+        store_deploy_marker=None,
     )
 
 
