@@ -15,6 +15,8 @@ from pathlib import Path
 from .util import MaintenanceError, atomic_json, no_symlink_ancestors, private_file
 
 INSTALL_SOURCE = ("scripts/install-autostop-disk-maintenance.py", "scripts/disk_maintenance/install.py")
+TMPFILES_SOURCE = "deploy/tmpfiles.d/autostop-disk-maintenance-locks.conf"
+TMPFILES_RULE = b"f /run/autostop-work-telegram-control.lock 0600 root root -\n"
 
 PAYLOAD = (
     "scripts/autostop-disk-maintenance.py",
@@ -40,6 +42,8 @@ POLICY = Path("/etc/autostop-maintenance/policy.json")
 STATE = Path("/var/lib/autostop-manager/private/disk-maintenance")
 WRAPPER = Path("/usr/local/sbin/autostop-disk-maintenance")
 SYSTEMD = Path("/etc/systemd/system")
+TMPFILES = Path("/etc/tmpfiles.d/autostop-disk-maintenance-locks.conf")
+CONTROL_LOCK = Path("/run/autostop-work-telegram-control.lock")
 WRAPPER_BYTES = (
     b"#!/bin/sh\nset -eu\numask 077\n"
     b"export LD_LIBRARY_PATH=/opt/autostop-sqlite/3.51.3/lib\n"
@@ -106,7 +110,7 @@ def _payload(source: Path, revision: str) -> tuple[dict[str, bytes], str]:
         raise MaintenanceError("install_revision_invalid")
     if _command(["git", "-C", str(source), "rev-parse", "HEAD"]) != revision:
         raise MaintenanceError("install_source_revision_changed")
-    paths = (*PAYLOAD, *INSTALL_SOURCE, *("deploy/systemd/" + name for name in UNITS))
+    paths = (*PAYLOAD, *INSTALL_SOURCE, *("deploy/systemd/" + name for name in UNITS), TMPFILES_SOURCE)
     if _command(["git", "-C", str(source), "status", "--porcelain", "--", *paths]):
         raise MaintenanceError("install_source_dirty")
     result = {}
@@ -118,6 +122,8 @@ def _payload(source: Path, revision: str) -> tuple[dict[str, bytes], str]:
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise MaintenanceError("install_source_invalid")
         result[name] = path.read_bytes()
+    if result[TMPFILES_SOURCE] != TMPFILES_RULE:
+        raise MaintenanceError("install_tmpfiles_source_invalid")
     digest = hashlib.sha256()
     for name in PAYLOAD:
         digest.update(name.encode() + b"\0" + result[name] + b"\0")
@@ -183,6 +189,106 @@ def _sync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _tmpfiles_record() -> dict | None:
+    no_symlink_ancestors(TMPFILES)
+    try:
+        descriptor = os.open(TMPFILES, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or (info.st_uid, info.st_gid) != (0, 0)
+            or info.st_mode & 0o022
+            or info.st_nlink != 1
+            or info.st_size > 65536
+        ):
+            raise MaintenanceError("install_tmpfiles_invalid")
+        data = source.read(65537)
+    active = [line for line in data.splitlines() if line.strip() and not line.lstrip().startswith(b"#")]
+    if len(data) > 65536 or active != [TMPFILES_RULE.rstrip(b"\n")]:
+        raise MaintenanceError("install_tmpfiles_invalid")
+    return {
+        "dev": info.st_dev,
+        "ino": info.st_ino,
+        "mode": stat.S_IMODE(info.st_mode),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _control_lock_identity(*, required: bool = False) -> tuple[int, int] | None:
+    no_symlink_ancestors(CONTROL_LOCK)
+    try:
+        info = CONTROL_LOCK.lstat()
+    except FileNotFoundError:
+        if required:
+            raise MaintenanceError("install_control_lock_missing") from None
+        return None
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or (info.st_uid, info.st_gid) != (0, 0)
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_nlink != 1
+    ):
+        raise MaintenanceError("install_control_lock_invalid")
+    return info.st_dev, info.st_ino
+
+
+def _publish_tmpfiles(receipt: dict) -> dict:
+    previous = receipt["previous_tmpfiles"]
+    if _tmpfiles_record() != previous:
+        raise MaintenanceError("install_tmpfiles_changed")
+    if previous is not None:
+        return previous
+    descriptor, temporary = tempfile.mkstemp(prefix=".disk-tmpfiles-", dir=TMPFILES.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            os.fchown(output.fileno(), 0, 0)
+            os.fchmod(output.fileno(), 0o644)
+            output.write(TMPFILES_RULE)
+            output.flush()
+            os.fsync(output.fileno())
+            info = os.fstat(output.fileno())
+        # link publishes the complete rule only if the destination is absent.
+        os.link(temporary, TMPFILES, follow_symlinks=False)
+        receipt["created_tmpfiles"] = {
+            "dev": info.st_dev,
+            "ino": info.st_ino,
+            "mode": 0o644,
+            "sha256": hashlib.sha256(TMPFILES_RULE).hexdigest(),
+        }
+    finally:
+        os.unlink(temporary)
+    _sync_directory(TMPFILES.parent)
+    if _tmpfiles_record() != receipt["created_tmpfiles"]:
+        raise MaintenanceError("install_tmpfiles_readback_failed")
+    return receipt["created_tmpfiles"]
+
+
+def _confirm_prerequisites(rule: dict, lock: tuple[int, int] | None) -> tuple[int, int]:
+    if _tmpfiles_record() != rule:
+        raise MaintenanceError("install_tmpfiles_changed")
+    observed = _control_lock_identity(required=True)
+    if lock is not None and observed != lock:
+        raise MaintenanceError("install_control_lock_changed")
+    assert observed is not None
+    return observed
+
+
+def _rollback_tmpfiles(receipt: dict) -> None:
+    current = _tmpfiles_record()
+    created = receipt["created_tmpfiles"]
+    if created is not None:
+        if current != created:
+            raise MaintenanceError("install_tmpfiles_rollback_changed")
+        TMPFILES.unlink()
+        _sync_directory(TMPFILES.parent)
+    elif current != receipt["previous_tmpfiles"]:
+        raise MaintenanceError("install_tmpfiles_rollback_changed")
+    # Never unlink, replace or restore the runtime lock: another holder may use it.
 
 
 def _approved_policy(policy_file: Path) -> bytes:
@@ -350,6 +456,7 @@ def _rollback(receipt_path: Path, receipt: dict) -> None:
     _attempt(errors, "rollback_current_failed", _activate, receipt["previous_current"])
     for item in receipt["previous_files"]:
         _attempt(errors, "rollback_file_failed", _restore_file, item)
+    _attempt(errors, "rollback_tmpfiles_failed", _rollback_tmpfiles, receipt)
     _attempt(errors, "rollback_reload_failed", _command, ["systemctl", "daemon-reload"])
     configuration_restored = len(errors) == configuration_start
     for name in TIMERS:
@@ -373,6 +480,9 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
         raise MaintenanceError("install_receipt_already_exists")
     contents, digest = _payload(source, revision)
     policy_bytes = _approved_policy(policy_file)
+    _directory(TMPFILES.parent, 0o755)
+    previous_tmpfiles = _tmpfiles_record()
+    previous_lock = _control_lock_identity()
     _directory(BASE, 0o750)
     _directory(BASE / "releases", 0o750)
     _directory(POLICY.parent, 0o700)
@@ -398,9 +508,15 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
         "previous_enabled": enabled,
         "previous_active": active,
         "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+        "previous_tmpfiles": previous_tmpfiles,
+        "created_tmpfiles": None,
     }
     atomic_json(receipt_path, receipt)
     try:
+        rule = _publish_tmpfiles(receipt)
+        atomic_json(receipt_path, receipt)
+        _command(["systemd-tmpfiles", "--create", str(TMPFILES)])
+        control_lock = _confirm_prerequisites(rule, previous_lock)
         _write(POLICY, policy_bytes, 0o600)
         _write(WRAPPER, WRAPPER_BYTES, 0o750)
         for name, path in zip(UNITS, unit_paths, strict=True):
@@ -409,6 +525,7 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
         _command([str(WRAPPER), "--policy", str(POLICY), "--help"])
         _command(["systemd-analyze", "verify", *(str(path) for path in unit_paths[:4])])
         _command(["systemctl", "daemon-reload"])
+        _confirm_prerequisites(rule, control_lock)
         for name in TIMERS:
             _command(["systemctl", "enable", "--now", name])
             if (

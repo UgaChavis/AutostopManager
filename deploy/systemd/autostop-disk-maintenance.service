@@ -1,7 +1,7 @@
 [Unit]
 Description=Bounded AutoStop disk retention on MNG1
-Wants=network-online.target
-After=network-online.target docker.service
+Wants=network-online.target systemd-tmpfiles-setup.service
+After=network-online.target docker.service systemd-tmpfiles-setup.service
 
 [Service]
 Type=oneshot
