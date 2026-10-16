@@ -232,7 +232,7 @@ def _public_source_url(value: Any) -> tuple[str, str] | None:
         or (address is None and not _DOMAIN.fullmatch(host))
     ):
         return None
-    source_key = host[4:] if host.startswith("www.") else host
+    source_key = address.compressed if address is not None else (host[4:] if host.startswith("www.") else host)
     authority = f"[{host}]" if address is not None and address.version == 6 else host
     if port is not None:
         authority = f"{authority}:{port}"
