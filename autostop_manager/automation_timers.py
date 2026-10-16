@@ -103,6 +103,20 @@ def _systemd_duration_minutes(value: str) -> int | None:
     return minutes if remainder == 0 else None
 
 
+def _systemd_period_minutes(values: Sequence[str]) -> int | None:
+    """Return a period only when every reported active interval agrees."""
+
+    periods: set[int | None] = set()
+    for value in values:
+        if len(value) > 512:
+            return None
+        matches = list(re.finditer(r"\bOnUnitActiveUSec=([^;{}]*);", value))
+        if len(matches) != len(re.findall(r"\bOnUnitActiveUSec\b", value)):
+            return None
+        periods.update(_systemd_duration_minutes(match.group(1)) for match in matches)
+    return periods.pop() if len(periods) == 1 else None
+
+
 class SystemTimerController:
     def __init__(
         self,
@@ -150,16 +164,10 @@ class SystemTimerController:
         if result.returncode == 0:
             for line in result.stdout.splitlines():
                 key, separator, value = line.partition("=")
-                if separator and len(value) <= 512:
+                if separator and (len(value) <= 512 or key == "TimersMonotonic"):
                     properties.setdefault(key, []).append(value)
         one = lambda key, default="": (properties.get(key) or [default])[-1]  # noqa: E731
-        monotonic = properties.get("TimersMonotonic", [])
-        period_minutes: int | None = None
-        for value in monotonic:
-            match = re.search(r"\bOnUnitActiveUSec=([^;{}]+);", value)
-            if match:
-                period_minutes = _systemd_duration_minutes(match.group(1))
-                break
+        period_minutes = _systemd_period_minutes(properties.get("TimersMonotonic", []))
         last_run = one("LastTriggerUSec") or None
         next_run = one("NextElapseUSecRealtime") or None
         if next_run is None and period_minutes is not None:
