@@ -239,7 +239,7 @@ def _public_source_url(value: Any) -> tuple[str, str] | None:
     return urlunsplit(("https", authority, parsed.path or "/", "", "")), source_key
 
 
-def _date_value(value: Any) -> date | None:
+def _date_value(value: Any, *, today: date) -> date | None:
     if not isinstance(value, str):
         return None
     raw = value.strip()
@@ -249,14 +249,14 @@ def _date_value(value: Any) -> date | None:
         value_date = date.fromisoformat(raw)
     except ValueError:
         return None
-    return value_date if value_date <= datetime.now(UTC).date() else None
+    return value_date if value_date <= today else None
 
 
-def _observed_freshness(value: Any) -> tuple[str, int, str] | None:
-    observed = _date_value(value)
+def _observed_freshness(value: Any, *, today: date) -> tuple[str, int, str] | None:
+    observed = _date_value(value, today=today)
     if observed is None:
         return None
-    age_days = (datetime.now(UTC).date() - observed).days
+    age_days = (today - observed).days
     return (
         observed.isoformat(),
         age_days,
@@ -264,13 +264,13 @@ def _observed_freshness(value: Any) -> tuple[str, int, str] | None:
     )
 
 
-def _publication_freshness(value: Any) -> tuple[str | None, int | None, str] | None:
+def _publication_freshness(value: Any, *, today: date) -> tuple[str | None, int | None, str] | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None, None, "publication_date_missing"
-    published = _date_value(value)
+    published = _date_value(value, today=today)
     if published is None:
         return None
-    age_days = (datetime.now(UTC).date() - published).days
+    age_days = (today - published).days
     return published.isoformat(), age_days, "stale" if age_days > 30 else "fresh"
 
 
@@ -353,6 +353,7 @@ def _validated_observation(
     target_brand: str,
     target_region: str,
     target_brand_name: str | None,
+    today: date,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not isinstance(row, Mapping):
         return None, _reject(index, "observation_not_object")
@@ -361,8 +362,8 @@ def _validated_observation(
     source = _compact(row.get("source"), limit=120)
     excerpt = _VIN_LIKE.sub("[redacted]", _compact(row.get("source_excerpt"), limit=1200))
     url = _public_source_url(row.get("url"))
-    observed = _observed_freshness(row.get("observed_at"))
-    publication = _publication_freshness(row.get("published_at"))
+    observed = _observed_freshness(row.get("observed_at"), today=today)
+    publication = _publication_freshness(row.get("published_at"), today=today)
     price_rub = _price(row.get("price_rub"))
     kind = _kind(row.get("offer_kind"))
     condition = _condition(row.get("condition"))
@@ -496,7 +497,7 @@ def assess_part_market(
     brand: str | None = None,
     target_region: str = "Красноярск",
 ) -> dict[str, Any]:
-    """Assess supplied public offers only; it never searches, writes, or confirms fitment."""
+    """Assess supplied offers on one UTC day; never search, write, or confirm fitment."""
 
     target_article = _normalize_article(article)
     target_brand = _normalize_brand(brand) if brand else ""
@@ -510,6 +511,7 @@ def assess_part_market(
     if not isinstance(observations, list) or len(observations) > _MAX_OBSERVATIONS:
         return {"ok": False, "schema": "PartMarketAssessmentV1", "error_code": "market_observations_invalid"}
 
+    today = datetime.now(UTC).date()
     candidates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for index, row in enumerate(observations):
@@ -520,6 +522,7 @@ def assess_part_market(
             target_brand=target_brand,
             target_region=safe_target_region,
             target_brand_name=brand,
+            today=today,
         )
         if candidate is not None:
             candidates.append(candidate)
