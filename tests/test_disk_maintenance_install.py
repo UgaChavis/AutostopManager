@@ -23,10 +23,11 @@ def source(tmp_path):
         *installer.PAYLOAD,
         *installer.INSTALL_SOURCE,
         *("deploy/systemd/" + item for item in installer.UNITS),
+        installer.TMPFILES_SOURCE,
     ):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# frozen test payload\n")
+        path.write_bytes(installer.TMPFILES_RULE if name == installer.TMPFILES_SOURCE else b"# frozen test payload\n")
     for args in (
         ["init", "-q"],
         ["config", "user.email", "fixture@example.invalid"],
@@ -49,6 +50,8 @@ def target(tmp_path, monkeypatch):
         ("STATE", "state"),
         ("WRAPPER", "sbin/helper"),
         ("SYSTEMD", "systemd"),
+        ("TMPFILES", "etc/tmpfiles.d/autostop-disk-maintenance-locks.conf"),
+        ("CONTROL_LOCK", "run/autostop-work-telegram-control.lock"),
     ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,6 +61,13 @@ def target(tmp_path, monkeypatch):
     policy.parent.mkdir(mode=0o700)
     approved = deepcopy(DEFAULT_POLICY)
     approved["state_root"] = str(installer.STATE)
+    approved["filesystem_root"] = str(root)
+    approved["locks"] = {
+        name: str(installer.CONTROL_LOCK if name == "tg" else root / "run" / f"{name}.lock")
+        for name in approved["locks"]
+    }
+    approved["inventory"]["roots"] = {name: str(root / "inventory" / name) for name in approved["inventory"]["roots"]}
+    approved["inventory"]["store_deploy_marker"] = str(root / "synthetic-marker.env")
     policy.write_text(json.dumps(approved))
     policy.chmod(0o600)
     receipt = tmp_path / "receipt" / "install.json"
@@ -70,6 +80,12 @@ def target(tmp_path, monkeypatch):
         calls.append(argv)
         if argv[0] == "git":
             return actual(argv, allow_failure=allow_failure)
+        if argv[0] == "systemd-tmpfiles":
+            assert argv == ["systemd-tmpfiles", "--create", str(installer.TMPFILES)]
+            assert installer.TMPFILES.read_bytes() == installer.TMPFILES_RULE
+            descriptor = os.open(installer.CONTROL_LOCK, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
+            return ""
         if argv[:2] == ["systemctl", "is-enabled"]:
             return states[argv[-1]]["enabled"]
         if argv[:2] == ["systemctl", "is-active"]:
