@@ -199,17 +199,20 @@ def _tmpfiles_record() -> dict | None:
         return None
     except OSError:
         raise MaintenanceError("install_tmpfiles_invalid") from None
-    with os.fdopen(descriptor, "rb") as source:
-        info = os.fstat(source.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or (info.st_uid, info.st_gid) != (0, 0)
-            or info.st_mode & 0o022
-            or info.st_nlink != 1
-            or info.st_size > 65536
-        ):
-            raise MaintenanceError("install_tmpfiles_invalid")
-        data = source.read(65537)
+    try:
+        with os.fdopen(descriptor, "rb") as source:
+            info = os.fstat(source.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or (info.st_uid, info.st_gid) != (0, 0)
+                or info.st_mode & 0o022
+                or info.st_nlink != 1
+                or info.st_size > 65536
+            ):
+                raise MaintenanceError("install_tmpfiles_invalid")
+            data = source.read(65537)
+    except OSError:
+        raise MaintenanceError("install_tmpfiles_invalid") from None
     active = [line for line in data.splitlines() if line.strip() and not line.lstrip().startswith(b"#")]
     if len(data) > 65536 or active != [TMPFILES_RULE.rstrip(b"\n")]:
         raise MaintenanceError("install_tmpfiles_invalid")
@@ -229,6 +232,8 @@ def _control_lock_identity(*, required: bool = False) -> tuple[int, int] | None:
         if required:
             raise MaintenanceError("install_control_lock_missing") from None
         return None
+    except OSError:
+        raise MaintenanceError("install_control_lock_invalid") from None
     if (
         not stat.S_ISREG(info.st_mode)
         or (info.st_uid, info.st_gid) != (0, 0)
