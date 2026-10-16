@@ -57,9 +57,11 @@ def backup(source: Path, output: Path) -> dict[str, object]:
 
     descriptor, raw_temporary = tempfile.mkstemp(prefix=".automation-registry.", suffix=".tmp", dir=output.parent)
     temporary = Path(raw_temporary)
-    os.fchmod(descriptor, 0o600)
-    os.close(descriptor)
     try:
+        try:
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
         source_uri = source.absolute().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(source_uri, uri=True, timeout=10)) as origin, origin:
             with closing(sqlite3.connect(temporary, timeout=10)) as destination, destination:
