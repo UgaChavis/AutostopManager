@@ -206,7 +206,11 @@ def native_add_queries(monkeypatch, tmp_path):
         tool = server._tool_manager.get_tool(name)
         content, result = asyncio.run(tool.run(arguments, convert_result=True))
         assert json.loads(content[0].text) == result
-        return result
+        trace = result["tool_execution"]
+        assert isinstance(trace, dict)
+        assert trace["tool"] == name
+        assert trace["outcome"] == ("ok" if result["ok"] else "error")
+        return {key: value for key, value in result.items() if key != "tool_execution"}
 
     return call
 
