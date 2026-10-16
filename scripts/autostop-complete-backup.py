@@ -83,7 +83,8 @@ class Layout:
     pg_lock: Path = Path("/run/lock/autostop24-db-backup.lock")
     revision: Path = Path("/opt/autostop-manager-releases/current/REVISION")
     helper: Path = Path("/usr/local/sbin/autostop24-db-backup")
-    store_source: Path = Path("/opt/autostopapp")
+    store_source: Path = Path("/opt/autostop-app")
+    store_deploy_marker: Path | None = Path("/opt/autostop-app-deploys/current.env")
 
 
 def stamp() -> str:
@@ -324,12 +325,37 @@ class Postgres:
         }
         if crm_mounts.get("/home/autostop/.minimal-kanban") != layout.crm:
             raise BackupError("backup_crm_mount_invalid")
-        git = subprocess.run(
-            ["git", "-C", str(layout.store_source), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=15
-        )
-        if git.returncode or not re.fullmatch(r"[0-9a-f]{40}", git.stdout.strip()):
-            raise BackupError("backup_store_source_revision_invalid")
-        result["store_source_revision"] = git.stdout.strip()
+        if layout.store_deploy_marker is not None:
+            # Deploy VPS extracts an archive at store_source; it has no .git.
+            # Bind provenance to the private deployment receipt and live image.
+            marker = layout.store_deploy_marker
+            private(marker)
+            if marker.stat().st_size > 65536:
+                raise BackupError("backup_store_deploy_marker_invalid")
+            fields = {}
+            for line in marker.read_text().splitlines():
+                key, separator, value = line.partition("=")
+                if key in {"git_sha", "image_id"}:
+                    if not separator or key in fields:
+                        raise BackupError("backup_store_deploy_marker_invalid")
+                    fields[key] = value
+            if (
+                not re.fullmatch(r"[0-9a-f]{40}", fields.get("git_sha", ""))
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields.get("image_id", ""))
+                or fields["image_id"] != result["autostop-app"]["image"]
+            ):
+                raise BackupError("backup_store_deploy_binding_invalid")
+            if layout.store_source.is_symlink() or not layout.store_source.is_dir():
+                raise BackupError("backup_store_source_directory_invalid")
+            result["store_source_revision"] = fields["git_sha"]
+        else:
+            # Explicit custom lab/legacy layouts may still use a Git checkout.
+            git = subprocess.run(
+                ["git", "-C", str(layout.store_source), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=15
+            )
+            if git.returncode or not re.fullmatch(r"[0-9a-f]{40}", git.stdout.strip()):
+                raise BackupError("backup_store_source_revision_invalid")
+            result["store_source_revision"] = git.stdout.strip()
         return result
 
     def helper(self, layout: Layout, guard) -> None:

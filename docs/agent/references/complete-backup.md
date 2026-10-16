@@ -4,7 +4,17 @@
 `/var/backups/autostop-complete`. Это согласованные точки отдельных компонентов,
 а не глобальная транзакция CRM, Store и Manager. Manifest сохраняет интервалы,
 Manager revision, CRM OCI revision, Store source revision и container image SHA.
-Store source revision сам по себе не доказывает installed source/image parity.
+Для штатного archive deployment Store source — `/opt/autostop-app`, а
+`store_source_revision` берётся из private `/opt/autostop-app-deploys/current.env`.
+Receipt должен быть обычным файлом текущего effective owner без group/other прав,
+не более 64 KiB, с единственными `git_sha` (полный lowercase SHA) и `image_id`
+(immutable `sha256:`), совпадающим с Docker `.Image` работающего Store.
+Отсутствующий или неверный receipt прекращает full-copy без fallback на checkout.
+Остальные поля receipt не попадают в manifest. Только явный custom
+`Layout(store_deploy_marker=None)` сохраняет legacy Git-checkout режим.
+Старые v1 manifests остаются доступны offline verify: их source SHA не получает
+задним числом deployed provenance. Receipt связывает заявленный выпуск с image,
+но не доказывает идентичность всех bytes source tree и образа или готовность restore.
 
 | Live источник | Артефакт и правило |
 |---|---|
