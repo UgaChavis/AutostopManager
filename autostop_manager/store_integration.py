@@ -1098,7 +1098,7 @@ def _failed_readback_fields(
         if field == "status":
             matches = str(observed).strip().upper() == str(expected).strip().upper()
         elif isinstance(expected, str):
-            matches = str(observed).strip() == expected.strip()
+            matches = isinstance(observed, str) and observed.strip() == expected.strip()
         else:
             matches = observed == expected
         if not matches:
