@@ -299,6 +299,7 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
         "canonical_url": "TEXT NOT NULL DEFAULT ''",
         "language": "TEXT NOT NULL DEFAULT 'unknown'",
         "extraction_method": "TEXT NOT NULL DEFAULT ''",
+        "browser_attempted": "INTEGER NOT NULL DEFAULT 0",
         "source_class": "TEXT NOT NULL DEFAULT 'unknown'",
         "source_basis": "TEXT NOT NULL DEFAULT ''",
         # Discovery fields survive an unavailable page so a report can state
@@ -371,6 +372,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             kind TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
             body TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '', content_simhash TEXT NOT NULL DEFAULT '',
             language TEXT NOT NULL DEFAULT 'unknown', extraction_method TEXT NOT NULL DEFAULT '',
+            browser_attempted INTEGER NOT NULL DEFAULT 0,
             source_class TEXT NOT NULL DEFAULT 'unknown', source_basis TEXT NOT NULL DEFAULT '',
             source_tier TEXT NOT NULL DEFAULT 'unclassified', search_snippet TEXT NOT NULL DEFAULT '',
             search_rank INTEGER NOT NULL DEFAULT 0, search_engines TEXT NOT NULL DEFAULT '',
@@ -771,7 +773,8 @@ def research_status(job_id: str) -> dict[str, Any]:
                 )
             ]
             browser_attempts = conn.execute(
-                "SELECT COUNT(*) FROM documents WHERE job_id=? AND extraction_method='browser_dom'", (job_id,)
+                "SELECT COUNT(*) FROM documents WHERE job_id=? AND (browser_attempted=1 OR extraction_method='browser_dom')",
+                (job_id,),
             ).fetchone()[0]
             query_plan = [
                 {"query": item["query"], "intent": item["intent"] or "manual"}
@@ -1555,7 +1558,8 @@ def _work_job(job_id: str) -> None:
                 phase = "query"
             elif pending_doc:
                 browser_attempts = conn.execute(
-                    "SELECT COUNT(*) FROM documents WHERE job_id=? AND extraction_method='browser_dom'", (job_id,)
+                    "SELECT COUNT(*) FROM documents WHERE job_id=? AND (browser_attempted=1 OR extraction_method='browser_dom')",
+                    (job_id,),
                 ).fetchone()[0]
                 conn.execute("UPDATE documents SET status='running' WHERE id=?", (pending_doc["id"],))
                 conn.commit()
@@ -1635,6 +1639,16 @@ def _work_job(job_id: str) -> None:
             with _db() as conn:
                 if conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()[0] != "running":
                     return
+                # Keep prior usage even when a retry or recovery yields static text.
+                conn.execute(
+                    """UPDATE documents SET browser_attempted=(browser_attempted=1 OR extraction_method='browser_dom' OR ?)
+                       WHERE id=?""",
+                    (
+                        fetch_result.get("browser_attempted") is True
+                        or fetch_result.get("extraction_method") == "browser_dom",
+                        doc_id,
+                    ),
+                )
                 if fetch_result.get("ok") is True:
                     body = redact_sensitive(fetch_result.get("text", ""), limit=MAX_DOCUMENT_CHARS)
                     title = redact_sensitive(fetch_result.get("title", ""), limit=200)
