@@ -1531,18 +1531,17 @@ class AutomationStore:
         """Recheck desired revision, hold, lease and fence before an external effect."""
 
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now = isoformat(utc_now())
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT 1
+                SELECT r.lease_until
                 FROM manager_automation_runs q
                 JOIN manager_automations a ON a.job_id = q.job_id
                 JOIN manager_automation_runtime r ON r.job_id = q.job_id
                 JOIN manager_automation_controller_runtime c ON c.singleton = 1
                 WHERE q.run_id = ? AND q.job_id = ? AND q.status = 'running'
                   AND q.lease_owner_hash = ? AND q.fencing_token = ?
-                  AND r.lease_owner_hash = ? AND r.fencing_token = ? AND r.lease_until > ?
+                  AND r.lease_owner_hash = ? AND r.fencing_token = ?
                   AND a.archived_at IS NULL AND a.desired_state = 'on' AND a.revision = ?
                   AND c.hold_enabled = 0
                 """,
@@ -1553,11 +1552,12 @@ class AutomationStore:
                     fencing_token,
                     owner_hash,
                     fencing_token,
-                    now,
                     claimed_revision,
                 ),
             ).fetchone()
-        return row is not None
+        # Sample time after the database read so connection/query waits cannot reuse stale time.
+        lease_until = parse_time(row["lease_until"]) if row is not None else None
+        return lease_until is not None and lease_until > utc_now()
 
     def cancel_run_claim(
         self,
