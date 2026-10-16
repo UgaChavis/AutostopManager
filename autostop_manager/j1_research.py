@@ -917,22 +917,30 @@ def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int =
                 total = conn.execute(
                     "SELECT COUNT(*) FROM documents_fts WHERE job_id=? AND documents_fts MATCH ?", (job_id, expression)
                 ).fetchone()[0]
-                rows = conn.execute(
-                    f"""SELECT {fields}, snippet(documents_fts,3,'[',']','…',24) AS excerpt
+                rows = (
+                    []
+                    if cursor >= total
+                    else conn.execute(
+                        f"""SELECT {fields}, snippet(documents_fts,3,'[',']','…',24) AS excerpt
                        FROM documents_fts JOIN documents AS d ON d.id=documents_fts.document_id
                        LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        WHERE documents_fts.job_id=? AND documents_fts MATCH ?
                        ORDER BY bm25(documents_fts) LIMIT ? OFFSET ?""",
-                    (job_id, expression, limit, cursor),
-                ).fetchall()
+                        (job_id, expression, limit, cursor),
+                    ).fetchall()
+                )
             else:
                 total = conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
-                rows = conn.execute(
-                    f"""SELECT {fields}, substr(d.body,1,300) AS excerpt
+                rows = (
+                    []
+                    if cursor >= total
+                    else conn.execute(
+                        f"""SELECT {fields}, substr(d.body,1,300) AS excerpt
                        FROM documents AS d LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        WHERE d.job_id=? ORDER BY d.created_at,d.id LIMIT ? OFFSET ?""",
-                    (job_id, limit, cursor),
-                ).fetchall()
+                        (job_id, limit, cursor),
+                    ).fetchall()
+                )
             items = [_result_item(row) for row in rows]
             return {
                 "ok": True,
