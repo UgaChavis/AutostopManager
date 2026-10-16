@@ -197,6 +197,8 @@ def _tmpfiles_record() -> dict | None:
         descriptor = os.open(TMPFILES, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
+    except OSError:
+        raise MaintenanceError("install_tmpfiles_invalid") from None
     with os.fdopen(descriptor, "rb") as source:
         info = os.fstat(source.fileno())
         if (
