@@ -872,22 +872,25 @@ def verify_protected(policy: dict) -> dict:
         for path in _protected_paths(policy):
             if not path.exists():
                 raise MaintenanceError("protected_path_unavailable")
+        roots = {key: _root(policy, key) for key in ("manager_releases", "work_tg_releases", "tg_runtimes")}
         for raw in _flatten(_inventory(policy).get("coherent_keep_paths", [])):
             if raw in cold_paths:
                 continue
             path = Path(raw)
-            if (path / "REVISION").is_file():
+            if path.parent == roots["manager_releases"]:
                 _regular(path / "REVISION")
                 revision = (path / "REVISION").read_text().strip()
                 if not _manager_name_matches_revision(path, revision):
                     raise MaintenanceError("preserved_revision_invalid")
                 _verify_checksum_list(path, path / "MANIFEST.sha256")
-            elif SHA.fullmatch(path.name):
+            elif path.parent == roots["tg_runtimes"] and SHA.fullmatch(path.name):
                 _regular(path / ".dependencies-ready")
                 _regular(path / ".model-ready")
                 _verify_checksum_list(path / "model", path / "faster-whisper-small.sha256")
-            elif TELEGRAM_NAME.fullmatch(path.name):
+            elif path.parent == roots["work_tg_releases"] and TELEGRAM_NAME.fullmatch(path.name):
                 _verify_work_release(path, policy)
+            else:
+                raise MaintenanceError("protected_runtime_identity_invalid")
             receipts.append({"component": "coherent_runtime", "path": str(path), "ok": True})
     return {"ok": True, "receipts": receipts, "fingerprint": inventory["fingerprint"]}
 
@@ -943,8 +946,13 @@ def _verify_work_release(path: Path, policy: dict) -> str:
     if not _manager_name_matches_revision(manager, revision) or revision[:12] != match[1]:
         raise MaintenanceError("work_release_revision_invalid")
     _verify_checksum_list(manager, manager / "MANIFEST.sha256")
+    revision_path = path / "REVISION"
+    if revision_path.exists() or revision_path.is_symlink():
+        _regular(revision_path)
+        if revision_path.read_text().strip() != revision:
+            raise MaintenanceError("work_release_revision_invalid")
     trusted = _checksum_rows(manager / "MANIFEST.sha256")
-    # Native work releases are git archives and have no REVISION/MANIFEST.
+    # Native work releases are git archives without their own manifest.
     # Compare the complete executable Python package and its launch/config
     # files to the matching trusted Manager manifest; never import the code.
     names = [str(child.relative_to(path)) for child in (path / "autostop_manager").rglob("*.py")]
