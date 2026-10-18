@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 import http.client
+import io
 from pathlib import Path
 import shutil
 import socket
@@ -99,8 +100,7 @@ def exchange(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., dict[str
         assert not thread.is_alive()
 
 
-@pytest.mark.parametrize("phase", ["headers", "body", "chunk_size", "trailers"])
-def test_http_exchange_deadline_bounds_continuous_drip(exchange, phase: str) -> None:
+def _drip_segments(phase: str) -> list[tuple[bytes, float]]:
     header = b"HTTP/1.1 200 OK\r\nContent-Length: 24\r\nConnection: close\r\n\r\n"
     chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
     if phase == "headers":
@@ -117,11 +117,100 @@ def test_http_exchange_deadline_bounds_continuous_drip(exchange, phase: str) -> 
         segments = [(chunked + b"3\r\nabc\r\n0\r\n", 0)] + [
             (bytes([byte]), 0.007) for byte in b"X-Synthetic-Trailer: abcdefghijklmnop\r\n\r\n"
         ]
-    exchange(segments)
-    started = time.monotonic()
+    return segments
+
+
+@pytest.mark.parametrize("phase", ["headers", "body", "chunk_size", "trailers"])
+def test_http_exchange_deadline_bounds_continuous_drip(exchange, phase: str) -> None:
+    exchange(_drip_segments(phase))
+    # A finite drip would finish successfully with only an idle timeout. Check
+    # interruption here; process scheduling/GC cannot guarantee a wall bound.
     with pytest.raises(TimeoutError):
         j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=0.06)
-    assert time.monotonic() - started < 0.2
+
+
+@pytest.mark.parametrize("phase", ["headers", "body", "chunk_size", "trailers"])
+@pytest.mark.parametrize("idle_timeout, expected_elapsed", [(None, 0.06), (0.01, 0.06), (0.002, 0.002)])
+def test_http_request_enforces_exact_deadline_without_scheduler_timing(
+    monkeypatch: pytest.MonkeyPatch, phase: str, idle_timeout: float | None, expected_elapsed: float
+) -> None:
+    segments = _drip_segments(phase)
+    elapsed = 0.0
+    deadline = 0.06
+    state = SimpleNamespace(timeout=None, closed=False)
+    reads: list[tuple[float, float | None]] = []
+    streams: list[io.RawIOBase] = []
+    request = bytearray()
+
+    class DripReader(io.RawIOBase):
+        def readable(self) -> bool:
+            return True
+
+        def readinto(self, buffer: Any) -> int:
+            nonlocal elapsed
+            reads.append((elapsed, state.timeout))
+            if not segments:
+                return 0
+            data, delay = segments[0]
+            if state.timeout is not None and delay > state.timeout:
+                elapsed += state.timeout
+                raise TimeoutError("scripted_socket_timeout")
+            elapsed += delay
+            size = min(len(data), len(buffer))
+            buffer[:size] = data[:size]
+            if size == len(data):
+                segments.pop(0)
+            else:
+                segments[0] = (data[size:], 0.0)
+            return size
+
+    def settimeout(timeout: float | None) -> None:
+        state.timeout = timeout
+
+    def makefile(mode: str, buffering: int = -1) -> io.IOBase:
+        assert mode == "rb"
+        stream = DripReader()
+        streams.append(stream)
+        return stream if buffering == 0 else io.BufferedReader(stream)
+
+    def sendall(data: bytes) -> None:
+        assert not state.closed
+        request.extend(data)
+
+    def close() -> None:
+        # Socket file objects retain the transport after HTTPConnection.close().
+        state.closed = True
+
+    sock = SimpleNamespace(
+        makefile=makefile,
+        gettimeout=lambda: state.timeout,
+        settimeout=settimeout,
+        sendall=sendall,
+        close=close,
+    )
+
+    def connect(address: tuple[str, int], timeout: float) -> Any:
+        assert address == ("1.1.1.1", 80)
+        assert timeout == pytest.approx(deadline)
+        settimeout(min(timeout, idle_timeout) if idle_timeout is not None else timeout)
+        return sock
+
+    # Exercise the public request's connection/response wiring as well as the
+    # real parser. Only DNS, transport delivery and its clock are controlled.
+    monkeypatch.setattr(j1_fetch, "time", SimpleNamespace(monotonic=lambda: elapsed))
+    monkeypatch.setattr(j1_fetch, "_public_address", lambda *_args: "1.1.1.1")
+    monkeypatch.setattr(j1_fetch.socket, "create_connection", connect)
+    with pytest.raises(TimeoutError):
+        j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=deadline)
+    assert request.startswith(b"GET /report HTTP/1.1\r\n")
+    assert elapsed == pytest.approx(expected_elapsed)
+    assert segments  # The response has not completed when the budget expires.
+    assert state.closed
+    assert all(stream.closed for stream in streams)
+    initial_idle = min(deadline, idle_timeout) if idle_timeout is not None else deadline
+    assert [timeout for _, timeout in reads] == pytest.approx(
+        [min(initial_idle, deadline - started) for started, _ in reads]
+    )
 
 
 @pytest.mark.parametrize(
@@ -150,10 +239,8 @@ def test_http_deadline_preserves_a_shorter_socket_idle_timeout(exchange) -> None
         [(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n", 0), (b"abc", 0.07)],
         io_timeout=0.025,
     )
-    started = time.monotonic()
     with pytest.raises(TimeoutError):
         j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=0.5)
-    assert time.monotonic() - started < 0.2
 
 
 @pytest.mark.parametrize(
@@ -236,11 +323,9 @@ def test_https_deadline_bounds_decrypted_body_with_verified_tls(
     monkeypatch.setattr(j1_fetch.ssl, "create_default_context", lambda: client_context)
     thread = threading.Thread(target=serve)
     thread.start()
-    started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
             j1_fetch._request_public("https://example.org/report", max_bytes=100, timeout=0.09)
-        assert time.monotonic() - started < 0.25
     finally:
         client.close()
         peer.close()
