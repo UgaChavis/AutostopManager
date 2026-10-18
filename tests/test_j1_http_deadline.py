@@ -130,16 +130,17 @@ def test_http_exchange_deadline_bounds_continuous_drip(exchange, phase: str) -> 
 
 
 @pytest.mark.parametrize("phase", ["headers", "body", "chunk_size", "trailers"])
-@pytest.mark.parametrize("idle_timeout", [None, 0.06, 0.002])
-def test_http_parser_enforces_exact_deadline_without_scheduler_timing(
-    monkeypatch: pytest.MonkeyPatch, phase: str, idle_timeout: float | None
+@pytest.mark.parametrize("idle_timeout, expected_elapsed", [(None, 0.06), (0.01, 0.06), (0.002, 0.002)])
+def test_http_request_enforces_exact_deadline_without_scheduler_timing(
+    monkeypatch: pytest.MonkeyPatch, phase: str, idle_timeout: float | None, expected_elapsed: float
 ) -> None:
     segments = _drip_segments(phase)
     elapsed = 0.0
     deadline = 0.06
-    state = SimpleNamespace(timeout=idle_timeout)
+    state = SimpleNamespace(timeout=None, closed=False)
     reads: list[tuple[float, float | None]] = []
     streams: list[io.RawIOBase] = []
+    request = bytearray()
 
     class DripReader(io.RawIOBase):
         def readable(self) -> bool:
@@ -150,42 +151,65 @@ def test_http_parser_enforces_exact_deadline_without_scheduler_timing(
             reads.append((elapsed, state.timeout))
             if not segments:
                 return 0
-            data, delay = segments.pop(0)
+            data, delay = segments[0]
             if state.timeout is not None and delay > state.timeout:
                 elapsed += state.timeout
                 raise TimeoutError("scripted_socket_timeout")
             elapsed += delay
-            assert len(data) <= len(buffer)
-            buffer[: len(data)] = data
-            return len(data)
+            size = min(len(data), len(buffer))
+            buffer[:size] = data[:size]
+            if size == len(data):
+                segments.pop(0)
+            else:
+                segments[0] = (data[size:], 0.0)
+            return size
 
     def settimeout(timeout: float | None) -> None:
         state.timeout = timeout
 
-    def makefile(*_args, **_kwargs) -> DripReader:
+    def makefile(mode: str, buffering: int = -1) -> io.IOBase:
+        assert mode == "rb"
         stream = DripReader()
         streams.append(stream)
-        return stream
+        return stream if buffering == 0 else io.BufferedReader(stream)
+
+    def sendall(data: bytes) -> None:
+        assert not state.closed
+        request.extend(data)
+
+    def close() -> None:
+        # Socket file objects retain the transport after HTTPConnection.close().
+        state.closed = True
 
     sock = SimpleNamespace(
         makefile=makefile,
         gettimeout=lambda: state.timeout,
         settimeout=settimeout,
+        sendall=sendall,
+        close=close,
     )
-    # Keep the real HTTP parser and buffered/raw reader wiring. Only transport
-    # delivery and its monotonic clock are controlled, without a sender thread.
+
+    def connect(address: tuple[str, int], timeout: float) -> Any:
+        assert address == ("1.1.1.1", 80)
+        assert timeout == pytest.approx(deadline)
+        settimeout(min(timeout, idle_timeout) if idle_timeout is not None else timeout)
+        return sock
+
+    # Exercise the public request's connection/response wiring as well as the
+    # real parser. Only DNS, transport delivery and its clock are controlled.
     monkeypatch.setattr(j1_fetch, "time", SimpleNamespace(monotonic=lambda: elapsed))
-    with j1_fetch._deadline_response_class(deadline)(sock) as response, pytest.raises(TimeoutError):
-        response.begin()
-        response.read(101)
-    assert elapsed == pytest.approx(min(deadline, idle_timeout) if idle_timeout is not None else deadline)
+    monkeypatch.setattr(j1_fetch, "_public_address", lambda *_args: "1.1.1.1")
+    monkeypatch.setattr(j1_fetch.socket, "create_connection", connect)
+    with pytest.raises(TimeoutError):
+        j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=deadline)
+    assert request.startswith(b"GET /report HTTP/1.1\r\n")
+    assert elapsed == pytest.approx(expected_elapsed)
     assert segments  # The response has not completed when the budget expires.
+    assert state.closed
     assert all(stream.closed for stream in streams)
+    initial_idle = min(deadline, idle_timeout) if idle_timeout is not None else deadline
     assert [timeout for _, timeout in reads] == pytest.approx(
-        [
-            min(idle_timeout, deadline - started) if idle_timeout is not None else deadline - started
-            for started, _ in reads
-        ]
+        [min(initial_idle, deadline - started) for started, _ in reads]
     )
 
 
