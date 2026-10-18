@@ -224,7 +224,7 @@ def _tmpfiles_record() -> dict | None:
     }
 
 
-def _control_lock_identity(*, required: bool = False) -> tuple[int, int] | None:
+def _control_lock_identity(*, required: bool = False, allow_legacy_0644: bool = False) -> tuple[int, int] | None:
     no_symlink_ancestors(CONTROL_LOCK)
     try:
         info = CONTROL_LOCK.lstat()
@@ -234,10 +234,11 @@ def _control_lock_identity(*, required: bool = False) -> tuple[int, int] | None:
         return None
     except OSError:
         raise MaintenanceError("install_control_lock_invalid") from None
+    allowed_modes = (0o600, 0o644) if allow_legacy_0644 else (0o600,)
     if (
         not stat.S_ISREG(info.st_mode)
         or (info.st_uid, info.st_gid) != (0, 0)
-        or stat.S_IMODE(info.st_mode) != 0o600
+        or stat.S_IMODE(info.st_mode) not in allowed_modes
         or info.st_nlink != 1
     ):
         raise MaintenanceError("install_control_lock_invalid")
@@ -489,7 +490,9 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
     policy_bytes = _approved_policy(policy_file)
     _directory(TMPFILES.parent, 0o755)
     previous_tmpfiles = _tmpfiles_record()
-    previous_lock = _control_lock_identity()
+    # Existing bridge scripts can create 0644 under umask 022. Only the initial
+    # observation permits it; tmpfiles must normalize the same inode to 0600.
+    previous_lock = _control_lock_identity(allow_legacy_0644=True)
     _directory(BASE, 0o750)
     _directory(BASE / "releases", 0o750)
     _directory(POLICY.parent, 0o700)

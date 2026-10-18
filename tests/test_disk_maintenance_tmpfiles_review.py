@@ -1,6 +1,6 @@
 """Synthetic installer regressions for the mandatory Telegram control-lock prerequisite.
 
-Seven semantic families, 25 distinct parameterized runs; no interface repetitions.
+Includes legacy lock-mode normalization and strict confirmation before enabling timers.
 Linux/root fixtures use private paths and a private Git source. The command fake
 models only the selected canonical f-rule at a private runtime leaf; it does not
 prove native systemd-tmpfiles or service namespace behavior. Product publication,
@@ -180,12 +180,15 @@ class CommandBoundary:
         if not _safe_rule(_leaf(self.rule)):
             raise MaintenanceError("synthetic_tmpfiles_invalid_rule")
         existing = _leaf(self.lock)
-        if existing is not None and not _safe_lock(existing):
+        if existing is not None and existing["kind"] != "file":
             raise MaintenanceError("synthetic_tmpfiles_unsafe_leaf")
         descriptor = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
+            # Native f normalizes an existing regular inode in place. Whether
+            # that inode is trusted for adoption is checked by the installer.
             os.fchown(descriptor, 0, 0)
-            os.fchmod(descriptor, 0o600)
+            if self.tmpfiles_mode != "zero-without-chmod":
+                os.fchmod(descriptor, 0o600)
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -375,6 +378,38 @@ def test_bootstrap_and_reinstall_preserve_adopted_rule_and_held_lock(source, tar
             os.close(holder)
 
 
+def test_legacy_0644_lock_is_normalized_without_changing_held_inode_or_bytes(source, target):
+    _write_private(target.lock, b"synthetic legacy lock bytes\n", 0o644)
+    before = _leaf(target.lock)
+    holder = _hold(target.lock)
+    try:
+        assert _install(source, target)["status"] == "installed"
+        _assert_bootstrap_before_enable(target)
+        assert _leaf(target.lock) == {**before, "mode": 0o600}
+        _assert_still_locked(target.lock, holder)
+        events = [name for name, _ in target.command.events]
+        assert events.index("tmpfiles") < events.index("enable")
+    finally:
+        os.close(holder)
+
+
+def test_success_without_legacy_lock_mode_normalization_never_enables_timers(source, target):
+    _write_private(target.lock, b"synthetic unnormalized legacy lock bytes\n", 0o644)
+    target.command.tmpfiles_mode = "zero-without-chmod"
+    before = _leaf(target.lock)
+    holder = _hold(target.lock)
+    try:
+        with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
+            _install(source, target)
+        assert any(event == "tmpfiles" for event, _ in target.command.events)
+        _no_enable(target)
+        assert _leaf(target.lock) == before
+        _assert_still_locked(target.lock, holder)
+        assert json.loads(target.receipt.read_text())["status"] == "rolled_back"
+    finally:
+        os.close(holder)
+
+
 @pytest.mark.parametrize(
     "kind",
     [
@@ -386,6 +421,9 @@ def test_bootstrap_and_reinstall_preserve_adopted_rule_and_held_lock(source, tar
         "lock-directory",
         "lock-hardlink",
         "lock-owner",
+        "lock-group-writable",
+        "lock-world-writable",
+        "lock-other-safe-mode",
     ],
 )
 def test_conflicting_or_unsafe_existing_objects_are_not_adopted(source, target, kind):
@@ -405,6 +443,9 @@ def test_conflicting_or_unsafe_existing_objects_are_not_adopted(source, target, 
         target.lock.mkdir()
     elif kind == "lock-hardlink":
         os.link(sentinel, target.lock)
+    elif kind in {"lock-group-writable", "lock-world-writable", "lock-other-safe-mode"}:
+        modes = {"lock-group-writable": 0o660, "lock-world-writable": 0o666, "lock-other-safe-mode": 0o640}
+        _write_private(target.lock, b"synthetic unsupported lock mode\n", modes[kind])
     else:
         _write_private(target.lock, b"synthetic foreign owned lock\n")
         os.chown(target.lock, 4242, 0)
