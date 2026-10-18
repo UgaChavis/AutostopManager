@@ -47,6 +47,16 @@ def _write_private(path, data, mode=0o600):
     path.chmod(mode)
 
 
+def _write_legacy_lock(path, data, creation_umask):
+    previous_umask = os.umask(creation_umask)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666)
+    finally:
+        os.umask(previous_umask)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(data)
+
+
 def _leaf(path):
     try:
         info = path.lstat()
@@ -378,9 +388,11 @@ def test_bootstrap_and_reinstall_preserve_adopted_rule_and_held_lock(source, tar
             os.close(holder)
 
 
-def test_legacy_0644_lock_is_normalized_without_changing_held_inode_or_bytes(source, target):
-    _write_private(target.lock, b"synthetic legacy lock bytes\n", 0o644)
+@pytest.mark.parametrize(("creation_umask", "expected_mode"), [(0o022, 0o644), (0o027, 0o640)])
+def test_legacy_lock_is_normalized_without_changing_held_inode_or_bytes(source, target, creation_umask, expected_mode):
+    _write_legacy_lock(target.lock, b"synthetic legacy lock bytes\n", creation_umask)
     before = _leaf(target.lock)
+    assert before["mode"] == expected_mode
     holder = _hold(target.lock)
     try:
         assert _install(source, target)["status"] == "installed"
@@ -393,10 +405,14 @@ def test_legacy_0644_lock_is_normalized_without_changing_held_inode_or_bytes(sou
         os.close(holder)
 
 
-def test_success_without_legacy_lock_mode_normalization_never_enables_timers(source, target):
-    _write_private(target.lock, b"synthetic unnormalized legacy lock bytes\n", 0o644)
+@pytest.mark.parametrize(("creation_umask", "expected_mode"), [(0o022, 0o644), (0o027, 0o640)])
+def test_success_without_legacy_lock_mode_normalization_never_enables_timers(
+    source, target, creation_umask, expected_mode
+):
+    _write_legacy_lock(target.lock, b"synthetic unnormalized legacy lock bytes\n", creation_umask)
     target.command.tmpfiles_mode = "zero-without-chmod"
     before = _leaf(target.lock)
+    assert before["mode"] == expected_mode
     holder = _hold(target.lock)
     try:
         with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
@@ -423,7 +439,7 @@ def test_success_without_legacy_lock_mode_normalization_never_enables_timers(sou
         "lock-owner",
         "lock-group-writable",
         "lock-world-writable",
-        "lock-other-safe-mode",
+        "lock-executable",
     ],
 )
 def test_conflicting_or_unsafe_existing_objects_are_not_adopted(source, target, kind):
@@ -443,8 +459,8 @@ def test_conflicting_or_unsafe_existing_objects_are_not_adopted(source, target, 
         target.lock.mkdir()
     elif kind == "lock-hardlink":
         os.link(sentinel, target.lock)
-    elif kind in {"lock-group-writable", "lock-world-writable", "lock-other-safe-mode"}:
-        modes = {"lock-group-writable": 0o660, "lock-world-writable": 0o666, "lock-other-safe-mode": 0o640}
+    elif kind in {"lock-group-writable", "lock-world-writable", "lock-executable"}:
+        modes = {"lock-group-writable": 0o660, "lock-world-writable": 0o666, "lock-executable": 0o700}
         _write_private(target.lock, b"synthetic unsupported lock mode\n", modes[kind])
     else:
         _write_private(target.lock, b"synthetic foreign owned lock\n")
