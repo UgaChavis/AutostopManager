@@ -13,7 +13,9 @@ import io
 import math
 import threading
 import time
+from collections.abc import Callable
 from email.message import Message
+from http.client import HTTPException
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
@@ -43,12 +45,36 @@ class BufferedResponse(io.BytesIO):
         return self.headers
 
 
+def _response_headers(response: httpx.Response) -> Message:
+    headers = Message()
+    for key, value in response.headers.multi_items():
+        headers[key] = value
+    return headers
+
+
 async def _fetch(
-    request: Request, *, deadline: float, maximum: int, follow_redirects: bool, truncate: bool = False
+    request: Request,
+    *,
+    deadline: float,
+    maximum: int,
+    follow_redirects: bool,
+    truncate: bool = False,
+    error_maximum: int = ERROR_BODY_LIMIT,
+    on_error_headers: Callable[[int, Message], None] | None = None,
 ) -> BufferedResponse:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("provider_total_deadline_exceeded")
+
+    async def remember_rejection(response: httpx.Response) -> None:
+        if on_error_headers is not None and not 200 <= response.status_code < 300:
+            headers = _response_headers(response)
+            on_error_headers(response.status_code, headers)
+            if 300 <= response.status_code < 400:
+                raise HTTPError(
+                    request.full_url, response.status_code, f"HTTP status {response.status_code}", headers, io.BytesIO()
+                )
+
     try:
         # Keep proxy/certificate environment handling and TLS verification enabled.
         with anyio.fail_after(remaining):
@@ -59,6 +85,10 @@ async def _fetch(
                 max_redirects=10,
                 headers={"Accept-Encoding": "identity"},
             ) as client:
+                if on_error_headers is not None and not follow_redirects:
+                    # HTTPX parses Location even when it will not follow it.
+                    # Reject redirects before their parsing can lose dispatch/status.
+                    client.event_hooks["response"].append(remember_rejection)
                 # Client/TLS initialization can run synchronously before an async checkpoint.
                 if time.monotonic() >= deadline:
                     raise TimeoutError("provider_total_deadline_exceeded")
@@ -68,11 +98,11 @@ async def _fetch(
                     content=cast(Any, request.data),
                     headers=dict(request.header_items()),
                 ) as response:
-                    headers = Message()
-                    for key, value in response.headers.multi_items():
-                        headers[key] = value
+                    headers = _response_headers(response)
                     failed = not 200 <= response.status_code < 300
-                    limit = ERROR_BODY_LIMIT if failed else maximum
+                    if failed and on_error_headers is not None and follow_redirects:
+                        on_error_headers(response.status_code, headers)
+                    limit = error_maximum if failed else maximum
                     body = bytearray()
                     async for chunk in response.aiter_raw():
                         remaining_bytes = limit + 1 - len(body)
@@ -102,7 +132,16 @@ async def _fetch(
 
 
 def urlopen(
-    request: Request, *, timeout: float, maximum: int, follow_redirects: bool = False, truncate: bool = False
+    request: Request,
+    *,
+    timeout: float,
+    maximum: int,
+    follow_redirects: bool = False,
+    truncate: bool = False,
+    error_maximum: int = ERROR_BODY_LIMIT,
+    admission: threading.BoundedSemaphore | None = None,
+    deadline: float | None = None,
+    preserve_error_status: bool = False,
 ) -> BufferedResponse:
     """Urllib-compatible buffered response; its read() never waits on a socket.
 
@@ -110,23 +149,56 @@ def urlopen(
     called by a running event loop. Existing facade urlopen monkeypatchs stay at
     their current boundary and do not need to imitate httpx.
     Prefix readers opt into truncate; the default still rejects oversized bodies.
+    A supplied monotonic deadline can only shorten the relative timeout. Callers
+    may isolate transport capacity and retain a known HTTP error status when its
+    body cannot be completed; the original provider defaults remain unchanged.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("invalid_http_deadline")
     if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
         raise ValueError("invalid_response_size_limit")
-    deadline = time.monotonic() + timeout
-    admission = _ADMISSIONS
+    if isinstance(error_maximum, bool) or not isinstance(error_maximum, int) or error_maximum <= 0:
+        raise ValueError("invalid_error_response_size_limit")
+    if deadline is not None and (
+        isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)
+    ):
+        raise ValueError("invalid_http_deadline")
+    started_at = time.monotonic()
+    deadline = min(started_at + timeout, deadline) if deadline is not None else started_at + timeout
+    if deadline <= started_at:
+        raise TimeoutError("provider_total_deadline_exceeded")
+    admission = _ADMISSIONS if admission is None else admission
     if not admission.acquire(blocking=False):
         raise URLError("provider_transport_busy")
     completed = threading.Event()
     outcome: list[tuple[bool, Any]] = []
+    error_lock = threading.Lock()
+    error_response: tuple[int, Message] | None = None
+
+    def remember_error_headers(status: int, headers: Message) -> None:
+        nonlocal error_response
+        with error_lock:
+            error_response = status, headers
+
+    def incomplete_http_error() -> HTTPError | None:
+        with error_lock:
+            observed = error_response
+        if observed is None:
+            return None
+        status, headers = observed
+        return HTTPError(request.full_url, status, f"HTTP status {status}", headers, io.BytesIO())
 
     def worker() -> None:
         try:
             response = asyncio.run(
                 _fetch(
-                    request, deadline=deadline, maximum=maximum, follow_redirects=follow_redirects, truncate=truncate
+                    request,
+                    deadline=deadline,
+                    maximum=maximum,
+                    follow_redirects=follow_redirects,
+                    truncate=truncate,
+                    error_maximum=error_maximum,
+                    on_error_headers=remember_error_headers if preserve_error_status else None,
                 )
             )
             outcome.append((True, response))
@@ -142,8 +214,17 @@ def urlopen(
         admission.release()
         raise URLError("provider_transport_unavailable") from None
     if not completed.wait(max(0, deadline - time.monotonic())) or time.monotonic() >= deadline:
+        if preserve_error_status and (error := incomplete_http_error()) is not None:
+            raise error
         raise TimeoutError("provider_total_deadline_exceeded")
     succeeded, value = outcome[0]
     if not succeeded:
+        if (
+            preserve_error_status
+            and not isinstance(value, HTTPError)
+            and isinstance(value, (OSError, HTTPException))
+            and (error := incomplete_http_error()) is not None
+        ):
+            raise error from value
         raise value
     return value
