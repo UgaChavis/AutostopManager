@@ -9,8 +9,10 @@ from pathlib import Path
 import secrets
 import stat
 
+from .cold_runtime import runtime_path
 
-WORK_OWNER_CONFIG_PATH = Path("/etc/autostop-work-telegram/owner.json")
+
+WORK_OWNER_CONFIG_PATH = runtime_path("work-telegram", "owner_config_path", "/etc/autostop-work-telegram/owner.json")
 MAX_OWNER_PEER_ID = (1 << 52) - 1
 
 

@@ -4,6 +4,10 @@
 
 ## Публикация исходников
 
+Подготовка нового изолированного поколения процессов описана в
+[cold-runtime-binding.md](cold-runtime-binding.md). Конфигурация путей сама по
+себе не открывает dispatch и не разрешает менять установленный сервер.
+
 В отдельном worktree запускай `./scripts/release-gates.sh` с одноразовыми данными; минимальная coverage — 82%. Влей актуальный `origin/AutostopManager` в feature branch без переписывания истории, повтори gates, опубликуй и merge зелёного PR. Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python registrar и guarded ledger; они не входят в native Manager MCP.
 
 CI и source release gates используют `scripts/update-instruction-catalogs.py --check --project-only`:

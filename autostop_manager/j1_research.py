@@ -34,6 +34,7 @@ from .j1_fetch import (
     search_public,
 )
 from .j1_sources import classify_source, discovery_domain
+from .cold_runtime import binding, ColdRuntimeDenied, guarded_effect, require_role
 
 SCHEMA = "autostop.j1.research.v1"
 REPORT_SCHEMA = "autostop.j1.report.v1"
@@ -134,6 +135,12 @@ def _utcnow() -> str:
 
 
 def _cache_dir() -> Path:
+    from .cold_runtime import binding, configured_path
+
+    if binding() is not None:
+        expected = configured_path("AUTOSTOP_J1_CACHE_DIR", "j1", "cache_dir", "/var/cache/autostop-j1")
+        configured_path("AUTOSTOP_J1_DATA_DIR", "j1", "cache_dir", expected)
+        return expected
     return Path(
         os.environ.get("AUTOSTOP_J1_CACHE_DIR") or os.environ.get("AUTOSTOP_J1_DATA_DIR") or "/var/cache/autostop-j1"
     )
@@ -1564,6 +1571,7 @@ def _discovery_metadata(row: dict[str, Any], url: str, canonical_url: str) -> tu
     )
 
 
+@guarded_effect("j1", lambda args: args["job_id"])
 def _work_job(job_id: str) -> None:
     """Do one bounded unit at a time so cancellation is observed promptly."""
     if _vin_api(job_id) is not None:
@@ -1798,6 +1806,7 @@ def _on_stop(_signum: int, _frame: Any) -> None:
 
 
 def run_worker(*, once: bool = False) -> None:
+    require_role("j1")
     _cache_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
     with (_cache_dir() / "worker.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1808,9 +1817,16 @@ def _run_locked_worker(*, once: bool) -> None:
     signal.signal(signal.SIGTERM, _on_stop)
     signal.signal(signal.SIGINT, _on_stop)
     with _db() as conn:
-        conn.execute("UPDATE jobs SET status='queued' WHERE status='running'")
-        conn.execute("UPDATE queries SET status='pending' WHERE status='running'")
-        conn.execute("UPDATE documents SET status='pending' WHERE status='running'")
+        if binding() is not None:
+            if any(
+                conn.execute(f"SELECT 1 FROM {table} WHERE status='running' LIMIT 1").fetchone()
+                for table in ("jobs", "queries", "documents")
+            ):
+                raise ColdRuntimeDenied("cold_j1_prior_execution_needs_review")
+        else:
+            conn.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+            conn.execute("UPDATE queries SET status='pending' WHERE status='running'")
+            conn.execute("UPDATE documents SET status='pending' WHERE status='running'")
         conn.commit()
     last_prune = 0.0
     last_vin_prune = -60.0

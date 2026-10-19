@@ -100,8 +100,9 @@ def _private_directory(path: Path) -> None:
 
 
 def runtime_root(*, create: bool = False) -> Path:
-    value = os.environ.get("AUTOSTOP_J1_VIN_CACHE_DIR", "/run/autostop-j1-vin")
-    path = Path(value)
+    from .cold_runtime import configured_path
+
+    path = configured_path("AUTOSTOP_J1_VIN_CACHE_DIR", "j1", "vin_cache_dir", "/run/autostop-j1-vin")
     if not path.is_absolute() or not _is_tmpfs(path):
         raise VinJobError("vin_tmpfs_required")
     if create:

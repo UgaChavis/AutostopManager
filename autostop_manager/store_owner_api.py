@@ -21,6 +21,7 @@ from jsonschema.exceptions import SchemaError
 from referencing.exceptions import Unresolvable
 
 from .config import normalize_store_api_url
+from .cold_runtime import guarded_effect
 
 
 STORE_OWNER_FORMAT = "autostop_store_owner_api_v1"
@@ -570,6 +571,11 @@ class StoreOwnerApiClient:
             contract_version=contract_version,
         )
 
+    @guarded_effect(
+        "manager-store-owner",
+        lambda args: args["idempotency_key"],
+        applies=lambda args: args["capability"].method != "GET" and args["action_mode"] == "apply",
+    )
     def _dispatch(
         self,
         *,

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .cold_runtime import binding, configured_path
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
@@ -49,6 +51,14 @@ def _strip_env_value(value: str) -> str:
 
 
 def _iter_runtime_env_files() -> list[Path]:
+    current = binding()
+    if current is not None:
+        expected = current.path(current.role, "env_file")
+        if os.environ.get("AUTOSTOP_MANAGER_ENV_FILE", str(expected)) != str(expected):
+            from .cold_runtime import ColdRuntimeDenied
+
+            raise ColdRuntimeDenied("cold_environment_path_conflict")
+        return [expected]
     configured = os.environ.get("AUTOSTOP_MANAGER_ENV_FILE")
     if configured:
         return [Path(item.strip()).expanduser() for item in configured.split(os.pathsep) if item.strip()]
@@ -64,10 +74,16 @@ def load_runtime_env(*, force: bool = False) -> list[Path]:
 
     loaded: list[Path] = []
     for path in _iter_runtime_env_files():
-        if not path.exists() or not path.is_file():
-            continue
+        if binding() is not None:
+            from .cold_runtime import _read_protected
+
+            contents = _read_protected(path).decode("utf-8-sig")
+        else:
+            if not path.exists() or not path.is_file():
+                continue
+            contents = path.read_text(encoding="utf-8-sig")
         loaded.append(path)
-        for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        for raw_line in contents.splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -82,6 +98,10 @@ def load_runtime_env(*, force: bool = False) -> list[Path]:
 
 
 def get_db_path() -> Path:
+    current = binding()
+    if current is not None:
+        role = "crm-embedded" if current.role == "crm-embedded" else "manager-mcp"
+        return configured_path("AUTOSTOP_MANAGER_DB", role, "manager_db", DEFAULT_DB_PATH)
     configured = os.environ.get("AUTOSTOP_MANAGER_DB")
     if configured:
         return Path(configured).expanduser().resolve()
@@ -89,6 +109,8 @@ def get_db_path() -> Path:
 
 
 def get_automation_db_path() -> Path:
+    if binding() is not None:
+        return configured_path("AUTOSTOP_AUTOMATION_DB", "scheduler", "registry_db", DEFAULT_AUTOMATION_DB_PATH)
     configured = os.environ.get("AUTOSTOP_AUTOMATION_DB")
     path = Path(configured).expanduser() if configured else DEFAULT_AUTOMATION_DB_PATH
     if not path.is_absolute() or ".." in path.parts:
@@ -117,6 +139,10 @@ def get_mcp_path() -> str:
 
 
 def get_automation_control_socket_path() -> Path:
+    if binding() is not None:
+        return configured_path(
+            AUTOMATION_CONTROL_SOCKET_ENV, "scheduler", "socket_path", DEFAULT_AUTOMATION_CONTROL_SOCKET
+        )
     configured = os.environ.get(AUTOMATION_CONTROL_SOCKET_ENV, str(DEFAULT_AUTOMATION_CONTROL_SOCKET)).strip()
     path = Path(configured)
     if not path.is_absolute() or ".." in path.parts or len(str(path)) > 100:
@@ -232,6 +258,13 @@ def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
 
 
 def get_work_telegram_socket_path() -> Path:
+    if binding() is not None:
+        return configured_path(
+            "AUTOSTOP_AUTOMATION_TELEGRAM_SOCKET",
+            "work-telegram",
+            "socket_path",
+            "/run/autostop-work-telegram/bridge.sock",
+        )
     configured = os.environ.get(
         "AUTOSTOP_AUTOMATION_TELEGRAM_SOCKET", "/run/autostop-work-telegram/bridge.sock"
     ).strip()
