@@ -57,14 +57,23 @@ class BoundedListingExecutor:
         self._lock = threading.Lock()
         self._pending = 0
         self._unavailable = False
+        self._draining = False
 
     @property
     def pending_count(self) -> int:
         with self._lock:
             return self._pending
 
+    def begin_drain(self) -> None:
+        """Close admission without cancelling accepted jobs or their readbacks."""
+        with self._lock:
+            self._draining = True
+
     def close(self) -> None:
         """Drain real workers; intended for lifecycle shutdown, not caller cancellation."""
+        with self._lock:
+            self._draining = True
+            self._unavailable = True
         self._pool.shutdown(wait=True)
 
     def _completed(self, _future: Future[dict[str, Any]]) -> None:
@@ -82,6 +91,8 @@ class BoundedListingExecutor:
         with self._lock:
             if self._unavailable:
                 raise ListingExecutionError("provider_executor_unavailable", stage="admission")
+            if self._draining:
+                raise ListingExecutionError("provider_executor_draining", stage="admission")
             if self._pending >= self._limit:
                 raise ListingExecutionError("provider_busy", stage="admission")
             self._pending += 1

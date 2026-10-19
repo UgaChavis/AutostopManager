@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from contextvars import copy_context
 from functools import partial, wraps
+import math
+import os
+import threading
+import time
 from typing import Any
+from uuid import uuid4
 
 from .agent_gateway import agent_envelope
+from .bounded_http_read import TrackedTransportAdmission
 from .listing_executor import BoundedListingExecutor, ListingExecutionError
+from .store_api import store_transport_admission
 
 
 STORE_READ_TOOLS = frozenset(
@@ -35,8 +43,78 @@ _ERROR_CODES = {
     "provider_busy": "store_executor_busy",
     "provider_wait_timeout": "store_executor_wait_timeout",
     "provider_executor_unavailable": "store_executor_unavailable",
+    "provider_executor_draining": "store_executor_draining",
     "provider_execution_failed": "store_executor_failed",
 }
+
+
+class StoreWorkers:
+    """One server's admission fence, adapter pools and nested HTTP cleanup."""
+
+    def __init__(
+        self,
+        reads: BoundedListingExecutor | None = None,
+        stateful: BoundedListingExecutor | None = None,
+        transport: TrackedTransportAdmission | None = None,
+    ) -> None:
+        self.reads = reads or BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=60)
+        self.stateful = stateful or BoundedListingExecutor(max_workers=1, max_waiting_calls=2, timeout_seconds=90)
+        self.transport = transport or TrackedTransportAdmission(3)
+        self.instance_id = uuid4().hex
+        self._draining = False
+        self._lock = threading.Lock()
+
+    def begin_drain(self) -> dict[str, Any]:
+        with self._lock:
+            self.reads.begin_drain()
+            self.stateful.begin_drain()
+            self._draining = True
+        return self.status()
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            reads, stateful = self.reads.pending_count, self.stateful.pending_count
+            # Accepted workflows still need transport admission for POST/readback.
+            # Once both adapter gates are closed and empty no new child can start.
+            if self._draining and reads == stateful == 0:
+                self.transport.begin_drain()
+            transport = self.transport.pending_count
+            drained = self._draining and reads == stateful == transport == 0
+            return {
+                "format": "store_worker_lifecycle_v1",
+                "instance_id": self.instance_id,
+                "pid": os.getpid(),
+                "accepting": not self._draining,
+                "status": "drained" if drained else "draining" if self._draining else "accepting",
+                "drained": drained,
+                "pending": {"read": reads, "stateful": stateful, "transport": transport},
+            }
+
+    async def drain(self, timeout_seconds: float) -> dict[str, Any]:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds < 0
+        ):
+            raise ValueError("invalid_store_drain_timeout")
+        deadline = time.monotonic() + timeout_seconds
+        snapshot = self.begin_drain()
+        while not snapshot["drained"] and time.monotonic() < deadline:
+            await asyncio.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+            snapshot = self.status()
+        return {
+            **snapshot,
+            "ok": snapshot["drained"],
+            **({"error_code": "store_drain_timeout"} if not snapshot["drained"] else {}),
+        }
+
+    def close(self) -> None:
+        """Release idle threads only after the pre-stop proof has succeeded."""
+        if not self.begin_drain()["drained"]:
+            raise RuntimeError("store_drain_incomplete")
+        self.reads.close()
+        self.stateful.close()
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
@@ -91,7 +169,9 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
     return result
 
 
-def offload_store(function: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
+def offload_store(
+    function: Callable[..., Any], tool_name: str, workers: StoreWorkers | None = None
+) -> Callable[..., Any]:
     """Keep SDK validation/signatures and return completed domain results intact.
 
     BoundedListingExecutor retains admissions until the real worker finishes,
@@ -101,8 +181,16 @@ def offload_store(function: Callable[..., Any], tool_name: str) -> Callable[...,
 
     @wraps(function)
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
-        context = copy_context()
-        pool = _STATEFUL_EXECUTOR if tool_name in STORE_STATEFUL_TOOLS else _READ_EXECUTOR
+        token = store_transport_admission.set(workers.transport) if workers is not None else None
+        try:
+            context = copy_context()
+        finally:
+            if token is not None:
+                store_transport_admission.reset(token)
+        if workers is None:
+            pool = _STATEFUL_EXECUTOR if tool_name in STORE_STATEFUL_TOOLS else _READ_EXECUTOR
+        else:
+            pool = workers.stateful if tool_name in STORE_STATEFUL_TOOLS else workers.reads
         try:
             return await pool.run(partial(context.run, function, *args, **kwargs))
         except ListingExecutionError as error:

@@ -143,7 +143,7 @@ def instrument_manager_tools(server: Any) -> None:
         for name, tool in registry.items():
             function = tool.fn
             if name in STORE_BLOCKING_TOOLS and not tool.is_async:
-                function = offload_store(function, str(name))
+                function = offload_store(function, str(name), workers=getattr(server, "store_workers", None))
                 tool.is_async = True
             elif name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
                 function = offload_read(function, str(name))

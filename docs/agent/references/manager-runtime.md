@@ -127,6 +127,45 @@ count без приведения bool, чисел и строк к другом
 и тела, лимит размера и два transport workers на процесс. Незавершённый DNS
 cleanup удерживает слот после timeout; `provider_transport_busy` не повторяется.
 
+### Завершение Store перед остановкой Manager
+
+Native HTTP-приложение имеет собственные Store pools и три отслеживаемых HTTP
+слота. Управление не добавляет MCP tools и не меняет manifest:
+
+- `GET /internal/store-workers` возвращает `store_worker_lifecycle_v1`,
+  `instance_id`, `pid`, `accepting`, `status`, `drained` и `pending` отдельно для
+  `read`, `stateful`, `transport`. Ответ не содержит аргументов и бизнес-данных.
+- `POST /internal/store-workers/drain` с пустым телом и заголовком
+  `X-Autostop-Store-Instance: <instance_id>` необратимо закрывает admission обоих
+  Store pools. Ответ `202` означает продолжающийся drain, `200` — завершение.
+  Повтор для того же instance идемпотентен; отсутствующий/чужой instance даёт `409`.
+- Новые Store calls получают `store_executor_draining` до запуска adapter:
+  `request_dispatched=false`, `outcome_uncertain=false`, без повтора. Уже принятые
+  вызовы продолжают работу, включая внутренний POST/readback. Отменённые и
+  просроченные queued calls по-прежнему не запускают adapter.
+
+Оба endpoint доступны только прямому loopback caller с loopback Host и фактическим
+портом listener. Origin и Forwarded/X-Forwarded-* отклоняются, CORS не включён,
+ответы имеют `Cache-Control: no-store`. Это локальный интерфейс в границе доверия
+native MCP, а не отдельная аутентификация root.
+
+Контроллер до SIGTERM закрывает внешние источники работы, получает instance и
+начинает drain, затем в ограниченный срок опрашивает GET того же instance.
+`accepting=false` и `drained=true` требуют нуля реальных adapter jobs и HTTP workers,
+включая очистку/DNS после timeout caller. HTTP admission закрывается только после
+завершения всех принятых workflows, чтобы сохранить их readback. При превышении
+срока admission остаётся закрытым; остановка/переключение релиза не разрешается.
+Перед сигналом отдельно проверяются MainPID/start identity и installed snapshot.
+Новый процесс получает новый instance. Resume и force-stop здесь отсутствуют.
+
+Внешний ASGI shutdown имеет запасное ожидание 10 секунд и явно пишет
+`store_drain_timeout` с pending counts при незавершении. Uvicorn до него уже ждёт
+HTTP handlers; этот hook не заменяет pre-stop handshake и не гарантирует завершение
+в `TimeoutStopSec=20s`. Thread/DNS принудительно не прерываются. `drained` описывает
+только Store execution: это не успех бизнес-записи, не `readback_verified` и не
+готовность всего Manager/CRM к выпуску. Подключение handshake к поддерживаемому
+release controller выполняется отдельным изменением по [deployment](deployment.md).
+
 ## CLI
 
 Точные аргументы: `python -m autostop_manager.cli <command> --help`.
