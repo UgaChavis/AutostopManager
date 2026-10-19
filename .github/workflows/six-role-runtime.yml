@@ -1,6 +1,9 @@
 name: six-role-runtime
 
 on:
+  # Register and exercise the new workflow before its first default-branch merge.
+  push:
+    branches: [codex/cold-runtime-binding-20261019]
   workflow_dispatch:
     inputs:
       candidate_sha:
@@ -16,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha || github.sha }}
       PYTHONDONTWRITEBYTECODE: "1"
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"

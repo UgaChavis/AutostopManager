@@ -101,13 +101,15 @@ holds, migrations or live permission. It is source support for a separately
 reviewed cold release. Tests use synthetic documents and disposable file locks;
 they do not provide native or production acceptance.
 
-The manual `six-role-runtime` GitHub workflow prepares the declared core and
+The `six-role-runtime` GitHub workflow prepares the declared core and
 `telegram` extras for exact CPython 3.12.15 on Linux x86_64. It records the source
 wheel, every dependency wheel, versions and SHA256 hashes, then installs the
 frozen lock into a new venv without an index or network namespace connectivity.
 It checks dependency imports for all six role entrypoints without starting a
 role, loading authentication/sessions or a Whisper model, or contacting an API.
 The workflow runs only on a fresh hosted runner and publishes an artifact only.
+It accepts an exact manual source pin; before its first default-branch merge,
+pushes to the fixed cold-binding feature branch also exercise that exact head.
 
 The artifact's installed-file inventory describes its disposable verification
 venv. It supplies unique hash/byte totals and dependency provenance; the release
