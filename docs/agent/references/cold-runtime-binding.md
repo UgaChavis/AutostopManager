@@ -122,6 +122,15 @@ this source change does not create either. The CRM container must require the
 source and protected dispatch references, and join the same serialized epoch.
 Six native slot permits alone do not cover that embedded writer.
 
+Cold CRM endpoints use literal loopback and independent exact namespace paths:
+`AUTOSTOP_CRM_MCP_URL=http://127.0.0.1:8001/mcp/__cold/<64hex>/mcp`
+and `AUTOSTOP_AUTOMATION_CRM_API_URL=http://127.0.0.1:8000/__cold/<different64hex>`.
+Both are explicit protected role configuration; the Board nonce is never derived
+from MCP in cold mode. The existing bearer, redirect prohibition and reserved
+automation header remain required. Missing, legacy or noncanonical cold routes
+refuse configuration. Legacy MCP-to-Board origin fallback applies only outside
+cold bindings.
+
 Telegram also needs separately staged, verified authentication material before
 native readiness can pass. An empty session requires an authorized login; this
 change does not perform one. A session copy must be separate and writable by its

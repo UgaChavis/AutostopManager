@@ -228,7 +228,10 @@ def normalize_automation_crm_api_url(value: str) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or port != 8000
-        or (parsed.path not in {"", "/"} and re.fullmatch(r"/__cold/[0-9a-f]{64}/?", parsed.path) is None)
+        or (
+            parsed.path not in {"", "/"}
+            and (re.fullmatch(r"/__cold/[0-9a-f]{64}/?", parsed.path) is None or binding() is None)
+        )
         or parsed.query
         or parsed.fragment
     ):
@@ -239,6 +242,10 @@ def normalize_automation_crm_api_url(value: str) -> str:
 
 def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
     raw_url = os.environ.get("AUTOSTOP_AUTOMATION_CRM_API_URL", "").strip()
+    if not raw_url and binding() is not None:
+        # The independently captured Board and MCP ingress cuts use different
+        # nonces. A cold scheduler must never guess a Board route from MCP.
+        return AutomationCrmConnectionConfig(configured=True, error_code="automation_crm_configuration_invalid")
     if not raw_url:
         raw_mcp_url = os.environ.get(CRM_MCP_URL_ENV, "").strip()
         normalized_mcp = normalize_crm_mcp_url(raw_mcp_url)
@@ -246,8 +253,7 @@ def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
             parsed = urlsplit(normalized_mcp)
             host = parsed.hostname or ""
             authority = f"[{host}]" if ":" in host else host
-            prefix = parsed.path.removeprefix("/mcp").removesuffix("/mcp")
-            raw_url = f"http://{authority}:8000{prefix}"
+            raw_url = f"http://{authority}:8000"
     token = _normalize_crm_mcp_bearer(os.environ.get(CRM_MCP_BEARER_TOKEN_ENV, ""))
     api_url = normalize_automation_crm_api_url(raw_url)
     configured = bool(raw_url or token)
@@ -303,7 +309,7 @@ def normalize_crm_mcp_url(value: str) -> str:
         or parsed.fragment
         or (
             parsed.path not in {"/mcp", "/mcp/"}
-            and re.fullmatch(r"/mcp/__cold/[0-9a-f]{64}/mcp/?", parsed.path) is None
+            and (re.fullmatch(r"/mcp/__cold/[0-9a-f]{64}/mcp/?", parsed.path) is None or binding() is None)
         )
         or port != 8001
     ):
