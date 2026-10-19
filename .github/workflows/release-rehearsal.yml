@@ -8,7 +8,7 @@ on:
         required: true
         type: string
   # Bootstrap the runner before this workflow reaches the default branch.
-  # Push runs always check the explicitly reviewed PR #126 source below.
+  # Push runs check this exact branch revision, including its gate script.
   push:
     branches:
       - "codex/manager-release-rehearsal-*"
@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: manager-rehearsal-${{ inputs.candidate_sha || 'bfbe58823a11f84fef23fef291f690559d989af0' }}
+  group: manager-rehearsal-${{ inputs.candidate_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CANDIDATE_SHA: ${{ inputs.candidate_sha || 'bfbe58823a11f84fef23fef291f690559d989af0' }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha || github.sha }}
       WORKFLOW_REVISION: ${{ github.workflow_sha }}
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"

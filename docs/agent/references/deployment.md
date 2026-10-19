@@ -7,8 +7,10 @@
 В отдельном worktree запускай `./scripts/release-gates.sh` с одноразовыми данными; минимальная coverage — 82%. Влей актуальный `origin/AutostopManager` в feature branch без переписывания истории, повтори gates, опубликуй и merge зелёного PR. Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python registrar и guarded ledger; они не входят в native Manager MCP.
 
 CI и source release gates используют `scripts/update-instruction-catalogs.py --check --project-only`:
-проектная часть A4/A5 проверяется без локального кеша плагинов Codex. На целевом хосте отдельно
-запусти полный `--check`, сверяющий также установленные выбранные навыки. Оба режима читают;
+проектная часть A4/A5 проверяется без локального кеша плагинов Codex. Source doctor также
+использует `--project-only`. На целевом хосте отдельно запусти полный `doctor` и
+`update-instruction-catalogs.py --check`, сверяющие установленные выбранные навыки
+и host environment до выпуска. Эти проверки читают;
 обновление каталогов без флагов выполняется до публикации исходников.
 
 Если поручение ограничено готовым PR и зелёным CI, остановись на этой границе: merge,
@@ -21,8 +23,8 @@ CI и source release gates используют `scripts/update-instruction-cata
 automotive export этой ревизии. Artifact содержит SHA-256 файлов, dependency receipt,
 полный gate log и разные поля `source_revision`/`workflow_revision`: ревизия workflow
 не подменяет проверяемый commit. Push в bootstrap-ветки
-`codex/manager-release-rehearsal-*` проверяет закреплённый PR #126; для нового
-кандидата явно задай его SHA через `workflow_dispatch`.
+`codex/manager-release-rehearsal-*` проверяет точный commit этой ветки своим
+gate script; для другого кандидата явно задай его SHA через `workflow_dispatch`.
 Workflow имеет только `contents: read`, не использует production secrets и не
 выполняет серверный выпуск. Его green/artifact подтверждают исходники и synthetic
 проверки; перед обновлением отдельно нужны текущие host, backup и runtime gates.
