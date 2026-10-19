@@ -25,16 +25,21 @@ from uuid import UUID
 
 from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN, MAX_INBOUND_MONITOR_EVENTS
 from autostop_manager.mcp_contract import manager_session_schema_evidence
+from autostop_manager.cold_runtime import binding, guarded_effect, require_role, runtime_path
 
 LOGGER = logging.getLogger(__name__)
 
-CONFIG_PATH = Path("/etc/autostop-work-telegram/wake.json")
-SOCKET_PATH = Path("/run/autostop-codex-wake/wake.sock")
-PROJECT_DIR = "/opt/AutostopManager"
-APP_SOCKET = "/root/.codex/app-server-control/app-server-control.sock"
+CONFIG_PATH = runtime_path("wake", "config_path", "/etc/autostop-work-telegram/wake.json")
+SOCKET_PATH = runtime_path("wake", "socket_path", "/run/autostop-codex-wake/wake.sock")
+PROJECT_DIR = str(runtime_path("wake", "source_root", "/opt/AutostopManager"))
+APP_SOCKET = str(runtime_path("wake", "app_socket", "/root/.codex/app-server-control/app-server-control.sock"))
 TASK_NAME = "Рабочий Telegram AutoStop"
 WORKER_TASK_NAME = "Рабочий Telegram AutoStop — обработка"
-INSTRUCTION_RELEASE_ROOTS = (Path("/opt/autostop-manager-releases"), Path("/opt/autostop-work-telegram-releases"))
+INSTRUCTION_RELEASE_ROOTS = (
+    (runtime_path("wake", "instruction_root", "/opt/AutostopManager"),)
+    if binding() is not None
+    else (Path("/opt/autostop-manager-releases"), Path("/opt/autostop-work-telegram-releases"))
+)
 RECONNECT_DELAYS = (1, 2, 4, 8, 16, 30)
 CONNECT_TIMEOUT = 20
 RECOVERY_POLL_INTERVAL = 15
@@ -109,6 +114,8 @@ class WakeConfig:
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> WakeConfig:
+        if binding() is not None and path != CONFIG_PATH:
+            raise WakeError("cold_wake_config_path_changed")
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
             raise WakeError("wake_config_permissions")
@@ -131,7 +138,11 @@ def validate_instruction_bundle(root: str, revision: str) -> None:
     if (
         not path.is_absolute()
         or path.resolve() != path
-        or path.parent not in INSTRUCTION_RELEASE_ROOTS
+        or (
+            path != runtime_path("wake", "instruction_root", PROJECT_DIR)
+            if binding() is not None
+            else path.parent not in INSTRUCTION_RELEASE_ROOTS
+        )
         or not isinstance(revision, str)
         or len(revision) != 40
         or any(c not in "0123456789abcdef" for c in revision)
@@ -267,6 +278,11 @@ class AppServer:
                 self._notice_lifecycle("offline", "codex_transport_failed_or_unknown")
             raise TransportLost("codex_disconnected") from exc
 
+    @guarded_effect(
+        "wake",
+        lambda args: args["self"].active_event_id,
+        applies=lambda args: args["method"] in {"turn/start", "thread/start", "turn/steer", "thread/fork"},
+    )
     async def request(self, method: str, params: dict[str, Any] | None) -> Any:
         self.sequence += 1
         ident = self.sequence
@@ -711,11 +727,13 @@ class AppServer:
             if self.failed_turn is None or self.failed_turn.event_id != event_id:
                 self.active_event_id = None
 
+    @guarded_effect("wake", lambda args: args["self"].active_event_id)
     async def run_turn(self, text: str) -> None:
         self.last_turn_started = False
         turn_generation = await self._start_turn(text)
         await self._wait_turn(turn_generation)
 
+    @guarded_effect("wake", lambda args: args["self"].active_event_id)
     async def run_job_turn(
         self,
         text: str,
@@ -1124,6 +1142,8 @@ class BridgeJobs:
     def __init__(self, bridge_uid: int, path: Path | None = None) -> None:
         from autostop_manager.telegram_bridge import WORK_SOCKET_PATH
 
+        if binding() is not None and path is not None and path != WORK_SOCKET_PATH:
+            raise WakeError("cold_work_bridge_socket_changed")
         self.path = path or WORK_SOCKET_PATH
         self.bridge_uid = bridge_uid
         self.connected = False
@@ -1949,6 +1969,7 @@ async def local_request(request: dict[str, Any], path: Path = SOCKET_PATH) -> di
 
 
 async def daemon(config: WakeConfig) -> None:
+    require_role("wake")
     app = AppServer(config)
     dispatcher = DurableWakeDispatcher(app, pwd.getpwnam("autostop-work-telegram").pw_uid)
     stopping = asyncio.Event()

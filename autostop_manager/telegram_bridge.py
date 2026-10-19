@@ -34,17 +34,20 @@ from autostop_manager.telegram_owner import (
     load_owner_peer_id,
 )
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
+from autostop_manager.cold_runtime import binding, ColdRuntimeDenied, guarded_effect, require_role, runtime_path
 
 
-DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
-DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
-DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
-DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
-WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
-WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
-WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
-WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
-WORK_TRANSCRIPTION_MODEL_DIR = Path("/opt/autostop-work-telegram-models/faster-whisper-small")
+DEFAULT_CREDENTIALS_PATH = runtime_path("personal-telegram", "credentials_path", "/etc/autostop-telegram/credentials")
+DEFAULT_SESSION_PATH = runtime_path("personal-telegram", "session_path", "/var/lib/autostop-telegram/account")
+DEFAULT_STATE_DIR = runtime_path("personal-telegram", "state_dir", "/var/lib/autostop-telegram")
+DEFAULT_SOCKET_PATH = runtime_path("personal-telegram", "socket_path", "/run/autostop-telegram/bridge.sock")
+WORK_CREDENTIALS_PATH = runtime_path("work-telegram", "credentials_path", "/etc/autostop-work-telegram/credentials")
+WORK_SESSION_PATH = runtime_path("work-telegram", "session_path", "/var/lib/autostop-work-telegram/account")
+WORK_STATE_DIR = runtime_path("work-telegram", "state_dir", "/var/lib/autostop-work-telegram")
+WORK_SOCKET_PATH = runtime_path("work-telegram", "socket_path", "/run/autostop-work-telegram/bridge.sock")
+WORK_TRANSCRIPTION_MODEL_DIR = runtime_path(
+    "work-telegram", "model_dir", "/opt/autostop-work-telegram-models/faster-whisper-small"
+)
 MAX_REQUEST_BYTES = 128 * 1024
 # A read batch can contain 100 messages of 4096 characters; JSON escaping alone
 # can expand their text to 2.4 MiB, with room still needed for bounded metadata.
@@ -185,6 +188,20 @@ class TelegramConfig:
         socket_path: Path = DEFAULT_SOCKET_PATH,
         owner_config_path: Path | None = None,
     ) -> TelegramConfig:
+        current = binding()
+        if current is not None:
+            if current.role not in {"work-telegram", "personal-telegram"}:
+                raise ColdRuntimeDenied("cold_entrypoint_role_changed")
+            if any(
+                path != current.path(current.role, name)
+                for name, path in (
+                    ("credentials_path", credentials_path),
+                    ("session_path", session_path),
+                    ("state_dir", state_dir),
+                    ("socket_path", socket_path),
+                )
+            ):
+                raise ColdRuntimeDenied("cold_telegram_paths_changed")
         runtime_paths = (credentials_path, session_path, state_dir, socket_path)
         if any(not path.is_absolute() for path in runtime_paths):
             raise BridgeError("runtime_path_not_absolute")
@@ -580,6 +597,7 @@ class DurableInboundMonitor(InboundMonitor):
 
 
 def _config_for_account(account: str) -> TelegramConfig:
+    require_role("work-telegram" if account == "work" else "personal-telegram")
     paths = _account_paths(account)
     return TelegramConfig.load(
         paths.credentials_path,
@@ -1984,6 +2002,11 @@ async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[
     }
 
 
+@guarded_effect(
+    "telegram",
+    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
+    applies=lambda args: args["request"].get("mode") == "apply",
+)
 async def _handle_send_photo(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2126,6 +2149,11 @@ async def _verify_document_readback(
         raise BridgeError("send_document_readback_failed")
 
 
+@guarded_effect(
+    "telegram",
+    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
+    applies=lambda args: args["request"].get("mode") == "apply",
+)
 async def _handle_send_document(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2257,6 +2285,11 @@ async def _handle_send_document(
     return _job_send_response(response, request, effect, idempotency_key)
 
 
+@guarded_effect(
+    "telegram",
+    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
+    applies=lambda args: args["request"].get("mode") == "apply",
+)
 async def _handle_send_voice(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2467,6 +2500,11 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     }
 
 
+@guarded_effect(
+    "telegram",
+    lambda args: args["idempotency_key"] or args["request"].get("job_id"),
+    applies=lambda args: args["mode"] == "apply",
+)
 async def _handle_send_text_to_entity(
     client: Any,
     config: TelegramConfig,
@@ -3750,6 +3788,8 @@ async def _handle_job_control(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any] | None:
     operation = str(request["operation"])
+    if binding() is not None and operation == "job_import_legacy":
+        raise ColdRuntimeDenied("cold_legacy_job_import_forbidden")
     inbox = monitor.inbox
     if operation == "job_status":
         return {"ok": True, "status": inbox.status() | {"health": inbox.health()}}
@@ -4378,9 +4418,27 @@ async def _await_daemon_task(task: asyncio.Future[Any]) -> None:
         raise BridgeError("telegram_transport_disconnected") from exc
 
 
+def _require_cold_telegram_config(config: TelegramConfig) -> None:
+    current = binding()
+    if current is not None:
+        if current.role not in {"work-telegram", "personal-telegram"} or any(
+            getattr(config, name) != current.path(current.role, key)
+            for name, key in (
+                ("session_path", "session_path"),
+                ("state_dir", "state_dir"),
+                ("socket_path", "socket_path"),
+            )
+        ):
+            raise ColdRuntimeDenied("cold_telegram_paths_changed")
+        owner = current.path("work-telegram", "owner_config_path") if current.role == "work-telegram" else None
+        if config.owner_config_path != owner:
+            raise ColdRuntimeDenied("cold_telegram_owner_path_changed")
+
+
 async def run_daemon(
     config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
 ) -> None:
+    _require_cold_telegram_config(config)
     watchdog = _cleanup_watchdog or _daemon_cleanup_watchdog()
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
