@@ -1,9 +1,9 @@
 """Opt-in cold epoch paths and serialized dispatch admission.
 
-A path binding is configuration, never permission.  Dispatch additionally needs
-the protected current cold-plan COMMIT/HEAD, an open epoch and the existing
-operation identity.  Nothing here creates state, changes a hold or retries an
-effect.  With no cold binding the existing runtime contract is preserved.
+A path binding is configuration, never permission. Dispatch additionally needs
+the controller's protected admission projection, an open serialized epoch and
+the existing operation identity. Private release journals are not exposed to
+workers. Nothing here creates state, changes a hold or retries an effect.
 """
 
 from __future__ import annotations
@@ -322,15 +322,48 @@ def _lock_link(path: str) -> os.stat_result:
 def _committed(current: ColdBinding, state: dict[str, Any]) -> None:
     plan_ref, commit_ref = _reference(state["plan_ref"]), _reference(state["commit_ref"])
     attempt = current.document["attempt_id"]
+    proof_root = f"/var/lib/autostop-manager-cold/{current.document['epoch_id']}/dispatch/proofs"
+    admission_ref = _reference(state["admission_ref"])
+    _require(admission_ref["path"] == proof_root + "/admission.json", "cold_admission_path")
+    admission = _read_ref(admission_ref)
+    _fields(
+        admission,
+        {"schema", "attempt_id", "boot_id", "generation", "epoch_id", "source_refs", "projected_refs"},
+        "cold_admission_fields",
+    )
+    _require(admission["schema"] == "autostop.j1.cold-dispatch-admission.v1", "cold_admission_schema")
+    current.same_epoch(admission)
+    source_refs = _fields(admission["source_refs"], {"plan", "commit", "head", "epoch"}, "cold_admission_source_fields")
+    projected_refs = _fields(
+        admission["projected_refs"], {"plan", "commit", "head", "epoch"}, "cold_admission_projected_fields"
+    )
+    projected = {}
+    for name in ("plan", "commit", "head", "epoch"):
+        source_ref, projected_ref = _reference(source_refs[name]), _reference(projected_refs[name])
+        _require(
+            projected_ref["path"] == proof_root + f"/{name}.json" and projected_ref["sha256"] == source_ref["sha256"],
+            "cold_projection_reference",
+        )
+        document = _read_ref(projected_ref)
+        _require(
+            hashlib.sha256(canonical(document)).hexdigest() == projected_ref["sha256"], "cold_projection_not_canonical"
+        )
+        projected[name] = document
+    _require(
+        source_refs["plan"] == plan_ref
+        and source_refs["commit"] == commit_ref
+        and source_refs["head"]["path"] == str(STATE_ROOT / "HEAD.json"),
+        "cold_admission_source_binding",
+    )
     _require(plan_ref["path"] == f"/var/lib/autostop-crm-forward/attempts/{attempt}/plan.json", "cold_plan_path")
-    plan = _read_ref(plan_ref)
+    plan = projected["plan"]
     _require(
         plan.get("schema") == "autostop.j1.crm-manager-cold-forward-plan.v1"
         and plan.get("attempt_id") == attempt
         and plan.get("candidate_manager_sha") == current.document["source_revision"],
         "cold_committed_plan_binding",
     )
-    commit = _read_ref(commit_ref)
+    commit = projected["commit"]
     _require(
         commit.get("schema") in {"autostop.j1.crm-forward-commit.v1", "autostop.j1.crm-forward-commit.v2"}
         and commit.get("plan") == plan,
@@ -344,12 +377,13 @@ def _committed(current: ColdBinding, state: dict[str, Any]) -> None:
         and commit_ref["path"] == str(STATE_ROOT / "history" / f"{sequence:020d}.json"),
         "cold_commit_record_path",
     )
-    head = _document(_read_protected(STATE_ROOT / "HEAD.json"))
+    head = projected["head"]
     _require(
         head == {"schema": "autostop.j1.crm-forward-head.v1", "sequence": sequence, "sha256": commit_ref["sha256"]},
         "cold_commit_not_current_head",
     )
-    epoch = _read_ref(plan.get("dispatch_epoch_ref"))
+    _require(source_refs["epoch"] == plan.get("dispatch_epoch_ref"), "cold_admission_epoch_binding")
+    epoch = projected["epoch"]
     current.same_epoch(epoch)
     _require(epoch.get("schema") == "autostop.j1.cold-dispatch-epoch.v1", "cold_dispatch_epoch_schema")
     refs = epoch["runtime_bindings"]
@@ -444,7 +478,17 @@ def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None =
         state = _document(_read_protected(Path(fence["state_path"])))
         _fields(
             state,
-            {"schema", "attempt_id", "boot_id", "generation", "epoch_id", "state", "commit_ref", "plan_ref"},
+            {
+                "schema",
+                "attempt_id",
+                "boot_id",
+                "generation",
+                "epoch_id",
+                "state",
+                "commit_ref",
+                "plan_ref",
+                "admission_ref",
+            },
             "cold_dispatch_state_fields",
         )
         current.same_epoch(state)

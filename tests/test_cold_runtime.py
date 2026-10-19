@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +24,93 @@ BOOT = "33333333-3333-4333-8333-333333333333"
 ORIGIN = "44444444-4444-4444-8444-444444444444"
 REVISION = "a" * 40
 COMMON = {"attempt_id": ATTEMPT, "boot_id": BOOT, "generation": EPOCH, "epoch_id": EPOCH}
+
+
+def bootstrap_module():
+    path = Path(__file__).parents[1] / "scripts/cold-role-start.py"
+    spec = importlib.util.spec_from_file_location("cold_bootstrap_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("role", "module", "arguments"),
+    [
+        ("manager-mcp", "mcp_server", []),
+        ("j1", "j1_research", ["worker"]),
+        ("scheduler", "automation_daemon", ["daemon"]),
+        ("work-telegram", "telegram_bridge", ["--account", "work", "daemon"]),
+        ("personal-telegram", "telegram_bridge", ["--account", "personal", "daemon"]),
+        ("wake", "telegram_wake", ["daemon"]),
+    ],
+)
+def test_fixed_bootstrap_validates_before_consumer_import(monkeypatch, role, module, arguments):
+    bootstrap = bootstrap_module()
+    source = Path(f"/opt/autostop-manager-cold-releases/{REVISION}/source")
+    events = []
+    current = SimpleNamespace(document={"paths": {"source_root": str(source)}})
+    fake_cold = SimpleNamespace(
+        binding=lambda: events.append("binding") or current,
+        require_role=lambda selected: events.append(("role", selected)),
+    )
+
+    def imported(name):
+        events.append(("import", name))
+        if name == "autostop_manager.cold_runtime":
+            return fake_cold
+        assert name == "autostop_manager." + module
+        assert events[-3:-1] == ["binding", ("role", role)]
+        return SimpleNamespace(main=lambda: events.append("consumer"))
+
+    monkeypatch.setattr(bootstrap, "_source_root", lambda: source)
+    monkeypatch.setattr(bootstrap, "importlib", SimpleNamespace(import_module=imported))
+    monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(modules={}, path=[], argv=[]))
+    assert bootstrap.main(["--role", role]) == 0
+    assert bootstrap.sys.path == [str(source)]
+    assert bootstrap.sys.argv == [str(source / "scripts/cold-role-start.py"), *arguments]
+    assert events[-1] == "consumer"
+
+
+@pytest.mark.parametrize("failure", ["missing", "role", "source", "loaded", "arbitrary"])
+def test_fixed_bootstrap_denies_before_application_import(monkeypatch, failure):
+    bootstrap = bootstrap_module()
+    source = Path(f"/opt/autostop-manager-cold-releases/{REVISION}/source")
+    imports = []
+
+    def require_role(_role):
+        if failure == "role":
+            raise cold.ColdRuntimeDenied("cold_entrypoint_role_changed")
+
+    def imported(name):
+        imports.append(name)
+        assert name == "autostop_manager.cold_runtime"
+        return SimpleNamespace(
+            binding=lambda: (
+                None
+                if failure == "missing"
+                else SimpleNamespace(
+                    document={"paths": {"source_root": "/old" if failure == "source" else str(source)}}
+                )
+            ),
+            require_role=require_role,
+        )
+
+    monkeypatch.setattr(bootstrap, "_source_root", lambda: source)
+    monkeypatch.setattr(bootstrap, "importlib", SimpleNamespace(import_module=imported))
+    loaded = {"autostop_manager": SimpleNamespace(__file__="/old/autostop_manager/__init__.py")}
+    monkeypatch.setattr(
+        bootstrap, "sys", SimpleNamespace(modules=loaded if failure == "loaded" else {}, path=[], argv=[])
+    )
+    argv = ["--role", "manager-mcp", *(["--module", "arbitrary"] if failure == "arbitrary" else [])]
+    with pytest.raises((SystemExit, cold.ColdRuntimeDenied)):
+        bootstrap.main(argv)
+    assert not imports or imports == ["autostop_manager.cold_runtime"]
+
+
+def test_fixed_bootstrap_refuses_development_source():
+    with pytest.raises(SystemExit, match="cold_bootstrap_source_invalid"):
+        bootstrap_module()._source_root()
 
 
 @pytest.fixture
@@ -87,16 +176,30 @@ def epoch(monkeypatch, tmp_path):
         "sequence": 1,
     }
     commit_ref = put(cold.STATE_ROOT / "history/00000000000000000001.json", commit)
-    put(
+    head = {"schema": "autostop.j1.crm-forward-head.v1", "sequence": 1, "sha256": commit_ref["sha256"]}
+    head_ref = put(
         cold.STATE_ROOT / "HEAD.json",
-        {"schema": "autostop.j1.crm-forward-head.v1", "sequence": 1, "sha256": commit_ref["sha256"]},
+        head,
     )
+    proof_root = root + "/proofs"
+    projection = {
+        name: put(proof_root + f"/{name}.json", document)
+        for name, document in (("plan", plan), ("commit", commit), ("head", head), ("epoch", epoch_doc))
+    }
+    admission = {
+        "schema": "autostop.j1.cold-dispatch-admission.v1",
+        **COMMON,
+        "source_refs": {"plan": plan_ref, "commit": commit_ref, "head": head_ref, "epoch": epoch_ref},
+        "projected_refs": projection,
+    }
+    admission_ref = put(proof_root + "/admission.json", admission)
     state = {
         "schema": "autostop.j1.cold-dispatch-state.v1",
         **COMMON,
         "state": "open",
         "plan_ref": plan_ref,
         "commit_ref": commit_ref,
+        "admission_ref": admission_ref,
     }
     put(root + "/state.json", state)
     source = Path(documents["manager-mcp"]["paths"]["source_root"])
@@ -118,6 +221,8 @@ def epoch(monkeypatch, tmp_path):
         "files": files,
         "put": put,
         "state": state,
+        "admission": admission,
+        "proof_root": proof_root,
         "state_path": root + "/state.json",
         "select": select,
         "lock": lock,
@@ -210,7 +315,7 @@ def test_manifest_hash_or_duplicate_json_key_cannot_configure(epoch):
 
 
 def test_closed_epoch_never_calls_effect(epoch):
-    state = {**epoch["state"], "state": "closed", "plan_ref": None, "commit_ref": None}
+    state = {**epoch["state"], "state": "closed", "plan_ref": None, "commit_ref": None, "admission_ref": None}
     epoch["put"](epoch["state_path"], state)
     called = []
 
@@ -223,9 +328,16 @@ def test_closed_epoch_never_calls_effect(epoch):
     assert called == []
 
 
-def test_open_requires_current_real_commit_head(epoch):
-    head = cold.STATE_ROOT / "HEAD.json"
-    epoch["put"](head, {"schema": "autostop.j1.crm-forward-head.v1", "sequence": 2, "sha256": "f" * 64})
+def test_open_requires_projected_commit_head_match(epoch):
+    admission = deepcopy(epoch["admission"])
+    projected = epoch["put"](
+        epoch["proof_root"] + "/head.json",
+        {"schema": "autostop.j1.crm-forward-head.v1", "sequence": 2, "sha256": "f" * 64},
+    )
+    admission["projected_refs"]["head"] = projected
+    admission["source_refs"]["head"]["sha256"] = projected["sha256"]
+    admission_ref = epoch["put"](epoch["proof_root"] + "/admission.json", admission)
+    epoch["put"](epoch["state_path"], {**epoch["state"], "admission_ref": admission_ref})
     with pytest.raises(cold.ColdRuntimeDenied, match="not_current_head"):
         with cold.dispatch_guard("current-action", "manager-store"):
             pytest.fail("effect executed")
@@ -309,7 +421,10 @@ def test_unknown_effect_exception_is_preserved_without_reexecution(epoch):
     assert called == ["current-action"]
 
 
-@pytest.mark.skipif(os.geteuid() != 0, reason="Real protected-file checks require a root-owned disposable source tree")
+@pytest.mark.skipif(
+    getattr(os, "geteuid", lambda: -1)() != 0,
+    reason="Real protected-file checks require a root-owned disposable source tree",
+)
 def test_real_protected_file_rejects_symlink_hardlink_permissions_and_fifo():
     from tempfile import TemporaryDirectory
 
@@ -355,7 +470,45 @@ def test_channel_role_and_missing_identity_fail_closed(epoch):
 
 
 def close_epoch(epoch):
-    epoch["put"](epoch["state_path"], {**epoch["state"], "state": "closed", "plan_ref": None, "commit_ref": None})
+    epoch["put"](
+        epoch["state_path"],
+        {**epoch["state"], "state": "closed", "plan_ref": None, "commit_ref": None, "admission_ref": None},
+    )
+
+
+def test_dispatch_reader_never_accesses_private_controller_graph(epoch):
+    for path in list(epoch["files"]):
+        if path.startswith("/var/lib/autostop-crm-forward/"):
+            del epoch["files"][path]
+    with cold.dispatch_guard("current-action", "manager-store"):
+        pass
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["extra", "generation", "projection_path", "projection_hash", "source_plan", "source_head", "missing_epoch"],
+)
+def test_incomplete_or_substituted_projection_never_admits_effect(epoch, mutation):
+    admission = deepcopy(epoch["admission"])
+    if mutation == "extra":
+        admission["permission"] = True
+    elif mutation == "generation":
+        admission["generation"] = ORIGIN
+    elif mutation == "projection_path":
+        admission["projected_refs"]["head"]["path"] = "/tmp/head.json"
+    elif mutation == "projection_hash":
+        admission["projected_refs"]["head"]["sha256"] = "f" * 64
+    elif mutation == "source_plan":
+        admission["source_refs"]["plan"]["path"] = "/tmp/plan.json"
+    elif mutation == "source_head":
+        admission["source_refs"]["head"]["path"] = "/tmp/HEAD.json"
+    else:
+        admission["projected_refs"].pop("epoch")
+    ref = epoch["put"](epoch["proof_root"] + "/admission.json", admission)
+    epoch["put"](epoch["state_path"], {**epoch["state"], "admission_ref": ref})
+    with pytest.raises(cold.ColdRuntimeDenied):
+        with cold.dispatch_guard("current-action", "manager-store"):
+            pytest.fail("effect executed")
 
 
 def test_closed_epoch_blocks_real_store_http_consumer_before_transport(epoch, monkeypatch):

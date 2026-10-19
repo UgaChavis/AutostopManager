@@ -19,6 +19,15 @@ paths under `/etc/autostop-manager-cold/<epoch>/<role>`,
 `REVISION`. `cold_runtime.expected_paths` is the canonical per-role field map.
 Cross-role sockets and the J1 VIN scratch path derive from the same epoch.
 
+The six native policies use the exact candidate venv interpreter with
+`-I -B <source>/scripts/cold-role-start.py --role <role>`. This fixed source
+entrypoint requires the binding and role before importing the application, then
+selects the existing module and arguments. It adds only its own physical cold
+source root; dependencies load from that candidate venv's normal site. It does
+not use `PYTHONPATH`, a legacy editable install or a caller-selected module.
+The separate native guard must pin the interpreter, bootstrap and reviewed source
+before execution admission. The script and manifest do not grant native access.
+
 Consumers resolve the binding before Telegram owner/account constants, default
 arguments and Wake configuration targets are established. Conflicting legacy
 environment paths are rejected. Cold J1 workers refuse prior running rows
@@ -37,13 +46,21 @@ It must never replace or recreate the lock. Missing/busy/replaced locks refuse
 admission. The immutable fence descriptor points to a mutable exact epoch state;
 closed, missing or malformed state refuses dispatch.
 
-An open state must reference the exact cold plan and committed history record.
-The typed cold plan binds the attempt, candidate Manager SHA and all epoch
-bindings; its canonical SHA must match the COMMIT's embedded plan. The current
-protected HEAD must name that record and sequence. A warm plan or a copied
-standalone receipt cannot open dispatch. The separate controller remains
-responsible for validating the complete release history, real native acceptance
-and all required release proofs before it publishes this open state.
+An open state references the exact source plan/COMMIT and an immutable admission
+projection under `dispatch/proofs`. The projection contains canonical copies of
+the plan, COMMIT, HEAD and epoch, with equal hashes for each source/projected
+reference. It binds the same attempt, boot, generation and seven manifests. A
+warm plan or an unrelated standalone receipt cannot open dispatch. Workers read
+only this bounded technical projection; private controller journals keep their
+permissions and are not mounted into CRM.
+
+The controller validates the actual private history/current HEAD, native
+acceptance and release proofs under the exclusive epoch lock, publishes readable
+root-owned projection files, then opens admission. The cold state store must
+close that epoch under the same exclusive lock before any later HEAD/pending
+mutation. A worker verifies this published admission cut; it does not independently
+probe the private host HEAD. Every admitted controller must enforce that close
+ordering. A projection alone does not grant permission or prove current runtime.
 
 The immutable tombstone catalog binds the same attempt/boot/generation/epoch.
 Any matching old `op_id` is forbidden, including with another payload digest.
@@ -66,6 +83,14 @@ this source change does not create either. The CRM container must require the
 `crm-embedded` manifest before importing its app, mount the exact cold Manager
 source and protected dispatch references, and join the same serialized epoch.
 Six native slot permits alone do not cover that embedded writer.
+
+Telegram also needs separately staged, verified authentication material before
+native readiness can pass. An empty session requires an authorized login; this
+change does not perform one. A session copy must be separate and writable by its
+new slot, with an explicit allowlist of authentication material. Do not copy old
+inbound/outbox/idempotency data, queued updates, entity caches or update cursors
+as part of that step. Session setup is not proof of an empty provider backlog;
+intake needs its own accepted boundary. No client messages are sent by preparation.
 
 This change creates no runtime files, systemd units, manifests, credentials,
 holds, migrations or live permission. It is source support for a separately
