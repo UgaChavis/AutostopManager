@@ -307,6 +307,8 @@ class InboundMonitor:
         )
         if cut is None:
             raise ColdRuntimeDenied("cold_ingress_cut_missing")
+        if cut.quarantine.overflow_count:
+            reason = "cold_ingress_quarantine_overflow"
         cut.quarantine.hold(event, source="callback", reason=reason)
         self._rejected_events += 1
         if isinstance(self, DurableInboundMonitor):

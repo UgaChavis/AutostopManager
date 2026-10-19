@@ -25,7 +25,7 @@ def _process_identity() -> tuple[int, int]:
     return os.getpid(), start
 
 
-def _publish(path: Path, document: dict[str, Any]) -> str:
+def _publish(path: Path, document: dict[str, Any], *, create_only: bool = False) -> str:
     raw = json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
     pending = path.with_name("." + path.name + ".pending")
     created = False
@@ -36,7 +36,11 @@ def _publish(path: Path, document: dict[str, Any]) -> str:
             output.write(raw)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(pending, path)
+        if create_only:
+            os.link(pending, path, follow_symlinks=False)
+            pending.unlink()
+        else:
+            os.replace(pending, path)
         parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(parent)
@@ -57,9 +61,9 @@ class ColdIngressQuarantine:
         self.records: dict[str, dict[str, Any]] = {}
         self.overflow_count = 0
         self.overflow_chain = "0" * 64
-        self._save()
+        self._save(create_only=True)
 
-    def _save(self) -> None:
+    def _save(self, *, create_only: bool = False) -> None:
         _publish(
             self.path,
             {
@@ -75,6 +79,7 @@ class ColdIngressQuarantine:
                 "observation_only": True,
                 "release_authority": False,
             },
+            create_only=create_only,
         )
 
     def hold(self, event: Any, *, source: str, reason: str) -> None:
@@ -136,7 +141,8 @@ class ColdIngressCut:
         if stamp is None:
             stamp = getattr(getattr(event, "message", None), "date", None)
         return (
-            getattr(event, "is_private", None) is True
+            self.quarantine.overflow_count == 0
+            and getattr(event, "is_private", None) is True
             and not bool(getattr(event, "out", False))
             and _positive(getattr(event, "chat_id", None))
             and _positive(getattr(event, "id", None))
@@ -160,7 +166,11 @@ async def capture_cold_ingress(
         raise ColdRuntimeDenied("cold_ingress_role_invalid")
     account = await client.get_me()
     account_id = getattr(account, "id", None)
-    if not _positive(account_id) or getattr(account, "is_self", None) is not True:
+    if (
+        not _positive(account_id)
+        or getattr(account, "is_self", None) is not True
+        or getattr(account, "bot", None) is not False
+    ):
         raise ColdRuntimeDenied("cold_ingress_account_unknown")
     state = await client(state_request)
     values = {name: getattr(state, name, None) for name in ("pts", "qts", "seq")}

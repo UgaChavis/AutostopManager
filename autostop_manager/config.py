@@ -228,13 +228,13 @@ def normalize_automation_crm_api_url(value: str) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or port != 8000
-        or parsed.path not in {"", "/"}
+        or (parsed.path not in {"", "/"} and re.fullmatch(r"/__cold/[0-9a-f]{64}/?", parsed.path) is None)
         or parsed.query
         or parsed.fragment
     ):
         return ""
     authority = f"[{address.compressed}]" if address.version == 6 else address.compressed
-    return urlunsplit(("http", f"{authority}:8000", "", "", ""))
+    return urlunsplit(("http", f"{authority}:8000", parsed.path.rstrip("/"), "", ""))
 
 
 def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
@@ -246,13 +246,14 @@ def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
             parsed = urlsplit(normalized_mcp)
             host = parsed.hostname or ""
             authority = f"[{host}]" if ":" in host else host
-            raw_url = f"http://{authority}:8000"
+            prefix = parsed.path.removeprefix("/mcp").removesuffix("/mcp")
+            raw_url = f"http://{authority}:8000{prefix}"
     token = _normalize_crm_mcp_bearer(os.environ.get(CRM_MCP_BEARER_TOKEN_ENV, ""))
     api_url = normalize_automation_crm_api_url(raw_url)
     configured = bool(raw_url or token)
     if not configured:
         return AutomationCrmConnectionConfig(configured=False)
-    if not api_url or not token:
+    if not api_url or not token or (binding() is not None and "/__cold/" not in urlsplit(api_url).path):
         return AutomationCrmConnectionConfig(configured=True, error_code="automation_crm_configuration_invalid")
     return AutomationCrmConnectionConfig(configured=True, api_url=api_url, bearer_token=token)
 
@@ -300,14 +301,17 @@ def normalize_crm_mcp_url(value: str) -> str:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or parsed.path not in {"/mcp", "/mcp/"}
+        or (
+            parsed.path not in {"/mcp", "/mcp/"}
+            and re.fullmatch(r"/mcp/__cold/[0-9a-f]{64}/mcp/?", parsed.path) is None
+        )
         or port != 8001
     ):
         return ""
     authority = f"[{address.compressed}]" if address.version == 6 else address.compressed
     if port is not None:
         authority = f"{authority}:{port}"
-    return urlunsplit(("http", authority, "/mcp", "", ""))
+    return urlunsplit(("http", authority, parsed.path.rstrip("/"), "", ""))
 
 
 def _normalize_crm_mcp_bearer(value: str) -> str:
@@ -327,7 +331,7 @@ def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
         return CrmMcpConnectionConfig(configured=False)
     url = normalize_crm_mcp_url(raw_url)
     bearer_token = _normalize_crm_mcp_bearer(raw_bearer)
-    if not url or not bearer_token:
+    if not url or not bearer_token or (binding() is not None and "/__cold/" not in urlsplit(url).path):
         return CrmMcpConnectionConfig(configured=True, error_code="crm_mcp_configuration_invalid")
     return CrmMcpConnectionConfig(configured=True, url=url, bearer_token=bearer_token)
 

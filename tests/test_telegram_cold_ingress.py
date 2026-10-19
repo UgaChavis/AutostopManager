@@ -32,7 +32,7 @@ def current(monkeypatch):
 
 class Client:
     async def get_me(self):
-        return SimpleNamespace(id=12345, is_self=True)
+        return SimpleNamespace(id=12345, is_self=True, bot=False)
 
     async def __call__(self, _request):
         return SimpleNamespace(pts=100, qts=0, seq=4)
@@ -147,6 +147,32 @@ def test_quarantine_overflow_is_bounded_and_never_claims_completeness(current, t
     assert receipt["complete_observation_log"] is False
     assert receipt["status"] == "needs_review" and receipt["replay"] == "forbidden"
     assert receipt["overflow_chain_sha256"] != "0" * 64
+    assert cut.accepts(event()) is False
+
+
+def test_overflow_latches_new_valid_ingress_before_any_new_job_id(current, tmp_path, monkeypatch):
+    cut = capture(current, tmp_path)
+    monkeypatch.setattr(bridge, "binding", lambda: current)
+    with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
+        inbox.duty_set(enabled=True)
+        monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+        monitor.cold_ingress_cut = cut
+        for identifier in range(257):
+            assert monitor.record(event(id=identifier + 1, original_update=None)) is None
+        assert monitor.record(event(id=999)) is None
+        assert inbox.events() == [] and inbox.active_jobs() == []
+        assert inbox.health()["intake"]["error_code"] == "cold_ingress_quarantine_overflow"
+
+
+def test_initial_quarantine_cannot_overwrite_existing_process_ledger(current, tmp_path):
+    cut = capture(current, tmp_path)
+    cut.quarantine.hold(event(), source="callback", reason="synthetic_unknown")
+    before = cut.quarantine.path.read_bytes()
+    old_cut = (tmp_path / "cold-ingress-cut.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        capture(current, tmp_path)
+    assert cut.quarantine.path.read_bytes() == before
+    assert (tmp_path / "cold-ingress-cut.json").read_bytes() == old_cut
 
 
 def test_unowned_pending_observation_is_preserved_on_publication_failure(current, tmp_path):
@@ -158,11 +184,13 @@ def test_unowned_pending_observation_is_preserved_on_publication_failure(current
     assert not (tmp_path / "cold-ingress-cut.json").exists()
 
 
-@pytest.mark.parametrize("metadata", ["account", "pts", "qts", "seq"])
+@pytest.mark.parametrize("metadata", ["account", "bot", "unknown_bot", "pts", "qts", "seq"])
 def test_unknown_startup_metadata_publishes_no_cut(current, tmp_path, metadata):
     class InvalidClient(Client):
         async def get_me(self):
-            return SimpleNamespace(id=12345, is_self=metadata != "account")
+            return SimpleNamespace(
+                id=12345, is_self=metadata != "account", bot=None if metadata == "unknown_bot" else metadata == "bot"
+            )
 
         async def __call__(self, _request):
             fields = {"pts": 100, "qts": 0, "seq": 4}

@@ -93,8 +93,11 @@ hash, PID and birth ticks. It names the private `cold-ingress-quarantine-<PID>-<
 Rejected updates retain at most 256 technical observations with exact role,
 peer/message/PTS locator, record fingerprint and reason, without text, names or
 media. An unqueried-history summary explicitly does not enumerate that history.
-Overflow preserves a count and metadata hash chain and makes log completeness
-false. These files are observations, never permission; the daemon does not read
+Overflow preserves a count and metadata hash chain, makes log completeness false
+and latches denial of all subsequent incoming updates, including valid new ones.
+Its held state requires independent reconciliation and new admission; a process
+restart alone is not accepted recovery. Initial process quarantine publication
+never replaces an existing ledger. These files are observations, never permission; the daemon does not read
 them to lower its cut. Unknown input stays `needs_review`, with no new job or
 automatic replay. A future operator must independently read the exact held
 locator, reconcile its outcome and the source boundary, and separately authorize

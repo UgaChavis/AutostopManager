@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import httpx
 
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_jobs import (
@@ -18,6 +19,47 @@ from autostop_manager.automation_jobs import (
 )
 from autostop_manager.automation_registry import AutomationStore, canonical_json
 from autostop_manager.config import AutomationCrmConnectionConfig
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
+@pytest.mark.parametrize("prefix", ["", "/__cold/" + "c" * 64])
+def test_real_http_client_preserves_namespace_and_existing_auth(monkeypatch, host, prefix):
+    observed = []
+    real_client = httpx.Client
+
+    def respond(request):
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "data": {
+                    "format": "crm_change_feed_readiness_v1",
+                    "consumer_id": CRM_DIGEST_CONSUMER_ID,
+                    "consumer_registered": False,
+                    "pending_delivery": False,
+                    "pending_publish": False,
+                    "high_water": 0,
+                    "generation": "synthetic-generation",
+                },
+            },
+        )
+
+    def client(**kwargs):
+        assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+        return real_client(**kwargs, transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", client)
+    source = HttpCrmDigestSource(
+        AutomationCrmConnectionConfig(
+            configured=True, api_url=f"http://{host}:8000{prefix}", bearer_token="synthetic-existing-bearer"
+        )
+    )
+    assert source.readiness()["high_water"] == 0
+    assert len(observed) == 1
+    assert str(observed[0].url) == f"http://{host}:8000{prefix}/api/change_feed/readiness"
+    assert observed[0].headers["Authorization"] == "Bearer synthetic-existing-bearer"
+    assert observed[0].headers["X-Autostop-Automation-Protocol"] == "crm_digest_v1"
 
 
 def command(service, operation, payload, key, revision=None):
