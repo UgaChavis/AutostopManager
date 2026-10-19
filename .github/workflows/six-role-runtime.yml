@@ -180,7 +180,13 @@ jobs:
           run([*sandbox, offline_python, '-m', 'pip', 'check'], env=offline_env)
           imports = '''
           import importlib,json,sys
+          metadata_subprocesses=[]
           def forbid(event,args):
+              # CPython ctypes/Telethon discovers libssl with this read-only
+              # cache listing. No ldconfig update or arbitrary child is allowed.
+              if event == 'subprocess.Popen' and args[0] == '/sbin/ldconfig' and tuple(args[1]) == ('/sbin/ldconfig','-p') and args[2] is None and args[3] == {'LC_ALL':'C','LANG':'C'}:
+                  metadata_subprocesses.append(['/sbin/ldconfig','-p'])
+                  return
               if event in {'socket.connect','socket.bind','socket.getaddrinfo','subprocess.Popen','os.system'}:
                   raise RuntimeError('dependency check attempted external effect: '+event)
               if event == 'open' and isinstance(args[0],str) and args[0].startswith(
@@ -193,6 +199,7 @@ jobs:
               importlib.import_module(module)
           for module in roles.values(): importlib.import_module('autostop_manager.'+module)
           print(json.dumps({'six_role_modules':roles,'offline_dependency_imports':True,
+                            'metadata_subprocesses':metadata_subprocesses,
                             'auth_or_sessions_loaded':False,'model_loaded':False,
                             'roles_started':False,'runtime_acceptance':False,'native_acceptance':False}))
           '''
