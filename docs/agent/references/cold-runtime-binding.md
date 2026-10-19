@@ -100,3 +100,17 @@ This change creates no runtime files, systemd units, manifests, credentials,
 holds, migrations or live permission. It is source support for a separately
 reviewed cold release. Tests use synthetic documents and disposable file locks;
 they do not provide native or production acceptance.
+
+The manual `six-role-runtime` GitHub workflow prepares the declared core and
+`telegram` extras for exact CPython 3.12.15 on Linux x86_64. It records the source
+wheel, every dependency wheel, versions and SHA256 hashes, then installs the
+frozen lock into a new venv without an index or network namespace connectivity.
+It checks dependency imports for all six role entrypoints without starting a
+role, loading authentication/sessions or a Whisper model, or contacting an API.
+The workflow runs only on a fresh hosted runner and publishes an artifact only.
+
+The artifact's installed-file inventory describes its disposable verification
+venv. It supplies unique hash/byte totals and dependency provenance; the release
+producer must still verify the actual candidate prefix, physical Python base,
+startup index and loaded native libraries. A core-only wheelhouse omits Telethon
+and faster-whisper and cannot satisfy this six-role dependency gate.

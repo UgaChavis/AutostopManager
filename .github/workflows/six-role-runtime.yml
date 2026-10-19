@@ -1,0 +1,231 @@
+name: six-role-runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact approved Manager source SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  offline-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - name: Require a hosted build-only boundary
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = Linux
+          test "$GITHUB_REPOSITORY" = UgaChavis/AutostopManager
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e /opt/AutostopManager
+          test ! -e /var/lib/autostop-crm-forward
+      - name: Check out the exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: candidate
+          persist-credentials: false
+      - name: Exact Python runtime ABI
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.15"
+      - name: Build, freeze, and independently install every six-role dependency offline
+        working-directory: candidate
+        run: |
+          python -I -B - <<'PY'
+          import csv
+          import gzip
+          import hashlib
+          import io
+          import json
+          import os
+          import platform
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import tarfile
+          import venv
+          import zipfile
+          from email.parser import BytesParser
+          from pathlib import Path
+
+          assert sys.version_info[:3] == (3, 12, 15)
+          assert platform.system() == 'Linux' and platform.machine() == 'x86_64'
+          assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
+          source = Path.cwd()
+          revision = os.environ['CANDIDATE_SHA']
+          def run(args, **kwargs):
+              return subprocess.check_output([str(a) for a in args], **kwargs)
+          assert run(['git', 'rev-parse', 'HEAD']).decode().strip() == revision
+          assert not run(['git', 'status', '--porcelain'])
+          tree = run(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip()
+          epoch = int(run(['git', 'show', '-s', '--format=%ct', revision]))
+          root = Path(os.environ['RUNNER_TEMP']).resolve()
+          work, output = root / 'manager-six-role-work', root / 'manager-six-role-runtime'
+          assert not work.exists() and not output.exists()
+          work.mkdir(mode=0o700); output.mkdir(mode=0o700)
+          environment = {k: v for k, v in os.environ.items()
+                         if k in {'PATH', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH'}}
+          environment.update(PYTHONDONTWRITEBYTECODE='1', PIP_DISABLE_PIP_VERSION_CHECK='1',
+                             SOURCE_DATE_EPOCH=str(epoch))
+          archive = run(['git', 'archive', '--format=tar', '--prefix=autostop-manager/', revision])
+          with gzip.GzipFile(filename='', mode='wb', mtime=0,
+                             fileobj=(output / 'manager-source.tar.gz').open('wb')) as target:
+              target.write(archive)
+          build_source = work / 'source'; build_source.mkdir()
+          expected = {}
+          with tarfile.open(fileobj=io.BytesIO(archive)) as package:
+              for member in package:
+                  path = Path(member.name)
+                  assert path.parts[0] == 'autostop-manager' and '..' not in path.parts
+                  if member.isdir():
+                      continue
+                  assert member.isfile(), 'nonregular source member'
+                  relative = Path(*path.parts[1:])
+                  target = build_source / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  raw = package.extractfile(member).read(); target.write_bytes(raw)
+                  if relative.parts[0] == 'autostop_manager' and target.suffix == '.py':
+                      expected[relative.as_posix()] = raw
+          builder, resolver, offline = (work / name for name in ('builder', 'resolver', 'offline'))
+          for target in (builder, resolver, offline):
+              venv.EnvBuilder(with_pip=True, symlinks=False).create(target)
+          builder_python, resolver_python, offline_python = (
+              path / 'bin/python' for path in (builder, resolver, offline))
+          run([builder_python, '-m', 'pip', 'install', 'pip==26.2.1',
+               'setuptools==80.9.0', 'wheel==0.45.1'], env=environment)
+          house = work / 'wheelhouse'; house.mkdir()
+          run([builder_python, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation',
+               '--wheel-dir', house, build_source], env=environment)
+          own = next(house.glob('autostop_manager-*.whl'))
+          with zipfile.ZipFile(own) as package:
+              actual = {name: package.read(name) for name in package.namelist()
+                        if name.startswith('autostop_manager/')}
+              assert actual == expected
+              info = 'autostop_manager-0.1.0.dist-info/RECORD'
+              import base64
+              for name, digest, size in csv.reader(io.StringIO(package.read(info).decode())):
+                  if name == info:
+                      assert not digest and not size
+                  else:
+                      raw = package.read(name)
+                      encoded = base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).decode().rstrip('=')
+                      assert digest == 'sha256=' + encoded and int(size) == len(raw)
+          run([resolver_python, '-m', 'pip', 'install', 'pip==26.2.1'], env=environment)
+          run([resolver_python, '-m', 'pip', 'install', '--no-compile', str(own) + '[telegram]'], env=environment)
+          metadata_code = "import importlib.metadata as m,json; print(json.dumps({d.metadata['Name']:d.version for d in m.distributions() if d.metadata['Name'].lower() not in {'pip','setuptools','wheel'}}))"
+          versions = json.loads(run([resolver_python, '-I', '-c', metadata_code], env=environment))
+          canonical = lambda name: re.sub(r'[-_.]+', '-', name).lower()
+          versions = {canonical(name): version for name, version in versions.items()}
+          assert {'autostop-manager', 'telethon', 'faster-whisper', 'ctranslate2',
+                  'onnxruntime', 'tokenizers', 'av'} <= set(versions)
+          dependencies = work / 'dependencies.txt'
+          dependencies.write_text(''.join(f'{name}=={version}\n' for name, version
+                                        in sorted(versions.items()) if name != 'autostop-manager'))
+          run([resolver_python, '-m', 'pip', 'download', '--only-binary=:all:',
+               '--no-deps', '--dest', house, '-r', dependencies], env=environment)
+          wheels = {}
+          for path in sorted(house.glob('*.whl')):
+              with zipfile.ZipFile(path) as package:
+                  metadata = BytesParser().parsebytes(package.read(next(
+                      name for name in package.namelist() if name.endswith('.dist-info/METADATA'))))
+              name = canonical(metadata['Name'])
+              assert name not in wheels and metadata['Version'] == versions[name]
+              wheels[name] = {'file': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                              'bytes': path.stat().st_size,
+                              'version': metadata['Version']}
+          assert set(wheels) == set(versions)
+          lock = output / 'runtime-cp312-linux-x86_64.lock'
+          lock.write_text('# CPython 3.12.15 Linux x86_64; declared core + telegram extras.\n' + ''.join(
+              f"{name + ('[telegram]' if name == 'autostop-manager' else '')}=={row['version']} --hash=sha256:{row['sha256']}\n"
+              for name, row in sorted(wheels.items())))
+          offline_env = dict(environment, PIP_NO_INDEX='1', HF_HUB_OFFLINE='1',
+                             HF_HUB_DISABLE_TELEMETRY='1', TRANSFORMERS_OFFLINE='1',
+                             HF_HOME=str(work / 'empty-hf'), XDG_CACHE_HOME=str(work / 'empty-cache'),
+                             AUTOSTOP_MANAGER_ENV_FILE='/dev/null',
+                             AUTOSTOP_MANAGER_DB=str(work / 'dependency-only.sqlite3'))
+          sandbox = ['sudo', '-n', 'unshare', '--net', '--', '/usr/bin/env', '-i'] + [
+              f'{name}={value}' for name, value in sorted(offline_env.items())]
+          run([*sandbox, offline_python, '-m', 'pip', 'install', '--no-compile', '--no-index', '--only-binary=:all:',
+               '--find-links', house, '--require-hashes', '-r', lock], env=offline_env)
+          run([*sandbox, offline_python, '-m', 'pip', 'check'], env=offline_env)
+          imports = '''
+          import importlib,json,sys
+          def forbid(event,args):
+              if event in {'socket.connect','socket.bind','socket.getaddrinfo','subprocess.Popen','os.system'}:
+                  raise RuntimeError('dependency check attempted external effect: '+event)
+              if event == 'open' and isinstance(args[0],str) and args[0].startswith(
+                  ('/etc/autostop','/var/lib/autostop','/root/.codex','/root/.config','/home/runner/.codex')):
+                  raise RuntimeError('dependency check attempted legacy state access')
+          sys.addaudithook(forbid)
+          roles={'manager-mcp':'mcp_server','j1':'j1_research','scheduler':'automation_daemon',
+                 'work-telegram':'telegram_bridge','personal-telegram':'telegram_bridge','wake':'telegram_wake'}
+          for module in ['av','telethon','faster_whisper','ctranslate2','onnxruntime','tokenizers']:
+              importlib.import_module(module)
+          for module in roles.values(): importlib.import_module('autostop_manager.'+module)
+          print(json.dumps({'six_role_modules':roles,'offline_dependency_imports':True,
+                            'auth_or_sessions_loaded':False,'model_loaded':False,
+                            'roles_started':False,'runtime_acceptance':False,'native_acceptance':False}))
+          '''
+          result = json.loads(run([*sandbox, offline_python, '-I', '-B', '-c', imports], cwd=work, env=offline_env))
+          (output / 'dependency-check.json').write_text(json.dumps(result, indent=2) + '\n')
+          installed, unique = {}, {}
+          for path in sorted(offline.rglob('*')):
+              relative = path.relative_to(offline).as_posix()
+              if path.is_symlink():
+                  installed[relative] = {'type':'symlink','target':os.readlink(path)}
+              elif path.is_file():
+                  digest, size = hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size
+                  installed[relative] = {'type':'file','sha256':digest,'bytes':size,
+                                         'mode':path.stat().st_mode & 0o777}
+                  assert digest not in unique or unique[digest] == size
+                  unique[digest] = size
+          index = {'format':'autostop.manager.disposable-runtime-index.v1',
+                   'source_revision':revision,'python':sys.version,'files':installed,
+                   'physical_file_bytes':sum(row['bytes'] for row in installed.values() if row['type']=='file'),
+                   'unique_sha256_bytes':unique,'deduplicated_file_bytes':sum(unique.values()),
+                   'deployment_startup_index':False,'native_acceptance':False}
+          (output / 'installed-files.json').write_text(json.dumps(index, indent=2, sort_keys=True)+'\n')
+          with gzip.GzipFile(filename='', mode='wb', mtime=0,
+                             fileobj=(output / 'wheelhouse.tar.gz').open('wb')) as compressed:
+              with tarfile.open(fileobj=compressed, mode='w|') as package:
+                  for path in sorted(house.glob('*.whl')):
+                      info = package.gettarinfo(str(path), arcname='wheelhouse/' + path.name)
+                      info.uid = info.gid = 0; info.uname = info.gname = ''; info.mtime = epoch
+                      with path.open('rb') as stream: package.addfile(info, stream)
+          (output / 'build-tools.txt').write_bytes(run([builder_python, '-m', 'pip', 'freeze', '--all']))
+          manifest = {'format':'autostop.manager.six-role-dependencies.v1',
+                      'source_revision':revision,'source_tree':tree,'source_date_epoch':epoch,
+                      'workflow_revision':os.environ['GITHUB_WORKFLOW_SHA'],
+                      'run_id':os.environ['GITHUB_RUN_ID'],'python':sys.version,
+                      'platform':'linux_x86_64','profile':'core+telegram','wheels':wheels,
+                      'python_source_files_verified':len(expected),'fresh_offline_install':True,
+                      'offline_network_namespace':True,
+                      'pip_check':True,'dependency_imports':True,'roles_started':False,
+                      'runtime_acceptance':False,'production_updated':False,
+                      'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in sorted(output.iterdir()) if p.is_file()}}
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
+          shutil.rmtree(work)
+          assert not run(['git', 'status', '--porcelain'])
+          print(json.dumps({'source_revision':revision,'wheels':len(wheels),
+                            'fresh_offline_install':True,'runtime_acceptance':False}))
+          PY
+      - name: Upload the sealed offline six-role dependency artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: manager-six-role-runtime-${{ env.CANDIDATE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/manager-six-role-runtime/
+          if-no-files-found: error
+          retention-days: 14
