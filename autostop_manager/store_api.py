@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextvars import ContextVar
 from datetime import datetime
 import hashlib
 from http.client import HTTPException
@@ -10,9 +11,13 @@ import re
 import threading
 import time
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
+
+import httpx
+
+from autostop_manager.bounded_http_read import urlopen as bounded_urlopen
 
 
 STORE_AGENT_FORMAT = "store_agent_v1"
@@ -579,20 +584,49 @@ _CONTACT_REDACT_KEYS = {
 _IDENTIFIER_REDACT_KEYS = {"license_plate", "vin"}
 
 
-class _RejectRedirectHandler(HTTPRedirectHandler):
-    """Turn every redirect into HTTPError before urllib can forward auth."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_RejectRedirectHandler())
+# Separate from public-provider capacity: two Store readers and one stateful worker.
+_STORE_TRANSPORT_ADMISSIONS = threading.BoundedSemaphore(3)
+_RESPONSE_BUDGET = ContextVar("store_response_budget", default=DEFAULT_RESPONSE_BUDGET_BYTES)
+_ERROR_RESPONSE_BUDGET = ContextVar("store_error_response_budget", default=DEFAULT_RESPONSE_BUDGET_BYTES)
+_HTTP_DEADLINE: ContextVar[float | None] = ContextVar("store_http_deadline", default=None)
 
 
 def urlopen(request: Request, *, timeout: float):
-    """Compatibility seam for tests backed by an opener that never redirects."""
+    """Keep the HTTP test seam while bounding the complete stream and worker count."""
 
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+    try:
+        return bounded_urlopen(
+            request,
+            timeout=timeout,
+            maximum=_RESPONSE_BUDGET.get() + 1,
+            truncate=True,
+            error_maximum=_ERROR_RESPONSE_BUDGET.get(),
+            admission=_STORE_TRANSPORT_ADMISSIONS,
+            deadline=_HTTP_DEADLINE.get(),
+            preserve_error_status=True,
+        )
+    except httpx.InvalidURL as exc:
+        raise URLError("provider_request_invalid") from exc
+
+
+def _open_response(request: Request, *, timeout: float, deadline: float, maximum: int, error_maximum: int):
+    budget_token = _RESPONSE_BUDGET.set(maximum)
+    error_budget_token = _ERROR_RESPONSE_BUDGET.set(error_maximum)
+    deadline_token = _HTTP_DEADLINE.set(deadline)
+    try:
+        return urlopen(request, timeout=timeout)
+    finally:
+        _HTTP_DEADLINE.reset(deadline_token)
+        _ERROR_RESPONSE_BUDGET.reset(error_budget_token)
+        _RESPONSE_BUDGET.reset(budget_token)
+
+
+def _pre_dispatch_error(error: URLError) -> str | None:
+    return {
+        "provider_transport_busy": "store_transport_busy",
+        "provider_transport_unavailable": "store_transport_unavailable",
+        "provider_request_invalid": "store_request_invalid",
+    }.get(str(error.reason))
 
 
 def clamp_store_limit(limit: int, *, default: int = DEFAULT_STORE_LIMIT) -> int:
@@ -627,7 +661,10 @@ class StoreApiClient:
         self._read_token = str(read_token or "").strip()
         self._manage_token = str(manage_token or "").strip()
         self._quote_token = str(quote_token or "").strip()
-        self.timeout = max(0.1, float(timeout))
+        configured_timeout = float(timeout)
+        if not math.isfinite(configured_timeout):
+            raise ValueError("store timeout must be finite")
+        self.timeout = max(0.1, configured_timeout)
         self.max_read_attempts = max(1, min(int(max_read_attempts), 3))
         self.max_response_bytes = max(1024, int(max_response_bytes))
         self.failure_threshold = max(1, int(failure_threshold))
@@ -812,6 +849,7 @@ class StoreApiClient:
         if self._circuit_is_open():
             return self._error("store_circuit_open", attempt_count=0)
 
+        deadline = time.monotonic() + self.timeout
         path = (
             f"/entities/store_quote_request/{quote(normalized_id, safe='')}/vin-photo-preview"
             f"?{urlencode({'expected_sha256': normalized_sha256})}"
@@ -823,11 +861,22 @@ class StoreApiClient:
             "User-Agent": "AutostopManager/0.1",
         }
         attempt_count = 0
+        last_error = "store_attachment_timeout_or_network_error"
+        http_status: int | None = None
         for attempt in range(1, self.max_read_attempts + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             attempt_count = attempt
             try:
                 request = Request(url, headers=headers, method="GET")
-                with urlopen(request, timeout=self.timeout) as response:
+                with _open_response(
+                    request,
+                    timeout=remaining,
+                    deadline=deadline,
+                    maximum=MAX_QUOTE_VIN_PHOTO_PREVIEW_BYTES,
+                    error_maximum=self.max_response_bytes,
+                ) as response:
                     content_type = (
                         str(getattr(response, "headers", {}).get("Content-Type", ""))
                         .split(";", 1)[0]
@@ -868,21 +917,35 @@ class StoreApiClient:
                     },
                 }
             except HTTPError as exc:
+                http_status = int(exc.code)
                 exc.close()
-                code = "store_attachment_not_found" if int(exc.code) == 404 else "store_attachment_request_rejected"
-                if int(exc.code) == 409:
+                if 500 <= http_status < 600:
+                    last_error = f"store_attachment_http_{http_status}"
+                    continue
+                code = "store_attachment_not_found" if http_status == 404 else "store_attachment_request_rejected"
+                if http_status == 409:
                     code = "store_attachment_stale"
                 self._record_success()
                 return self._error(
                     code,
                     attempt_count=attempt,
-                    status="conflict" if int(exc.code) == 409 else "blocked",
+                    status="conflict" if http_status == 409 else "blocked",
                     request_dispatched=True,
                     outcome_uncertain=False,
-                    http_status=int(exc.code),
+                    http_status=http_status,
                 )
+            except URLError as exc:
+                dispatch_error = _pre_dispatch_error(exc)
+                if dispatch_error:
+                    return self._error(
+                        dispatch_error,
+                        attempt_count=attempt - 1,
+                        request_dispatched=attempt > 1,
+                        outcome_uncertain=False,
+                    )
+                last_error = "store_attachment_timeout_or_network_error"
             except (OSError, HTTPException):
-                continue
+                last_error = "store_attachment_timeout_or_network_error"
             except (TypeError, ValueError):
                 self._record_failure()
                 return self._error(
@@ -893,10 +956,11 @@ class StoreApiClient:
                 )
         self._record_failure()
         return self._error(
-            "store_attachment_timeout_or_network_error",
+            last_error,
             attempt_count=attempt_count,
             request_dispatched=bool(attempt_count),
             outcome_uncertain=False,
+            http_status=http_status,
         )
 
     def management_action(
@@ -969,6 +1033,7 @@ class StoreApiClient:
         if self._circuit_is_open():
             return self._error("store_circuit_open", attempt_count=0)
 
+        deadline = time.monotonic() + self.timeout
         try:
             url = f"{self.api_url}{path}"
             if query:
@@ -982,23 +1047,29 @@ class StoreApiClient:
             if json_body is not None:
                 data = json.dumps(json_body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 headers["Content-Type"] = "application/json"
+            request = Request(url, data=data, headers=headers, method=method)
         except (TypeError, UnicodeError, ValueError):
             return self._error("store_request_invalid", attempt_count=0)
 
         attempts = self.max_read_attempts if method == "GET" else 1
-        last_error = "store_request_failed"
+        last_error = "store_timeout_or_network_error"
         attempt_count = 0
         http_status: int | None = None
         request_dispatched = False
         for attempt in range(1, attempts + 1):
-            try:
-                request = Request(url, data=data, headers=headers, method=method)
-            except (TypeError, ValueError):
-                return self._error("store_request_invalid", attempt_count=0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             attempt_count = attempt
             request_dispatched = True
             try:
-                with urlopen(request, timeout=self.timeout) as response:
+                with _open_response(
+                    request,
+                    timeout=remaining,
+                    deadline=deadline,
+                    maximum=self.max_response_bytes,
+                    error_maximum=self.max_response_bytes,
+                ) as response:
                     raw = response.read(self.max_response_bytes + 1)
                 if len(raw) > self.max_response_bytes:
                     last_error = "store_response_too_large"
@@ -1028,11 +1099,10 @@ class StoreApiClient:
                 return redacted
             except HTTPError as exc:
                 status_code = int(exc.code)
-                if not 400 <= status_code < 500:
-                    exc.close()
                 http_status = status_code
                 last_error = f"store_http_{status_code}"
                 if 300 <= status_code < 400:
+                    exc.close()
                     last_error = "store_redirect_rejected"
                     break
                 if 400 <= status_code < 500:
@@ -1047,9 +1117,7 @@ class StoreApiClient:
                         expected_detail=expected_detail,
                         expected_operation=expected_operation,
                     )
-                    if parsed is not None:
-                        return parsed
-                    return self._error(
+                    return parsed or self._error(
                         last_error,
                         attempt_count=attempt,
                         status="conflict" if status_code == 409 else "blocked",
@@ -1057,6 +1125,17 @@ class StoreApiClient:
                         outcome_uncertain=False,
                         http_status=status_code,
                     )
+                exc.close()
+            except URLError as exc:
+                dispatch_error = _pre_dispatch_error(exc)
+                if dispatch_error:
+                    return self._error(
+                        dispatch_error,
+                        attempt_count=attempt - 1,
+                        request_dispatched=attempt > 1,
+                        outcome_uncertain=False,
+                    )
+                last_error = "store_timeout_or_network_error"
             except (OSError, HTTPException):
                 last_error = "store_timeout_or_network_error"
             except UnicodeDecodeError:
