@@ -114,7 +114,7 @@ def test_fixed_bootstrap_refuses_development_source():
 
 
 @pytest.fixture
-def epoch(monkeypatch, tmp_path):
+def epoch(monkeypatch, tmp_path, request):
     files = {}
 
     def put(path, value):
@@ -145,6 +145,11 @@ def epoch(monkeypatch, tmp_path):
         "origin_attempt_id": ORIGIN,
         "rows": [{"op_id": "old-unknown", "payload_sha256": "e" * 64, "outcome": "unknown", "retry": "forbidden"}],
     }
+    fingerprint_kind = getattr(request, "param", None)
+    if fingerprint_kind is not None:
+        tombstones["schema"] = "autostop.j1.cold-dispatch-tombstones.v2"
+        row = tombstones["rows"][0]
+        row["fingerprint"] = {"kind": fingerprint_kind, "sha256": row.pop("payload_sha256")}
     tombstone_ref = put(etc + "/tombstones.json", tombstones)
     documents, refs = {}, {}
     for role in cold.ROLES:
@@ -367,6 +372,51 @@ def test_unknown_old_operation_cannot_be_retagged_with_new_payload(epoch):
     with pytest.raises(cold.ColdRuntimeDenied, match="old_operation_forbidden"):
         with cold.dispatch_guard("old-unknown", "manager-store", payload_sha256="a" * 64):
             pytest.fail("old operation replayed")
+
+
+@pytest.mark.parametrize("epoch", ["payload_sha256", "observed_record_sha256"], indirect=True)
+def test_v2_fingerprint_preserves_id_only_quarantine_and_new_dispatch(epoch):
+    called = []
+    for payload in (None, "a" * 64, "e" * 64):
+        with pytest.raises(cold.ColdRuntimeDenied, match="old_operation_forbidden"):
+            with cold.dispatch_guard("old-unknown", "manager-store", payload_sha256=payload):
+                called.append("old")
+    with cold.dispatch_guard("new-operation", "manager-store", payload_sha256="e" * 64):
+        called.append("new")
+    assert called == ["new"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["kind", "kind_type", "digest", "extra", "missing", "mixed", "legacy_extra", "duplicate", "retry", "schema"],
+)
+def test_tombstone_fingerprint_is_strict_and_never_relabels_observation(epoch, mutation):
+    doc = deepcopy(epoch["tombstones"])
+    row = doc["rows"][0]
+    doc["schema"] = "autostop.j1.cold-dispatch-tombstones.v2"
+    row["fingerprint"] = {"kind": "observed_record_sha256", "sha256": row.pop("payload_sha256")}
+    if mutation == "kind":
+        row["fingerprint"]["kind"] = "inferred_payload_sha256"
+    elif mutation == "kind_type":
+        row["fingerprint"]["kind"] = {"value": "payload_sha256"}
+    elif mutation == "digest":
+        row["fingerprint"]["sha256"] = True
+    elif mutation == "extra":
+        row["fingerprint"]["accepted"] = True
+    elif mutation == "missing":
+        row["fingerprint"].pop("kind")
+    elif mutation == "mixed":
+        row["payload_sha256"] = "a" * 64
+    elif mutation == "legacy_extra":
+        doc["schema"] = "autostop.j1.cold-dispatch-tombstones.v1"
+    elif mutation == "duplicate":
+        doc["rows"].append(deepcopy(row))
+    elif mutation == "retry":
+        row["retry"] = "allowed"
+    else:
+        doc["schema"] = "autostop.j1.cold-dispatch-tombstones.v3"
+    with pytest.raises(cold.ColdRuntimeDenied):
+        cold._blocked_operation_ids(doc, cold.binding())
 
 
 def test_cold_browser_never_reads_old_release_or_connects_to_renderer(epoch, monkeypatch):

@@ -68,6 +68,11 @@ ordering. A projection alone does not grant permission or prove current runtime.
 
 The immutable tombstone catalog binds the same attempt/boot/generation/epoch.
 Any matching old `op_id` is forbidden, including with another payload digest.
+Version 2 records a typed `fingerprint` with `kind` equal to `payload_sha256`
+or `observed_record_sha256` and a SHA256 digest. An observed record digest does
+not assert that the external payload is known. Version 1 remains readable with
+its original `payload_sha256` field; neither version changes the ID-only deny
+rule. Mixed, extra or unknown fingerprint fields refuse dispatch.
 Missing identity refuses dispatch; the guard does not generate replacement UUIDs
 or replay an operation. Existing Store/owner HTTP writes, Manager CRM writes,
 Telegram sends, scheduler jobs/outbox, research workers and Wake turn starts use
