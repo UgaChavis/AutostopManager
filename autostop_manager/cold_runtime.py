@@ -437,6 +437,10 @@ def _blocked_operation_ids(tombstones: Any, current: ColdBinding) -> set[str]:
                 "cold_tombstone_fingerprint_kind",
             )
             _sha(fingerprint["sha256"])
+            _require(
+                fingerprint["kind"] != "observed_record_sha256" or row["outcome"] == "unknown",
+                "cold_tombstone_observed_outcome",
+            )
         _require(
             row["outcome"] in {"unknown", "known_not_applied", "applied", "needs_review"}
             and row["retry"] == "forbidden",

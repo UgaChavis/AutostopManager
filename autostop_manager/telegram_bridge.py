@@ -34,6 +34,7 @@ from autostop_manager.telegram_owner import (
     load_owner_peer_id,
 )
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
+from autostop_manager.telegram_ingress import ColdIngressCut, capture_cold_ingress
 from autostop_manager.cold_runtime import binding, ColdRuntimeDenied, guarded_effect, require_role, runtime_path
 
 
@@ -289,6 +290,29 @@ class InboundMonitor:
         self._dropped_events = 0
         self._dropped_open_events = 0
         self._rejected_events = 0
+        self.cold_ingress_required = binding() is not None
+        self.cold_ingress_cut: ColdIngressCut | None = None
+
+    def _accept_cold_ingress(self, event: Any) -> bool:
+        if not self.cold_ingress_required:
+            return True
+        cut = self.cold_ingress_cut
+        if cut is not None and cut.accepts(event):
+            return True
+        pts = getattr(getattr(event, "original_update", None), "pts", None)
+        reason = (
+            "cold_ingress_before_cut"
+            if cut is not None and type(pts) is int and 0 <= pts <= cut.pts
+            else "cold_ingress_metadata_unknown"
+        )
+        if cut is None:
+            raise ColdRuntimeDenied("cold_ingress_cut_missing")
+        cut.quarantine.hold(event, source="callback", reason=reason)
+        self._rejected_events += 1
+        if isinstance(self, DurableInboundMonitor):
+            self.inbox.set_health(component="intake", state="held", error_code=reason)
+            self.changed()
+        return False
 
     @staticmethod
     def _event_id(event: InboundMonitorEvent) -> str:
@@ -318,7 +342,11 @@ class InboundMonitor:
     def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
         """Remember only an incoming private message locator; never its body or media."""
 
-        if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
+        if bool(getattr(event, "out", False)):
+            return None
+        if not self._accept_cold_ingress(event):
+            return None
+        if not bool(getattr(event, "is_private", False)):
             return None
         try:
             peer_id = int(getattr(event, "chat_id", 0) or 0)
@@ -528,6 +556,16 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
 
+    def hold_cold_history(self) -> bool:
+        if not self.cold_ingress_required:
+            return False
+        if self.cold_ingress_cut is None:
+            raise ColdRuntimeDenied("cold_ingress_cut_missing")
+        self.cold_ingress_cut.quarantine.hold(None, source="history_not_queried", reason="cold_history_requires_review")
+        self.inbox.set_health(component="intake", state="held", error_code="cold_history_requires_review")
+        self.changed()
+        return True
+
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
         self.reconciliation_restarts = 0
@@ -547,7 +585,11 @@ class DurableInboundMonitor(InboundMonitor):
 
     def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
         del preserve_open
-        if not bool(getattr(event, "is_private", False)) or bool(getattr(event, "out", False)):
+        if bool(getattr(event, "out", False)):
+            return None
+        if not self._accept_cold_ingress(event):
+            return None
+        if not bool(getattr(event, "is_private", False)):
             return None
         peer_id, message_id = getattr(event, "chat_id", None), getattr(event, "id", None)
         if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
@@ -4348,6 +4390,10 @@ async def _route_or_capture_incoming_event(
     *,
     automation_coordinator: Any | None,
 ) -> None:
+    if monitor.cold_ingress_required and (
+        bool(getattr(event, "out", False)) or not monitor._accept_cold_ingress(event)
+    ):
+        return
     if isinstance(monitor, DurableInboundMonitor):
         # Every accepted update first enters the durable registry.  Owner
         # automation must subsequently use the same lease/receipt path; running
@@ -4435,10 +4481,23 @@ def _require_cold_telegram_config(config: TelegramConfig) -> None:
             raise ColdRuntimeDenied("cold_telegram_owner_path_changed")
 
 
+async def _bind_cold_ingress(client: Any, current: Any, config: TelegramConfig, monitor: InboundMonitor | None) -> None:
+    if current is not None:
+        cut = await capture_cold_ingress(client, current, config.state_dir, _load_reconciliation_state_request())
+        if monitor is not None:
+            monitor.cold_ingress_cut = cut
+
+
+def _register_legacy_ingress(client: Any, callback: Any, builder: Any, current: Any) -> None:
+    if current is None:
+        client.add_event_handler(callback, builder)
+
+
 async def run_daemon(
     config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
 ) -> None:
     _require_cold_telegram_config(config)
+    current = binding()
     watchdog = _cleanup_watchdog or _daemon_cleanup_watchdog()
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -4502,11 +4561,14 @@ async def run_daemon(
                 automation_coordinator=automation_coordinator,
             )
 
-        client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
+        _register_legacy_ingress(client, capture, events.NewMessage(incoming=None if durable else True), current)
     try:
         await client.connect()
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
+        await _bind_cold_ingress(client, current, config, inbound_monitor)
+        if inbound_monitor is not None and current is not None:
+            client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
@@ -4721,6 +4783,10 @@ async def _reconcile_peer_history(
 
 async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:
     """Bounded, resumable replay from persisted enabled-duty intervals."""
+    if monitor.hold_cold_history():
+        # iter_messages has no account-global update PTS. Its messages cannot
+        # acquire new operation IDs in a cold epoch, even after reconnect.
+        return
     windows = monitor.inbox.recovery_windows()
     if not windows:
         return

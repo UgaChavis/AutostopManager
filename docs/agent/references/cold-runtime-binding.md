@@ -70,7 +70,8 @@ The immutable tombstone catalog binds the same attempt/boot/generation/epoch.
 Any matching old `op_id` is forbidden, including with another payload digest.
 Version 2 records a typed `fingerprint` with `kind` equal to `payload_sha256`
 or `observed_record_sha256` and a SHA256 digest. An observed record digest does
-not assert that the external payload is known. Version 1 remains readable with
+not assert that the external payload is known and requires outcome `unknown`.
+Version 1 remains readable with
 its original `payload_sha256` field; neither version changes the ID-only deny
 rule. Mixed, extra or unknown fingerprint fields refuse dispatch.
 Missing identity refuses dispatch; the guard does not generate replacement UUIDs
@@ -78,6 +79,31 @@ or replay an operation. Existing Store/owner HTTP writes, Manager CRM writes,
 Telegram sends, scheduler jobs/outbox, research workers and Wake turn starts use
 their domain request/job/event identities at the consumer seam. Their existing
 business, idempotency, revision and readback checks continue to apply.
+
+Cold Telegram intake captures `get_me` and account-global `GetState` in the new
+owned daemon after authentication and before it registers an ingest callback.
+The accepted counter stays in a frozen in-memory cut. Private updates need a
+strictly newer provider `original_update.pts` and an aware provider date; missing
+dates never become the current wall clock. Groups/channels lack a configured,
+accepted channel cut and remain held. Cold history reconciliation does not query
+or ingest `iter_messages`, which does not carry those update counters.
+
+`state_dir/cold-ingress-cut.json` binds the observation to epoch, source, account
+hash, PID and birth ticks. It names the private `cold-ingress-quarantine-<PID>-<birth>.json`.
+Rejected updates retain at most 256 technical observations with exact role,
+peer/message/PTS locator, record fingerprint and reason, without text, names or
+media. An unqueried-history summary explicitly does not enumerate that history.
+Overflow preserves a count and metadata hash chain and makes log completeness
+false. These files are observations, never permission; the daemon does not read
+them to lower its cut. Unknown input stays `needs_review`, with no new job or
+automatic replay. A future operator must independently read the exact held
+locator, reconcile its outcome and the source boundary, and separately authorize
+any continuation; overflow is a stop condition for a completeness claim.
+
+The current source tests use an artificial SDK. Real authentication, account/cut
+readback bound to the admitted PID and subsequent intake acceptance remain fresh
+window gates. A fresh session alone does not prove absence of provider backlog
+or complete delivery of every update after the cut.
 
 Admission is distinct from the result. An exception, cancellation or lost reply
 never proves that a dispatched remote operation did not happen. The guard does

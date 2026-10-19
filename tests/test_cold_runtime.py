@@ -388,7 +388,19 @@ def test_v2_fingerprint_preserves_id_only_quarantine_and_new_dispatch(epoch):
 
 @pytest.mark.parametrize(
     "mutation",
-    ["kind", "kind_type", "digest", "extra", "missing", "mixed", "legacy_extra", "duplicate", "retry", "schema"],
+    [
+        "kind",
+        "kind_type",
+        "digest",
+        "extra",
+        "missing",
+        "mixed",
+        "legacy_extra",
+        "duplicate",
+        "retry",
+        "schema",
+        "observed_outcome",
+    ],
 )
 def test_tombstone_fingerprint_is_strict_and_never_relabels_observation(epoch, mutation):
     doc = deepcopy(epoch["tombstones"])
@@ -413,6 +425,8 @@ def test_tombstone_fingerprint_is_strict_and_never_relabels_observation(epoch, m
         doc["rows"].append(deepcopy(row))
     elif mutation == "retry":
         row["retry"] = "allowed"
+    elif mutation == "observed_outcome":
+        row["outcome"] = "applied"
     else:
         doc["schema"] = "autostop.j1.cold-dispatch-tombstones.v3"
     with pytest.raises(cold.ColdRuntimeDenied):
