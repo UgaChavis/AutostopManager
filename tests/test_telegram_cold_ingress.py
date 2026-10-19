@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,10 @@ from autostop_manager import telegram_bridge as bridge
 from autostop_manager import telegram_ingress as ingress
 from autostop_manager.cold_runtime import ColdBinding, ColdRuntimeDenied
 from autostop_manager.telegram_inbox import TelegramInbox
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="Cold native process and filesystem contracts use Linux"
+)
 
 
 @pytest.fixture
