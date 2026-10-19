@@ -15,6 +15,18 @@ CI и source release gates используют `scripts/update-instruction-cata
 установка/включение J1 VIN и серверный выпуск требуют отдельного объёма поручения.
 Исходники новой функции, units/installers и обновлённые инструкции не доказывают работающий runtime.
 
+Для отдельного Ubuntu runner используй GitHub workflow `release-rehearsal` с полным
+`candidate_sha`. Он создаёт собственную `.venv`, выполняет неизменённый
+`scripts/release-gates.sh` и только после успеха сохраняет Git archive и sealed
+automotive export этой ревизии. Artifact содержит SHA-256 файлов, dependency receipt,
+полный gate log и разные поля `source_revision`/`workflow_revision`: ревизия workflow
+не подменяет проверяемый commit. Push в bootstrap-ветки
+`codex/manager-release-rehearsal-*` проверяет закреплённый PR #126; для нового
+кандидата явно задай его SHA через `workflow_dispatch`.
+Workflow имеет только `contents: read`, не использует production secrets и не
+выполняет серверный выпуск. Его green/artifact подтверждают исходники и synthetic
+проверки; перед обновлением отдельно нужны текущие host, backup и runtime gates.
+
 ## Отдельная активация VIN-исследования J1
 
 Самостоятельный [VIN-режим](j1-vin-research.md) по умолчанию выключен,
