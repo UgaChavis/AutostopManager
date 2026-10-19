@@ -55,6 +55,27 @@ Busy/timeout возвращают безопасные `error`, `stage`, `adapte
 остановку потока; его слот удерживается до реального завершения. Статические
 правила и сверка готовых данных остаются локальными вызовами.
 
+Все десять Store entrypoints выполняются вне MCP event loop через
+[Store executor](../../../autostop_manager/mcp_store_executor.py).
+Runtime/search/entity/photo, analytics и owner capabilities используют отдельные
+два workers, два ожидающих вызова и 60 секунд ожидания. Digest, management action,
+owner API и quote conductor могут менять Store или Manager state; их отдельный
+пул имеет один worker, два ожидающих вызова и 90 секунд ожидания. Это сохраняет
+последовательность операций с состоянием и оставляет чтения для проверки результата.
+Сигнатуры и завершённые доменные ответы сохраняются.
+
+Отказы Store executor сохраняют семейство ответа и код `store_executor_busy`,
+`store_executor_wait_timeout`, `store_executor_unavailable` или `store_executor_failed`.
+Автоповтора нет. До старта adapter `request_dispatched=false` и
+`outcome_uncertain=false`; после старта точный dispatch неизвестен
+(`request_dispatched=null`). Для начавшейся операции с состоянием отказ означает
+`status=compensating`, `outcome_uncertain=true`, `readback_required=true` и
+`readback_verified=false`, даже если worker уже завершился к моменту отказа caller.
+Сначала проверь точный объект/receipt; timeout не разрешает повтор записи.
+Отмена queued-вызова не запускает adapter. Начавшийся worker удерживает слот до
+фактического завершения и продолжает внутренний readback; отмена caller его не
+останавливает. Эти ограничения ожидания не заменяют deadline самого HTTP transport.
+
 `search_web_multi`, `fetch_page_excerpt`, `fetch_page_browser`,
 `collect_work_price_evidence`, `estimate_repair_work_cost` и `verify_oem_candidates_web`
 используют отдельный общий веб-пул: два workers, два ожидающих вызова и максимум

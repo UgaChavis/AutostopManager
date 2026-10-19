@@ -16,6 +16,7 @@ from uuid import uuid4
 from mcp.types import CallToolResult, TextContent
 
 from .mcp_read_executor import BLOCKING_CONTROL_TOOLS, BLOCKING_READ_TOOLS, BLOCKING_WEB_TOOLS, offload_read
+from .mcp_store_executor import STORE_BLOCKING_TOOLS, offload_store
 
 
 LOGGER = logging.getLogger(__name__)
@@ -141,7 +142,10 @@ def instrument_manager_tools(server: Any) -> None:
     if isinstance(registry, Mapping):
         for name, tool in registry.items():
             function = tool.fn
-            if name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
+            if name in STORE_BLOCKING_TOOLS and not tool.is_async:
+                function = offload_store(function, str(name))
+                tool.is_async = True
+            elif name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
                 function = offload_read(function, str(name))
                 # FastMCP chooses await vs direct invocation using this stored flag.
                 # Keep its validated argument model, parameters and context metadata.
