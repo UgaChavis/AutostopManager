@@ -173,7 +173,9 @@ jobs:
                              HF_HOME=str(work / 'empty-hf'), XDG_CACHE_HOME=str(work / 'empty-cache'),
                              AUTOSTOP_MANAGER_ENV_FILE='/dev/null',
                              AUTOSTOP_MANAGER_DB=str(work / 'dependency-only.sqlite3'))
-          sandbox = ['sudo', '-n', 'unshare', '--net', '--', '/usr/bin/env', '-i'] + [
+          sandbox = ['sudo', '-n', 'unshare', '--net', '--', '/usr/bin/setpriv',
+                     '--reuid', str(os.getuid()), '--regid', str(os.getgid()),
+                     '--clear-groups', '/usr/bin/env', '-i'] + [
               f'{name}={value}' for name, value in sorted(offline_env.items())]
           run([*sandbox, offline_python, '-m', 'pip', 'install', '--no-compile', '--no-index', '--only-binary=:all:',
                '--find-links', house, '--require-hashes', '-r', lock], env=offline_env)
@@ -248,6 +250,7 @@ jobs:
                             'fresh_offline_install':True,'runtime_acceptance':False}))
           PY
       - name: Upload the sealed offline six-role dependency artifact
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: manager-six-role-runtime-${{ env.CANDIDATE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
