@@ -379,7 +379,8 @@ def _committed(current: ColdBinding, state: dict[str, Any]) -> None:
     )
     head = projected["head"]
     _require(
-        head == {"schema": "autostop.j1.crm-forward-head.v1", "sequence": sequence, "sha256": commit_ref["sha256"]},
+        type(head.get("sequence")) is int
+        and head == {"schema": "autostop.j1.crm-forward-head.v1", "sequence": sequence, "sha256": commit_ref["sha256"]},
         "cold_commit_not_current_head",
     )
     _require(source_refs["epoch"] == plan.get("dispatch_epoch_ref"), "cold_admission_epoch_binding")

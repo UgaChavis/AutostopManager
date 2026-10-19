@@ -343,6 +343,26 @@ def test_open_requires_projected_commit_head_match(epoch):
             pytest.fail("effect executed")
 
 
+@pytest.mark.parametrize("invalid_sequence", [True, 1.0])
+def test_head_sequence_has_strict_integer_type(epoch, invalid_sequence):
+    admission = deepcopy(epoch["admission"])
+    projected = epoch["put"](
+        epoch["proof_root"] + "/head.json",
+        {
+            "schema": "autostop.j1.crm-forward-head.v1",
+            "sequence": invalid_sequence,
+            "sha256": epoch["state"]["commit_ref"]["sha256"],
+        },
+    )
+    admission["projected_refs"]["head"] = projected
+    admission["source_refs"]["head"]["sha256"] = projected["sha256"]
+    admission_ref = epoch["put"](epoch["proof_root"] + "/admission.json", admission)
+    epoch["put"](epoch["state_path"], {**epoch["state"], "admission_ref": admission_ref})
+    with pytest.raises(cold.ColdRuntimeDenied, match="not_current_head"):
+        with cold.dispatch_guard("current-action", "manager-store"):
+            pytest.fail("malformed HEAD admitted an effect")
+
+
 def test_unknown_old_operation_cannot_be_retagged_with_new_payload(epoch):
     with pytest.raises(cold.ColdRuntimeDenied, match="old_operation_forbidden"):
         with cold.dispatch_guard("old-unknown", "manager-store", payload_sha256="a" * 64):
