@@ -44,6 +44,13 @@ warning-контракт, сначала установи и проверь со
 
 ## Проверки и восстановление
 
+Native MCP выполняет Store HTTP вне event loop с отдельной ограниченной очередью
+чтения и последовательным worker для операций с состоянием; точные бюджеты —
+[runtime-контракт](manager-runtime.md#ограничения-выполнения).
+При `store_executor_*` смотри `adapter_started`, `adapter_may_continue` и
+`meta.outcome_uncertain`: истечение ожидания не останавливает уже начатую операцию.
+Для начавшейся записи требуется проверка точного результата до любого повтора.
+
 Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно:
 
 ```bash
