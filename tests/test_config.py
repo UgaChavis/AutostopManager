@@ -173,6 +173,37 @@ def test_automation_crm_route_is_derived_only_from_literal_loopback_mcp(monkeypa
     assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
+def test_cold_crm_requires_explicit_independent_namespaces(monkeypatch, host):
+    namespace = "a" * 64
+    monkeypatch.setattr(config, "binding", lambda: object())
+    monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_API_URL", raising=False)
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp/__cold/{namespace}/mcp/")
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_BEARER_TOKEN", "synthetic-existing-bearer")
+    assert config.get_crm_mcp_connection_config().url == f"http://{host}:8001/mcp/__cold/{namespace}/mcp"
+    assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_API_URL", f"http://{host}:8000/__cold/" + "b" * 64)
+    assert config.get_automation_crm_connection_config().api_url == f"http://{host}:8000/__cold/" + "b" * 64
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp")
+    assert config.get_crm_mcp_connection_config().error_code == "crm_mcp_configuration_invalid"
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_API_URL", f"http://{host}:8000")
+    assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
+
+
+def test_new_namespace_does_not_relax_legacy_connection_paths(monkeypatch):
+    monkeypatch.setattr(config, "binding", lambda: None)
+    assert config.normalize_crm_mcp_url("http://127.0.0.1:8001/mcp/__cold/" + "a" * 64 + "/mcp") == ""
+    assert config.normalize_automation_crm_api_url("http://127.0.0.1:8000/__cold/" + "b" * 64) == ""
+
+
+@pytest.mark.parametrize(
+    "path", ["a" * 63, "A" * 64, "a" * 64 + "/other", "a" * 64 + "?x=1", "a" * 64 + "#x", "%61" * 64]
+)
+def test_cold_crm_namespace_rejects_noncanonical_paths(path):
+    assert config.normalize_crm_mcp_url(f"http://127.0.0.1:8001/mcp/__cold/{path}/mcp") == ""
+    assert config.normalize_automation_crm_api_url(f"http://127.0.0.1:8000/__cold/{path}") == ""
+
+
 def test_automation_control_peer_roles_are_uid_bound(monkeypatch):
     monkeypatch.setenv(
         "AUTOSTOP_AUTOMATION_CONTROL_PEERS",

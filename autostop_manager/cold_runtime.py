@@ -401,6 +401,54 @@ def _committed(current: ColdBinding, state: dict[str, Any]) -> None:
     )
 
 
+def _blocked_operation_ids(tombstones: Any, current: ColdBinding) -> set[str]:
+    _fields(
+        tombstones,
+        {"schema", "attempt_id", "boot_id", "generation", "epoch_id", "origin_attempt_id", "rows"},
+        "cold_tombstones_fields",
+    )
+    current.same_epoch(tombstones)
+    version = tombstones["schema"]
+    _require(
+        type(version) is str
+        and version in {"autostop.j1.cold-dispatch-tombstones.v1", "autostop.j1.cold-dispatch-tombstones.v2"},
+        "cold_tombstones_schema",
+    )
+    legacy = version == "autostop.j1.cold-dispatch-tombstones.v1"
+    _uuid(tombstones["origin_attempt_id"])
+    rows = tombstones["rows"]
+    _require(type(rows) is list and len(rows) <= 8192, "cold_tombstones_limit")
+    seen: set[str] = set()
+    for row in rows:
+        fingerprint_field = "payload_sha256" if legacy else "fingerprint"
+        _fields(row, {"op_id", fingerprint_field, "outcome", "retry"}, "cold_tombstone_fields")
+        _require(
+            type(row["op_id"]) is str and 1 <= len(row["op_id"]) <= 200 and row["op_id"] not in seen,
+            "cold_tombstone_identity",
+        )
+        seen.add(row["op_id"])
+        if legacy:
+            _sha(row["payload_sha256"])
+        else:
+            fingerprint = _fields(row["fingerprint"], {"kind", "sha256"}, "cold_tombstone_fingerprint_fields")
+            _require(
+                type(fingerprint["kind"]) is str
+                and fingerprint["kind"] in {"payload_sha256", "observed_record_sha256"},
+                "cold_tombstone_fingerprint_kind",
+            )
+            _sha(fingerprint["sha256"])
+            _require(
+                fingerprint["kind"] != "observed_record_sha256" or row["outcome"] == "unknown",
+                "cold_tombstone_observed_outcome",
+            )
+        _require(
+            row["outcome"] in {"unknown", "known_not_applied", "applied", "needs_review"}
+            and row["retry"] == "forbidden",
+            "cold_tombstone_outcome",
+        )
+    return seen
+
+
 @contextmanager
 def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None = None) -> Iterator[None]:
     current = binding()
@@ -497,31 +545,7 @@ def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None =
             state["schema"] == "autostop.j1.cold-dispatch-state.v1" and state["state"] == "open", "cold_dispatch_closed"
         )
         _committed(current, state)
-        tombstones = _read_ref(current.document["tombstones_ref"])
-        _fields(
-            tombstones,
-            {"schema", "attempt_id", "boot_id", "generation", "epoch_id", "origin_attempt_id", "rows"},
-            "cold_tombstones_fields",
-        )
-        current.same_epoch(tombstones)
-        _require(tombstones["schema"] == "autostop.j1.cold-dispatch-tombstones.v1", "cold_tombstones_schema")
-        _uuid(tombstones["origin_attempt_id"])
-        rows = tombstones["rows"]
-        _require(type(rows) is list and len(rows) <= 8192, "cold_tombstones_limit")
-        seen = set()
-        for row in rows:
-            _fields(row, {"op_id", "payload_sha256", "outcome", "retry"}, "cold_tombstone_fields")
-            _require(
-                type(row["op_id"]) is str and 1 <= len(row["op_id"]) <= 200 and row["op_id"] not in seen,
-                "cold_tombstone_identity",
-            )
-            seen.add(row["op_id"])
-            _sha(row["payload_sha256"])
-            _require(
-                row["outcome"] in {"unknown", "known_not_applied", "applied", "needs_review"}
-                and row["retry"] == "forbidden",
-                "cold_tombstone_outcome",
-            )
+        seen = _blocked_operation_ids(_read_ref(current.document["tombstones_ref"]), current)
         _require(operation_id not in seen, "cold_old_operation_forbidden")
         yield
     finally:
