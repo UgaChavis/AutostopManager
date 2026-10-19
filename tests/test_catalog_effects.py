@@ -9,11 +9,13 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from functools import partial
 import hashlib
+from inspect import signature
 import io
 import json
 from pathlib import Path
 import socket
 import sqlite3
+import sys
 import tempfile
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -94,8 +96,20 @@ def _analytics_payload():
 @pytest.fixture
 def isolated_http(monkeypatch):
     calls = []
+    original_connect = socket.socket.connect
+    socketpair_fallback = getattr(socket, "_fallback_socketpair", None)
 
-    def forbidden(*_args, **_kwargs):
+    def forbidden(*args, **kwargs):
+        # Windows asyncio needs its stdlib loopback socketpair. Keep all
+        # application network calls forbidden, including other loopback access.
+        if (
+            socketpair_fallback is not None
+            and sys._getframe(1).f_code is socketpair_fallback.__code__
+            and len(args) > 1
+            and isinstance(args[1], tuple)
+            and args[1][0] in {"127.0.0.1", "::1"}
+        ):
+            return original_connect(*args, **kwargs)
         raise AssertionError("real network is forbidden in catalog effect tests")
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
@@ -163,7 +177,13 @@ def native_tools(tmp_path, monkeypatch, isolated_http):
     )
     server = FastMCP("catalog-effects-test")
     mcp_tools.register_manager_tools(server, store, store_client=client, include_tools=NATIVE_NAMES)
-    return {name: tool.fn for name, tool in server._tool_manager._tools.items()}, store
+
+    def invoke(name, *args, **kwargs):
+        tool = server._tool_manager.get_tool(name)
+        arguments = dict(signature(tool.fn).bind(*args, **kwargs).arguments)
+        return asyncio.run(tool.run(arguments))
+
+    return {name: partial(invoke, name) for name in server._tool_manager._tools}, store
 
 
 def _snapshot(store):
