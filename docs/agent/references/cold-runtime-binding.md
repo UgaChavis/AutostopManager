@@ -33,6 +33,10 @@ arguments and Wake configuration targets are established. Conflicting legacy
 environment paths are rejected. Cold J1 workers refuse prior running rows
 instead of requeueing them. Cold schedulers cannot adopt or control the legacy
 system timers. Legacy Telegram job import is unavailable in a cold slot. These
+slots cannot inspect or call the legacy J1 browser; that role remains denied.
+Unit-name/native health for the six new slots belongs to the controller's exact
+epoch slot mapping, not to hardcoded legacy unit names or this path binding.
+These
 rules do not migrate any history, sessions, credentials, pending jobs or cursors;
 the separate release controller must provide reviewed fresh state and retain
 unknown historical operations for review.

@@ -349,6 +349,22 @@ def test_unknown_old_operation_cannot_be_retagged_with_new_payload(epoch):
             pytest.fail("old operation replayed")
 
 
+def test_cold_browser_never_reads_old_release_or_connects_to_renderer(epoch, monkeypatch):
+    from autostop_manager import j1_browser
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("cold role used the denied legacy browser")
+
+    monkeypatch.setattr(j1_browser, "_read_root_owned_file", forbidden)
+    monkeypatch.setattr(j1_browser.socket, "socket", forbidden)
+    monkeypatch.setattr(j1_browser, "_socket_ready", forbidden)
+    assert j1_browser.active_release_revision() == ("", "browser_cold_role_denied")
+    assert j1_browser.browser_status()["browser_ready"] is False
+    result = j1_browser.render_page("https://example.org/article", socket_path="/old/renderer.sock")
+    assert result["error"] == "browser_cold_role_denied"
+    assert result["retryable"] is False and result["safe_disabled"] is True
+
+
 def test_real_shared_lock_excludes_close_through_actual_effect(epoch):
     import fcntl
 
