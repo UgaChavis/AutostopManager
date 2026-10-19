@@ -425,11 +425,20 @@ def test_real_photo_keeps_its_two_megabyte_limit_separate_from_json_limit(local_
 
 
 @pytest.mark.parametrize("surface", ["json", "photo", "post"])
-def test_real_redirect_does_not_forward_store_credentials_or_repeat(local_store, surface):
+@pytest.mark.parametrize("redirect_kind", ["valid", "invalid_port", "long_relative"])
+def test_real_redirect_does_not_forward_store_credentials_or_repeat(local_store, surface, redirect_kind):
     target = local_store(lambda handler, _fixture: send_response(handler, b"{}"))
-    source = local_store(lambda handler, _fixture: send_response(handler, b"", status=302, location=target.url))
+    location = {"valid": target.url, "invalid_port": "http://127.0.0.1:bad/", "long_relative": "a" * 65530}[
+        redirect_kind
+    ]
+    source = local_store(lambda handler, _fixture: send_response(handler, b"", status=302, location=location))
     result = call_surface(client(source.url, timeout=3, max_read_attempts=3), surface)
     assert result["ok"] is False and result["meta"]["http_status"] == 302
+    expected_code = "store_attachment_request_rejected" if surface == "photo" else "store_redirect_rejected"
+    assert result["summary"]["error_code"] == expected_code
+    assert result["meta"]["attempt_count"] == 1
+    assert result["meta"]["request_dispatched"] is True
+    assert result["meta"]["outcome_uncertain"] is (surface == "post")
     assert len(source.requests) == 1 and target.requests == []
     expected_token = {"json": "read", "photo": "quote", "post": "manage"}[surface]
     assert source.requests[0][2] == f"Bearer synthetic-{expected_token}-token"

@@ -45,6 +45,13 @@ class BufferedResponse(io.BytesIO):
         return self.headers
 
 
+def _response_headers(response: httpx.Response) -> Message:
+    headers = Message()
+    for key, value in response.headers.multi_items():
+        headers[key] = value
+    return headers
+
+
 async def _fetch(
     request: Request,
     *,
@@ -58,6 +65,16 @@ async def _fetch(
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("provider_total_deadline_exceeded")
+
+    async def remember_rejection(response: httpx.Response) -> None:
+        if on_error_headers is not None and not 200 <= response.status_code < 300:
+            headers = _response_headers(response)
+            on_error_headers(response.status_code, headers)
+            if 300 <= response.status_code < 400:
+                raise HTTPError(
+                    request.full_url, response.status_code, f"HTTP status {response.status_code}", headers, io.BytesIO()
+                )
+
     try:
         # Keep proxy/certificate environment handling and TLS verification enabled.
         with anyio.fail_after(remaining):
@@ -68,6 +85,10 @@ async def _fetch(
                 max_redirects=10,
                 headers={"Accept-Encoding": "identity"},
             ) as client:
+                if on_error_headers is not None and not follow_redirects:
+                    # HTTPX parses Location even when it will not follow it.
+                    # Reject redirects before their parsing can lose dispatch/status.
+                    client.event_hooks["response"].append(remember_rejection)
                 # Client/TLS initialization can run synchronously before an async checkpoint.
                 if time.monotonic() >= deadline:
                     raise TimeoutError("provider_total_deadline_exceeded")
@@ -77,11 +98,9 @@ async def _fetch(
                     content=cast(Any, request.data),
                     headers=dict(request.header_items()),
                 ) as response:
-                    headers = Message()
-                    for key, value in response.headers.multi_items():
-                        headers[key] = value
+                    headers = _response_headers(response)
                     failed = not 200 <= response.status_code < 300
-                    if failed and on_error_headers is not None:
+                    if failed and on_error_headers is not None and follow_redirects:
                         on_error_headers(response.status_code, headers)
                     limit = error_maximum if failed else maximum
                     body = bytearray()
