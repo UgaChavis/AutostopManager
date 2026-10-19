@@ -50,6 +50,10 @@ Native MCP выполняет Store HTTP вне event loop с отдельной
 При `store_executor_*` смотри `adapter_started`, `adapter_may_continue` и
 `meta.outcome_uncertain`: истечение ожидания не останавливает уже начатую операцию.
 Для начавшейся записи требуется проверка точного результата до любого повтора.
+Перед остановкой native Manager используется отдельный
+[Store drain handshake](manager-runtime.md#завершение-store-перед-остановкой-manager).
+Он учитывает реальные adapter/HTTP workers после ухода caller; завершённый drain
+не заменяет проверку бизнес-результата неопределённой записи.
 
 `StoreApiClient` использует один HTTP deadline на вызов JSON API или загрузки фото:
 соединение, заголовки и тело делят `timeout`, а GET-повторы получают только остаток

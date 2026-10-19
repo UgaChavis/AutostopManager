@@ -17,7 +17,7 @@ from urllib.request import Request
 
 import httpx
 
-from autostop_manager.bounded_http_read import urlopen as bounded_urlopen
+from autostop_manager.bounded_http_read import TrackedTransportAdmission, urlopen as bounded_urlopen
 
 
 STORE_AGENT_FORMAT = "store_agent_v1"
@@ -586,6 +586,9 @@ _IDENTIFIER_REDACT_KEYS = {"license_plate", "vin"}
 
 # Separate from public-provider capacity: two Store readers and one stateful worker.
 _STORE_TRANSPORT_ADMISSIONS = threading.BoundedSemaphore(3)
+store_transport_admission: ContextVar[TrackedTransportAdmission | None] = ContextVar(
+    "store_transport_admission", default=None
+)
 _RESPONSE_BUDGET = ContextVar("store_response_budget", default=DEFAULT_RESPONSE_BUDGET_BYTES)
 _ERROR_RESPONSE_BUDGET = ContextVar("store_error_response_budget", default=DEFAULT_RESPONSE_BUDGET_BYTES)
 _HTTP_DEADLINE: ContextVar[float | None] = ContextVar("store_http_deadline", default=None)
@@ -601,7 +604,7 @@ def urlopen(request: Request, *, timeout: float):
             maximum=_RESPONSE_BUDGET.get() + 1,
             truncate=True,
             error_maximum=_ERROR_RESPONSE_BUDGET.get(),
-            admission=_STORE_TRANSPORT_ADMISSIONS,
+            admission=store_transport_admission.get() or _STORE_TRANSPORT_ADMISSIONS,
             deadline=_HTTP_DEADLINE.get(),
             preserve_error_status=True,
         )

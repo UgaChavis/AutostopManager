@@ -30,6 +30,42 @@ MAX_TRANSPORT_WORKERS = 2
 _ADMISSIONS = threading.BoundedSemaphore(MAX_TRANSPORT_WORKERS)
 
 
+class TrackedTransportAdmission:
+    """Nonblocking capacity retained through the transport worker's real cleanup."""
+
+    def __init__(self, capacity: int) -> None:
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("invalid_transport_capacity")
+        self._capacity = capacity
+        self._pending = 0
+        self._accepting = True
+        self._lock = threading.Lock()
+
+    def acquire(self, blocking: bool = False) -> bool:
+        if blocking:
+            raise ValueError("transport_admission_must_not_block")
+        with self._lock:
+            if not self._accepting or self._pending >= self._capacity:
+                return False
+            self._pending += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            if self._pending == 0:
+                raise ValueError("transport_admission_released_too_many_times")
+            self._pending -= 1
+
+    def begin_drain(self) -> None:
+        with self._lock:
+            self._accepting = False
+
+    @property
+    def pending_count(self) -> int:
+        with self._lock:
+            return self._pending
+
+
 class BufferedResponse(io.BytesIO):
     def __init__(self, body: bytes, *, status: int, headers: Message, url: str) -> None:
         super().__init__(body)
@@ -139,7 +175,7 @@ def urlopen(
     follow_redirects: bool = False,
     truncate: bool = False,
     error_maximum: int = ERROR_BODY_LIMIT,
-    admission: threading.BoundedSemaphore | None = None,
+    admission: threading.BoundedSemaphore | TrackedTransportAdmission | None = None,
     deadline: float | None = None,
     preserve_error_status: bool = False,
 ) -> BufferedResponse:
