@@ -37,8 +37,10 @@ Sourcing — lookup-only: `store_sourcing_offer` не поддерживает e
 пустой ответ не подтверждает отсутствие предложений. Manager принимает эти
 фиксированные warning-коды только для sourcing search, а прежний Store без
 таких warnings остаётся совместим. Если выпуск Store меняет sourcing timeout или
-warning-контракт, сначала установи и проверь совместимый Manager consumer, затем
-выпускай Store producer по [deployment](deployment.md). Текущие лимиты и состояние
+warning-контракт, проверь совместимость итоговых Manager consumer и Store producer
+до открытия приёма задач. Установка выполняется при остановленных приложениях по
+[deployment](deployment.md); совместимость промежуточных запущенных версий не нужна.
+Текущие лимиты и состояние
 выпуска проверяй по установленной ревизии и ответу Store; опубликованные исходники
 сами по себе не подтверждают работающий сервер.
 
@@ -70,13 +72,25 @@ Store имеет три отдельных HTTP worker-слота. `store_transp
 deadline; слот удерживается до фактического завершения worker, включая очистку и
 ожидание системного DNS. Лимиты тела JSON и JPEG проверяются отдельно.
 
-Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно:
+Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно. Задай `runtime_python` точным проверенным Python из текущего `ExecStart` Manager:
 
 ```bash
 manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
-env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
 ```
 
 Проверяй initialize/ping, manifest/schemas, `checks.store_runtime_status.ok`, `checks.store_owner_capabilities.ok`, `checks.store_order_search.ok`. Fingerprint mismatch между checkout и installed revision — drift, не автоматически неисправность Store. Write smoke выполняй в synthetic tests с одноразовыми состояниями, без live apply. Release gates: [deployment.md](deployment.md); Store `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full` проверяют контракт, не качество провайдера.
 
-Диагностика: exact REVISION/deploy marker → service/container → loopback/private transport и Nginx public deny → tools/list schema → presence-only token checks → principal (`401`/`403`) → runtime circuit → Store response contract → business validation. Provider/auth error не повод для restart. Manager/CRM выпускаются `/opt/autostopcrm/deploy.sh`; Store — GitHub Deploy VPS по своему runbook. Rollback сохраняет business volumes и Manager registry.
+Диагностика: exact REVISION/image digest → service/container → loopback/private
+transport и Nginx public deny → tools/list schema → presence-only token checks →
+principal (`401`/`403`) → runtime circuit → Store response contract → business
+validation. Provider/auth error не повод для restart.
+
+Общий порядок обслуживания: остановка приложений с сохранением SSH/operator,
+одна согласованная копия данных/настроек и одна локальная проверка восстановления,
+установка проверенных версий, техническая приёмка и очистка временных материалов.
+Business volumes, Manager registry, principal IDs, credentials и история
+идемпотентности сохраняются. Совместимый Store уже выбранной версии повторно не
+устанавливается. Push в Store `main` запускает `Deploy VPS`, поэтому даже docs-only
+merge требует соответствующего окна обслуживания. Полный порядок —
+[deployment.md](deployment.md).

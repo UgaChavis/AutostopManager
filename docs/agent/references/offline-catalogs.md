@@ -20,13 +20,22 @@ PDF locator учитывает только полный служебный mark
 
 Архив 25 каталогов: [GitHub catalogs-2026-09-25](https://github.com/UgaChavis/AutostopManager/releases/tag/catalogs-2026-09-25), `autostop-parts-catalogs-20260925-public.zip`, SHA-256 `b2b1e40510e91579a5e8e4be90e0d4a2b461122b6a73af27ec4600d4a1ff7ffe` (отдельный sha256 asset).
 
-Согласованный `/opt/autostopcrm/deploy.sh` до maintenance вызывает sync из выбранного Manager snapshot: сверка 25 originals/SHA/index/text и synthetic search → при ready без download → при пустом cache pinned ZIP с size/SHA check, private import и OCR → при незавершённом OCR только его продолжение. Старые каталоги сохраняются. Download/hash/import/OCR/search failure останавливает выпуск до maintenance. Если индексированная запись есть, но original/text утрачен или повреждён, sync останавливается без перезаписи: importer автоматически её не восстанавливает.
+Проверка каталога — отдельный шаг [подготовки обслуживания](deployment.md).
+Из выбранного Manager snapshot сверяются 25 originals/SHA/index/text и synthetic
+search. Если кеш готов, download не нужен. При отдельно разрешённой подготовке
+пустого кеша используются pinned ZIP с size/SHA check, private import и OCR;
+при незавершённом OCR продолжается только он. Старые каталоги сохраняются.
+Download/hash/import/OCR/search failure останавливает подготовку. Если запись уже
+индексирована, но original/text утрачен или повреждён, sync отказывает без
+перезаписи: importer автоматически её не восстанавливает. Запуск старого CRM
+orchestrator ради этой проверки не требуется.
 
-Только чтение без download/записи:
+Только чтение без download/записи; `runtime_python` заранее задаётся точным
+проверенным Python из текущего `ExecStart` Manager:
 
 ```bash
 manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
-env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python "$manager_snapshot/scripts/sync_offline_parts_catalog_release.py" --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" "$manager_snapshot/scripts/sync_offline_parts_catalog_release.py" --cache-root /opt/AutostopManager/data/offline_parts_catalogs --verify-only
 ```
 
 Для отдельно порученной установки используй ту же команду без --verify-only. Скрипт не читает DB/.env, принудительно использует cache-root. Git checkout не содержит каталогов и сам их не импортирует.
