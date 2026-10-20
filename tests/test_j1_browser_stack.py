@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
+import subprocess
+import sys
 
 import pytest
 
@@ -226,14 +229,36 @@ def test_ocr_timeout_is_explicit_after_render(monkeypatch: pytest.MonkeyPatch) -
     assert result == {"ok": False, "error": "ocr_timeout", "retryable": True, "extraction_method": "pdf_ocr"}
 
 
-def test_browser_image_includes_renderer_source_dependencies() -> None:
+def test_browser_image_includes_renderer_source_dependencies(tmp_path: Path) -> None:
     dockerfile = (ROOT / "deploy/j1-browser/Dockerfile").read_text(encoding="utf-8")
     allowed_files = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+    package = tmp_path / "autostop_manager"
+    package.mkdir()
     for line in dockerfile.splitlines():
         if line.startswith("COPY "):
             for source in line.split()[1:-1]:
                 assert (ROOT / source).is_file(), source
                 assert f"!{source}" in allowed_files, source
+                shutil.copyfile(ROOT / source, package / Path(source).name)
+
+    # Import the actual image source closure without installed dependencies or
+    # the checkout on sys.path; checking only COPY filenames misses imports.
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from autostop_manager import j1_browser_renderer, j1_browser_proxy",
+            str(tmp_path),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
 
     assert "autostop_manager/j1_sources.py" in dockerfile
     assert "autostop_manager/j1_fetch.py" in dockerfile

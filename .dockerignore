@@ -4,6 +4,7 @@
 **
 !autostop_manager/
 !autostop_manager/__init__.py
+!autostop_manager/config.py
 !autostop_manager/j1_fetch.py
 !autostop_manager/j1_sources.py
 !autostop_manager/j1_browser.py
