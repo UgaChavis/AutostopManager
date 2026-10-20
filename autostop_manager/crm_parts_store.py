@@ -16,7 +16,6 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from .config import CrmMcpConnectionConfig, get_crm_mcp_connection_config
-from .cold_runtime import guarded_effect
 from .crm_mcp_web_research import _payload_from_tool_result, _run_sync
 
 PARTS_STORE_COLUMN = "parts_store"
@@ -87,9 +86,6 @@ class LoopbackCrmPartsStoreTransport:
         except Exception:  # noqa: BLE001 - never expose endpoint, bearer or CRM content
             return _failure("crm_mcp_transport_failed", uncertain=_RISKS[name] == "write")
 
-    @guarded_effect(
-        "manager-crm", lambda args: args["idempotency_key"], applies=lambda args: _RISKS.get(args["name"]) == "write"
-    )
     async def _invoke_async(self, name: str, arguments: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
         async with httpx.AsyncClient(
             timeout=_TIMEOUT_SECONDS,

@@ -16,7 +16,7 @@ import socket
 import stat
 from typing import Any
 
-from .cold_runtime import binding
+from .config import reject_obsolete_runtime_config
 from .j1_fetch import public_url
 
 
@@ -94,8 +94,7 @@ def _read_root_owned_file(path: str, *, maximum_bytes: int, exact_mode: int | No
 def active_release_revision(release_root: str | None = None) -> tuple[str, str]:
     """Return the sealed current Manager revision or a public readiness reason."""
 
-    if binding() is not None:
-        return "", "browser_cold_role_denied"
+    reject_obsolete_runtime_config()
     configured_root = release_root or os.environ.get("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", DEFAULT_RELEASE_ROOT)
     root = _safe_path(configured_root, limit=220)
     if not root:
@@ -263,8 +262,7 @@ def render_page(
     falling back to the CRM browser.
     """
 
-    if binding() is not None:
-        return _failure("browser_cold_role_denied", retryable=False, safe_disabled=True)
+    reject_obsolete_runtime_config()
     safe_url = _public_http_url(url)
     if not safe_url:
         return _failure("browser_url_invalid", retryable=False)

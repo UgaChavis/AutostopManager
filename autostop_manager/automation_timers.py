@@ -126,10 +126,7 @@ class SystemTimerController:
         dropin_root: Path = Path("/etc/systemd/system"),
         store: AutomationStore | None = None,
     ) -> None:
-        from .cold_runtime import binding
-
-        # Cold slots do not adopt or control any of the legacy system timers.
-        self.policies = {} if binding() is not None else dict(policies)
+        self.policies = dict(policies)
         self.runner = runner
         self.dropin_root = dropin_root
         self.store = store or AutomationStore()

@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from autostop_manager.config import reject_obsolete_runtime_config
 from autostop_manager.telegram_owner import (
     OwnerConfigError,
     WORK_OWNER_CONFIG_PATH,
@@ -34,21 +35,17 @@ from autostop_manager.telegram_owner import (
     load_owner_peer_id,
 )
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
-from autostop_manager.telegram_ingress import ColdIngressCut, capture_cold_ingress
-from autostop_manager.cold_runtime import binding, ColdRuntimeDenied, guarded_effect, require_role, runtime_path
 
 
-DEFAULT_CREDENTIALS_PATH = runtime_path("personal-telegram", "credentials_path", "/etc/autostop-telegram/credentials")
-DEFAULT_SESSION_PATH = runtime_path("personal-telegram", "session_path", "/var/lib/autostop-telegram/account")
-DEFAULT_STATE_DIR = runtime_path("personal-telegram", "state_dir", "/var/lib/autostop-telegram")
-DEFAULT_SOCKET_PATH = runtime_path("personal-telegram", "socket_path", "/run/autostop-telegram/bridge.sock")
-WORK_CREDENTIALS_PATH = runtime_path("work-telegram", "credentials_path", "/etc/autostop-work-telegram/credentials")
-WORK_SESSION_PATH = runtime_path("work-telegram", "session_path", "/var/lib/autostop-work-telegram/account")
-WORK_STATE_DIR = runtime_path("work-telegram", "state_dir", "/var/lib/autostop-work-telegram")
-WORK_SOCKET_PATH = runtime_path("work-telegram", "socket_path", "/run/autostop-work-telegram/bridge.sock")
-WORK_TRANSCRIPTION_MODEL_DIR = runtime_path(
-    "work-telegram", "model_dir", "/opt/autostop-work-telegram-models/faster-whisper-small"
-)
+DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
+DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
+DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
+DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
+WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
+WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
+WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
+WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
+WORK_TRANSCRIPTION_MODEL_DIR = Path("/opt/autostop-work-telegram-models/faster-whisper-small")
 MAX_REQUEST_BYTES = 128 * 1024
 # A read batch can contain 100 messages of 4096 characters; JSON escaping alone
 # can expand their text to 2.4 MiB, with room still needed for bounded metadata.
@@ -189,20 +186,7 @@ class TelegramConfig:
         socket_path: Path = DEFAULT_SOCKET_PATH,
         owner_config_path: Path | None = None,
     ) -> TelegramConfig:
-        current = binding()
-        if current is not None:
-            if current.role not in {"work-telegram", "personal-telegram"}:
-                raise ColdRuntimeDenied("cold_entrypoint_role_changed")
-            if any(
-                path != current.path(current.role, name)
-                for name, path in (
-                    ("credentials_path", credentials_path),
-                    ("session_path", session_path),
-                    ("state_dir", state_dir),
-                    ("socket_path", socket_path),
-                )
-            ):
-                raise ColdRuntimeDenied("cold_telegram_paths_changed")
+        reject_obsolete_runtime_config()
         runtime_paths = (credentials_path, session_path, state_dir, socket_path)
         if any(not path.is_absolute() for path in runtime_paths):
             raise BridgeError("runtime_path_not_absolute")
@@ -290,31 +274,6 @@ class InboundMonitor:
         self._dropped_events = 0
         self._dropped_open_events = 0
         self._rejected_events = 0
-        self.cold_ingress_required = binding() is not None
-        self.cold_ingress_cut: ColdIngressCut | None = None
-
-    def _accept_cold_ingress(self, event: Any) -> bool:
-        if not self.cold_ingress_required:
-            return True
-        cut = self.cold_ingress_cut
-        if cut is not None and cut.accepts(event):
-            return True
-        pts = getattr(getattr(event, "original_update", None), "pts", None)
-        reason = (
-            "cold_ingress_before_cut"
-            if cut is not None and type(pts) is int and 0 <= pts <= cut.pts
-            else "cold_ingress_metadata_unknown"
-        )
-        if cut is None:
-            raise ColdRuntimeDenied("cold_ingress_cut_missing")
-        if cut.quarantine.overflow_count:
-            reason = "cold_ingress_quarantine_overflow"
-        cut.quarantine.hold(event, source="callback", reason=reason)
-        self._rejected_events += 1
-        if isinstance(self, DurableInboundMonitor):
-            self.inbox.set_health(component="intake", state="held", error_code=reason)
-            self.changed()
-        return False
 
     @staticmethod
     def _event_id(event: InboundMonitorEvent) -> str:
@@ -345,8 +304,6 @@ class InboundMonitor:
         """Remember only an incoming private message locator; never its body or media."""
 
         if bool(getattr(event, "out", False)):
-            return None
-        if not self._accept_cold_ingress(event):
             return None
         if not bool(getattr(event, "is_private", False)):
             return None
@@ -558,16 +515,6 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
 
-    def hold_cold_history(self) -> bool:
-        if not self.cold_ingress_required:
-            return False
-        if self.cold_ingress_cut is None:
-            raise ColdRuntimeDenied("cold_ingress_cut_missing")
-        self.cold_ingress_cut.quarantine.hold(None, source="history_not_queried", reason="cold_history_requires_review")
-        self.inbox.set_health(component="intake", state="held", error_code="cold_history_requires_review")
-        self.changed()
-        return True
-
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
         self.reconciliation_restarts = 0
@@ -588,8 +535,6 @@ class DurableInboundMonitor(InboundMonitor):
     def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
         del preserve_open
         if bool(getattr(event, "out", False)):
-            return None
-        if not self._accept_cold_ingress(event):
             return None
         if not bool(getattr(event, "is_private", False)):
             return None
@@ -641,7 +586,7 @@ class DurableInboundMonitor(InboundMonitor):
 
 
 def _config_for_account(account: str) -> TelegramConfig:
-    require_role("work-telegram" if account == "work" else "personal-telegram")
+    reject_obsolete_runtime_config()
     paths = _account_paths(account)
     return TelegramConfig.load(
         paths.credentials_path,
@@ -2046,11 +1991,6 @@ async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[
     }
 
 
-@guarded_effect(
-    "telegram",
-    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
-    applies=lambda args: args["request"].get("mode") == "apply",
-)
 async def _handle_send_photo(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2193,11 +2133,6 @@ async def _verify_document_readback(
         raise BridgeError("send_document_readback_failed")
 
 
-@guarded_effect(
-    "telegram",
-    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
-    applies=lambda args: args["request"].get("mode") == "apply",
-)
 async def _handle_send_document(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2329,11 +2264,6 @@ async def _handle_send_document(
     return _job_send_response(response, request, effect, idempotency_key)
 
 
-@guarded_effect(
-    "telegram",
-    lambda args: args["request"].get("idempotency_key") or args["request"].get("job_id"),
-    applies=lambda args: args["request"].get("mode") == "apply",
-)
 async def _handle_send_voice(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
@@ -2544,11 +2474,6 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     }
 
 
-@guarded_effect(
-    "telegram",
-    lambda args: args["idempotency_key"] or args["request"].get("job_id"),
-    applies=lambda args: args["mode"] == "apply",
-)
 async def _handle_send_text_to_entity(
     client: Any,
     config: TelegramConfig,
@@ -3832,8 +3757,6 @@ async def _handle_job_control(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any] | None:
     operation = str(request["operation"])
-    if binding() is not None and operation == "job_import_legacy":
-        raise ColdRuntimeDenied("cold_legacy_job_import_forbidden")
     inbox = monitor.inbox
     if operation == "job_status":
         return {"ok": True, "status": inbox.status() | {"health": inbox.health()}}
@@ -4392,10 +4315,6 @@ async def _route_or_capture_incoming_event(
     *,
     automation_coordinator: Any | None,
 ) -> None:
-    if monitor.cold_ingress_required and (
-        bool(getattr(event, "out", False)) or not monitor._accept_cold_ingress(event)
-    ):
-        return
     if isinstance(monitor, DurableInboundMonitor):
         # Every accepted update first enters the durable registry.  Owner
         # automation must subsequently use the same lease/receipt path; running
@@ -4466,40 +4385,10 @@ async def _await_daemon_task(task: asyncio.Future[Any]) -> None:
         raise BridgeError("telegram_transport_disconnected") from exc
 
 
-def _require_cold_telegram_config(config: TelegramConfig) -> None:
-    current = binding()
-    if current is not None:
-        if current.role not in {"work-telegram", "personal-telegram"} or any(
-            getattr(config, name) != current.path(current.role, key)
-            for name, key in (
-                ("session_path", "session_path"),
-                ("state_dir", "state_dir"),
-                ("socket_path", "socket_path"),
-            )
-        ):
-            raise ColdRuntimeDenied("cold_telegram_paths_changed")
-        owner = current.path("work-telegram", "owner_config_path") if current.role == "work-telegram" else None
-        if config.owner_config_path != owner:
-            raise ColdRuntimeDenied("cold_telegram_owner_path_changed")
-
-
-async def _bind_cold_ingress(client: Any, current: Any, config: TelegramConfig, monitor: InboundMonitor | None) -> None:
-    if current is not None:
-        cut = await capture_cold_ingress(client, current, config.state_dir, _load_reconciliation_state_request())
-        if monitor is not None:
-            monitor.cold_ingress_cut = cut
-
-
-def _register_legacy_ingress(client: Any, callback: Any, builder: Any, current: Any) -> None:
-    if current is None:
-        client.add_event_handler(callback, builder)
-
-
 async def run_daemon(
     config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
 ) -> None:
-    _require_cold_telegram_config(config)
-    current = binding()
+    reject_obsolete_runtime_config()
     watchdog = _cleanup_watchdog or _daemon_cleanup_watchdog()
     TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -4563,14 +4452,11 @@ async def run_daemon(
                 automation_coordinator=automation_coordinator,
             )
 
-        _register_legacy_ingress(client, capture, events.NewMessage(incoming=None if durable else True), current)
+        client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
     try:
         await client.connect()
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
-        await _bind_cold_ingress(client, current, config, inbound_monitor)
-        if inbound_monitor is not None and current is not None:
-            client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
@@ -4785,10 +4671,6 @@ async def _reconcile_peer_history(
 
 async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:
     """Bounded, resumable replay from persisted enabled-duty intervals."""
-    if monitor.hold_cold_history():
-        # iter_messages has no account-global update PTS. Its messages cannot
-        # acquire new operation IDs in a cold epoch, even after reconnect.
-        return
     windows = monitor.inbox.recovery_windows()
     if not windows:
         return

@@ -23,10 +23,10 @@ from .automation_jobs import (
     OwnerNotifier,
     TelegramOwnerNotifier,
 )
+from .config import reject_obsolete_runtime_config
 from .automation_registry import AutomationStore
 from .automation_timers import SystemTimerController
 from .config import get_automation_crm_connection_config, get_work_telegram_socket_path, load_runtime_env
-from .cold_runtime import guarded_effect, require_role
 
 
 Executor = Callable[[Mapping[str, Any]], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
@@ -135,7 +135,6 @@ class AutomationDaemon:
 
         return cls(store=state, executors=executors, notifier=notifier, readiness_provider=readiness)
 
-    @guarded_effect("scheduler", lambda args: args["claim"].get("run_id"))
     async def _execute_claim(self, claim: Mapping[str, Any]) -> None:
         executor = self.executors.get(str(claim["template_id"]))
         succeeded = False
@@ -179,7 +178,6 @@ class AutomationDaemon:
                 ),
             )
 
-    @guarded_effect("scheduler-outbox", lambda args: args["claim"].get("idempotency_key"))
     async def _execute_outbox(self, claim: Mapping[str, Any]) -> None:
         payload = claim.get("payload")
         text: str | None = None
@@ -358,7 +356,7 @@ class AutomationDaemon:
                 await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
 
     async def run(self) -> None:
-        require_role("scheduler")
+        reject_obsolete_runtime_config()
         self.store.initialize()
         self.store.seed_defaults()
         await asyncio.to_thread(self.timer_controller.adopt_all_current)

@@ -78,9 +78,10 @@ def test_automation_installer_is_parseable_and_activation_is_opt_in():
     assert "crm_revision_required_for_activation=true" in source
     assert "AUTOSTOP_AUTOMATION_CRM_REVISION" in source
     assert "AUTOSTOP_AUTOMATION_CRM_VERSION" in source
-    assert source.index('rollback_dir="$(mktemp -d') < source.index("automation_release hold")
     assert "manager_automation_installer_rollback_attempted=true" in source
-    assert source.index("automation_release hold") < source.index("install -o root -g root -m 0600")
+    assert source.index('rollback_dir="$(mktemp -d') < source.index("install -o root -g root -m 0600")
+    assert "automation_release" not in source
+    assert "--activate-under-hold" not in source
 
 
 def test_automation_installer_requires_crm_revision_before_activation(tmp_path: Path):

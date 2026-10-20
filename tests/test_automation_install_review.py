@@ -42,7 +42,7 @@ def finish_install_case(
     source = (ROOT / "scripts" / "install-manager-automation.sh").read_text()
     body = source.split("finish_install() {\n", 1)[1].split("\n}\ntrap finish_install EXIT", 1)[0]
     activation_start = source.index('if systemctl is-active --quiet "${UNIT_NAME}"; then\n  systemctl enable')
-    activation = source[activation_start : source.index("\nfi", activation_start) + 3]
+    activation = "activation_started=1\n" + source[activation_start : source.index("\nfi", activation_start) + 3]
     backup = tmp_path / "backup"
     backup.mkdir()
     unit, config = tmp_path / "unit", tmp_path / "config"
@@ -76,6 +76,7 @@ def finish_install_case(
         "service_was_active": str(service_flags[0]),
         "service_was_enabled": str(service_flags[1]),
         "rollback_armed": str(armed),
+        "activation_started": "0",
         "UNIT_NAME": "synthetic-manager-review.service",
         "installation_failure": trigger if trigger != "exit" else "",
         "original_failure": str(exit_code),
@@ -159,7 +160,7 @@ persist_state() {
     if trigger == "candidate_copy":
         script += 'cp --archive --no-dereference "$rollback_dir/unit" "$UNIT_PATH"\n'
     elif trigger == "candidate_activation":
-        script += 'systemctl enable --now "$UNIT_NAME"\n'
+        script += 'activation_started=1\nsystemctl enable --now "$UNIT_NAME"\n'
     elif trigger == "candidate_health":
         script += activation + f"\nrollback_phase=1\nexit {exit_code}\n"
     else:
@@ -290,7 +291,7 @@ def test_success_or_disarmed_exit_preserves_candidate_files_without_service_roll
     assert "rollback_attempted" not in result.process.stderr
 
 
-@pytest.mark.parametrize("trigger", ["exit", "candidate_copy", "candidate_activation"])
+@pytest.mark.parametrize("trigger", ["exit", "candidate_copy"])
 def test_original_installer_failure_status_survives_successful_rollback(tmp_path, trigger):
     result = finish_install_case(tmp_path, trigger=trigger, exit_code=23)
     assert result.unit.read_bytes() == PRIOR_UNIT and result.config.read_bytes() == PRIOR_CONFIG
@@ -300,38 +301,44 @@ def test_original_installer_failure_status_survives_successful_rollback(tmp_path
 
 @pytest.mark.parametrize("enabled", [0, 1])
 @pytest.mark.parametrize("failure", ["unit", "config", "daemon-reload", "enabled-state", "stop"])
-def test_previously_inactive_candidate_is_stopped_after_failed_restoration(tmp_path, enabled, failure):
+def test_pre_activation_restore_preserves_inactive_service(tmp_path, enabled, failure):
     kwargs = (
         {"fail_copy": failure}
         if failure in {"unit", "config"}
         else {"fail_service": ("enable" if enabled else "disable") if failure == "enabled-state" else failure}
     )
-    result = finish_install_case(tmp_path, trigger="candidate_health", service_flags=(0, enabled), **kwargs)
+    result = finish_install_case(tmp_path, service_flags=(0, enabled), **kwargs)
     require_backup_retained(result)
     assert result.calls[-1] == "stop"
     assert "restart" not in result.calls
-    assert result.service_state[0] == int(failure == "stop")
+    assert result.service_state[0] == 0
     if failure in {"unit", "config"}:
         assert result.calls == ["stop"]
 
 
 @pytest.mark.parametrize("enabled", [0, 1])
 @pytest.mark.parametrize("failure", ["unit", "config", "daemon-reload", "enabled-state"])
-def test_previously_active_candidate_is_never_restarted_with_unconfirmed_restoration(tmp_path, enabled, failure):
+def test_pre_activation_restore_never_restarts_unconfirmed_files(tmp_path, enabled, failure):
     kwargs = (
         {"fail_copy": failure}
         if failure in {"unit", "config"}
         else {"fail_service": ("enable" if enabled else "disable") if failure == "enabled-state" else failure}
     )
-    result = finish_install_case(tmp_path, trigger="candidate_health", service_flags=(1, enabled), **kwargs)
+    result = finish_install_case(tmp_path, service_flags=(1, enabled), **kwargs)
     require_backup_retained(result)
     assert "restart" not in result.calls and "stop" not in result.calls
     assert result.service_state[0] == 1
 
 
 @pytest.mark.parametrize("active,enabled", [(0, 0), (0, 1), (1, 0), (1, 1)])
-def test_failed_candidate_health_restores_complete_prior_service_state(tmp_path, active, enabled):
-    result = finish_install_case(tmp_path, trigger="candidate_health", service_flags=(active, enabled))
-    assert result.unit.read_bytes() == PRIOR_UNIT and result.config.read_bytes() == PRIOR_CONFIG
-    assert result.service_state == (active, enabled)
-    assert not result.backup.exists()
+@pytest.mark.parametrize("trigger", ["candidate_health", "candidate_activation"])
+def test_failure_after_activation_never_restores_old_writer(tmp_path, active, enabled, trigger):
+    result = finish_install_case(tmp_path, trigger=trigger, service_flags=(active, enabled))
+    assert result.unit.read_bytes() == CANDIDATE_UNIT and result.config.read_bytes() == CANDIDATE_CONFIG
+    assert result.service_state == (1, 1)
+    assert result.calls == []
+    assert result.backup.exists()
+    assert (result.backup / "unit").read_bytes() == PRIOR_UNIT
+    assert (result.backup / "config").read_bytes() == PRIOR_CONFIG
+    assert "manager_automation_installer_recovery_required=true" in result.process.stderr
+    assert "rollback_attempted" not in result.process.stderr

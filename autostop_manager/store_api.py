@@ -17,8 +17,6 @@ from urllib.request import Request
 
 import httpx
 
-from .cold_runtime import guarded_effect
-
 from autostop_manager.bounded_http_read import TrackedTransportAdmission, urlopen as bounded_urlopen
 
 
@@ -1011,11 +1009,6 @@ class StoreApiClient:
             expected_operation=normalized_operation,
         )
 
-    @guarded_effect(
-        "manager-store",
-        lambda args: (args.get("json_body") or {}).get("idempotency_key"),
-        applies=lambda args: args["method"] == "POST" and args["path"].startswith("/actions/"),
-    )
     def _request(
         self,
         method: str,

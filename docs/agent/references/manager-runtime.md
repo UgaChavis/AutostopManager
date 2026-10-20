@@ -245,7 +245,6 @@ CLI не создаёт старый E4 cache и не предоставляет
 | --- | --- |
 | `scripts/doctor.sh` | Wrapper передаёт аргументы в `doctor`; обычный режим read-only, `--full` требует одноразовой среды. |
 | `scripts/release-gates.sh` | Локальные проверки с disposable данными, не deploy. |
-| `scripts/cold-role-start.py` | Закреплённый cold entrypoint: обязательные binding/role до импорта приложения и только шесть фиксированных профилей; сам не даёт разрешения native launch или dispatch. [Контракт](cold-runtime-binding.md). |
 | `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей исторического E2 gate для catalog_clients/vin_oem_resolver/benchmark, не меняет данные. |
 | `scripts/check-automotive-catalog.py` | Disposable state: сверяет registry, exact native schemas, все 43 PartsAPI и MD references; providers не вызывает. |
 | `scripts/generate-automotive-instructions.py` | Создаёт operation MD из registry/schema; `--check` сравнивает без записи. |
@@ -256,7 +255,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/automotive-corgi-worker.mjs` | Внутренний Node worker; stdin и readonly pinned SQLite; сеть/download/fallback отсутствуют. |
 | `scripts/vin-retest.py` | Только отдельно порученный live read-only benchmark native MCP на localhost: VIN из stdin, `--output-dir PRIVATE_PATH [--timeout 25] [--full-control]`; без CRM/Store-записей, скачивания баз и установки пакетов. Сохраняет обезличенный receipt без VIN, его хеша, профиля или provider payload. Process deadline и контроль представления — [стенд VIN](vin-retest.md). Самостоятельный J1 VIN-режим выбирается отдельно. |
 | `scripts/install-manager-mcp.sh` | Runtime installer: `--activate [--replace-unit]`. |
-| `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate|--activate-under-hold`, `--replace-unit`, `--release-attempt-key`. |
+| `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate`, `--replace-unit`. После попытки активации ошибка требует ручного восстановления: автоматического возврата прежнего writer нет. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |
 | `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. |
 | `scripts/autostop-complete-backup.py` | `plan` проверяет ёмкость и runtime без записи; `create` создаёт локальную копию данных, `verify --backup PATH` проверяет её. `daily` сохраняет канонический PostgreSQL backup при отказе полной копии. Root-only данные, установка/активация отдельно: [правила backup](complete-backup.md). |

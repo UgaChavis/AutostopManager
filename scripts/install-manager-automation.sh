@@ -5,7 +5,6 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELEASE_ROOT="/opt/autostop-manager-releases/current"
 RUNTIME_PYTHON="/opt/AutostopManager/.venv/bin/python"
 RUNTIME_STATE_DIR="/var/lib/autostop-manager-scheduler"
-RUNTIME_DB="${RUNTIME_STATE_DIR}/registry.sqlite3"
 UNIT_NAME="autostop-manager-scheduler.service"
 UNIT_SOURCE="${PROJECT_ROOT}/deploy/systemd/${UNIT_NAME}"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
@@ -14,27 +13,19 @@ CONFIG_DIR="/etc/autostop-manager"
 CONFIG_PATH="${CONFIG_DIR}/automation-control.env"
 SOCKET_PATH="/run/autostop-manager-automation/control.sock"
 activate=0
-activate_under_hold=0
 replace_unit=0
-release_attempt_key=""
 manager_revision="${AUTOSTOP_MANAGER_REVISION:-}"
 crm_revision="${AUTOSTOP_AUTOMATION_CRM_REVISION:-}"
 crm_version="${AUTOSTOP_AUTOMATION_CRM_VERSION:-}"
 
 usage() {
-  echo "usage: $0 [--activate|--activate-under-hold] [--replace-unit] --manager-revision SHA [--crm-revision SHA] [--crm-version VERSION] [--release-attempt-key KEY]" >&2
+  echo "usage: $0 [--activate] [--replace-unit] --manager-revision SHA [--crm-revision SHA] [--crm-version VERSION]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --activate) activate=1 ;;
-    --activate-under-hold) activate=1; activate_under_hold=1 ;;
     --replace-unit) replace_unit=1 ;;
-    --release-attempt-key)
-      shift
-      [[ $# -gt 0 ]] || { usage; exit 2; }
-      release_attempt_key="$1"
-      ;;
     --manager-revision)
       shift
       [[ $# -gt 0 ]] || { usage; exit 2; }
@@ -73,10 +64,6 @@ if [[ "${activate}" -eq 1 && ! "${crm_revision}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 if [[ -n "${crm_version}" && ! "${crm_version}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]]; then
   echo "crm_version_invalid=true" >&2
-  exit 2
-fi
-if [[ "${activate_under_hold}" -eq 1 && ! "${release_attempt_key}" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$ ]]; then
-  echo "release_attempt_key_invalid=true" >&2
   exit 2
 fi
 
@@ -125,10 +112,7 @@ config_existed=0
 service_was_active=0
 service_was_enabled=0
 rollback_armed=1
-control_socket_was_live=0
-if [[ -S "${SOCKET_PATH}" ]]; then
-  control_socket_was_live=1
-fi
+activation_started=0
 if [[ -f "${UNIT_PATH}" ]]; then
   cp --archive --no-dereference "${UNIT_PATH}" "${rollback_dir}/unit"
   unit_existed=1
@@ -152,6 +136,13 @@ finish_install() {
     rm -f -- "${temporary_config}"
   fi
   if [[ "${exit_code}" -ne 0 && "${rollback_armed}" -eq 1 ]]; then
+    # Once activation was attempted, a candidate may have written. Never
+    # restore/restart the old writer automatically, even after a failed probe.
+    if [[ "${activation_started}" -eq 1 ]]; then
+      echo "manager_automation_installer_recovery_required=true" >&2
+      echo "manager_automation_installer_rollback_backup=${rollback_dir}" >&2
+      exit "${exit_code}"
+    fi
     if [[ "${unit_existed}" -eq 1 ]]; then
       cp --archive --no-dereference "${rollback_dir}/unit" "${UNIT_PATH}" || rollback_failed=1
     else
@@ -191,28 +182,6 @@ finish_install() {
 }
 trap finish_install EXIT
 
-if [[ "${activate_under_hold}" -eq 1 ]]; then
-  env \
-    PYTHONPATH="${PROJECT_ROOT}" \
-    PYTHONSAFEPATH=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    AUTOSTOP_MANAGER_ENV_FILE=/dev/null \
-    AUTOSTOP_AUTOMATION_DB="${RUNTIME_DB}" \
-    AUTOSTOP_AUTOMATION_CONTROL_SOCKET="${SOCKET_PATH}" \
-    "${RUNTIME_PYTHON}" -m autostop_manager.automation_release hold \
-      --release-attempt-key "${release_attempt_key}"
-  if [[ "${control_socket_was_live}" -eq 0 ]]; then
-    env \
-      PYTHONPATH="${PROJECT_ROOT}" \
-      PYTHONSAFEPATH=1 \
-      PYTHONDONTWRITEBYTECODE=1 \
-      AUTOSTOP_MANAGER_ENV_FILE=/dev/null \
-      AUTOSTOP_AUTOMATION_DB="${RUNTIME_DB}" \
-      AUTOSTOP_AUTOMATION_CONTROL_SOCKET="${SOCKET_PATH}" \
-      "${RUNTIME_PYTHON}" -m autostop_manager.automation_release adopt-current \
-        --release-attempt-key "${release_attempt_key}"
-  fi
-fi
 
 allowed_uids="0,10001"
 allowed_peers="0:codex|system,10001:crm_operator"
@@ -242,12 +211,12 @@ fi
 
 echo "manager_automation_unit_installed=true"
 echo "activation_requested=$([[ "${activate}" -eq 1 ]] && echo true || echo false)"
-echo "activation_under_hold=$([[ "${activate_under_hold}" -eq 1 ]] && echo true || echo false)"
 if [[ "${activate}" -ne 1 ]]; then
   rollback_armed=0
   exit 0
 fi
 
+activation_started=1
 if systemctl is-active --quiet "${UNIT_NAME}"; then
   systemctl enable "${UNIT_NAME}"
   systemctl restart "${UNIT_NAME}"
@@ -267,17 +236,6 @@ env \
   PYTHONDONTWRITEBYTECODE=1 \
   AUTOSTOP_AUTOMATION_CONTROL_SOCKET="${SOCKET_PATH}" \
   "${RUNTIME_PYTHON}" -m autostop_manager.automation_control status
-if [[ "${activate_under_hold}" -eq 1 ]]; then
-  env \
-    PYTHONPATH="${RELEASE_ROOT}" \
-    PYTHONSAFEPATH=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    AUTOSTOP_MANAGER_ENV_FILE=/dev/null \
-    AUTOSTOP_AUTOMATION_CONTROL_SOCKET="${SOCKET_PATH}" \
-    "${RUNTIME_PYTHON}" -m autostop_manager.automation_release seed \
-      --release-attempt-key "${release_attempt_key}"
-fi
 
 echo "manager_automation_active=true"
-echo "global_hold_release_required=$([[ "${activate_under_hold}" -eq 1 ]] && echo true || echo false)"
 rollback_armed=0

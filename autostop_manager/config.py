@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from .cold_runtime import binding, configured_path
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
@@ -50,15 +48,13 @@ def _strip_env_value(value: str) -> str:
     return clean
 
 
-def _iter_runtime_env_files() -> list[Path]:
-    current = binding()
-    if current is not None:
-        expected = current.path(current.role, "env_file")
-        if os.environ.get("AUTOSTOP_MANAGER_ENV_FILE", str(expected)) != str(expected):
-            from .cold_runtime import ColdRuntimeDenied
+def reject_obsolete_runtime_config() -> None:
+    """Never reinterpret retired release bindings as ordinary runtime defaults."""
+    if any(key.startswith("AUTOSTOP_COLD_") for key in os.environ):
+        raise ValueError("obsolete_cold_runtime_configuration")
 
-            raise ColdRuntimeDenied("cold_environment_path_conflict")
-        return [expected]
+
+def _iter_runtime_env_files() -> list[Path]:
     configured = os.environ.get("AUTOSTOP_MANAGER_ENV_FILE")
     if configured:
         return [Path(item.strip()).expanduser() for item in configured.split(os.pathsep) if item.strip()]
@@ -69,19 +65,15 @@ def load_runtime_env(*, force: bool = False) -> list[Path]:
     """Load local manager .env files without overriding real environment vars."""
 
     global _ENV_LOADED
+    reject_obsolete_runtime_config()
     if _ENV_LOADED and not force:
         return []
 
     loaded: list[Path] = []
     for path in _iter_runtime_env_files():
-        if binding() is not None:
-            from .cold_runtime import _read_protected
-
-            contents = _read_protected(path).decode("utf-8-sig")
-        else:
-            if not path.exists() or not path.is_file():
-                continue
-            contents = path.read_text(encoding="utf-8-sig")
+        if not path.exists() or not path.is_file():
+            continue
+        contents = path.read_text(encoding="utf-8-sig")
         loaded.append(path)
         for raw_line in contents.splitlines():
             line = raw_line.strip()
@@ -93,15 +85,13 @@ def load_runtime_env(*, force: bool = False) -> list[Path]:
                 continue
             os.environ.setdefault(key, _strip_env_value(value))
 
+    reject_obsolete_runtime_config()
     _ENV_LOADED = True
     return loaded
 
 
 def get_db_path() -> Path:
-    current = binding()
-    if current is not None:
-        role = "crm-embedded" if current.role == "crm-embedded" else "manager-mcp"
-        return configured_path("AUTOSTOP_MANAGER_DB", role, "manager_db", DEFAULT_DB_PATH)
+    reject_obsolete_runtime_config()
     configured = os.environ.get("AUTOSTOP_MANAGER_DB")
     if configured:
         return Path(configured).expanduser().resolve()
@@ -109,8 +99,7 @@ def get_db_path() -> Path:
 
 
 def get_automation_db_path() -> Path:
-    if binding() is not None:
-        return configured_path("AUTOSTOP_AUTOMATION_DB", "scheduler", "registry_db", DEFAULT_AUTOMATION_DB_PATH)
+    reject_obsolete_runtime_config()
     configured = os.environ.get("AUTOSTOP_AUTOMATION_DB")
     path = Path(configured).expanduser() if configured else DEFAULT_AUTOMATION_DB_PATH
     if not path.is_absolute() or ".." in path.parts:
@@ -139,10 +128,7 @@ def get_mcp_path() -> str:
 
 
 def get_automation_control_socket_path() -> Path:
-    if binding() is not None:
-        return configured_path(
-            AUTOMATION_CONTROL_SOCKET_ENV, "scheduler", "socket_path", DEFAULT_AUTOMATION_CONTROL_SOCKET
-        )
+    reject_obsolete_runtime_config()
     configured = os.environ.get(AUTOMATION_CONTROL_SOCKET_ENV, str(DEFAULT_AUTOMATION_CONTROL_SOCKET)).strip()
     path = Path(configured)
     if not path.is_absolute() or ".." in path.parts or len(str(path)) > 100:
@@ -228,10 +214,7 @@ def normalize_automation_crm_api_url(value: str) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or port != 8000
-        or (
-            parsed.path not in {"", "/"}
-            and (re.fullmatch(r"/__cold/[0-9a-f]{64}/?", parsed.path) is None or binding() is None)
-        )
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
     ):
@@ -241,11 +224,8 @@ def normalize_automation_crm_api_url(value: str) -> str:
 
 
 def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
+    reject_obsolete_runtime_config()
     raw_url = os.environ.get("AUTOSTOP_AUTOMATION_CRM_API_URL", "").strip()
-    if not raw_url and binding() is not None:
-        # The independently captured Board and MCP ingress cuts use different
-        # nonces. A cold scheduler must never guess a Board route from MCP.
-        return AutomationCrmConnectionConfig(configured=True, error_code="automation_crm_configuration_invalid")
     if not raw_url:
         raw_mcp_url = os.environ.get(CRM_MCP_URL_ENV, "").strip()
         normalized_mcp = normalize_crm_mcp_url(raw_mcp_url)
@@ -259,19 +239,13 @@ def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
     configured = bool(raw_url or token)
     if not configured:
         return AutomationCrmConnectionConfig(configured=False)
-    if not api_url or not token or (binding() is not None and "/__cold/" not in urlsplit(api_url).path):
+    if not api_url or not token:
         return AutomationCrmConnectionConfig(configured=True, error_code="automation_crm_configuration_invalid")
     return AutomationCrmConnectionConfig(configured=True, api_url=api_url, bearer_token=token)
 
 
 def get_work_telegram_socket_path() -> Path:
-    if binding() is not None:
-        return configured_path(
-            "AUTOSTOP_AUTOMATION_TELEGRAM_SOCKET",
-            "work-telegram",
-            "socket_path",
-            "/run/autostop-work-telegram/bridge.sock",
-        )
+    reject_obsolete_runtime_config()
     configured = os.environ.get(
         "AUTOSTOP_AUTOMATION_TELEGRAM_SOCKET", "/run/autostop-work-telegram/bridge.sock"
     ).strip()
@@ -307,10 +281,7 @@ def normalize_crm_mcp_url(value: str) -> str:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or (
-            parsed.path not in {"/mcp", "/mcp/"}
-            and (re.fullmatch(r"/mcp/__cold/[0-9a-f]{64}/mcp/?", parsed.path) is None or binding() is None)
-        )
+        or parsed.path not in {"/mcp", "/mcp/"}
         or port != 8001
     ):
         return ""
@@ -330,6 +301,7 @@ def _normalize_crm_mcp_bearer(value: str) -> str:
 def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
     """Read the optional loopback CRM Gateway route from Manager's runtime environment."""
 
+    reject_obsolete_runtime_config()
     raw_url = os.environ.get(CRM_MCP_URL_ENV, "")
     raw_bearer = os.environ.get(CRM_MCP_BEARER_TOKEN_ENV, "")
     configured = bool(str(raw_url or "").strip() or str(raw_bearer or "").strip())
@@ -337,7 +309,7 @@ def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
         return CrmMcpConnectionConfig(configured=False)
     url = normalize_crm_mcp_url(raw_url)
     bearer_token = _normalize_crm_mcp_bearer(raw_bearer)
-    if not url or not bearer_token or (binding() is not None and "/__cold/" not in urlsplit(url).path):
+    if not url or not bearer_token:
         return CrmMcpConnectionConfig(configured=True, error_code="crm_mcp_configuration_invalid")
     return CrmMcpConnectionConfig(configured=True, url=url, bearer_token=bearer_token)
 
