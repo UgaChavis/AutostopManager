@@ -45,8 +45,8 @@ def duty_fixture(tmp_path, state, *, inbound=True, bridge_available=True, bypass
     source = (ROOT / "scripts/set-work-telegram-duty.sh").read_text()
     replacements = {
         'release_link="/opt/autostop-work-telegram-releases/current"': f'release_link="{current}"',
-        'venv_python="/opt/autostop-work-telegram-venv/bin/python"': f'venv_python="{sys.executable}"',
-        'wake_python="/opt/AutostopManager/.venv/bin/python"': f'wake_python="{bin_dir / "wake-python"}"',
+        'venv_python=""': f'venv_python="{sys.executable}"',
+        'wake_python=""': f'wake_python="{bin_dir / "wake-python"}"',
         'wake_config="/etc/autostop-work-telegram/wake.json"': f'wake_config="{config}"',
         'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor}"',
         'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "lock"}"',

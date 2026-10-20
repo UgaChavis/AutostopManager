@@ -14,7 +14,6 @@ action="$1"
 shift
 inbox_dir="/run/autostop-work-telegram/inbox"
 release_root="/opt/autostop-work-telegram-releases/current"
-venv_python="/opt/autostop-work-telegram-venv/bin/python"
 service_user="autostop-work-telegram"
 release_dir=""
 file_path=""
@@ -79,9 +78,11 @@ else
   [[ "${language}" =~ ^[a-z]{2,8}$ ]] || { echo "media_language_invalid=true" >&2; exit 2; }
 fi
 release_dir="$(readlink -f -- "${release_root}" 2>/dev/null || true)"
-[[ "${release_dir}" == /opt/autostop-work-telegram-releases/* && -d "${release_dir}" && ! -L "${release_dir}" \
-  && -x "${venv_python}" ]] \
+[[ ( "${release_dir}" == /opt/autostop-work-telegram-releases/* \
+  || "${release_dir}" == /opt/autostop-manager-releases/* ) && -d "${release_dir}" && ! -L "${release_dir}" ]] \
   || { echo "media_runtime_unavailable=true" >&2; exit 1; }
+
+venv_python="$(bash "${release_dir}/scripts/work-telegram-python.sh" bridge)" || exit 1
 
 command=(
   /usr/bin/env
