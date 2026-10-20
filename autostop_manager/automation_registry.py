@@ -407,6 +407,15 @@ SCHEMA_STATEMENTS = (
 )
 
 
+_JOB_STATUS_SELECT = """
+    SELECT a.*, r.actual_state, r.next_run_at, r.last_run_at,
+           r.last_success_at, r.heartbeat_at, r.lease_until,
+           r.fencing_token, r.error_code, r.applied_revision, r.applied_at
+    FROM manager_automations a
+    LEFT JOIN manager_automation_runtime r ON r.job_id = a.job_id
+"""
+
+
 @dataclass(frozen=True)
 class AutomationStore:
     db_path: Path | None = None
@@ -1029,17 +1038,15 @@ class AutomationStore:
 
     def _job_status(self, connection: sqlite3.Connection, job_id: str) -> dict[str, Any]:
         row = connection.execute(
-            """
-            SELECT a.*, r.actual_state, r.next_run_at, r.last_run_at,
-                   r.last_success_at, r.heartbeat_at, r.lease_until,
-                   r.fencing_token, r.error_code, r.applied_revision, r.applied_at
-            FROM manager_automations a
-            JOIN manager_automation_runtime r ON r.job_id = a.job_id
-            WHERE a.job_id = ?
-            """,
+            _JOB_STATUS_SELECT + " WHERE a.job_id = ?",
             (job_id,),
         ).fetchone()
-        if not row:
+        return self._job_status_from_row(row)
+
+    def _job_status_from_row(self, row: sqlite3.Row | None) -> dict[str, Any]:
+        # A missing runtime row previously failed its exact lookup. Keep that
+        # failure visible instead of silently dropping it from a list JOIN.
+        if row is None or row["actual_state"] is None:
             raise AutomationError("automation_job_not_found")
         revision = int(row["revision"])
         applied_revision = int(row["applied_revision"])
@@ -1150,12 +1157,12 @@ class AutomationStore:
             if job_id:
                 jobs = [self._job_status(connection, job_id)]
             else:
-                archived_clause = "" if include_archived else "WHERE archived_at IS NULL"
-                identifiers = connection.execute(
-                    f"SELECT job_id FROM manager_automations {archived_clause} ORDER BY created_at LIMIT ?",
+                archived_clause = "" if include_archived else "WHERE a.archived_at IS NULL"
+                rows = connection.execute(
+                    _JOB_STATUS_SELECT + f" {archived_clause} ORDER BY a.created_at LIMIT ?",
                     (MAX_JOBS,),
                 ).fetchall()
-                jobs = [self._job_status(connection, str(row["job_id"])) for row in identifiers]
+                jobs = [self._job_status_from_row(row) for row in rows]
             controller = connection.execute(
                 """
                 SELECT state, heartbeat_at, started_at, hold_enabled, hold_reason,
