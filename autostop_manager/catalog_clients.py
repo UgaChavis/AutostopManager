@@ -17,7 +17,7 @@ import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 from .bounded_http_read import urlopen as bounded_urlopen
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
@@ -39,14 +39,6 @@ MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
 MIN_PROVIDER_TIMEOUT_SECONDS = 1.0
 MAX_PROVIDER_TIMEOUT_SECONDS = 30.0
 MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS = 60.0
-
-
-class _NoRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
 
 
 def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:

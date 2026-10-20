@@ -45,10 +45,6 @@ def _merged_item_context(item: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _item_identifier(item: dict[str, Any]) -> str:
-    return _canonical_identity_input(item)["identifier"]
-
-
 def _canonical_identity_input(item: Any) -> dict[str, Any]:
     prepared = validate_identity_item(item)
     prepared["_raw_identifier"] = prepared["identifier"]
@@ -97,18 +93,6 @@ def _redact_text(value: Any, identifier: str) -> str:
 def _contains_identifier(value: Any, identifier: str) -> bool:
     text = str(value or "")
     return any(variant in text for variant in _identifier_variants(identifier))
-
-
-def _first_nonempty(*values: Any) -> Any:
-    for value in values:
-        if value not in (None, ""):
-            return value
-    return None
-
-
-def _partsapi_vehicle_profile(call: dict[str, Any]) -> dict[str, Any]:
-    profiles = [profile for profile in call.get("vehicle_profiles") or [] if isinstance(profile, dict)]
-    return profiles[0] if len(profiles) == 1 else {}
 
 
 def _assess_partsapi_identity_agreement(

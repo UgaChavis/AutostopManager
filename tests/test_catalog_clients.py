@@ -2781,12 +2781,6 @@ def test_restored_provider_reader_rejects_non_bytes():
         _read_response_bytes(Response())
 
 
-def test_restored_provider_opener_denies_redirects_without_network():
-    from autostop_manager.catalog_clients import _NoRedirectHandler
-
-    assert _NoRedirectHandler().redirect_request(None, None, 302, "redirect", {}, "https://other.test/") is None
-
-
 @pytest.mark.parametrize(
     "endpoint",
     [
