@@ -22,8 +22,7 @@ from autostop_manager.config import AutomationCrmConnectionConfig
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
-@pytest.mark.parametrize("prefix", ["", "/__cold/" + "c" * 64])
-def test_real_http_client_preserves_namespace_and_existing_auth(monkeypatch, host, prefix):
+def test_real_http_client_preserves_existing_auth(monkeypatch, host):
     observed = []
     real_client = httpx.Client
 
@@ -52,12 +51,12 @@ def test_real_http_client_preserves_namespace_and_existing_auth(monkeypatch, hos
     monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", client)
     source = HttpCrmDigestSource(
         AutomationCrmConnectionConfig(
-            configured=True, api_url=f"http://{host}:8000{prefix}", bearer_token="synthetic-existing-bearer"
+            configured=True, api_url=f"http://{host}:8000", bearer_token="synthetic-existing-bearer"
         )
     )
     assert source.readiness()["high_water"] == 0
     assert len(observed) == 1
-    assert str(observed[0].url) == f"http://{host}:8000{prefix}/api/change_feed/readiness"
+    assert str(observed[0].url) == f"http://{host}:8000/api/change_feed/readiness"
     assert observed[0].headers["Authorization"] == "Bearer synthetic-existing-bearer"
     assert observed[0].headers["X-Autostop-Automation-Protocol"] == "crm_digest_v1"
 

@@ -174,26 +174,76 @@ def test_automation_crm_route_is_derived_only_from_literal_loopback_mcp(monkeypa
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
-def test_cold_crm_requires_explicit_independent_namespaces(monkeypatch, host):
-    namespace = "a" * 64
-    monkeypatch.setattr(config, "binding", lambda: object())
-    monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_API_URL", raising=False)
-    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp/__cold/{namespace}/mcp/")
+def test_retired_cold_routes_are_rejected_without_default_fallback(monkeypatch, host):
+    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp/__cold/" + "a" * 64 + "/mcp")
     monkeypatch.setenv("AUTOSTOP_CRM_MCP_BEARER_TOKEN", "synthetic-existing-bearer")
-    assert config.get_crm_mcp_connection_config().url == f"http://{host}:8001/mcp/__cold/{namespace}/mcp"
+    monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_API_URL", raising=False)
+    assert config.get_crm_mcp_connection_config().error_code == "crm_mcp_configuration_invalid"
     assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
     monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_API_URL", f"http://{host}:8000/__cold/" + "b" * 64)
-    assert config.get_automation_crm_connection_config().api_url == f"http://{host}:8000/__cold/" + "b" * 64
-    monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp")
-    assert config.get_crm_mcp_connection_config().error_code == "crm_mcp_configuration_invalid"
-    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_API_URL", f"http://{host}:8000")
     assert config.get_automation_crm_connection_config().error_code == "automation_crm_configuration_invalid"
 
 
-def test_new_namespace_does_not_relax_legacy_connection_paths(monkeypatch):
-    monkeypatch.setattr(config, "binding", lambda: None)
-    assert config.normalize_crm_mcp_url("http://127.0.0.1:8001/mcp/__cold/" + "a" * 64 + "/mcp") == ""
-    assert config.normalize_automation_crm_api_url("http://127.0.0.1:8000/__cold/" + "b" * 64) == ""
+@pytest.mark.parametrize("key", ["AUTOSTOP_COLD_RUNTIME_BINDING", "AUTOSTOP_COLD_RUNTIME_BINDING_SHA256"])
+@pytest.mark.parametrize("value", ["", "synthetic-retired-config"])
+def test_obsolete_binding_rejects_cached_load_and_state_defaults(monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    monkeypatch.setattr(config, "_ENV_LOADED", True)
+    for operation in (
+        config.load_runtime_env,
+        config.get_db_path,
+        config.get_automation_db_path,
+        config.get_automation_control_socket_path,
+        config.get_work_telegram_socket_path,
+        config.get_crm_mcp_connection_config,
+        config.get_automation_crm_connection_config,
+    ):
+        with pytest.raises(ValueError, match=r"^obsolete_cold_runtime_configuration$"):
+            operation()
+
+
+def test_obsolete_binding_in_env_file_is_rejected_before_loaded_flag(monkeypatch, tmp_path):
+    monkeypatch.setattr(config.os, "environ", dict(config.os.environ))
+    path = tmp_path / "retired.env"
+    path.write_text("AUTOSTOP_COLD_RUNTIME_BINDING=synthetic-retired-config\n")
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", str(path))
+    monkeypatch.delenv("AUTOSTOP_COLD_RUNTIME_BINDING", raising=False)
+    monkeypatch.setattr(config, "_ENV_LOADED", False)
+    with pytest.raises(ValueError, match=r"^obsolete_cold_runtime_configuration$"):
+        config.load_runtime_env()
+    assert config._ENV_LOADED is False
+    # The loader intentionally preserves the rejected configuration until corrected.
+    monkeypatch.delenv("AUTOSTOP_COLD_RUNTIME_BINDING")
+
+
+def test_native_startups_reject_obsolete_binding_before_state_access(monkeypatch):
+    import asyncio
+    from autostop_manager import (
+        j1_browser,
+        j1_research,
+        j1_vin_store,
+        mcp_server,
+        telegram_bridge,
+        telegram_owner,
+        telegram_wake,
+    )
+
+    monkeypatch.setenv("AUTOSTOP_COLD_RUNTIME_BINDING", "synthetic-retired-config")
+    operations = (
+        j1_research.run_worker,
+        j1_browser.active_release_revision,
+        lambda: j1_browser.render_page("https://example.invalid/"),
+        lambda: telegram_owner.load_owner_peer_id(telegram_owner.WORK_OWNER_CONFIG_PATH),
+        j1_vin_store.runtime_root,
+        mcp_server.build_server,
+        telegram_bridge.TelegramConfig.load,
+        telegram_wake.WakeConfig.load,
+        lambda: telegram_wake.BridgeJobs(0),
+        lambda: asyncio.run(telegram_bridge.run_daemon(None)),
+    )
+    for operation in operations:
+        with pytest.raises(ValueError, match=r"^obsolete_cold_runtime_configuration$"):
+            operation()
 
 
 @pytest.mark.parametrize(

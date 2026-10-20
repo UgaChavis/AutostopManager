@@ -75,25 +75,39 @@ env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /usr/bin/
 
 При systemctl timeout/отсутствии executable возвращается `inspection_error`/`system_timer_inspection_failed`; желаемое состояние сохраняется, другие строки доступны, ready=false. Unknown не означает исправный выключенный timer. Исправь systemd/D-Bus/конкретный unit, перечитай состояние; не меняй переключатель ради ошибки чтения.
 
-## Standalone выпуск и восстановление
+## Обслуживание и восстановление
 
-Согласованный выпуск выполняет [deployment.md](deployment.md); ниже только отдельно порученное standalone восстановление.
+Обновление выполняется с полной остановкой приложений по
+[deployment.md](deployment.md#обслуживание-с-остановкой-приложений): приём новых задач
+закрывается, SSH и управляющая сессия сохраняются. Очереди, выбранный worker,
+закреплённые инструкции, personal/work sessions, registry и настройки duty/hold
+входят в единственную согласованную копию данных и конфигурации. Проверочное
+восстановление выполняется один раз локально и изолированно; отдельная дублирующая
+копия automation registry для обычного обновления не нужна.
 
-Первый переход с RAM-only: до остановки сохрани точные ссылки через `python scripts/export-work-telegram-inbox.py --output PRIVATE_NEW_FILE` в root-owned каталоге 0700; helper читает текущий монитор и не публикует идентификаторы. Сверь текущий ход и эффекты, объяви окно переключения. Старый disable теряет RAM-ссылки, поэтому экспорт выполняется первым; переписку целиком не воспроизводи.
+Перед остановкой сверь активный ход и внешние эффекты. Неизвестный исход сохраняется
+для отдельного readback; перезапуск не разрешает повтор отправки. Подтверди остановку
+исполнителей до копирования состояния. Существующий hold сохраняет владельца и
+attempt до разрешённого снятия: смена причины не передаёт владение.
 
-Work Telegram: приостанови исполнение и duty → `scripts/install-telegram-bridge.sh --account work --revision <commit>` → provisioning модели → `scripts/deploy_telegram_bridge.sh --account work --no-start <commit>` → `scripts/install-codex-wake.sh` из active snapshot. Новый snapshot содержит REVISION; установка wake оставляет службу неактивной.
+При запуске проверь installed source/Python, MCP, voice, scheduler/socket/readiness,
+managed timers, wake, сохранённую привязку worker и очереди без клиентских отправок.
+Приём задач открывается после общей приёмки. Реестр версии 2 сохраняет паузу и
+страницы заданий; неподтверждённый durable или RAM-only комплект не запускается
+поверх него. Старую registry нельзя класть поверх новых операций.
 
-Для первого перехода сохрани duty выключенным и новый реестр пустым. Запусти bridge и wake для локального управления, затем поставь wake на паузу и проверь `enabled=false`, отсутствие активного задания и неизвестного хода. Сначала выбери отдельный worker через `select-worker` с ожидаемыми старым thread/config hash и новым физическим root/revision по `--help`. Только затем импортируй сохранённые ссылки через `job-import-legacy --file PRIVATE_FILE --instruction-root PHYSICAL --instruction-revision SHA`: они сохраняют ID и удерживаются для проверки. Перезапусти wake для чтения выбранной конфигурации, проверь сохранность импортированных заданий и узко сверь входящие на границе переключения. Все запуски и перезапуски входят в отдельно согласованный выпуск. При обновлении уже настроенного worker сохраняй его привязку; импортированные и удержанные задания не удаляй ради повторного выбора чата.
+Установщики `install-telegram-bridge.sh`, `deploy_telegram_bridge.sh`,
+`install-codex-wake.sh` и `install-manager-automation.sh` содержат собственные
+действия запуска/остановки. Использование требует проверки flags и эффектов
+выбранной ревизии; последовательность их вызовов не является обязательным путём
+обновления. Уже настроенный worker и его задания сохраняются.
 
-До enable проверь MCP, voice, systemd, версии и root/revision без клиентских отправок. Personal session сохраняется отдельно. Current вручную не переключай. Откат не подменяет реестр старой копией: до остановки служб проверяется поддержка его версии целевым комплектом. Реестр версии 2 сохраняет паузу и страницы заданий; неподтверждённый durable или RAM-only комплект не запускается поверх него.
+Только если отдельно требуется первый переход с RAM-only, до остановки сохрани
+точные открытые ссылки через `scripts/export-work-telegram-inbox.py` в приватный
+каталог. `job-import-legacy` сохраняет ID и удерживает импортированные задания для
+проверки; импорт не разрешает автоматический replay. Создание нового worker и
+такой импорт не входят в обычное обновление.
 
-Automation использует один `--release-attempt-key ATTEMPT` для `hold`, `prepare-held`, `seed`, `adopt-current`, `release-hold`; все меняют состояние:
-
-1. `python -m autostop_manager.automation_release hold --release-attempt-key ATTEMPT`, требуется `quiescent=true`.
-2. `scripts/backup-manager-automation-state.py --output NEW_PATH`: online registry backup в root-owned `0700`; отдельно снимки scheduler unit, managed timer drop-ins и Telegram duty.
-3. Только active immutable release: `scripts/install-manager-automation.sh --activate-under-hold --release-attempt-key ATTEMPT --manager-revision SHA --crm-revision CRM_SHA [--crm-version CRM_VERSION]`.
-4. Scheduler/socket/readiness, пять timers, CRM/Telegram bounded smoke/readback; затем `python -m autostop_manager.automation_release release-hold --release-attempt-key ATTEMPT`.
-
-Активный release hold сохраняет владельца и attempt до разрешённого снятия; смена причины не передаёт владение. Ожидание `quiescent=true` сверяет удержание на каждом readback и завершается ошибкой при его потере или замене.
-
-При ошибке сохраняй hold/work pause и восстанавливай компоненты штатным rollback. Старую registry нельзя класть поверх новых операций без отдельного решения о state recovery. Диагностируй systemd, Unix socket/peer permissions, App Server/archived chat, schema/contract, Telegram transport и business workflow отдельно. Задержка ответа сама не основание перезапускать bridge/wake.
+При ошибке сохрани паузу и данные; диагностика различает systemd, Unix socket/peer
+permissions, App Server/archived chat, schema/contract, Telegram transport и
+business workflow. Задержка ответа сама не основание перезапускать bridge/wake.

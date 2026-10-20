@@ -9,10 +9,10 @@ from pathlib import Path
 import secrets
 import stat
 
-from .cold_runtime import runtime_path
+from .config import reject_obsolete_runtime_config
 
 
-WORK_OWNER_CONFIG_PATH = runtime_path("work-telegram", "owner_config_path", "/etc/autostop-work-telegram/owner.json")
+WORK_OWNER_CONFIG_PATH = Path("/etc/autostop-work-telegram/owner.json")
 MAX_OWNER_PEER_ID = (1 << 52) - 1
 
 
@@ -27,6 +27,7 @@ def _validate_peer_id(value: object) -> int:
 
 
 def _open_parent(path: Path, *, for_sync: bool = False) -> int:
+    reject_obsolete_runtime_config()
     if not path.is_absolute():
         raise OwnerConfigError("owner_config_path_invalid")
     # The service has traverse-only access to /etc/autostop-work-telegram.

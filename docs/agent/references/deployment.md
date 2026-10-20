@@ -4,11 +4,18 @@
 
 ## Публикация исходников
 
-Подготовка нового изолированного поколения процессов описана в
-[cold-runtime-binding.md](cold-runtime-binding.md). Конфигурация путей сама по
-себе не открывает dispatch и не разрешает менять установленный сервер.
+Рабочий порядок — обслуживание с полной остановкой приложений, описанное ниже.
+Сохранившиеся cold/coordinated-компоненты не являются обязательным путём выпуска;
+их удаление требует отдельной проверки связей. Открытые замечания старых review —
+в [очереди обслуживания](../../maintenance-backlog.md).
 
-В отдельном worktree запускай `./scripts/release-gates.sh` с одноразовыми данными; минимальная coverage — 82%. Влей актуальный `origin/AutostopManager` в feature branch без переписывания истории, повтори gates, опубликуй и merge зелёного PR. Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python registrar и guarded ledger; они не входят в native Manager MCP.
+Исправления проверяй короткими тестами затронутого поведения в отдельном worktree.
+Собери один кандидат и выполни обязательный `./scripts/release-gates.sh` с
+одноразовыми данными; минимальная coverage — 82%. Сохрани обязательные PR-проверки
+и post-merge CI точного итогового SHA. Повторный полный прогон нужен при изменении
+проверенного кандидата или конкретном провале, а не для каждой промежуточной правки.
+Подтверди точный remote SHA через `git ls-remote`. CRM сохраняет свой Python
+registrar и guarded ledger; они не входят в native Manager MCP.
 
 CI и source release gates используют `scripts/update-instruction-catalogs.py --check --project-only`:
 проектная часть A4/A5 проверяется без локального кеша плагинов Codex. Source doctor также
@@ -21,7 +28,8 @@ CI и source release gates используют `scripts/update-instruction-cata
 установка/включение J1 VIN и серверный выпуск требуют отдельного объёма поручения.
 Исходники новой функции, units/installers и обновлённые инструкции не доказывают работающий runtime.
 
-Для отдельного Ubuntu runner используй GitHub workflow `release-rehearsal` с полным
+Если готового результата точного кандидата нет, для отдельного Ubuntu runner
+можно использовать GitHub workflow `release-rehearsal` с полным
 `candidate_sha`. Он создаёт собственную `.venv`, выполняет неизменённый
 `scripts/release-gates.sh` и только после успеха сохраняет Git archive и sealed
 automotive export этой ревизии. Artifact содержит SHA-256 файлов, dependency receipt,
@@ -51,22 +59,58 @@ VIN-bearing browser URLs остаются запрещены; прежняя bro
 в рамках разрешённого rollback; возвращать код без проверки runtime недостаточно.
 Эта инструкция сама не поручает активацию, merge или изменение CRM/Store/VPN.
 
-## Согласованный серверный выпуск
+## Обслуживание с остановкой приложений
 
-1. Выполни `.venv/bin/python -m autostop_manager.cli store-conductor-release-gate` на постоянном Store-состоянии; разберись с заблокированными legacy runs. Запусти `scripts/remove-learning-hooks.py` в dry-run; `--apply` используй только для требуемой legacy migration, сохраняя backup.
-2. Чистый server checkout переключи на `AutostopManager`, fetch и fast-forward до опубликованного SHA. Проверь private Manager `.env`: loopback `AUTOSTOP_STORE_API_URL`, Store READ/MANAGE/QUOTE/OWNER tokens; окружение CRM отдельное. Проверяются имена и наличие, значения не выводятся.
-3. Нормальный orchestrator — `/opt/autostopcrm/deploy.sh`. Он до maintenance выполняет [pinned catalog sync](offline-catalogs.md), затем backup релиза/config/DB, Automation hold, work-Telegram pause, immutable Manager activation, проверки и rollback. Не захватывай отдельный hold и не запускай installers поверх coordinated deploy; не переключай `current` вручную.
-4. Native Manager MCP активируется по умолчанию (`AUTOSTOP_MANAGER_MCP_ACTIVATE_ON_DEPLOY=1`). Для static J1 используй `AUTOSTOP_J1_ACTIVATE_ON_DEPLOY=1`. Browser включается отдельно через `AUTOSTOP_J1_BROWSER_ACTIVATE_ON_DEPLOY=1`: нужны `MemAvailable >=2 GiB`, `SwapFree >=1 GiB`, нулевой swap I/O за 60 секунд и повторная проверка ёмкости внутри deploy. Отказ gate сохраняет static J1; marker вручную не создаётся.
-5. Проверь installed Manager/CRM revisions, bounded MCP/CRM/Store probes, `doctor --integrations` без `--full`, восстановление duty и отсутствие retired integration-audit/watchdog units. Full doctor допустим лишь с одноразовыми CRM/Store. Для J1 нужны active `autostop-j1.service` и probe из [web-research.md](web-research.md).
-6. Сверь установленный `AGENTS.md`, A1, M1/M2 и A4/A5 с опубликованной ревизией; запусти полный `scripts/update-instruction-catalogs.py --check` из установленного snapshot. Согласуй опубликованный bundle, CRM pin/hash и сохранённые тексты конструктора по [контракту каталога](automotive-tools.md), независимо перечитай результат. Обновление инструкций сохраняет ID, положение, связи и `tool_statuses`; длинный A5 представлен ссылкой на полный указатель без зафиксированных чисел и SHA.
+1. Зафиксируй опубликованные SHA, проверенные пакеты/images и фактические версии
+   Manager, CRM и Store. Сохрани незакоммиченную работу. Существующие checkout
+   не переключай ради установки. Проверь совместимость итоговой пары Manager/CRM
+   с выбранным Store и реальные пути source, Python, данных и конфигурации.
+2. Посчитай пик места, памяти и времени именно выбранной установки, включая одну
+   копию данных и временное проверочное восстановление. Сохрани минимум 2 ГБ
+   свободного места сверх рассчитанного пика. Старый фиксированный порог 30 GiB
+   относился к прежнему совместному сценарию и не заменяет текущий расчёт.
+3. В разрешённое окно закрой приём новых задач, сохрани состояния очередей,
+   duty/hold и незавершённые операции. Выполни проверяемый
+   [Store drain](manager-runtime.md#завершение-store-перед-остановкой-manager).
+   Останови приложения Manager, CRM и Store, подтвердив идентичность и завершение
+   их процессов. SSH и текущая управляющая сессия должны продолжать работать.
+4. При подтверждённой остановке writers сделай **одну согласованную копию**
+   необходимых данных и настроек всех затрагиваемых приложений. Сохрани
+   credentials, principal IDs, сессии, очереди и историю идемпотентности.
+   Один раз проверь восстановление локально в изолированном каталоге/БД без
+   доступа к клиентским каналам, затем удали проверочную копию. Независимый ПК
+   для этого порядка не требуется. Штатные резервные копии сохраняются.
+5. Установи точные проверенные версии, сохранив persistent bindings и доступы.
+   Старый CRM `deploy.sh` и сложные release/J1/guard-контроллеры сохраняются для
+   анализа; в обычном обслуживании их не запускай до отдельной согласованной
+   переработки. Простой installer допустим лишь с заранее проверенными эффектами:
+   без второй копии, активации старой инфраструктуры или самостоятельного открытия
+   приёма задач. [Офлайн-каталоги](offline-catalogs.md) проверяются отдельно;
+   существующий исправный кеш повторно не загружается.
+6. Запусти выбранные приложения в согласованной последовательности. Независимо
+   проверь installed SHA, process cwd/interpreter, image digest, конфигурацию,
+   Manager → CRM → Store, API/MCP/UI и авторизацию. Проверь scheduler, очереди,
+   wake/duty и доступность включённых функций без тестовых клиентских сообщений,
+   заказов и платежей. Неизвестные старые операции автоматически не повторяй.
+7. После общей приёмки открой приём задач и зафиксируй результат. Удали временные
+   распаковки, проверочные каталоги, ненужные сборки и единственную копию выпуска;
+   сохрани уникальную работу, текущие runtime, компактный журнал и штатные backups.
 
-Store выпускается отдельно через его GitHub `Deploy VPS` и текущий `/opt/autostopapp/docs/deploy_rollback.md`. Push/merge в Store `main`, включая docs-only, запускает полный cutover: сначала CI, backup/headroom/network/proxy gates, потом независимый readback. Не объединяй его с CRM cutover без согласованного объёма.
+При неизвестном результате, незавершённом drain, нарушении владения или нехватке
+ресурсов останови затронутый этап и сохрани данные. Автоматический запуск старого
+writer и наложение старой БД поверх новых операций запрещены. Возврат версии
+требует отдельного согласованного решения с сохранением текущих данных.
 
-При изменении sourcing warning-контракта сначала установи и проверь совместимый Manager consumer, затем публикуй Store producer в `main`: отправка Store запускает выпуск автоматически. Порядок и текущие warning-коды — [store-api.md](store-api.md).
+Store не переустанавливается, если его выбранная версия уже работает и совместима.
+Push/merge в Store `main`, включая docs-only, запускает GitHub `Deploy VPS`;
+публикация в `main` допустима только в соответствующем окне обслуживания.
+Изменения контракта проверяй на итоговой связке до открытия приёма задач;
+поддерживать промежуточное сочетание старых и новых процессов при полной остановке
+не требуется. Контракт — [store-api.md](store-api.md).
 
 ## Комплект для выпуска документации
 
-Эта последовательность дополняет согласованный серверный выпуск для итоговой пары
+Эта последовательность дополняет обслуживание для итоговой пары
 Manager/CRM. Подготовка комплекта не устанавливает релиз, не перезапускает службы,
 не меняет duty или живую структуру. Будущий выпуск выполняется в пределах поручения.
 
@@ -75,35 +119,14 @@ Manager/CRM. Подготовка комплекта не устанавлива
    по [контракту каталога](automotive-tools.md). Подтверди remote SHA. Если main
    изменился, согласуй новую пару, регенерируй каталог и повтори обязательные проверки;
    прежний green CI не подтверждает новый checkout.
-2. Сохрани измеренные незакоммиченные изменения `/opt/AutostopManager` и последующие
-   правки с HEAD/status/diff/hashes. Для выпуска подготовь отдельный clean Manager
-   clone на `AutostopManager`, HEAD которого совпадает с итоговым remote SHA;
-   detached archive предназначен для review, не для deploy. Не сбрасывай dirty source.
-   Создай собственную `.venv` нового checkout, установи зависимости его pyproject и
-   выполни release gates и полный host catalog check. Orchestrator выбирает его через
-   `AUTOSTOP_MANAGER_SOURCE_DIR`; `AUTOSTOP_MANAGER_RELEASE_PYTHON` выбирает interpreter
-   preflight. Native MCP по-прежнему использует `/opt/AutostopManager/.venv/bin/python`:
-   отдельно проверь совместимость его зависимостей. Source override не переносит
-   runtime venv, `/opt/AutostopManager/.env`, `.crm-mcp.env` или постоянную Manager DB.
-3. Используй существующий `/opt/autostopcrm` с прежними `.env`, data и compose identity.
-   После проверки clean main выполни fetch/fast-forward до итогового CRM SHA;
-   произвольный clone с default `./data` меняет persistent bindings. До maintenance
-   нужны ≥30 GiB доступного места и дополнительный build/backup/rollback reserve.
-   Согласуй effective settings: CRM `deploy.sh` сначала читает свою `.env`, которая
-   может перекрыть переданные переменные. Значения секретов не выводи. Пример будущего
-   запуска после замены `FINAL_SHA12` выбранным проверенным checkout:
-
-   ```bash
-   env AUTOSTOP_MANAGER_SOURCE_DIR=/opt/autostop-manager-release-source-FINAL_SHA12 \
-     AUTOSTOP_MANAGER_RELEASE_PYTHON=/opt/autostop-manager-release-source-FINAL_SHA12/.venv/bin/python \
-     AUTOSTOP_MIN_FREE_DISK_BYTES=32212254720 \
-     /opt/autostopcrm/deploy.sh
-   ```
-
-   Его preflight требует clean branch HEAD=remote main. Выполни действующий
-   согласованный порядок выше: orchestrator владеет hold, паузой, backup, activation
-   и rollback. Дополнительный hold или standalone installer не запускай. Сохрани
-   текущие J1/browser/VIN settings, API-форматы и роли; выпуск текста их не расширяет.
+2. Сохрани рабочие изменения с HEAD/status/diff/hashes. Используй один подготовленный
+   проверенный пакет, без обязательного дополнительного clone/venv на сервере.
+   Сверь совместимость зависимостей фактического runtime; путь Python бери из
+   текущего `ExecStart`, а не из предположения о `/opt/AutostopManager/.venv`.
+3. Сохрани существующие CRM compose identity, `.env` и data bindings. Значения
+   секретов не выводи. Выполни порядок остановки, единственного backup/restore и
+   установки выше. Текущие J1/browser/VIN settings, API-форматы и роли сохраняются;
+   выпуск текста их не расширяет.
 4. После activation независимо сверь installed Manager REVISION/MANIFEST/process cwd,
    CRM OCI SHA и pin/hash, duty/queue, scheduler, timers и отсутствие новых outbox
    эффектов. Запусти host catalogs и bounded probes из физического installed snapshot.
@@ -131,21 +154,18 @@ Manager/CRM. Подготовка комплекта не устанавлива
    не запускай. В браузере проверь pinned SHA ссылки, относительные переходы, unsafe URL
    блокировку и owner/viewer права; просмотр не запускает providers или business actions.
 
-Откат выполняет orchestrator по CRM runbook с exact previous coherent tuple и
-проверенным recovery set. До открытия writers protected state возвращается только
-после доказанной остановки кандидатов; failed restore/health сохраняет marker/hold
-и work pause. После снятия marker и новых business writes старую DB не накладывай:
-нужны новое quiet window и backup текущих данных, затем совместимый rollback с их
-сохранением. Current/полный previous, бизнес-тома и M2 сохраняются. Disk policy после
-нового tuple перепроверяется; прежняя цель очистки 20 GB не заменяет ≥30 GiB приёмку.
+Неудачная проверка восстановления или приёмка сохраняет окно обслуживания и
+единственную копию выпуска. После новых business writes старую БД не накладывай.
+Действующие бизнес-тома и M2 сохраняются; после установки перепроверь фактические
+runtime bindings и политику штатной очистки диска.
 
 ## Native MCP и подключённый Codex
 
-Проверь active `autostop-manager-mcp.service`; cwd его `MainPID` должен совпадать с физическим target `/opt/autostop-manager-releases/current`. Probe запускай из `/tmp` с активным `PYTHONPATH`, чтобы checkout не подменил импорт:
+Проверь active `autostop-manager-mcp.service`; cwd его `MainPID` должен совпадать с физическим target `/opt/autostop-manager-releases/current`. Probe запускай из `/tmp` с активным `PYTHONPATH`, чтобы checkout не подменил импорт. Перед примером задай `runtime_python` точным проверенным Python из текущего `ExecStart`:
 
 ```bash
 manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
-env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/bin/python -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
+env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
 ```
 
 Требуются handshake, все страницы `tools/list`, manifest/schema и annotation parity, безопасные вызовы. `--store-check` читает health/capabilities и не более одного заказа через `store_search(entity="store_order", limit=1)` без pagination и записи. Проверяй `checks.store_order_search.ok=true`; `store_order_sample_empty` означает доступ без образца для проверки полей. Отчёт не сохраняет ID, поля или raw provider errors.
@@ -164,10 +184,19 @@ env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" /opt/AutostopManager/.venv/b
 
 Ошибка первого чтения остаётся в отчёте; она восстановлена только после успешного чтения нужного файла с совпавшим hash. Журналы и история читаются через актуальный индекс M2, без копирования прежних рабочих кейсов. Внешние ограничения доступа оценивай отдельно от успешного входа в роль.
 
-## Standalone восстановление
+## Службы и восстановление
 
-Standalone изменения выполняй одной опубликованной ревизией с сохранённым rollback. `scripts/install-manager-mcp.sh --activate` допустим только в таком явно заданном scope, не после успешного coordinated deploy.
+Установщики, включая `scripts/install-codex-wake.sh`, остаются техническими
+инструментами со своими эффектами; перед использованием читай текущие flags и
+реализацию. Их запуск не заменяет общий порядок обслуживания.
 
-Для work Telegram при первом переходе с RAM-only сначала сохрани и сверь точные открытые ссылки до остановки duty. Затем соблюдай порядок [telegram-runtime.md](telegram-runtime.md), включая обязательный `scripts/deploy_telegram_bridge.sh --account work --no-start <revision>`, `scripts/install-codex-wake.sh` и явный выбор отдельного worker с закреплённым комплектом инструкций; до включения проверь MCP, voice, systemd и версии без сообщений клиентам. Реестр сохраняется при откате, несовместимый RAM-only релиз его не заменяет. Personal Telegram имеет отдельный release/session; его deploy запрещает `--no-start`.
+Сохраняй отдельные personal/work Telegram sessions, выбранный worker и закреплённые
+инструкции, durable registry, незавершённые задания и их ID. Старый RAM-only комплект
+не запускается поверх durable registry. Импорт исторических ссылок и выбор нового
+worker не являются обязательным шагом обычного обновления; специальные случаи —
+в [telegram-runtime.md](telegram-runtime.md).
 
-Для Automation используй один release-attempt key: quiescent hold → online registry backup в root-owned `0700` → снимки unit/timer drop-ins/duty → install active immutable release under hold → scheduler/socket/readiness, пять timers, CRM/Telegram smoke → release hold. На ошибке сохраняй hold и паузу work, восстанавливай компоненты штатным rollback с независимой проверкой. Сохраняй volumes, uploads и registry. Старый registry нельзя восстановить поверх новых операций без отдельного решения о state recovery.
+Уже существующий hold или duty имеет владельца: обслуживание не даёт права снимать
+чужое удержание. До возобновления проверь scheduler/socket/readiness, managed timers,
+CRM/Telegram и исходные состояния управления. Неизвестный внешний эффект сначала
+сверяется по точному результату; старый registry поверх новых операций не восстанавливается.
