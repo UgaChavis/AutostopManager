@@ -8,6 +8,7 @@ redirects, and exposes only the three read-only legacy CRM E8 capabilities Manag
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping
@@ -52,9 +53,9 @@ def _bounded_timeout(value: Any) -> float:
         return CRM_MCP_E8_TIMEOUT_SECONDS
     try:
         timeout = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return CRM_MCP_E8_TIMEOUT_SECONDS
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         return CRM_MCP_E8_TIMEOUT_SECONDS
     return min(timeout, _MAX_TIMEOUT_SECONDS)
 
