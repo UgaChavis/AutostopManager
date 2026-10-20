@@ -17,6 +17,34 @@ def _connection() -> config.CrmMcpConnectionConfig:
     )
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        pytest.param(float("nan"), 8.0, id="nan"),
+        pytest.param(float("inf"), 8.0, id="infinity"),
+        pytest.param(float("-inf"), 8.0, id="negative-infinity"),
+        pytest.param(10**1000, 8.0, id="overflowing-integer"),
+        pytest.param(True, 8.0, id="boolean"),
+        pytest.param(0, 8.0, id="zero"),
+        pytest.param("invalid", 8.0, id="invalid-text"),
+        pytest.param(0.5, 0.5, id="fractional-budget"),
+        pytest.param(60, 10.0, id="clamped-budget"),
+    ],
+)
+def test_transport_normalizes_timeout_before_starting_a_session(monkeypatch, requested, expected):
+    captured = []
+
+    async def invoke(_self, _capability, _arguments, timeout_seconds):
+        captured.append(timeout_seconds)
+        return {"ok": True}
+
+    monkeypatch.setattr(crm_transport.LoopbackCrmMcpWebResearchTransport, "_invoke_async", invoke)
+    transport = crm_transport.LoopbackCrmMcpWebResearchTransport(_connection(), timeout_seconds=requested)
+
+    assert transport.invoke("research_part_public_evidence", {}) == {"ok": True}
+    assert captured == [expected]
+
+
 def test_crm_mcp_config_uses_manager_environment_and_rejects_non_loopback(monkeypatch):
     monkeypatch.delenv(config.CRM_MCP_URL_ENV, raising=False)
     monkeypatch.delenv(config.CRM_MCP_BEARER_TOKEN_ENV, raising=False)

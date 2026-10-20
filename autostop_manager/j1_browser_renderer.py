@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from .j1_browser import _MAX_MESSAGE_BYTES, _MAX_REQUEST_BYTES, _public_http_url
 from .j1_fetch import USER_AGENT, redact_sensitive
+from .numeric import bounded_int as _bounded_int
 
 
 SCHEMA = "autostop.j1.browser.v1"
@@ -42,16 +43,6 @@ _MAX_RESPONSE_BYTES = _MAX_MESSAGE_BYTES
 _MAX_CONCURRENT_RENDERS = 2
 _CHROMIUM_NOFILE_LIMIT = 1_024
 _CHROMIUM_FILE_SIZE_LIMIT = 16 * 1024 * 1024
-
-
-def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool):
-        return default
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-    return max(minimum, min(numeric, maximum))
 
 
 def _redact_text(value: str, *, limit: int) -> str:

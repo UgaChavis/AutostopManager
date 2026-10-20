@@ -8,7 +8,7 @@ redirects, and exposes only the three read-only legacy CRM E8 capabilities Manag
 from __future__ import annotations
 
 import asyncio
-import json
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping
@@ -20,6 +20,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from .config import CrmMcpConnectionConfig, get_crm_mcp_connection_config
+from .mcp_results import payload_from_tool_result as _payload_from_tool_result
 from .web_research_gateway import (
     FETCH_PAGE_EXCERPT_CAPABILITY,
     RESEARCH_PART_PUBLIC_EVIDENCE_CAPABILITY,
@@ -52,9 +53,9 @@ def _bounded_timeout(value: Any) -> float:
         return CRM_MCP_E8_TIMEOUT_SECONDS
     try:
         timeout = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return CRM_MCP_E8_TIMEOUT_SECONDS
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         return CRM_MCP_E8_TIMEOUT_SECONDS
     return min(timeout, _MAX_TIMEOUT_SECONDS)
 
@@ -93,23 +94,6 @@ def _capability_failure(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     if execution := _compact_execution(body.get("execution")):
         result["execution"] = execution
     return result
-
-
-def _payload_from_tool_result(result: Any) -> dict[str, Any] | None:
-    structured = getattr(result, "structuredContent", None)
-    if isinstance(structured, Mapping):
-        return dict(structured)
-    for content in getattr(result, "content", []) or []:
-        text = getattr(content, "text", None)
-        if not isinstance(text, str):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return None
 
 
 def _schema_hash_for_capability(payload: Mapping[str, Any], capability: str) -> str | None:

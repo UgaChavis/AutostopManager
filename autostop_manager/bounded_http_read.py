@@ -13,7 +13,8 @@ import io
 import math
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from email.message import Message
 from http.client import HTTPException
 from typing import Any, cast
@@ -88,6 +89,35 @@ def _response_headers(response: httpx.Response) -> Message:
     return headers
 
 
+@asynccontextmanager
+async def _stream_response(
+    client: httpx.AsyncClient, request: httpx.Request, *, follow_redirects: bool
+) -> AsyncIterator[httpx.Response]:
+    response = None
+    try:
+        for redirects in range(client.max_redirects + 1):
+            # Resolve initial URL/client auth once, as HTTPX's automatic chain
+            # does. Later requests already carry its redirect header policy;
+            # deriving BasicAuth again from Location userinfo would replace it.
+            response = await client.send(
+                request,
+                stream=True,
+                follow_redirects=False,
+                auth=httpx.USE_CLIENT_DEFAULT if redirects == 0 else httpx.Auth(),
+            )
+            if not follow_redirects or response.next_request is None:
+                yield response
+                return
+            # HTTPX constructs the next URL/method/auth/cookie request. Closing
+            # here avoids its automatic unbounded read of intermediate bodies.
+            request = response.next_request
+            await response.aclose()
+        raise httpx.TooManyRedirects("Exceeded maximum allowed redirects.", request=request)
+    finally:
+        if response is not None:
+            await response.aclose()
+
+
 async def _fetch(
     request: Request,
     *,
@@ -128,12 +158,13 @@ async def _fetch(
                 # Client/TLS initialization can run synchronously before an async checkpoint.
                 if time.monotonic() >= deadline:
                     raise TimeoutError("provider_total_deadline_exceeded")
-                async with client.stream(
+                http_request = client.build_request(
                     request.get_method(),
                     request.full_url,
                     content=cast(Any, request.data),
                     headers=dict(request.header_items()),
-                ) as response:
+                )
+                async with _stream_response(client, http_request, follow_redirects=follow_redirects) as response:
                     headers = _response_headers(response)
                     failed = not 200 <= response.status_code < 300
                     if failed and on_error_headers is not None and follow_redirects:

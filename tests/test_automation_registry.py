@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -89,6 +90,60 @@ def test_schema_is_component_versioned_without_hijacking_sqlite_user_version(tmp
     assert version == 6
     assert user_version == 2
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("include_archived", [False, True])
+def test_status_reads_bounded_ordered_jobs_in_one_query(tmp_path: Path, monkeypatch, include_archived):
+    current = datetime(2026, 10, 21, tzinfo=UTC)
+    monkeypatch.setattr(automation_registry, "utc_now", lambda: current)
+    store = AutomationStore(tmp_path / "registry.sqlite3")
+    store.initialize()
+    expected = []
+    with store.connect() as connection:
+        for index in range(103):
+            job_id = f"auto_{index:024x}"
+            created = automation_registry.isoformat(current + timedelta(seconds=index // 2))
+            archived = created if index % 11 == 0 else None
+            connection.execute(
+                """INSERT INTO manager_automations(
+                    job_id,template_id,name,desired_state,schedule_kind,every_seconds,timezone,
+                    revision,created_actor_hash,created_at,updated_at,archived_at)
+                    VALUES(?,'crm_digest_v1','Synthetic','off','interval',1200,'UTC',1,'synthetic',?,?,?)""",
+                (job_id, created, created, archived),
+            )
+            connection.execute(
+                "INSERT INTO manager_automation_runtime(job_id,actual_state,updated_at) VALUES(?,'disabled',?)",
+                (job_id, created),
+            )
+            if include_archived or archived is None:
+                expected.append(job_id)
+    statements = []
+    connect = AutomationStore.connect
+
+    @contextmanager
+    def traced_connect(self):
+        with connect(self) as connection:
+            connection.set_trace_callback(statements.append)
+            yield connection
+
+    monkeypatch.setattr(AutomationStore, "connect", traced_connect)
+
+    result = store.status(include_archived=include_archived)
+
+    assert [job["job_id"] for job in result["jobs"]] == expected[: automation_registry.MAX_JOBS]
+    assert len([statement for statement in statements if "FROM manager_automations" in statement]) == 1
+    assert "BEGIN IMMEDIATE" in statements  # Schema validation/migrations remain active.
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_status_keeps_missing_runtime_as_an_error(tmp_path: Path, exact):
+    store = AutomationStore(tmp_path / "registry.sqlite3")
+    job = create_digest(AutomationControlService(store))
+    with store.connect() as connection:
+        connection.execute("DELETE FROM manager_automation_runtime WHERE job_id = ?", (job["job_id"],))
+
+    with pytest.raises(AutomationError, match=r"^automation_job_not_found$"):
+        store.status(**({"job_id": job["job_id"]} if exact else {}))
 
 
 def test_singleton_starts_off_and_command_replay_is_stable(tmp_path: Path):

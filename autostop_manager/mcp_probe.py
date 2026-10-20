@@ -12,6 +12,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from .mcp_contract import validate_manager_mcp_surface
+from .mcp_results import payload_from_tool_result as _payload_from_tool_result
 
 
 DEFAULT_MANAGER_MCP_URL = "http://127.0.0.1:41931/mcp"
@@ -148,23 +149,6 @@ def classify_transport_exception(exc: BaseException) -> str:
     if any(token in message for token in ("404", "connection refused", "not found", "no route to host")):
         return "transport_route_unavailable"
     return "transport_failure"
-
-
-def _payload_from_tool_result(result: Any) -> dict[str, Any] | None:
-    structured = getattr(result, "structuredContent", None)
-    if isinstance(structured, Mapping):
-        return dict(structured)
-    for content in getattr(result, "content", []) or []:
-        text = getattr(content, "text", None)
-        if not isinstance(text, str):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    return None
 
 
 def _payload_contains(payload: Any, marker: str) -> bool:

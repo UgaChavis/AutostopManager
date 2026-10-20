@@ -159,14 +159,8 @@ def test_timer_transport_failure_preserves_status_and_blocks_readiness(tmp_path:
         calls.append(command)
         if command[2] == "autostop-failed.timer":
             if failure == "timeout":
-                return subprocess.run(
-                    [sys.executable, "-c", "import time; time.sleep(10)"],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.05,
-                    check=False,
-                )
-            return subprocess.run([str(tmp_path / "missing-systemctl")], check=False)
+                raise subprocess.TimeoutExpired(command, timeout=5)
+            raise FileNotFoundError("synthetic-systemctl-unavailable")
         return fake_systemctl(command)
 
     controller.runner = failing_transport
