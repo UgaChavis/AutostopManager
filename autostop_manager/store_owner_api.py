@@ -575,6 +575,7 @@ class StoreOwnerApiClient:
         "manager-store-owner",
         lambda args: args["idempotency_key"],
         applies=lambda args: args["capability"].method != "GET" and args["action_mode"] == "apply",
+        operation=lambda args: args["capability"].operation_id,
     )
     def _dispatch(
         self,

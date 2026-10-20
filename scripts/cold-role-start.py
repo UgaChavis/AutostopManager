@@ -43,12 +43,17 @@ def main(argv: list[str] | None = None) -> int:
     # dependencies come from the separately pinned candidate venv's normal site.
     sys.path.insert(0, str(source))
     cold = importlib.import_module("autostop_manager.cold_runtime")
-    current = cold.binding()
+    current = cold.claim_runtime_start()
     if current is None:
         raise SystemExit("cold_bootstrap_binding_required")
     cold.require_role(role)
     if current.document["paths"]["source_root"] != str(source):
         raise SystemExit("cold_bootstrap_binding_source_changed")
+    if current.document.get("schema") == "autostop.manager.component-runtime-binding.v1":
+        # The privileged bootstrap deliberately supplies a clean environment.
+        # J1 and Telegram entrypoints do not load this file themselves. Read the
+        # exact protected role file after the claim, before any consumer import.
+        importlib.import_module("autostop_manager.config").load_runtime_env()
     module, arguments = PROFILES[role]
     sys.argv = [str(source / "scripts/cold-role-start.py"), *arguments]
     result = importlib.import_module("autostop_manager." + module).main()

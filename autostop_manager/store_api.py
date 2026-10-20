@@ -1015,6 +1015,7 @@ class StoreApiClient:
         "manager-store",
         lambda args: (args.get("json_body") or {}).get("idempotency_key"),
         applies=lambda args: args["method"] == "POST" and args["path"].startswith("/actions/"),
+        operation=lambda args: args["expected_operation"],
     )
     def _request(
         self,

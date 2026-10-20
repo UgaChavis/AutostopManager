@@ -51,7 +51,7 @@ def test_fixed_bootstrap_validates_before_consumer_import(monkeypatch, role, mod
     events = []
     current = SimpleNamespace(document={"paths": {"source_root": str(source)}})
     fake_cold = SimpleNamespace(
-        binding=lambda: events.append("binding") or current,
+        claim_runtime_start=lambda: events.append("binding") or current,
         require_role=lambda selected: events.append(("role", selected)),
     )
 
@@ -86,7 +86,7 @@ def test_fixed_bootstrap_denies_before_application_import(monkeypatch, failure):
         imports.append(name)
         assert name == "autostop_manager.cold_runtime"
         return SimpleNamespace(
-            binding=lambda: (
+            claim_runtime_start=lambda: (
                 None
                 if failure == "missing"
                 else SimpleNamespace(

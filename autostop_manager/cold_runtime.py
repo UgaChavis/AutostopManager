@@ -226,6 +226,10 @@ class ColdBinding:
 
 
 def validate_binding_document(document: Any) -> ColdBinding:
+    if type(document) is dict and document.get("schema") == "autostop.manager.component-runtime-binding.v1":
+        from .component_runtime import validate_binding_document as component_binding
+
+        return component_binding(document)
     value = _fields(
         document,
         {
@@ -268,7 +272,7 @@ def _boot_id() -> str:
     return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
-def binding() -> ColdBinding | None:
+def _load_binding() -> ColdBinding | None:
     path, digest = os.environ.get(BINDING_ENV), os.environ.get(SHA_ENV)
     if path is None and digest is None:
         _require(
@@ -292,6 +296,26 @@ def binding() -> ColdBinding | None:
     )
     _require(_boot_id() == result.document["boot_id"], "cold_boot_changed")
     return result
+
+
+def binding() -> ColdBinding | None:
+    current = _load_binding()
+    if current is not None and current.document["schema"] != SCHEMA:
+        from .component_runtime import validate_process_claim
+
+        validate_process_claim(current)
+    return current
+
+
+def claim_runtime_start() -> ColdBinding | None:
+    """Check a controller-owned one-shot claim before importing the consumer."""
+    current = _load_binding()
+    if current is not None and current.document["schema"] != SCHEMA:
+        from .component_runtime import starting
+
+        with starting(current):
+            pass
+    return current
 
 
 def runtime_path(role: str, name: str, legacy: str | Path) -> Path:
@@ -450,29 +474,8 @@ def _blocked_operation_ids(tombstones: Any, current: ColdBinding) -> set[str]:
 
 
 @contextmanager
-def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None = None) -> Iterator[None]:
-    current = binding()
-    if current is None:
-        yield
-        return
-    _require(
-        type(operation_id) is str and 1 <= len(operation_id) <= 200 and not any(ord(c) < 32 for c in operation_id),
-        "cold_dispatch_existing_identity_required",
-    )
-    channels = {
-        "manager-store": {"manager-mcp", "crm-embedded"},
-        "manager-store-owner": {"manager-mcp", "crm-embedded"},
-        "manager-crm": {"manager-mcp", "crm-embedded"},
-        "j1": {"j1"},
-        "scheduler": {"scheduler"},
-        "scheduler-outbox": {"scheduler"},
-        "work-telegram": {"work-telegram"},
-        "personal-telegram": {"personal-telegram"},
-        "wake": {"wake"},
-    }
-    _require(current.role in channels.get(channel, set()), "cold_dispatch_channel_role")
-    if payload_sha256 is not None:
-        _sha(payload_sha256)
+def _dispatch_state(current: ColdBinding, *, exclusive: bool = False) -> Iterator[dict[str, Any]]:
+    """Read the current state while holding the same protected dispatch inode."""
     fence = _read_ref(current.document["ingress_fence_ref"])
     _fields(
         fence,
@@ -516,7 +519,8 @@ def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None =
             flock_module = _fcntl
             if flock_module is None:
                 raise ColdRuntimeDenied("cold_linux_required")
-            flock_module.flock(descriptor, flock_module.LOCK_SH | flock_module.LOCK_NB)
+            operation = flock_module.LOCK_EX if exclusive else flock_module.LOCK_SH
+            flock_module.flock(descriptor, operation | flock_module.LOCK_NB)
         except BlockingIOError as exc:
             raise ColdRuntimeDenied("cold_dispatch_serialization_busy") from exc
         linked = _lock_link(fence["dispatch_lock_path"])
@@ -525,6 +529,47 @@ def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None =
             "cold_lock_replaced",
         )
         state = _document(_read_protected(Path(fence["state_path"])))
+        current.same_epoch(state)
+        yield state
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def dispatch_guard(
+    operation_id: Any, channel: str, payload_sha256: str | None = None, *, operation: str | None = None
+) -> Iterator[None]:
+    current = binding()
+    if current is None:
+        yield
+        return
+    _require(
+        type(operation_id) is str and 1 <= len(operation_id) <= 200 and not any(ord(c) < 32 for c in operation_id),
+        "cold_dispatch_existing_identity_required",
+    )
+    channels = {
+        "manager-store": {"manager-mcp", "crm-embedded"},
+        "manager-store-owner": {"manager-mcp", "crm-embedded"},
+        "manager-crm": {"manager-mcp", "crm-embedded"},
+        "j1": {"j1"},
+        "scheduler": {"scheduler"},
+        "scheduler-outbox": {"scheduler"},
+        "work-telegram": {"work-telegram"},
+        "personal-telegram": {"personal-telegram"},
+        "wake": {"wake"},
+    }
+    _require(current.role in channels.get(channel, set()), "cold_dispatch_channel_role")
+    if payload_sha256 is not None:
+        _sha(payload_sha256)
+    with _dispatch_state(current) as state:
+        if current.document["schema"] != SCHEMA:
+            from .component_runtime import admit_effect
+
+            admit_effect(current, state, channel, operation)
+            seen = _blocked_operation_ids(_read_ref(current.document["tombstones_ref"]), current)
+            _require(operation_id not in seen, "cold_old_operation_forbidden")
+            yield
+            return
         _fields(
             state,
             {
@@ -548,11 +593,9 @@ def dispatch_guard(operation_id: Any, channel: str, payload_sha256: str | None =
         seen = _blocked_operation_ids(_read_ref(current.document["tombstones_ref"]), current)
         _require(operation_id not in seen, "cold_old_operation_forbidden")
         yield
-    finally:
-        os.close(descriptor)
 
 
-def guarded_effect(channel: str, identity: Any, *, applies: Any = None) -> Any:
+def guarded_effect(channel: str, identity: Any, *, applies: Any = None, operation: Any = None) -> Any:
     """Keep the epoch's shared lock through a synchronous or async consumer.
 
     Callers select an existing domain identity from bound arguments. This helper
@@ -576,7 +619,11 @@ def guarded_effect(channel: str, identity: Any, *, applies: Any = None) -> Any:
 
                 return nullcontext()
             resolved = current.role if channel == "telegram" else channel
-            return dispatch_guard(identity(arguments.arguments), resolved)
+            return dispatch_guard(
+                identity(arguments.arguments),
+                resolved,
+                operation=operation(arguments.arguments) if operation is not None else None,
+            )
 
         if inspect.iscoroutinefunction(function):
 

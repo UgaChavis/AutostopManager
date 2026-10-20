@@ -135,6 +135,16 @@ def get_mcp_port() -> int:
 
 def get_mcp_path() -> str:
     path = os.environ.get("AUTOSTOP_MANAGER_MCP_PATH", "/mcp")
+    current = binding()
+    if current is not None:
+        from .component_runtime import SCHEMA
+        from .cold_runtime import ColdRuntimeDenied
+
+        if current.document["schema"] == SCHEMA:
+            expected = f"/mcp/__component/{current.document['epoch_id']}"
+            if path != expected:
+                raise ColdRuntimeDenied("component_mcp_ingress_path")
+            return expected
     return path if path.startswith("/") else f"/{path}"
 
 
@@ -259,7 +269,7 @@ def get_automation_crm_connection_config() -> AutomationCrmConnectionConfig:
     configured = bool(raw_url or token)
     if not configured:
         return AutomationCrmConnectionConfig(configured=False)
-    if not api_url or not token or (binding() is not None and "/__cold/" not in urlsplit(api_url).path):
+    if not api_url or not token or not _bound_crm_url("board", api_url):
         return AutomationCrmConnectionConfig(configured=True, error_code="automation_crm_configuration_invalid")
     return AutomationCrmConnectionConfig(configured=True, api_url=api_url, bearer_token=token)
 
@@ -337,9 +347,20 @@ def get_crm_mcp_connection_config() -> CrmMcpConnectionConfig:
         return CrmMcpConnectionConfig(configured=False)
     url = normalize_crm_mcp_url(raw_url)
     bearer_token = _normalize_crm_mcp_bearer(raw_bearer)
-    if not url or not bearer_token or (binding() is not None and "/__cold/" not in urlsplit(url).path):
+    if not url or not bearer_token or not _bound_crm_url("mcp", url):
         return CrmMcpConnectionConfig(configured=True, error_code="crm_mcp_configuration_invalid")
     return CrmMcpConnectionConfig(configured=True, url=url, bearer_token=bearer_token)
+
+
+def _bound_crm_url(kind: str, url: str) -> bool:
+    current = binding()
+    if current is None:
+        return True
+    if current.document["schema"] == "autostop.manager.component-runtime-binding.v1":
+        from .component_runtime import crm_urls
+
+        return url == crm_urls(current)[kind]
+    return "/__cold/" in urlsplit(url).path
 
 
 def get_store_api_url() -> str:
