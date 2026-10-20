@@ -4,7 +4,7 @@
 
 ## Bridge и wake
 
-При включённом duty work bridge сохраняет входящие в защищённый реестр `/var/lib/autostop-work-telegram/inbound.sqlite3` → отдельный видимый worker Codex получает задание → проходит B2 и выбранный скилл → bridge проверяет действия и явный результат. Personal account/session/release остаются отдельными. Содержимое сообщений и медиа в реестр и технические журналы не копируется; история Codex-чата имеет собственное хранение.
+При включённом duty work bridge сохраняет входящие в защищённый реестр `/var/lib/autostop-work-telegram/inbound.sqlite3` → отдельный видимый worker Codex получает задание → проходит B2 и выбранный скилл → bridge проверяет действия и явный результат. Personal account/session остаются отдельными; после обслуживания personal/work используют общий проверенный Manager source и Python. Содержимое сообщений и медиа в реестр и технические журналы не копируется; история Codex-чата имеет собственное хранение.
 
 Bridge — единственный писатель SQLite (WAL, synchronous=FULL, каталог 0700, файлы 0600). Ссылка на событие сохраняется после перезапуска и никогда не перепривязывается. Приём подтверждается после commit, независимо от готовности модели. До 10 000 незавершённых событий; завершённые ссылки хранятся семь дней, незавершённые автоматически не удаляются. При переполнении/ошибке хранения сохраняется граница пропуска и состояние ухудшения приёма.
 
@@ -18,7 +18,7 @@ Wake подписывается на изменения реестра чере�
 
 После ожидаемого скачивания голосового события bridge повторно проверяет, что событие открыто, перед сохранением приватного файла. Успешное атомарное переименование завершает запись; удаление временного пути требуется при незавершённой записи. Ошибка удаления staged voice проходит через существующие ограниченные попытки очистки; при постоянном отказе файл и handle сохраняются для точной сверки, очистка не объявляется подтверждённой. Лимит текста расшифровки остаётся 32 Ki символов, а лимит JSON-ответа media runner учитывает их кодирование. Предпросмотр видео использует исходную положительную длительность в расчёте кадров и команде обработки; округление длительности относится только к выдаваемому результату.
 
-Work CLI: пользователь `autostop-work-telegram`, `PYTHONPATH=/opt/autostop-work-telegram-releases/current`, `/opt/autostop-work-telegram-venv/bin/python -m autostop_manager.telegram_bridge --account work <command>`. Управляющие job/duty операции запускаются root и не читают credentials. Проверяй `<command> --help`; для installed проверок cwd=/tmp и PYTHONSAFEPATH=1.
+Work CLI: пользователь `autostop-work-telegram`, `PYTHONPATH` равен физическому пути, полученному из `/opt/autostop-work-telegram-releases/current`. На принятой установке Python — `/opt/autostop-manager-cold-releases/51752bdb2048e0012e23b10bc770ff59f781874a/venv/bin/python3.12`; аргументы `-B -m autostop_manager.telegram_bridge --account work <command>`. Перед вызовом сверь effective `ExecStart` и installed `REVISION`, не используй удалённый `/opt/autostop-work-telegram-venv`. Управляющие job/duty операции запускаются root и не читают credentials. Проверяй `<command> --help`; для installed проверок cwd=/tmp и PYTHONSAFEPATH=1. Подробности — [manager-runtime.md](manager-runtime.md).
 
 | Команда bridge | Назначение |
 | --- | --- |

@@ -20,16 +20,16 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 | `autostop-j1.service`, `autostop-j1-browser.service` | Static probe; для browser ещё renderer/proxy, socket и revision-bound attestation. |
 | `autostopcrm`, `autostop-db`, `autostop-app` | Health + revision, private transport и API contract. |
 | `autostop-searxng`, optional browser containers | Container health и отдельные static/browser вызовы. Исторический `autostop-crawl4ai` не обязателен текущему runtime; перед старым rollback восстанови точный cold image по CRM runbook. |
-| `autostop24-db-backup.timer` | Store PostgreSQL backup: текущий Result и точный `pg_restore --list`; файл сам не доказывает восстановимость. CRM backup проверяется отдельно. |
+| `autostop24-db-backup.timer` | В 03:30 UTC новый Store helper сохраняет одну проверенную генерацию DB, files и settings в `/var/backups/autostop-current/store`; Result и manifest проверяются отдельно. Читаемость dump не заменяет локальное восстановление. |
 | `autostop-app-watchdog.timer` | Store deploy сам ставит pause/release; не включай timer вручную внутри deploy. |
 
 Для публичного доступа отдельно сравни DNS A, внешний TCP/TLS/redirect/HTTP, локальные upstream, private endpoint и public deny (`401` private без токена, `404` публичный internal маршрут). Различай DNS/network, transport/protocol, schema, auth/permissions, config, provider и application failures. Логи читай ограниченно, без секретов и business payload.
 
 ## Обновление ОС и выпуск
 
-Регулярная локальная копия данных CRM, Manager, scheduler и Store: [complete-backup.md](complete-backup.md). Установка timer требует проверенной новой копии и ёмкости для retention; восстановление и offsite выполняются отдельно.
+Сохраняются одна согласованная копия Manager + CRM `/var/backups/autostop-current/manager-crm/20261021-current` и одна генерация Store; состав и порядок замены — [complete-backup.md](complete-backup.md). Ежедневный timer остался только существующим Store backup. Старый complete bundle и `pg-retain` hook не активны; независимый ПК/offsite не входят в принятую схему.
 
-Освобождение места на MNG1 и ночное сохранение current+rollback/трёх дней PG: [disk-maintenance.md](disk-maintenance.md). Используй private manifest, native locks, cold verification и восстановление CI; после нового выпуска перечитывай pinned policy.
+Хранятся текущие версии приложений и необходимые runtime, без обязательного previous-комплекта: [disk-maintenance.md](disk-maintenance.md). Технические логи — три дня; существующий daily logrotate hook ограничивает download caches и Docker build cache по 1 GiB. Данные CRM/Store, полезная незавершённая работа, инструменты и CI сохраняются. После выпуска сверяй actual paths/images и обновляй policy; старые backup roots не возвращай из legacy-шаблона.
 
 Перед обновлением ОС сохрани root-only пакетный перечень, config служб/сети/proxy, свежий проверенный dump и `/proc/sys/kernel/random/boot_id`. Используй поддерживаемые обновления без снятия vendor phasing и автоматического удаления данных. Reboot — отдельное поручение, после окончания deploy/backup процессов. После него проверь новый boot ID, `uname -r`, SHA, systemd, containers, публичный TLS/HTTP, Gateway/MCP, G1, Telegram duty, J1 static/browser и Codex.
 
