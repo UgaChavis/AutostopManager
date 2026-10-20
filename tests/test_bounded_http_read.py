@@ -19,12 +19,18 @@ from autostop_manager import bounded_http_read as bounded
 from autostop_manager import catalog_clients, vin_lookup, work_pricing_research
 
 
-@pytest.mark.parametrize("status,cross_origin", [(302, True), (307, False)])
-def test_followed_redirect_closes_body_and_keeps_httpx_request_rules(monkeypatch, status, cross_origin):
+@pytest.mark.parametrize("status,cross_origin", [(302, True), (302, False), (307, False)])
+@pytest.mark.parametrize("redirect_credentials", [False, True])
+def test_followed_redirect_closes_body_and_keeps_httpx_request_rules(
+    monkeypatch, status, cross_origin, redirect_credentials
+):
     observed = []
     closed = []
     client = httpx.AsyncClient
     target = "https://other.invalid/final" if cross_origin else "/final"
+    if redirect_credentials:
+        host = "other.invalid" if cross_origin else "synthetic.invalid"
+        target = f"https://redirect:chosen@{host}/final"
 
     class Body(httpx.AsyncByteStream):
         def __init__(self, redirect):

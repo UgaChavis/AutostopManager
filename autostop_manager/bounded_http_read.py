@@ -95,8 +95,16 @@ async def _stream_response(
 ) -> AsyncIterator[httpx.Response]:
     response = None
     try:
-        for _ in range(client.max_redirects + 1):
-            response = await client.send(request, stream=True, follow_redirects=False)
+        for redirects in range(client.max_redirects + 1):
+            # Resolve initial URL/client auth once, as HTTPX's automatic chain
+            # does. Later requests already carry its redirect header policy;
+            # deriving BasicAuth again from Location userinfo would replace it.
+            response = await client.send(
+                request,
+                stream=True,
+                follow_redirects=False,
+                auth=httpx.USE_CLIENT_DEFAULT if redirects == 0 else httpx.Auth(),
+            )
             if not follow_redirects or response.next_request is None:
                 yield response
                 return
