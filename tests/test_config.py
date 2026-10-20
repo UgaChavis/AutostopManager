@@ -176,7 +176,9 @@ def test_automation_crm_route_is_derived_only_from_literal_loopback_mcp(monkeypa
 @pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
 def test_cold_crm_requires_explicit_independent_namespaces(monkeypatch, host):
     namespace = "a" * 64
-    monkeypatch.setattr(config, "binding", lambda: object())
+    from autostop_manager.cold_runtime import ColdBinding, SCHEMA
+
+    monkeypatch.setattr(config, "binding", lambda: ColdBinding({"schema": SCHEMA}))
     monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_API_URL", raising=False)
     monkeypatch.setenv("AUTOSTOP_CRM_MCP_URL", f"http://{host}:8001/mcp/__cold/{namespace}/mcp/")
     monkeypatch.setenv("AUTOSTOP_CRM_MCP_BEARER_TOKEN", "synthetic-existing-bearer")

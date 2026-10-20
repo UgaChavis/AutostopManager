@@ -246,6 +246,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/doctor.sh` | Wrapper передаёт аргументы в `doctor`; обычный режим read-only, `--full` требует одноразовой среды. |
 | `scripts/release-gates.sh` | Локальные проверки с disposable данными, не deploy. |
 | `scripts/cold-role-start.py` | Закреплённый cold entrypoint: обязательные binding/role до импорта приложения и только шесть фиксированных профилей; сам не даёт разрешения native launch или dispatch. [Контракт](cold-runtime-binding.md). |
+| `scripts/component-role-bootstrap.py` | Только root в закреплённом component unit: проверяет source/runtime и один раз фиксирует actual PID/birth/namespace, затем сбрасывает UID/GID/groups и exec того же runtime. Требует отдельного admission, сохраняет неизвестный claim без повтора; произвольную команду не принимает. [Контракт](../../component-external-runtime.md). |
 | `scripts/check-e2-branch-coverage.py` | Читает coverage JSON; требует 82% ветвей исторического E2 gate для catalog_clients/vin_oem_resolver/benchmark, не меняет данные. |
 | `scripts/check-automotive-catalog.py` | Disposable state: сверяет registry, exact native schemas, все 43 PartsAPI и MD references; providers не вызывает. |
 | `scripts/generate-automotive-instructions.py` | Создаёт operation MD из registry/schema; `--check` сравнивает без записи. |
