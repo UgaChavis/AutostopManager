@@ -510,7 +510,9 @@ _ACTION_RESULT_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "set_batch_storage_location": frozenset({"entity_type", "entity_id", "part_id", "storage_location", "updated_at"}),
-    "mark_order_ready": frozenset({"entity_type", "entity_id", "order_number", "status", "ready_at", "updated_at"}),
+    "mark_order_ready": frozenset(
+        {"entity_type", "entity_id", "order_number", "status", "payment_status", "paid_at", "ready_at", "updated_at"}
+    ),
     "set_order_payment_status": frozenset(
         {"entity_type", "entity_id", "order_number", "status", "payment_status", "paid_at", "ready_at", "updated_at"}
     ),
@@ -1649,6 +1651,17 @@ def _validate_action_payload(payload: dict[str, Any], operation: str) -> None:
     result = summary.get("result")
     if result is not None:
         _require_allowed_keys(result, _ACTION_RESULT_FIELDS[operation], path="summary.result")
+        if operation in {"mark_order_ready", "set_order_payment_status"}:
+            payment_result = result
+            if result.get("paid_at") == "generated_on_apply":
+                if not (
+                    operation == "set_order_payment_status"
+                    and payload.get("status") == summary.get("mode") == "dry_run"
+                    and result.get("payment_status") == "PAID"
+                ):
+                    raise ValueError("summary.result.paid_at preview is invalid")
+                payment_result = {**result, "paid_at": None}
+            _validate_entity_scalar_types(payment_result, path="summary.result")
     for index, change in enumerate(payload.get("changes") or []):
         _require_allowed_keys(change, _ACTION_CHANGE_FIELDS, path=f"changes[{index}]")
         if change.get("field") not in _ACTION_ALLOWED_CHANGE_NAMES[operation]:
