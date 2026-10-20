@@ -738,6 +738,22 @@ def _error_code(exc: BaseException) -> str:
     return code if SAFE_CODE.fullmatch(code) else "operation_failed"
 
 
+def _maintenance_noop(policy: dict, result: dict) -> bool:
+    """A verified empty plan needs neither CI admission changes nor deletion proofs."""
+    if available_bytes(policy) < policy["goal_bytes"]:
+        return False
+    with native_locks(policy):
+        fresh = make_plan(policy)
+        if fresh["candidates"]:
+            return False
+        validate_manifest(fresh, policy)
+        if available_bytes(policy) < policy["goal_bytes"]:
+            return False
+        atomic_json(state_root(policy) / "last-plan.json", fresh)
+        result["noop"] = {"goal_satisfied": True, "no_candidates": True, "ci_not_paused": True}
+        return True
+
+
 def execute(policy: dict, *, operation: str, manifest: dict | None = None) -> dict:
     require_root()
     state_root(policy)
@@ -750,21 +766,22 @@ def execute(policy: dict, *, operation: str, manifest: dict | None = None) -> di
         try:
             if manifest is not None:
                 validate_manifest(manifest, policy)
-            ci_ready = False
-            if operation != "pg-retain":
-                try:
-                    ci.pause(policy, state_root(policy) / "ci-state.json", wait_seconds=1800)
-                    ci_ready = True
-                except (MaintenanceError, OSError) as exc:
-                    result["skipped"].append({"reason": _error_code(exc)})
-                    _resume(policy, result)
-                    if not result["ci_restored"]:
-                        raise MaintenanceError("ci_recovery_required") from exc
-            with native_locks(policy):
-                fresh = make_plan(policy) if manifest is None else manifest
-                if manifest is None:
-                    atomic_json(state_root(policy) / "last-plan.json", fresh)
-                _apply_locked(fresh, policy, result, ci_ready=ci_ready)
+            if operation != "maintain" or not _maintenance_noop(policy, result):
+                ci_ready = False
+                if operation != "pg-retain":
+                    try:
+                        ci.pause(policy, state_root(policy) / "ci-state.json", wait_seconds=1800)
+                        ci_ready = True
+                    except (MaintenanceError, OSError) as exc:
+                        result["skipped"].append({"reason": _error_code(exc)})
+                        _resume(policy, result)
+                        if not result["ci_restored"]:
+                            raise MaintenanceError("ci_recovery_required") from exc
+                with native_locks(policy):
+                    fresh = make_plan(policy) if manifest is None else manifest
+                    if manifest is None:
+                        atomic_json(state_root(policy) / "last-plan.json", fresh)
+                    _apply_locked(fresh, policy, result, ci_ready=ci_ready)
         except (MaintenanceError, OSError, ValueError) as exc:
             result["errors"].append(_error_code(exc))
         finally:
