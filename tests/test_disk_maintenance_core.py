@@ -535,6 +535,22 @@ def test_own_runner_excluded_from_runtime_and_health(setup):
         core.validate_policy(policy)
 
 
+@pytest.mark.parametrize("days", [1, 2, 3])
+def test_explicit_pg_retention_days_do_not_change_enablement(days):
+    policy = copy.deepcopy(core.DEFAULT_POLICY)
+    policy["pg_keep_days"] = days
+    assert core.validate_policy(policy)["pg_keep_days"] == days
+    assert policy["pg_retention_enabled"] is False
+
+
+@pytest.mark.parametrize("days", [0, 4, True, 1.0, "1", None])
+def test_invalid_pg_retention_days_are_rejected(days):
+    policy = copy.deepcopy(core.DEFAULT_POLICY)
+    policy["pg_keep_days"] = days
+    with pytest.raises(MaintenanceError, match="policy_retention_invalid"):
+        core.validate_policy(policy)
+
+
 def test_policy_owner_and_mode_checks(tmp_path, monkeypatch):
     monkeypatch.setattr(util, "ROOT_UID", os.geteuid())
     directory = tmp_path / "private"

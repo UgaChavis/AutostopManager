@@ -44,7 +44,7 @@ DEFAULT_POLICY = {
     "manifest_ttl_seconds": 900,
     "delete_budget_seconds": 900,
     "timezone": "Asia/Krasnoyarsk",
-    "pg_keep_days": 3,
+    "pg_keep_days": 1,
     "locks": {
         "cleanup": "/run/lock/autostop-disk-maintenance.lock",
         "full": "/var/backups/autostop-complete/.backup.lock",
@@ -117,7 +117,8 @@ def validate_policy(policy: dict) -> dict:
     for name, (low, high) in ranges.items():
         if type(policy.get(name)) is not int or not low <= policy[name] <= high:
             raise MaintenanceError("policy_budget_invalid")
-    if policy.get("pg_keep_days") != 3 or policy.get("timezone") != "Asia/Krasnoyarsk":
+    days = policy.get("pg_keep_days")
+    if type(days) is not int or not 1 <= days <= 3 or policy.get("timezone") != "Asia/Krasnoyarsk":
         raise MaintenanceError("policy_retention_invalid")
     try:
         ZoneInfo(policy["timezone"])

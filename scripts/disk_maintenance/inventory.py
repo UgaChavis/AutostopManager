@@ -576,10 +576,10 @@ def _pg_inventory(policy: dict, full_keeper: str | None, candidates: list, prote
             skipped.append({"path": str(path), "reason": "invalid_pg_metadata"})
             continue
         days[stamp.astimezone(timezone).date()].append((stamp, path))
-    keep = {max(days[day])[1] for day in sorted(days, reverse=True)[: policy.get("pg_keep_days", 3)]}
+    keep = {max(days[day])[1] for day in sorted(days, reverse=True)[: policy.get("pg_keep_days", 1)]}
     if pin:
         keep.add(pin)
-    if len(days) < policy.get("pg_keep_days", 3):
+    if len(days) < policy.get("pg_keep_days", 1):
         raise MaintenanceError("preserved_pg_days_missing")
     for entries in days.values():
         for _, path in entries:
