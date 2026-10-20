@@ -27,6 +27,8 @@ receipts и восстановление CI — `/var/lib/autostop-manager/priva
 `autostop-disk-maintenance.timer` запускается в **04:00 Asia/Krasnoyarsk**,
 `Persistent=false`; recovery timer каждые пять минут возвращает только собственную
 паузу CI. Обслуживание не останавливает приложения и не перезапускает Docker.
+При достаточном месте и подтверждённом пустом плане `maintain` возвращает no-op
+под native locks, с повторной проверкой здоровья и снимка; CI не приостанавливается.
 Общий cleanup lock, native locks PostgreSQL, CRM deploy и рабочего Telegram
 исключают пересечение с копированием и выпуском. Занятость lock означает отсутствие
 удалений в этой попытке; отдельно проверь результат `recover-ci` и владельца lock.

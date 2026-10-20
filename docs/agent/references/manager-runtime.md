@@ -262,7 +262,9 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate`, `--replace-unit`. После попытки активации ошибка требует ручного восстановления: автоматического возврата прежнего writer нет. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |
 | `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. |
-| `scripts/autostop-complete-backup.py` | `plan` проверяет ёмкость и runtime без записи; `create` создаёт локальную копию данных, `verify --backup PATH` проверяет её. `daily` сохраняет канонический PostgreSQL backup при отказе полной копии. Root-only данные, установка/активация отдельно: [правила backup](complete-backup.md). |
+| `scripts/autostop-complete-backup.py` | Прежний complete-bundle helper для исторических manifests; с текущим Store helper не запускается. Действующие копии и восстановление — [правила backup](complete-backup.md). |
+| `scripts/store-backup.py` | Root-only текущая копия Store DB, files и settings; `--root` и `--lock` задают точные пути. Проверяет dump и стабильность источника, затем атомарно публикует одну генерацию. Live restore не выполняет. |
+| `scripts/technical-retention.py` | Без `--apply` планирует уборку; `--apply --days 3 --docker` ограничивает только закрытые технические логи и разрешённые download/build caches. Busy/open guards сохраняют активные файлы; business data не входит. |
 | `scripts/autostop-disk-maintenance.py` | Root-only `plan` пишет private manifest; `apply --manifest PATH --approve SHA256` удаляет проверенных кандидатов; `maintain` исполняет принятую policy; `pg-retain` согласует три дня PG; `recover-ci` возвращает собственную паузу CI. [Контракт очистки](disk-maintenance.md). |
 | `scripts/install-autostop-disk-maintenance.py` | `--source-commit SHA --policy-file PRIVATE_JSON --receipt NEW_PRIVATE_PATH` устанавливает frozen root helper и включает два maintenance timers с сохранением/rollback конфигурации. Прикладной runtime не выпускается. |
 | `scripts/install-j1-worker.sh` | Runtime installer: `--activate [--replace-unit]`. |
@@ -275,6 +277,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
 | `scripts/set-work-telegram-duty.sh` | `--status` read-only; `--enable|--disable` меняют duty. |
+| `scripts/work-telegram-python.sh` | `bridge|wake` читает effective systemd ExecStart и возвращает действующий Python; окружение не устанавливает, fallback на checkout отсутствует. |
 | `scripts/export-work-telegram-inbox.py` | Экспортирует точные legacy-ссылки в новый root-private файл до согласованного переключения; без копирования переписки или replay. |
 | `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe --file EXACT_FILE [--language ru] [--delete-after]`, `preview --file EXACT_FILE [--delete-after]` или `self-check`; `--language` доступен только `transcribe`. |
 | `scripts/run-work-telegram-monitor-voice.sh` | Текущий event: `telegram_monitor_voice --event-id ... [--language ru]`, затем очистка. |
