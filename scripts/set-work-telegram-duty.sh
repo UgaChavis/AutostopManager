@@ -4,14 +4,14 @@ set -Eeuo pipefail
 service_unit="autostop-work-telegram.service"
 service_user="autostop-work-telegram"
 release_link="/opt/autostop-work-telegram-releases/current"
-venv_python="/opt/autostop-work-telegram-venv/bin/python"
+venv_python=""
 monitor_env="/etc/autostop-work-telegram/monitor.env"
 control_lock="/run/autostop-work-telegram-control.lock"
 pending_monitor_env=""
 preserve_existing_duty=0
 wake_unit="autostop-codex-wake.service"
 wake_config="/etc/autostop-work-telegram/wake.json"
-wake_python="/opt/AutostopManager/.venv/bin/python"
+wake_python=""
 export PYTHONSAFEPATH=1
 
 usage() { echo "usage: $0 --enable|--disable|--status [--expected-release-dir DIR]" >&2; }
@@ -28,7 +28,8 @@ exec 9>"${control_lock}"
 flock -x 9
 if [[ -n "${expected_release_dir}" ]]; then
   current_release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
-  if [[ ! -L "${release_link}" || "${expected_release_dir}" != "$(dirname -- "${release_link}")/"* \
+  if [[ ! -L "${release_link}" || ( "${expected_release_dir}" != "$(dirname -- "${release_link}")/"* \
+    && "${expected_release_dir}" != /opt/autostop-manager-releases/* ) \
     || ! -d "${expected_release_dir}" || -L "${expected_release_dir}" \
     || "${current_release_dir}" != "${expected_release_dir}" ]]; then
     echo "work_telegram_release_target_changed=true" >&2
@@ -56,7 +57,17 @@ stop_active_media_workers() {
   systemctl stop "${units[@]}" || return 1
 }
 
+load_bridge_python() {
+  venv_python="${venv_python:-$(bash "${release_link}/scripts/work-telegram-python.sh" bridge)}"
+}
+
+wake_control() {
+  wake_python="${wake_python:-$(bash "${release_link}/scripts/work-telegram-python.sh" wake)}" || return 1
+  PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake "$@"
+}
+
 bridge_status() {
+  load_bridge_python || return 1
   sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
     "${venv_python}" -m autostop_manager.telegram_bridge --account work status
 }
@@ -66,6 +77,7 @@ durable_release() {
 }
 
 bridge_control() {
+  load_bridge_python || return 1
   PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work "$@"
 }
 
@@ -90,7 +102,7 @@ disable_duty() {
   fi
   if [[ -f "${wake_config}" ]]; then
     if systemctl is-active --quiet "${wake_unit}"; then
-      PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake pause || return 1
+      wake_control pause || return 1
     fi
     systemctl disable --now "${wake_unit}" || return 1
   fi
@@ -112,8 +124,10 @@ disable_duty() {
 
 enable_duty() {
   local monitor_env_dir monitor_status release_dir intent_changed=0 wake_ready=0
+  load_bridge_python || return 1
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
-  [[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/* && -d "${release_dir}" && ! -L "${release_dir}" && -x "${venv_python}" ]] || return 1
+  [[ -L "${release_link}" && ( "${release_dir}" == /opt/autostop-work-telegram-releases/* \
+    || "${release_dir}" == /opt/autostop-manager-releases/* ) && -d "${release_dir}" && ! -L "${release_dir}" && -x "${venv_python}" ]] || return 1
   monitor_env_dir="$(dirname -- "${monitor_env}")"
   [[ -d "${monitor_env_dir}" && ! -L "${monitor_env_dir}" ]] || return 1
   pending_monitor_env="$(mktemp "${monitor_env_dir}/.monitor.env.XXXXXX")" || return 1
@@ -129,7 +143,7 @@ enable_duty() {
         wake_ready=1
         break
       fi
-      if PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status \
+      if wake_control status \
         | "${venv_python}" -c '
 import json,sys
 s=json.load(sys.stdin)
@@ -167,7 +181,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
       if durable_release; then
         bridge_control duty-set --enabled >/dev/null || return 1
         if [[ -f "${wake_config}" ]]; then
-          PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake resume >/dev/null || return 1
+          wake_control resume >/dev/null || return 1
         fi
       fi
       return 0
@@ -187,12 +201,13 @@ cleanup_incomplete_duty() {
 
 case "${operation}" in
   --status)
+    load_bridge_python || exit 1
     bridge_state="$(bridge_status)" || { printf '%s\n' '{"ok":false,"transport_ready":false,"error":"bridge_unavailable"}'; exit 1; }
     wake_active=false
     if [[ -f "${wake_config}" ]] && systemctl is-active --quiet "${wake_unit}"; then wake_active=true; fi
     wake_state='{}'
     if [[ "${wake_active}" == true ]]; then
-      wake_state="$(PYTHONPATH="${release_link}" "${wake_python}" -m autostop_manager.telegram_wake status)" \
+      wake_state="$(wake_control status)" \
         || wake_state='{}'
     fi
     BRIDGE_STATE="${bridge_state}" WAKE_ACTIVE="${wake_active}" WAKE_STATE="${wake_state}" "${venv_python}" -c '

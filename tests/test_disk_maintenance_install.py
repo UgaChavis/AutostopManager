@@ -125,8 +125,66 @@ def test_install_freezes_only_committed_payload_and_private_policy(source, targe
     assert stat.S_IMODE(installer.POLICY.stat().st_mode) == 0o600
     assert stat.S_IMODE(installer.POLICY.parent.stat().st_mode) == 0o700
     assert installer.WRAPPER.read_bytes() == installer.WRAPPER_BYTES
+    assert not (installer.SYSTEMD / installer.RETENTION_UNIT).exists()
     assert all(not (call[0] == "systemctl" and "restart" in call) for call in calls)
     assert json.loads(receipt.read_text())["status"] == "installed"
+
+
+def test_enabled_pg_retention_installs_its_hook(source, target):
+    root, revision = source
+    policy, receipt, _, _ = target
+    settings = json.loads(policy.read_text())
+    settings["pg_retention_enabled"] = True
+    policy.write_text(json.dumps(settings))
+    installer.install(root, policy, revision, receipt)
+    assert (installer.SYSTEMD / installer.RETENTION_UNIT).read_bytes() == (
+        root / "deploy/systemd" / installer.RETENTION_UNIT
+    ).read_bytes()
+
+
+def test_disabled_pg_retention_retires_only_its_exact_hook(source, target):
+    root, revision = source
+    policy, receipt, _, _ = target
+    hook = installer.SYSTEMD / installer.RETENTION_UNIT
+    hook.parent.mkdir()
+    hook.write_bytes((root / "deploy/systemd" / installer.RETENTION_UNIT).read_bytes())
+    unrelated = hook.parent / "database-health-wait.conf"
+    unrelated.write_text("preserve unrelated settings\n")
+    installer.install(root, policy, revision, receipt)
+    assert not hook.exists()
+    assert unrelated.read_text() == "preserve unrelated settings\n"
+
+
+def test_disabled_pg_retention_preserves_modified_hook_before_adoption(source, target):
+    root, revision = source
+    policy, receipt, calls, _ = target
+    hook = installer.SYSTEMD / installer.RETENTION_UNIT
+    hook.parent.mkdir()
+    hook.write_text("operator managed hook\n")
+    with pytest.raises(MaintenanceError, match="install_retention_hook_modified"):
+        installer.install(root, policy, revision, receipt)
+    assert hook.read_text() == "operator managed hook\n"
+    assert not installer.POLICY.exists() and not installer.WRAPPER.exists()
+    assert not any(call[0] == "systemctl" for call in calls)
+
+
+def test_failed_install_restores_the_retired_hook(source, target, monkeypatch):
+    root, revision = source
+    policy, receipt, _, command = target
+    hook = installer.SYSTEMD / installer.RETENTION_UNIT
+    hook.parent.mkdir()
+    expected = (root / "deploy/systemd" / installer.RETENTION_UNIT).read_bytes()
+    hook.write_bytes(expected)
+
+    def fail_verify(argv, *, allow_failure=False):
+        if argv[0] == "systemd-analyze":
+            raise MaintenanceError("injected_verify_failure")
+        return command(argv, allow_failure=allow_failure)
+
+    monkeypatch.setattr(installer, "_command", fail_verify)
+    with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
+        installer.install(root, policy, revision, receipt)
+    assert hook.read_bytes() == expected
 
 
 def test_dirty_selected_source_never_installs(source, target):

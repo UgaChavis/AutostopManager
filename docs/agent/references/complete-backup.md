@@ -1,117 +1,20 @@
 # Регулярная локальная копия данных приложений
 
-`scripts/autostop-complete-backup.py` создаёт private bundles в отдельном
-`/var/backups/autostop-complete`. Это согласованные точки отдельных компонентов,
-а не глобальная транзакция CRM, Store и Manager. Manifest сохраняет интервалы,
-Manager revision, CRM OCI revision, Store source revision и container image SHA.
-Для штатного archive deployment Store source — `/opt/autostop-app`, а
-`store_source_revision` берётся из private `/opt/autostop-app-deploys/current.env`.
-Receipt должен быть обычным файлом текущего effective owner без group/other прав,
-не более 64 KiB, с единственными `git_sha` (полный lowercase SHA) и `image_id`
-(immutable `sha256:`), совпадающим с Docker `.Image` работающего Store.
-Отсутствующий или неверный receipt прекращает full-copy без fallback на checkout.
-Остальные поля receipt не попадают в manifest. Только явный custom
-`Layout(store_deploy_marker=None)` сохраняет legacy Git-checkout режим.
-Старые v1 manifests остаются доступны offline verify: их source SHA не получает
-задним числом deployed provenance. Receipt связывает заявленный выпуск с image,
-но не доказывает идентичность всех bytes source tree и образа или готовность restore.
+## Действующая схема после уборки 2026-10-21
 
-| Live источник | Артефакт и правило |
-|---|---|
-| Store PostgreSQL | свежий dump канонического `/usr/local/sbin/autostop24-db-backup`, hardlink store.dump на том же filesystem |
-| Store files | uploads.tar.gz, photos.tar.gz: SHA всего набора неизменны от начала canonical dump до окончания архивов |
-| CRM data | crm-files.tar.gz: state, attachments, shared-files, repair-orders, durable JSON/audit/config data; raw SQLite отдельно |
-| CRM native SQLite | exact top-level change_feed.sqlite3: online snapshot под существующим state.lock, journal_mode=DELETE, полная integrity_check |
-| CRM agent | required crm-agent.tar.gz: весь agent/ под существующим exact agent/agent.lock, кроме самого native lock; byte stability/copy validation |
-| Manager DB | manager.sqlite3: online snapshot, integrity_check |
-| Scheduler registry | scheduler.sqlite3: online snapshot, integrity_check |
-| M2 журнал | roles.tar.gz: проверенная файловая копия |
+Сохраняются одна согласованная копия Manager + CRM и одна текущая генерация Store. Новая копия заменяет предыдущую только после проверки и устойчивой публикации; незавершённая попытка не даёт права удалить единственную исправную копию. Рабочие данные приложений не являются объектом очистки.
 
-Wrapper проверяет root ownership, safe mode и точный SHA256 канонического helper.
-Его исходник и retention=7 не меняются. Перед helper под native PG flock фиксируется
-набор canonical points; flock отпускается, helper берёт его сам. После completion
-wrapper снова берёт flock, выбирает ровно один новый inode/mtime/size point,
-проверяет private metadata и pg_restore, затем делает hardlink. Stale, ambiguous
-или другой filesystem дают отказ. Canonical points и их содержимое не копируются
-и не редактируются wrapper. Store capture идёт первым: последующий отказ CRM
-может оставить свежую каноническую DB-копию, сохранив прежние full bundles.
+| Компоненты | Действующий путь и порядок |
+| --- | --- |
+| Manager + CRM | `/var/backups/autostop-current/manager-crm/20261021-current`: согласованные данные и настройки, включая встроенный Manager, очереди и scheduler. Это сохранённая проверенная точка обслуживания; отдельный ежедневный complete-bundle timer не включён. Следующая замена требует нового согласованного capture и локальной проверки восстановления. |
+| Store | `/var/backups/autostop-current/store/<generation>`: `database.dump`, `files.tar`, `manifest.json`. [store-backup.py](../../../scripts/store-backup.py) установлен как `/usr/local/sbin/autostop24-db-backup`; существующий `autostop24-db-backup.timer` запускает его ежедневно в **03:30 UTC**. Нового таймера нет. |
 
-CLI create строго прекращает attempt при failed preflight и не выполняет fallback.
-CLI daily сохраняет прежнее nightly DB поведение: если fullbundle failed до helper,
-его exact canonical helper выполняется отдельно один раз по прежним health/lock/
-retention правилам без нового fullcopy reserve. Если helper уже attempted, повторять
-его нельзя. Fullbundlefailure остаётся nonzero; JSON сообщает canonical_attempted/
-canonical_succeeded, поэтому G1 видит честную полную ошибку и результат DB части.
+Store helper использует существующий PG lock, делает `pg_dump`, сверяет все байты и права файлового архива, полностью читает dump через `pg_restore`, повторно проверяет стабильность исходных файлов и идентичность контейнеров. Затем fsync и атомарная публикация предшествуют удалению старой owned-generation. Это проверка читаемости и целостности носителя, не выполнение SQL restore в рабочую БД. Изменение источника или ошибка до публикации сохраняют предыдущую копию. Неизвестные каталоги не удаляются.
 
-До и после всей попытки сравниваются ID, image, StartedAt и mounts контейнеров
-CRM/Store/DB, Store source revision, installed Manager revision и helper SHA.
-При любом изменении новая full-copy не публикуется. В manifest не сохраняются
-environment, runtime tokens, owner identities или customer поля; сам bundle содержит
-действующие бизнес/auth-данные и доступен только root.
+Старые `pg-retain`, drop-in `disk-retention.conf`, wrapper complete bundle и многодневные backup roots больше не участвуют в действующем расписании. Их код сохранён как прежний механизм, без разрешения включать его. Политика текущих версий и технических кэшей — [disk-maintenance.md](disk-maintenance.md).
 
-CRM state.lock совместим с ProcessFileLock/flock. Attachment bytes пишутся до
-commit metadata, удаляются после tombstone. Архив и полная сверка copied bytes
-готовятся до state.lock. Под lock полный regular-file fingerprint сравнивается
-с этим архивом до и после online feed snapshot; полная integrity_check снимка
-выполняется после освобождения lock. Независимые shared-file/printing writers не
-объявляются защищёнными одним state.lock. Изменение файла прерывает attempt,
-copied archive bytes также сравниваются с source SHA. Lock budget — 8 секунд,
-ожидание — 3 секунды. CRM native writer timeout по текущему source — 10 секунд;
-короткая задержка или operator failure всё же возможны. Первый capture требует
-тихого окна и проверки длительности; lock_seconds сохраняется в manifest.
-Новый root-owned state.lock не создаётся.
-Top-level agent/ выделен из core CRM archive/fingerprints только потому, что
-обязательный отдельный архив сохраняет весь этот компонент. Agent lock ожидается
-не более 3 секунд и удерживается с budget8; state.lock одновременно не удерживается.
-Status (включая board_control), tasks, schedules, runs/actions пишутся под этим
-ProcessFileLock; public prompt/memory writers и initensure не всегда берут lock,
-поэтому archive source before/after и copied-byte hashes обязательны. Все их файлы
-сохраняются, payload suffixes непрозрачны. Manifest crm_agent содержит interval,
-lock_seconds, restore_path=agent/ и directory UID/GID/mode metadata. Единой CRM/agent транзакции нет.
-Standalone runner работает в одном потоке: target открывается root-private с
-memory journal, source online backup выполняется под effective UID/GID владельца
-БД, затем finally возвращает root identity и target journal_mode=DELETE. Поэтому
-новые native WAL/SHM получают app owner, а target остаётся root600.
+Восстановление сначала проверяется локально и изолированно. Пишущие приложения останавливаются в согласованное окно; SSH и управляющая сессия сохраняются. Проверяются точные версии, данные и права, затем выполняется независимый readback. Старая БД не накладывается автоматически поверх новых данных, старые очереди и неизвестные внешние эффекты не воспроизводятся без сверки. Независимый ПК и offsite остаются вне текущей работы.
 
-Исключены только exact known CRM native SQLite WAL/SHM/journals, native lock paths,
-CRM logs, searxng cache, maintenance
-reports и вложенные backup. Telegram sessions, VPN profiles, исходники, ОС,
-/etc runtime config, environment secrets и provider snapshots не входят.
-Payload filenames в attachments/shared-files/repair-orders/Store volumes непрозрачны:
-.lock/.db/.sqlite3/-wal/-shm/-journal не исключаются и не открываются как SQLite.
-Для recovery нужны отдельные source/revision anchors, config и reprovision secrets.
-
-Plan выполняет read-only runtime/helper/mount checks и метаданные объёмов.
-Консервативный first-run peak: raw non-PG sources + 64MiB + 130% последнего PG
-dump. Резерв — 8GiB. PostgreSQL hardlink занимает 0 дополнительных data bytes;
-свежий canonical dump требует временное место до штатного helper retention.
-Plan отдельно показывает три retained bundles и steady peak: три прежних + один
-staging bundle + свежий PG dump. После bootstrap фактические non-PG artifact bytes
-и сохранённый raw baseline позволяют независимо рассчитать measured projection
-с поправкой на рост. Оценка не гарантирует максимальный размер: guard проверяет
-свободное место при capture и отказывает при исчерпании. Старые owned bundles
-не удаляются до новой validated, fsynced и atomic публикации. Retention=3 удаляет
-только independently verified private bundles нашего формата; unknown/corrupt/
-manual directories сохраняются. Hardlinks сохраняют dump даже после штатного
-удаления его canonical directory entry; в затяжном failure периоде это требует
-дополнительного capacity readback.
-
-Установка/активация — отдельное поручение M2 после review/tests, разрешённого
-manual bootstrap, независимого verify и достаточного steady/peak capacity.
-Runner: root750 /usr/local/sbin/autostop-complete-backup, bundle root700/files600.
-Drop-in: deploy/systemd/autostop24-db-backup.service.d/complete-data.conf меняет
-только ExecStart существующей службы на wrapper daily и задаёт SQLite3.51.3 runtime.
-Создать backup directory до daemon-reload. Существующие timer, 03:30UTC trigger
-и G1 policy сохраняются; отдельный timer не добавляется. Снятие только этого
-drop-in и daemon-reload возвращают исходный canonical helper ExecStart.
-
-Restore выполняется отдельно, сначала в изоляции без сети/отправок. SQLite
-integrity и pg_restore в /dev/null не доказывают application recovery. Пишущие
-компоненты должны быть остановлены на согласованное quiet window; проверить
-exact revision/config и независимо прочитать результат. Пока writers остановлены,
-восстановить uid/gid/mode каждой live SQLite по component sqlite_restore_metadata:
-backup artifacts имеют root600 независимо от исходного app owner. Tar сохраняет
-исходную файловую ownership metadata; права каталогов проверяются до запуска writers.
-Не активировать scheduler
-и Telegram по старой очереди до сверки idempotency/outbox и внешних receipts.
-Offsite destination и шифрование согласуются отдельно; remote writes отсутствуют.
+Код прежнего `autostop-complete-backup.py` сохранён для чтения старых manifests;
+он не соответствует текущему Store helper и не используется для создания новых копий.
+Проверенный backup и состояние очередей сохраняй до окончания приёмки выпуска.

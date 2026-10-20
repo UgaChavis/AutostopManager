@@ -116,13 +116,96 @@ def test_maintain_deletes_only_owned_candidate_and_reports_deficit(setup):
     assert util.read_json(state / "last-result.json", private=True)["deleted"] == result["deleted"]
 
 
-def test_missing_preserved_cold_receipt_keeps_old_archives(setup, monkeypatch):
+@pytest.mark.parametrize("enough_space", [False, True])
+def test_missing_preserved_cold_receipt_keeps_old_archives(setup, monkeypatch, enough_space):
     policy, candidates, _, calls = setup
+    if enough_space:
+        policy["goal_bytes"] = 10_000_000_000
     old = data_directory(policy)
     candidates.append(candidate(old))
     monkeypatch.setattr(core.inventory, "verify_protected", lambda value: {"ok": True, "receipts": []})
     result = core.maintain(policy)
     assert old.exists() and result["errors"] == ["preserved_verification_missing"]
+    assert calls == ["pause", "resume"]
+
+
+@pytest.mark.parametrize("recover_pending_ci", [False, True])
+def test_verified_empty_maintenance_does_not_pause_ci_or_verify_unused_archives(setup, monkeypatch, recover_pending_ci):
+    policy, _, _, calls = setup
+    policy["goal_bytes"] = 10_000_000_000
+    state = Path(policy["state_root"])
+    if recover_pending_ci:
+        util.atomic_json(state / "ci-state.json", {"phase": "paused"})
+    monkeypatch.setattr(core.ci, "pause", lambda *a, **k: pytest.fail("empty plan must not pause CI"))
+    monkeypatch.setattr(core.inventory, "verify_protected", lambda *a: pytest.fail("no deletion proof is needed"))
+    monkeypatch.setattr(core, "secure_delete", lambda *a: pytest.fail("empty plan must not delete"))
+    result = core.maintain(policy)
+    assert result["ok"] and result["target_reached"] and result["deleted"] == []
+    assert result["noop"] == {"goal_satisfied": True, "no_candidates": True, "ci_not_paused": True}
+    assert "preserved_receipts" not in result
+    assert calls == (["resume", "resume"] if recover_pending_ci else [])
+    assert util.read_json(state / "last-plan.json", private=True)["candidates"] == []
+    assert util.read_json(state / "last-result.json", private=True) == result
+
+
+@pytest.mark.parametrize("failure", ["inventory", "health", "runtime"])
+def test_empty_maintenance_requires_available_inventory_and_repeated_health_snapshot(setup, monkeypatch, failure):
+    policy, _, baseline, calls = setup
+    policy["goal_bytes"] = 10_000_000_000
+    checks = []
+
+    if failure == "inventory":
+
+        def unavailable(value):
+            raise MaintenanceError("inventory_unavailable")
+
+        monkeypatch.setattr(core.inventory, "collect", unavailable)
+    elif failure == "health":
+
+        def unhealthy(value):
+            checks.append("health")
+            if len(checks) == 2:
+                raise MaintenanceError("health_http_failed")
+            return {"ok": True}
+
+        monkeypatch.setattr(core, "health", unhealthy)
+    else:
+
+        def changed(value):
+            checks.append("snapshot")
+            current = copy.deepcopy(baseline)
+            if len(checks) == 3:
+                current["units"][0]["pid"] += 1
+            return current
+
+        monkeypatch.setattr(core.inventory, "snapshot", changed)
+    result = core.maintain(policy)
+    expected = {"inventory": "inventory_unavailable", "health": "health_http_failed", "runtime": "runtime_changed"}
+    assert result["errors"] == [expected[failure]] and not result["ok"]
+    assert "noop" not in result and result["deleted"] == [] and not calls
+
+
+def test_empty_maintenance_keeps_native_lock_guard(setup):
+    policy, _, _, calls = setup
+    policy["goal_bytes"] = 10_000_000_000
+    with core.locked(Path(policy["locks"]["tg"])):
+        result = core.maintain(policy)
+    assert result["errors"] == ["native_lock_busy"] and not result["ok"]
+    assert "noop" not in result and result["deleted"] == [] and not calls
+
+
+def test_space_falling_below_goal_does_not_claim_maintenance_noop(setup, monkeypatch):
+    policy, _, _, calls = setup
+    policy["goal_bytes"] = 10_000_000_000
+    checks = []
+
+    def space(value):
+        checks.append("space")
+        return policy["goal_bytes"] + 1 if len(checks) < 4 else policy["goal_bytes"] - 1
+
+    monkeypatch.setattr(core, "available_bytes", space)
+    result = core.maintain(policy)
+    assert result["ok"] and not result["target_reached"] and "noop" not in result
     assert calls == ["pause", "resume"]
 
 
@@ -449,6 +532,22 @@ def test_own_runner_excluded_from_runtime_and_health(setup):
     policy, _, _, _ = setup
     policy["inventory"]["units"] = [policy["ci"]["runner_unit"]]
     with pytest.raises(MaintenanceError, match="ci_runner_in_application_baseline"):
+        core.validate_policy(policy)
+
+
+@pytest.mark.parametrize("days", [1, 2, 3])
+def test_explicit_pg_retention_days_do_not_change_enablement(days):
+    policy = copy.deepcopy(core.DEFAULT_POLICY)
+    policy["pg_keep_days"] = days
+    assert core.validate_policy(policy)["pg_keep_days"] == days
+    assert policy["pg_retention_enabled"] is False
+
+
+@pytest.mark.parametrize("days", [0, 4, True, 1.0, "1", None])
+def test_invalid_pg_retention_days_are_rejected(days):
+    policy = copy.deepcopy(core.DEFAULT_POLICY)
+    policy["pg_keep_days"] = days
+    with pytest.raises(MaintenanceError, match="policy_retention_invalid"):
         core.validate_policy(policy)
 
 

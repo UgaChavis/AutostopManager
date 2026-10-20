@@ -1,0 +1,19 @@
+[Unit]
+Description=Daily verified Store database, files and settings backup (one generation)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/autostop24-db-backup
+User=root
+Group=root
+UMask=0077
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/var/backups/autostop-current/store /run/lock
+TimeoutStartSec=2h

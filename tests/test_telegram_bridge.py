@@ -737,7 +737,7 @@ def test_work_telegram_duty_control_has_explicit_enable_and_disable_paths() -> N
     assert 'monitor_env="/etc/autostop-work-telegram/monitor.env"' in text
     assert "AUTOSTOP_WORK_TELEGRAM_OWNER" not in text
     assert 'release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"' in text
-    assert '[[ -L "${release_link}" && "${release_dir}" == /opt/autostop-work-telegram-releases/*' in text
+    assert '[[ -L "${release_link}" && ( "${release_dir}" == /opt/autostop-work-telegram-releases/*' in text
     # Match complete content commands: technical `ready` is not Telegram `read`.
     assert not re.search(r" (?:dialogs|send|search|read)\b", text)
 
@@ -837,7 +837,7 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
     (fake_bin / "sleep").chmod(0o755)
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
-        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
+        ('venv_python=""', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),
@@ -957,7 +957,7 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
     script_text = (ROOT / "scripts" / "set-work-telegram-duty.sh").read_text(encoding="utf-8")
     for old, new in (
         ('release_link="/opt/autostop-work-telegram-releases/current"', f'release_link="{current_link}"'),
-        ('venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{venv_python}"'),
+        ('venv_python=""', f'venv_python="{venv_python}"'),
         ('monitor_env="/etc/autostop-work-telegram/monitor.env"', f'monitor_env="{monitor_env}"'),
         ('wake_config="/etc/autostop-work-telegram/wake.json"', f'wake_config="{tmp_path / "wake.json"}"'),
         ('control_lock="/run/autostop-work-telegram-control.lock"', f'control_lock="{control_lock}"'),

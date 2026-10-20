@@ -36,6 +36,7 @@ UNITS = (
     "autostop-disk-maintenance-recovery.timer",
     "autostop24-db-backup.service.d/disk-retention.conf",
 )
+RETENTION_UNIT = UNITS[-1]
 TIMERS = ("autostop-disk-maintenance.timer", "autostop-disk-maintenance-recovery.timer")
 BASE = Path("/usr/local/libexec/autostop-disk-maintenance")
 POLICY = Path("/etc/autostop-maintenance/policy.json")
@@ -103,6 +104,24 @@ def _write(path: Path, data: bytes, mode: int, *, gid: int = 0) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def _owned_retention_hook(path: Path, expected: bytes) -> bool:
+    """Only retire the exact hook shipped by this installer."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    no_symlink_ancestors(path)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 0
+        or info.st_mode & 0o022
+        or info.st_nlink != 1
+        or path.read_bytes() != expected
+    ):
+        raise MaintenanceError("install_retention_hook_modified")
+    return True
 
 
 def _payload(source: Path, revision: str) -> tuple[dict[str, bytes], str]:
@@ -488,6 +507,11 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
         raise MaintenanceError("install_receipt_already_exists")
     contents, digest = _payload(source, revision)
     policy_bytes = _approved_policy(policy_file)
+    retain_pg = json.loads(policy_bytes)["pg_retention_enabled"]
+    hook_path = SYSTEMD / RETENTION_UNIT
+    hook_bytes = contents["deploy/systemd/" + RETENTION_UNIT]
+    if not retain_pg:
+        _owned_retention_hook(hook_path, hook_bytes)
     _directory(TMPFILES.parent, 0o755)
     previous_tmpfiles = _tmpfiles_record()
     # Bridge creators inherit umask: 022/027 can produce 0644/0640. Only the
@@ -530,7 +554,12 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
         _write(POLICY, policy_bytes, 0o600)
         _write(WRAPPER, WRAPPER_BYTES, 0o750)
         for name, path in zip(UNITS, unit_paths, strict=True):
-            _write(path, contents["deploy/systemd/" + name], 0o644)
+            if name == RETENTION_UNIT and not retain_pg:
+                if _owned_retention_hook(path, hook_bytes):
+                    path.unlink()
+                    _sync_directory(path.parent)
+            else:
+                _write(path, contents["deploy/systemd/" + name], 0o644)
         _activate("releases/" + digest)
         _command([str(WRAPPER), "--policy", str(POLICY), "--help"])
         _command(["systemd-analyze", "verify", *(str(path) for path in unit_paths[:4])])
