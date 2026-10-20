@@ -18,6 +18,7 @@ from typing import Any
 
 from .config import reject_obsolete_runtime_config
 from .j1_fetch import public_url
+from .numeric import bounded_int as _bounded_int
 
 
 SCHEMA = "autostop.j1.browser.v1"
@@ -31,16 +32,6 @@ MAX_TIMEOUT_SECONDS = 25
 # Each JSON string character can require six bytes; reserve URL, title and envelope.
 _MAX_MESSAGE_BYTES = 6 * (MAX_TEXT_CHARS + 2_048 + 200) + 1_024
 _MAX_REQUEST_BYTES = 6 * 2_048 + 1_024
-
-
-def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool):
-        return default
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-    return max(minimum, min(numeric, maximum))
 
 
 def _public_http_url(value: Any) -> str:

@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from .j1_fetch import MAX_TEXT_CHARS, redact_sensitive
+from .numeric import bounded_int as _bounded_int
 
 
 MAX_PDF_BYTES = 8_000_000
@@ -28,16 +29,6 @@ MAX_TIMEOUT_SECONDS = 30
 MAX_IMAGE_BYTES = 30_000_000
 MAX_IMAGE_FILE_BYTES = MAX_IMAGE_BYTES // MAX_PAGES
 OCR_LANGUAGES = "rus+eng"
-
-
-def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool):
-        return default
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-    return max(minimum, min(numeric, maximum))
 
 
 def _restrict_child() -> None:
