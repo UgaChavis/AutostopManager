@@ -27,6 +27,12 @@ receipts и восстановление CI — `/var/lib/autostop-manager/priva
 `autostop-disk-maintenance.timer` запускается в **04:00 Asia/Krasnoyarsk**,
 `Persistent=false`; recovery timer каждые пять минут возвращает только собственную
 паузу CI. Обслуживание не останавливает приложения и не перезапускает Docker.
+
+| Служба | Действие |
+| --- | --- |
+| `autostop-disk-maintenance.service` | Выполняет `maintain`; фактические drop-ins могут добавлять отдельные post-hooks, поэтому запуск всей службы не заменяет ограниченный CLI smoke. |
+| `autostop-disk-maintenance-recovery.service` | Возвращает только сохранённые изменения CI своего предыдущего запуска. |
+
 При достаточном месте и подтверждённом пустом плане `maintain` возвращает no-op
 под native locks, с повторной проверкой здоровья и снимка; CI не приостанавливается.
 Общий cleanup lock, native locks PostgreSQL, CRM deploy и рабочего Telegram
