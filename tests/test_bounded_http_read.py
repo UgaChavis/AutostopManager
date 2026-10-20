@@ -13,9 +13,96 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import pytest
+import httpx
 
 from autostop_manager import bounded_http_read as bounded
 from autostop_manager import catalog_clients, vin_lookup, work_pricing_research
+
+
+@pytest.mark.parametrize("status,cross_origin", [(302, True), (307, False)])
+def test_followed_redirect_closes_body_and_keeps_httpx_request_rules(monkeypatch, status, cross_origin):
+    observed = []
+    closed = []
+    client = httpx.AsyncClient
+    target = "https://other.invalid/final" if cross_origin else "/final"
+
+    class Body(httpx.AsyncByteStream):
+        def __init__(self, redirect):
+            self.redirect = redirect
+
+        async def __aiter__(self):
+            if self.redirect:
+                pytest.fail("intermediate redirect body was read")
+            yield b"synthetic"
+
+        async def aclose(self):
+            if self.redirect:
+                closed.append(True)
+
+    async def handle(request):
+        observed.append((request.method, request.headers.get("Authorization"), await request.aread()))
+        redirect = request.url.path == "/redirect"
+        return httpx.Response(
+            status if redirect else 200,
+            headers={"Location": target} if redirect else {},
+            stream=Body(redirect),
+        )
+
+    monkeypatch.setattr(
+        bounded.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs)
+    )
+    response = asyncio.run(
+        bounded._fetch(
+            Request("https://synthetic.invalid/redirect", data=b"input", headers={"Authorization": "Bearer synthetic"}),
+            deadline=time.monotonic() + 2,
+            maximum=128,
+            follow_redirects=True,
+        )
+    )
+
+    assert response.read() == b"synthetic"
+    assert observed == [
+        ("POST", "Bearer synthetic", b"input"),
+        (
+            "GET" if status == 302 else "POST",
+            None if cross_origin else "Bearer synthetic",
+            b"" if status == 302 else b"input",
+        ),
+    ]
+    assert closed == [True]
+
+
+def test_redirect_limit_closes_every_stream_without_reading_its_body(monkeypatch):
+    closed = []
+    requests = []
+    client = httpx.AsyncClient
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            pytest.fail("intermediate redirect body was read")
+            yield b""
+
+        async def aclose(self):
+            closed.append(True)
+
+    async def handle(request):
+        requests.append(request)
+        return httpx.Response(302, headers={"Location": "/loop"}, stream=Body())
+
+    monkeypatch.setattr(
+        bounded.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs)
+    )
+
+    with pytest.raises(URLError, match="provider_network_error"):
+        asyncio.run(
+            bounded._fetch(
+                Request("https://synthetic.invalid/loop"),
+                deadline=time.monotonic() + 2,
+                maximum=128,
+                follow_redirects=True,
+            )
+        )
+    assert len(requests) == len(closed) == 11
 
 
 @pytest.fixture
