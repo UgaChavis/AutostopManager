@@ -607,6 +607,7 @@ def test_order_payment_projection_matches_store_search_and_exact_read(monkeypatc
         {"paid_at": "2026-09-26T03:30:00"},
         {"paid_at": "invalid"},
         {"paid_at": "2026-99-99T03:30:00Z"},
+        {"paid_at": "x" * 65},
     ],
 )
 def test_order_payment_projection_rejects_invalid_types_and_dates(monkeypatch, invalid):
@@ -1039,6 +1040,150 @@ def test_all_five_real_app_action_envelopes_have_independent_change_limits(
     assert result["ok"] is True
     assert result["items"] == []
     assert result["changes"] == changes
+
+
+@pytest.mark.parametrize("operation", ["mark_order_ready", "set_order_payment_status"])
+@pytest.mark.parametrize("mode", ["dry_run", "apply"])
+@pytest.mark.parametrize("payment_status,paid_at", [("PAYMENT_REQUIRED", None), ("PAID", "2026-10-20T03:30:00+00:00")])
+def test_order_action_payment_projection_accepts_store54_receipt_replay(
+    monkeypatch, operation, mode, payment_status, paid_at
+):
+    calls = []
+    payload = _envelope(
+        status="dry_run" if mode == "dry_run" else "applied",
+        summary={
+            "operation": operation,
+            "mode": mode,
+            "target_id": "synthetic-order-1",
+            "changed": True,
+            "result": {
+                "entity_type": "store_order",
+                "entity_id": "synthetic-order-1",
+                "order_number": "SYNTHETIC-1",
+                "status": "READY",
+                "payment_status": payment_status,
+                "paid_at": paid_at,
+                "ready_at": "2026-10-20T03:00:00+00:00",
+                "updated_at": "2026-10-20T03:30:00+00:00",
+            },
+        },
+        next_cursor=None,
+    )
+    payload["meta"] = {
+        "correlation_id": "synthetic-correlation-1",
+        "idempotency_key": "synthetic-existing-key-1",
+        "idempotency_replay": True,
+        "effects": [],
+        "external_effect_state": "FAILED" if operation == "mark_order_ready" else "NOT_APPLICABLE",
+        **(
+            {
+                "external_effect_manual_reconciliation_required": True,
+                "external_effect_reconciliation_reason": "delivery_outcome_unknown_after_claim",
+                "external_effect_reconciled_at": "2026-10-20T03:31:00+00:00",
+            }
+            if operation == "mark_order_ready"
+            else {}
+        ),
+    }
+
+    def response(request, **_kwargs):
+        calls.append(request)
+        return _Response(payload)
+
+    monkeypatch.setattr(store_api_module, "urlopen", response)
+    result = _client(max_read_attempts=3).management_action(
+        operation=operation,
+        target_id="synthetic-order-1",
+        expected_updated_at="2026-10-20T03:00:00+00:00",
+        owner_intent="Synthetic receipt reconciliation",
+        idempotency_key="synthetic-existing-key-1",
+        correlation_id="synthetic-correlation-1",
+        mode=mode,
+        planned_changes={"status": "READY"} if operation == "mark_order_ready" else {"paid": True},
+    )
+
+    assert result["ok"] is True
+    assert result["summary"]["result"]["payment_status"] == payment_status
+    assert result["summary"]["result"]["paid_at"] == paid_at
+    assert result["meta"]["idempotency_replay"] is True
+    assert len(calls) == 1 and calls[0].get_method() == "POST"
+    assert json.loads(calls[0].data)["idempotency_key"] == "synthetic-existing-key-1"
+
+
+@pytest.mark.parametrize("operation", ["mark_order_ready", "set_order_payment_status"])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"payment_status": None},
+        {"payment_status": False},
+        {"payment_status": {"private": "hidden"}},
+        {"payment_status": "unknown"},
+        {"paid_at": False},
+        {"paid_at": 7},
+        {"paid_at": {"private": "hidden"}},
+        {"paid_at": "2026-10-20"},
+        {"paid_at": "2026-10-20T03:30:00"},
+        {"paid_at": "2026-99-99T03:30:00Z"},
+        {"paid_at": "generated_on_apply"},
+        {"payment_secret": "not-an-allowed-field"},
+    ],
+)
+def test_order_action_payment_projection_rejects_invalid_applied_result_without_retry(monkeypatch, operation, invalid):
+    payload = _envelope(
+        status="applied",
+        summary={
+            "operation": operation,
+            "mode": "apply",
+            "result": {"payment_status": "PAID", "paid_at": None, **invalid},
+        },
+    )
+    request = Mock(return_value=_Response(payload))
+    monkeypatch.setattr(store_api_module, "urlopen", request)
+    result = _client(max_read_attempts=3).management_action(
+        operation=operation,
+        target_id="synthetic-order-1",
+        expected_updated_at="version-1",
+        owner_intent="Synthetic payment projection validation",
+        idempotency_key="synthetic-existing-key-1",
+        correlation_id="synthetic-correlation-1",
+        mode="apply",
+        planned_changes={"status": "READY"} if operation == "mark_order_ready" else {"paid": True},
+    )
+
+    assert result["ok"] is False
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
+    assert result["meta"]["request_dispatched"] is True
+    assert result["meta"]["outcome_uncertain"] is True
+    request.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "operation,status,mode,payment_status,accepted",
+    [
+        ("set_order_payment_status", "dry_run", "dry_run", "PAID", True),
+        ("mark_order_ready", "dry_run", "dry_run", "PAID", False),
+        ("set_order_payment_status", "applied", "dry_run", "PAID", False),
+        ("set_order_payment_status", "dry_run", "apply", "PAID", False),
+        ("set_order_payment_status", "dry_run", "dry_run", "PAYMENT_REQUIRED", False),
+    ],
+)
+def test_generated_payment_timestamp_is_only_a_payment_dry_run_projection(
+    operation, status, mode, payment_status, accepted
+):
+    payload = _envelope(
+        status=status,
+        summary={
+            "operation": operation,
+            "mode": mode,
+            "result": {"payment_status": payment_status, "paid_at": "generated_on_apply"},
+        },
+    )
+    if accepted:
+        store_api_module._validate_action_payload(payload, operation)
+        assert payload["summary"]["result"]["paid_at"] == "generated_on_apply"
+    else:
+        with pytest.raises(ValueError, match="paid_at preview"):
+            store_api_module._validate_action_payload(payload, operation)
 
 
 @pytest.mark.parametrize(
