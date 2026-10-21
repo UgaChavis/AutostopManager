@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from io import StringIO
 import json
 import math
 import re
@@ -159,18 +161,69 @@ def _public_identifier(classification: IdentifierClassification) -> dict[str, An
     }
 
 
+def _replace_uppercase_spans(value: str, pattern: str, replacement: str) -> str:
+    """Replace literal uppercase matches at complete original character boundaries.
+
+    Stream uppercase units through KMP, keeping only the last pattern-length
+    origin markers. Interior expansion units cannot begin or end a replacement.
+    """
+    if not pattern:
+        return value
+    prefix = [0] * len(pattern)
+    for index in range(1, len(pattern)):
+        matched = prefix[index - 1]
+        while matched and pattern[index] != pattern[matched]:
+            matched = prefix[matched - 1]
+        if pattern[index] == pattern[matched]:
+            matched += 1
+        prefix[index] = matched
+
+    starts: deque[int | None] = deque(maxlen=len(pattern))
+    matched = 0
+    copied_until = 0
+    output: StringIO | None = None
+    for original_index, char in enumerate(value):
+        upper = char.upper()
+        for unit_index, unit in enumerate(upper):
+            starts.append(original_index if unit_index == 0 else None)
+            while matched and unit != pattern[matched]:
+                matched = prefix[matched - 1]
+            if unit == pattern[matched]:
+                matched += 1
+            if matched != len(pattern):
+                continue
+            first_original = starts[0]
+            if first_original is not None and unit_index + 1 == len(upper):
+                if output is None:
+                    output = StringIO()
+                output.write(value[copied_until:first_original])
+                output.write(replacement)
+                copied_until = original_index + 1
+                starts.clear()
+                matched = 0  # Preserve str.replace's nonoverlap semantics.
+            else:
+                # A rejected half-expansion may overlap a later complete match.
+                matched = prefix[matched - 1]
+    if output is None:
+        return value
+    output.write(value[copied_until:])
+    result = output.getvalue()
+    output.close()
+    return result
+
+
 def _redact_identifier_text(value: str, identifier: str | None) -> str:
     normalized = re.sub(r"[^A-Z0-9*]", "", str(identifier or "").upper())
     if not normalized:
         return value
     display = _redact_identifier(normalized)["display"]
-    redacted = value.replace(normalized, display)
+    redacted = _replace_uppercase_spans(value, normalized, display)
     if "-" in value:
         parts = []
         for split_at in range(3, min(len(normalized), 7)):
             parts.append(f"{normalized[:split_at]}-{normalized[split_at:]}")
         for variant in parts:
-            redacted = redacted.replace(variant, display)
+            redacted = _replace_uppercase_spans(redacted, variant, display)
     return redacted
 
 

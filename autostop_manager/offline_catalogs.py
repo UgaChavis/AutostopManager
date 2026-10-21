@@ -98,7 +98,9 @@ def _rg_matches(
     literal = "".join(f"\\{char}" if char in r"\.^$|?*+()[]{}" else char for char in query)
     try:
         with path.open("rb") as source:
-            has_synthetic_page_markers = is_pdf and source.read(16).startswith(b"\f[PAGE ")
+            has_synthetic_page_markers = is_pdf and (
+                source.read(16).removeprefix(b"\xef\xbb\xbf").startswith(b"\f[PAGE ")
+            )
     except OSError:
         return [], "catalog_read_failed"
     if is_tsv:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -175,6 +176,36 @@ def _find_map_values(
     return None, []
 
 
+def _normalize_brand_key(value: str) -> str:
+    decomposed = unicodedata.normalize("NFD", value)
+    return _normalize_key("".join(char for char in decomposed if not unicodedata.combining(char)))
+
+
+def _find_brand_map_values(
+    mapping: dict[str, list[dict[str, Any]]], query: str | None, catalog: dict[str, dict[str, Any]]
+) -> tuple[str | None, list[dict[str, Any]]]:
+    if not query or not (normalized := _normalize_brand_key(query)):
+        return _find_map_values(mapping, query)
+    selected_key = next((key for key in mapping if _normalize_brand_key(key) == normalized), None)
+    if selected_key is None:
+        # Preserve the existing fuzzy selection, then include its equivalent spellings.
+        selected_key, _ = _find_map_values(mapping, query)
+    if selected_key is None or not (identity := _normalize_brand_key(selected_key)):
+        return _find_map_values(mapping, query)
+
+    keys = [key for key in mapping if _normalize_brand_key(key) == identity]
+    spelling = unicodedata.normalize("NFC", query.strip()).casefold()
+    matched_key = next((key for key in keys if unicodedata.normalize("NFC", key).casefold() == spelling), selected_key)
+    merged: dict[str, dict[str, Any]] = {}
+    for key in keys:
+        for source in mapping[key]:
+            if isinstance(source, dict) and (source_id := _source_id(source)):
+                merged.setdefault(source_id, source)
+    # Group concatenation would reorder equal-score sources from interleaved spellings.
+    order = {source_id: index for index, source_id in enumerate(catalog)}
+    return matched_key, sorted(merged.values(), key=lambda source: order.get(_source_id(source), len(order)))
+
+
 def _is_licensed(source: dict[str, Any]) -> bool:
     status = str(source.get("legal_ingestion_status") or "").strip()
     access = str(source.get("access") or "").strip()
@@ -219,7 +250,8 @@ def recommend_automotive_sources(
     limit: int = 10,
 ) -> dict[str, Any]:
     """Return source routes for a repair question without copying source content."""
-    brand_key, brand_sources = _find_map_values(load_brand_source_map(), brand)
+    catalog = _source_index()
+    brand_key, brand_sources = _find_brand_map_values(load_brand_source_map(), brand, catalog)
     data_type_key, data_type_sources = _find_map_values(load_data_type_source_map(), data_type)
     normalized_data_type = _normalize_key(data_type)
     if not data_type_sources and normalized_data_type in _DATA_TYPE_ALIASES:
@@ -233,8 +265,6 @@ def recommend_automotive_sources(
                 if source_id:
                     merged.setdefault(source_id, source)
         data_type_sources = list(merged.values())
-    catalog = _source_index()
-
     by_id: dict[str, dict[str, Any]] = {}
     brand_ids = {_source_id(source) for source in brand_sources if _source_id(source)}
     data_type_ids = {_source_id(source) for source in data_type_sources if _source_id(source)}
@@ -290,7 +320,10 @@ def recommend_automotive_sources(
         warnings.append(f"No exact data-type route found for {data_type}; use repair source playbook.")
     if not include_licensed and (brand_key or data_type_key) and not rows:
         warnings.append("No open-only source route remained after licensed or license-dependent sources were filtered.")
-    if normalized_data_type in _SAFETY_CRITICAL_DATA_TYPES:
+    if (
+        normalized_data_type in _SAFETY_CRITICAL_DATA_TYPES
+        or _normalize_key(data_type_key) in _SAFETY_CRITICAL_DATA_TYPES
+    ):
         warnings.append("Safety-critical route: use OEM or licensed professional sources only.")
 
     endpoints = []

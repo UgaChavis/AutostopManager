@@ -30,6 +30,7 @@ from .config import get_automation_crm_connection_config, get_work_telegram_sock
 
 
 Executor = Callable[[Mapping[str, Any]], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
+CONTROLLER_HEARTBEAT_SECONDS = 10.0
 TEST_NOTIFICATION_TEXT = "Тест уведомлений: Центр автоматизаций подключён."
 INCIDENT_ID_PATTERN = re.compile(r"inc_[0-9a-f]{32}\Z")
 RESULT_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,95}\Z")
@@ -330,30 +331,51 @@ class AutomationDaemon:
         )
 
     async def scheduler_loop(self) -> None:
-        while not self.stopping.is_set():
-            try:
-                self.store.controller_heartbeat(owner=self.owner)
-                reconciled = self.store.reconcile_next_job()
-                if reconciled is not None:
-                    if not reconciled.get("applied"):
-                        # An active lease can keep this revision pending. Yield
-                        # so control requests and shutdown can run while waiting.
-                        with suppress(TimeoutError):
-                            await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
-                    continue
-                outbox = self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
-                if outbox is not None:
-                    await self._execute_outbox(outbox)
-                    continue
-                claim = self.store.claim_next_run(owner=self.owner, lease_seconds=self.lease_seconds)
-                if claim is not None:
-                    await self._execute_claim(claim)
-                    continue
-            except Exception:  # noqa: BLE001 - the persistent controller retries without logging private state.
+        controller_state = "active"
+
+        async def heartbeat_loop() -> None:
+            while True:
+                await asyncio.sleep(CONTROLLER_HEARTBEAT_SECONDS)
+                # A transient status write must not abort an in-flight claim.
                 with suppress(Exception):
-                    self.store.controller_heartbeat(owner=self.owner, state="error")
-            with suppress(TimeoutError):
-                await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
+                    self.store.controller_heartbeat(
+                        owner=self.owner,
+                        state="stopping" if self.stopping.is_set() else controller_state,
+                    )
+
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
+        try:
+            while not self.stopping.is_set():
+                try:
+                    controller_state = "active"
+                    self.store.controller_heartbeat(owner=self.owner)
+                    reconciled = self.store.reconcile_next_job()
+                    if reconciled is not None:
+                        if not reconciled.get("applied"):
+                            # An active lease can keep this revision pending. Yield
+                            # so control requests and shutdown can run while waiting.
+                            with suppress(TimeoutError):
+                                await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
+                        continue
+                    outbox = self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
+                    if outbox is not None:
+                        await self._execute_outbox(outbox)
+                        continue
+                    claim = self.store.claim_next_run(owner=self.owner, lease_seconds=self.lease_seconds)
+                    if claim is not None:
+                        await self._execute_claim(claim)
+                        continue
+                except Exception:  # noqa: BLE001 - retry without logging private state.
+                    controller_state = "error"
+                    with suppress(Exception):
+                        self.store.controller_heartbeat(owner=self.owner, state="error")
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
+        finally:
+            # End owned updates before run() can publish the stopped state.
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
 
     async def run(self) -> None:
         reject_obsolete_runtime_config()

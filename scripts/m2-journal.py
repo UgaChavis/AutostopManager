@@ -83,6 +83,11 @@ def records(path):
     return [json.loads(block) for block in RECORD.findall(path.read_text())]
 
 
+def canonical_record(record):
+    """Compare UUID aliases without changing the stored record spelling."""
+    return {**record, "id": str(UUID(record["id"]))}
+
+
 def publish_pointers(root, week):
     path = ensure_week(root, week)
     entries = records(path)
@@ -124,10 +129,11 @@ def recover(root):
     validate(record)
     week = week_for(datetime.fromisoformat(payload["at"]))
     path = ensure_week(root, week)
-    existing = {entry["id"]: entry for entry in records(path)}
-    if record["id"] in existing and existing[record["id"]] != payload:
+    normalized = canonical_record(payload)
+    existing = [entry for entry in records(path) if str(UUID(entry["id"])) == normalized["id"]]
+    if any(canonical_record(entry) != normalized for entry in existing):
         raise ValueError("journal_record_conflict")
-    if record["id"] not in existing:
+    if not existing:
         block = (
             "\n## "
             + payload["at"]
@@ -158,14 +164,17 @@ def run(root=ROOT, record=None, at=None):
         ensure_week(root, week)
         recover(root)
         if record is not None:
+            normalized = canonical_record(record)
             existing = [
                 entry
                 for path in (root / "journal").glob("????-W??.md")
                 for entry in records(path)
-                if entry["id"] == record["id"]
+                if str(UUID(entry["id"])) == normalized["id"]
             ]
             if existing:
-                if {k: v for k, v in existing[0].items() if k != "at"} != record:
+                if any(
+                    canonical_record({k: v for k, v in entry.items() if k != "at"}) != normalized for entry in existing
+                ):
                     raise ValueError("journal_record_conflict")
             else:
                 payload = {**record, "at": at.astimezone(UTC).isoformat()}

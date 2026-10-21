@@ -2,22 +2,25 @@
 
 Each caller owns its request budget. DNS can outlive the caller deadline, so a
 worker retains its admission until it actually ends; a timeout never claims to
-have terminated OS name resolution. No cookies or credentials are retained.
+have terminated OS name resolution. HTTP headers and decoded body share the
+same monotonic deadline. No cookies or credentials are retained.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 import ipaddress
 import re
 import socket
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
+import anyio
 import httpx
 
 
@@ -86,50 +89,111 @@ def _public_address(host: str, port: int) -> str:
     return str(addresses[0])
 
 
-def _http_get(url: str, timeout: float, maximum: int) -> tuple[int, bytes, dict[str, str]]:
+def _remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise CatalogReadError("catalog_deadline_exceeded", retryable=True)
+    return remaining
+
+
+class _OwnedResponseStream(httpx.AsyncByteStream):
+    def __init__(self, stream: httpx.AsyncByteStream) -> None:
+        self._stream = stream
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._stream:
+            yield chunk
+
+    async def aclose(self) -> None:
+        # HTTPX also closes at EOF; protect that first close before is_closed
+        # can make later response.aclose calls skip incomplete stream cleanup.
+        with anyio.CancelScope(shield=True):
+            await self._stream.aclose()
+
+
+async def _async_http_get(
+    url: str, *, address: str, deadline: float, maximum: int
+) -> tuple[int, bytes, dict[str, str]]:
     parsed = urlsplit(url)
     host = parsed.hostname or ""
-    port = 443 if parsed.scheme == "https" else 80
-    address = _public_address(host, port)
     pinned_host = f"[{address}]" if ":" in address else address
     pinned_url = urlunsplit((parsed.scheme, pinned_host, parsed.path, parsed.query, ""))
     headers = {"Host": host, "User-Agent": CATALOG_USER_AGENT, "Accept-Encoding": "identity"}
-    with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-        request = client.build_request("GET", pinned_url, headers=headers)
-        request.extensions["sni_hostname"] = host
-        response = client.send(request, stream=True, follow_redirects=False)
-        try:
-            body = bytearray()
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
-                if len(body) > maximum:
-                    raise CatalogReadError("catalog_response_too_large")
-            return response.status_code, bytes(body), dict(response.headers)
-        finally:
-            response.close()
+    deadline_scope = None
+    try:
+        remaining = _remaining_time(deadline)
+        with anyio.fail_after(remaining) as deadline_scope:
+            client = httpx.AsyncClient(timeout=remaining, follow_redirects=False, trust_env=False)
+            response = None
+            try:
+                await client.__aenter__()
+                request = client.build_request("GET", pinned_url, headers=headers)
+                request.extensions["sni_hostname"] = host
+                # TLS/client setup can execute synchronously without an async checkpoint.
+                _remaining_time(deadline)
+                response = await client.send(request, stream=True, follow_redirects=False)
+                response.stream = _OwnedResponseStream(cast(httpx.AsyncByteStream, response.stream))
+                body = bytearray()
+                # Navigation needs only headers; close intermediate bodies without buffering them.
+                if response.status_code not in {301, 302, 303, 307, 308}:
+                    async for chunk in response.aiter_bytes():
+                        _remaining_time(deadline)
+                        if len(body) + len(chunk) > maximum:
+                            raise CatalogReadError("catalog_response_too_large")
+                        body.extend(chunk)
+                result = response.status_code, bytes(body), dict(response.headers)
+            finally:
+                # Caller timeout never releases capacity before the owned transport is closed.
+                with anyio.CancelScope(shield=True):
+                    try:
+                        if response is not None:
+                            await response.aclose()
+                    finally:
+                        await client.aclose()
+            _remaining_time(deadline)
+            return result
+    except TimeoutError as exc:
+        if deadline_scope is not None and deadline_scope.cancelled_caught:
+            raise CatalogReadError("catalog_deadline_exceeded", retryable=True) from exc
+        raise
+
+
+def _http_get(
+    url: str, timeout: float, maximum: int, *, deadline: float | None = None
+) -> tuple[int, bytes, dict[str, str]]:
+    deadline = time.monotonic() + timeout if deadline is None else deadline
+    parsed = urlsplit(url)
+    host = parsed.hostname or ""
+    port = 443 if parsed.scheme == "https" else 80
+    _remaining_time(deadline)
+    address = _public_address(host, port)
+    _remaining_time(deadline)
+    return asyncio.run(_async_http_get(url, address=address, deadline=deadline, maximum=maximum))
 
 
 def _bounded_get(url: str, timeout: float, maximum: int) -> tuple[int, bytes, dict[str, str]]:
-    if not _ADMISSIONS.acquire(blocking=False):
+    deadline = time.monotonic() + timeout
+    admission = _ADMISSIONS
+    if not admission.acquire(blocking=False):
         raise CatalogReadError("catalog_transport_busy", retryable=True)
     done = threading.Event()
     outcome: list[tuple[int, bytes, dict[str, str]] | BaseException] = []
 
     def run() -> None:
         try:
-            outcome.append(_http_get(url, timeout, maximum))
+            outcome.append(_http_get(url, timeout, maximum, deadline=deadline))
         except BaseException as exc:  # noqa: BLE001 - preserve worker failure for its caller.
             outcome.append(exc)
         finally:
-            _ADMISSIONS.release()
+            admission.release()
             done.set()
 
     try:
         threading.Thread(target=run, name="autostop-public-catalog", daemon=True).start()
     except RuntimeError as exc:
-        _ADMISSIONS.release()
+        admission.release()
         raise CatalogReadError("catalog_transport_unavailable", retryable=True) from exc
-    if not done.wait(timeout):
+    if not done.wait(max(0, deadline - time.monotonic())) or time.monotonic() >= deadline:
         raise CatalogReadError("catalog_deadline_exceeded", retryable=True)
     value = outcome[0]
     if isinstance(value, CatalogReadError):

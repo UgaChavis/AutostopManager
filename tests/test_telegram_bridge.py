@@ -629,6 +629,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     unit_state_path.write_text(unit_state, encoding="utf-8")
     if inbound_intent:
         monitor_env.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n", encoding="utf-8")
+        monitor_env.chmod(0o644)
 
     fake_bin.mkdir()
     (fake_bin / "systemctl").write_text(
@@ -820,6 +821,7 @@ def test_work_telegram_duty_disable_clears_intent_and_stops_inflight_media(tmp_p
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    monitor_env.chmod(0o644)
     control_lock.parent.mkdir()
     venv_python = tmp_path / "venv-python"
     venv_python.write_text(
@@ -885,6 +887,7 @@ def test_work_telegram_duty_disable_allows_a_missing_unit_before_first_release(t
     monitor_env.parent.mkdir(parents=True)
     control_lock.parent.mkdir()
     monitor_env.write_text("AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1\n", encoding="utf-8")
+    monitor_env.chmod(0o644)
     fake_bin.mkdir()
     (fake_bin / "systemctl").write_text(
         '#!/bin/sh\ncase "$1" in\nshow) printf "not-found\\n";;\nlist-units) :;;\n*) exit 9;;\nesac\n',

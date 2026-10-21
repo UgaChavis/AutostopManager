@@ -487,6 +487,8 @@ def test_missed_interval_is_coalesced_to_window_opening(monkeypatch, tmp_path: P
         idempotency_key="enable-window-0001",
         expected_revision=scheduled["revision"],
     )
+    reconciled = store.reconcile_next_job()
+    assert reconciled and reconciled["applied"] is True
     with sqlite3.connect(store.path) as connection:
         connection.execute(
             "UPDATE manager_automation_runtime SET next_run_at = ? WHERE job_id = ?",
@@ -833,6 +835,50 @@ def test_global_hold_control_is_release_system_only(tmp_path: Path, kind: str, o
             expected_revision=0 if operation != "preview" else None,
             actor={"kind": kind, "id": "untrusted-hold-actor", "is_admin": True},
         )
+
+
+@pytest.mark.parametrize("outcomes", [(False, False), (True, False, False, True, False)])
+def test_last_success_survives_failures_and_advances_on_recovery(monkeypatch, tmp_path: Path, outcomes):
+    current = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(automation_registry, "utc_now", lambda: current)
+    path = tmp_path / "manager.sqlite3"
+    store = AutomationStore(path)
+    service = AutomationControlService(store)
+    job = enable_digest(service, create_digest(service))
+    expected_last_success = None
+
+    for index, succeeded in enumerate(outcomes):
+        request(
+            service,
+            "run_now",
+            {"job_id": job["job_id"]},
+            idempotency_key=f"success-history-run-{index:04d}",
+            expected_revision=job["revision"],
+        )
+        claim = store.claim_next_run(owner="success-history-worker")
+        assert claim
+        assert store.finish_run(
+            job_id=job["job_id"],
+            run_id=claim["run_id"],
+            owner="success-history-worker",
+            fencing_token=claim["fencing_token"],
+            succeeded=succeeded,
+            result_code="ok" if succeeded else "automation_crm_transport_failed",
+        )
+        if succeeded:
+            expected_last_success = automation_registry.isoformat(current)
+        with sqlite3.connect(path) as connection:
+            actual_last_success = connection.execute(
+                "SELECT last_success_at FROM manager_automation_runtime WHERE job_id = ?",
+                (job["job_id"],),
+            ).fetchone()[0]
+            latest_successful_run = connection.execute(
+                "SELECT MAX(finished_at) FROM manager_automation_runs WHERE job_id = ? AND status = 'succeeded'",
+                (job["job_id"],),
+            ).fetchone()[0]
+        assert actual_last_success == latest_successful_run == expected_last_success
+        assert store.status(job_id=job["job_id"])["jobs"][0]["last_success_at"] == expected_last_success
+        current += timedelta(minutes=1)
 
 
 def test_error_incident_alert_is_suppressed_until_one_recovery(tmp_path: Path):

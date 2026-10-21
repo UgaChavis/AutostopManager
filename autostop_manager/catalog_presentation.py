@@ -104,11 +104,11 @@ def catalog_execution(payload: dict[str, Any], *, elapsed_ms: float, dry_run: bo
     return output
 
 
-def _preview_rows(value: Any, depth: int = 0) -> list[dict[str, Any]]:
+def _preview_rows(value: Any, depth: int = 0) -> list[Any]:
     if depth > 8:
         return []
     if isinstance(value, list):
-        return [row for row in value if isinstance(row, dict)]
+        return value if any(isinstance(row, dict) for row in value) else []
     if isinstance(value, dict):
         for key in ("data", "result", "array", "items", "rows", "records"):
             if key in value:
@@ -118,14 +118,21 @@ def _preview_rows(value: Any, depth: int = 0) -> list[dict[str, Any]]:
     return []
 
 
+def _is_preview_field(key: Any, value: Any) -> bool:
+    return str(key).replace("_", "").casefold() in _PREVIEW_FIELDS and isinstance(value, (str, int, float, bool))
+
+
 def present_catalog(payload: dict[str, Any], detail: CatalogDetail = "full") -> dict[str, Any]:
     if detail == "full":
         return payload
     metadata: dict[str, dict[str, Any]] = {}
+    generated_records: list[dict[str, Any]] | None = None
+    previewable_total = 0
 
     def compact(value: Any, path: str) -> Any:
         if isinstance(value, list):
-            total = len(value)
+            # Only the generated preview was bounded before compaction.
+            total = previewable_total if value is generated_records else len(value)
             metadata[path] = {
                 "total": total,
                 "returned": min(total, SUMMARY_LIST_LIMIT),
@@ -164,21 +171,29 @@ def present_catalog(payload: dict[str, Any], detail: CatalogDetail = "full") -> 
     source = dict(payload)
     if not any(payload.get(key) for key in _NORMALIZED_LISTS):
         rows = _preview_rows(payload.get("payload"))
-        previews = [
-            {
-                key: _VIN.sub("[REDACTED_IDENTIFIER]", value) if isinstance(value, str) else value
-                for key, value in row.items()
-                if str(key).replace("_", "").casefold() in _PREVIEW_FIELDS
-                and isinstance(value, (str, int, float, bool))
-            }
-            for row in rows
-        ]
-        previews = [row for row in previews if row]
+        source_total = 0
+        previews: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source_total += 1
+            if not any(_is_preview_field(key, value) for key, value in row.items()):
+                continue
+            previewable_total += 1
+            if len(previews) < SUMMARY_LIST_LIMIT:
+                previews.append(
+                    {
+                        key: _VIN.sub("[REDACTED_IDENTIFIER]", value) if isinstance(value, str) else value
+                        for key, value in row.items()
+                        if _is_preview_field(key, value)
+                    }
+                )
         if previews:
+            generated_records = previews
             source["data_preview"] = {
                 "records": previews,
-                "source_total": len(rows),
-                "previewable_total": len(previews),
+                "source_total": source_total,
+                "previewable_total": previewable_total,
                 "fitment_confirmed": False,
             }
     execution = source.get("execution")

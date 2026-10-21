@@ -1443,6 +1443,7 @@ class AutomationStore:
                     FROM manager_automations a
                     JOIN manager_automation_runtime r ON r.job_id = a.job_id
                     WHERE a.desired_state = 'on' AND a.archived_at IS NULL
+                      AND r.applied_revision = a.revision
                       AND r.next_run_at IS NOT NULL AND r.next_run_at <= ?
                       AND (r.lease_until IS NULL OR r.lease_until <= ?)
                     ORDER BY r.next_run_at LIMIT ?
@@ -1770,7 +1771,7 @@ class AutomationStore:
             connection.execute(
                 """
                 UPDATE manager_automation_runtime
-                SET actual_state = ?, next_run_at = ?, last_success_at = ?,
+                SET actual_state = ?, next_run_at = ?, last_success_at = COALESCE(?, last_success_at),
                     heartbeat_at = ?, lease_owner_hash = NULL, lease_until = NULL,
                     error_code = ?, incident_id = ?, incident_code = ?,
                     applied_revision = ?, applied_at = ?, updated_at = ?

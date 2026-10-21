@@ -21,6 +21,7 @@ def duty_fixture(tmp_path, state, *, inbound=True, bridge_available=True, bypass
     )
     if inbound:
         monitor.write_text(intent)
+        monitor.chmod(0o644)
     config = tmp_path / "wake.json"
     config.write_text("{}")
     bin_dir = tmp_path / "bin"
