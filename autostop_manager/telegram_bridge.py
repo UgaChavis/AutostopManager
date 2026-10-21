@@ -1809,13 +1809,12 @@ def _load_idempotency(path: Path) -> dict[str, dict[str, Any]]:
             not stat.S_ISREG(file_stat.st_mode)
             or file_stat.st_uid != os.geteuid()
             or stat.S_IMODE(file_stat.st_mode) != 0o600
-            or file_stat.st_size > 5 * 1024 * 1024
         ):
             raise BridgeError("idempotency_state_invalid")
-        raw = os.read(descriptor, 5 * 1024 * 1024 + 1)
-        if len(raw) > 5 * 1024 * 1024:
-            raise BridgeError("idempotency_state_invalid")
-        payload = json.loads(raw)
+        # This private history grows with completed sends. A request-size cap
+        # would eventually reject valid state written by _save_idempotency.
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = json.load(stream)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BridgeError("idempotency_state_unreadable") from exc
     finally:
