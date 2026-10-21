@@ -1770,7 +1770,7 @@ class AutomationStore:
             connection.execute(
                 """
                 UPDATE manager_automation_runtime
-                SET actual_state = ?, next_run_at = ?, last_success_at = ?,
+                SET actual_state = ?, next_run_at = ?, last_success_at = COALESCE(?, last_success_at),
                     heartbeat_at = ?, lease_owner_hash = NULL, lease_until = NULL,
                     error_code = ?, incident_id = ?, incident_code = ?,
                     applied_revision = ?, applied_at = ?, updated_at = ?
