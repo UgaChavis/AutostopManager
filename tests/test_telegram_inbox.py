@@ -754,6 +754,7 @@ def test_pruning_removes_only_completed_after_retention(inbox: TelegramInbox, cl
     old = inbox.record(1, 1)
     job = running(inbox)
     finish(inbox, job, receipt(inbox, job))
+    inbox.advance_checkpoint(1, 1)
     unresolved = inbox.record(2, 1)
     clock.advance(7 * 24 * 3600 - 1)
     assert inbox.prune() == 0
@@ -764,6 +765,36 @@ def test_pruning_removes_only_completed_after_retention(inbox: TelegramInbox, cl
     assert inbox.require_open(unresolved)
     assert inbox.status()["open_events"] == 1
     assert inbox.status()["completed_jobs"] == 0
+
+
+@pytest.mark.parametrize("duty_enabled", [False, True])
+def test_retention_preserves_dedup_until_history_covers_gaps(
+    inbox: TelegramInbox, clock: Clock, duty_enabled: bool
+) -> None:
+    old = inbox.record(1, 10)
+    job = running(inbox)
+    finish(inbox, job, receipt(inbox, job))
+    inbox.advance_checkpoint(1, 4)
+    inbox.mark_gap(peer_id=1, message_id=5, received_at=clock.value.isoformat(), reason_code="capacity")
+    if not duty_enabled:
+        inbox.duty_set(False)
+    gap = inbox.gaps()
+    clock.advance(7 * 24 * 3600 + 1)
+
+    assert inbox.prune() == 0
+    assert inbox.resolve(old).message_id == 10
+    assert inbox.event_state(old) == "reply_verified"
+    assert inbox.checkpoint(1) == 4 and inbox.gaps() == gap
+
+    # Only history recovery may cover the missing prefix; pruning never does.
+    inbox.advance_checkpoint(1, 10)
+    inbox.clear_gap(peer_id=1, through_message_id=10)
+    inbox.mark_gap(peer_id=1, message_id=11, received_at=clock.value.isoformat(), reason_code="capacity")
+    later_gap = inbox.gaps()
+    assert inbox.prune() == 1
+    assert inbox.checkpoint(1) == 10 and inbox.gaps() == later_gap
+    with pytest.raises(InboxError, match="inbound_event_unavailable"):
+        inbox.resolve(old)
 
 
 def test_checkpoint_never_moves_backwards(inbox: TelegramInbox) -> None:
