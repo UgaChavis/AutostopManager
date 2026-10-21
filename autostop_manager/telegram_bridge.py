@@ -508,7 +508,6 @@ class DurableInboundMonitor(InboundMonitor):
         self.generation = inbox.generation
         self.reconcile_requested = asyncio.Event()
         self.transport_ready = False
-        self.automation_coordinator: Any | None = None
         self.failure_event = asyncio.Event()
         self.failure_code: str | None = None
         self.reconciliation_fence: tuple[int, int, int] | None = None
@@ -3091,9 +3090,7 @@ async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: s
     }
 
 
-async def _handle_monitor_target(
-    client: Any, monitor: InboundMonitor, event_id: str, *, config: TelegramConfig | None = None
-) -> dict[str, Any]:
+async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
     """Resolve an explicit live event for guarded read/send, never infer a recipient."""
 
     event = monitor.require_open(event_id)
@@ -3106,7 +3103,7 @@ async def _handle_monitor_target(
         "ok": True,
         "event_id": event_id,
         "target": {"id": target["id"], "kind": target["kind"]},
-        "role": "owner" if config is not None and _owner_peer_id(config) == target["id"] else "client",
+        "role": "client",
         "reply_to_message_id": event.message_id,
     }
 
@@ -3293,7 +3290,7 @@ async def _handle_monitor_operation(
             }
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
     if operation == "monitor_target":
-        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""), config=config)
+        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""))
     if operation == "monitor_mark":
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
@@ -3544,7 +3541,6 @@ async def _handle_job_operation(
         job = inbox.claim(
             instruction_root=str(request.get("instruction_root") or ""),
             instruction_revision=str(request.get("instruction_revision") or ""),
-            unbatched_peer_id=_owner_peer_id(config),
         )
     elif operation == "job_start_intent":
         job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
@@ -3816,7 +3812,7 @@ async def _handle_job_control(
         await _deliver_incident_notifications(client, config, monitor, mutation_locked=True)
         return {"ok": True, "status": inbox.job_status()}
     if operation == "job_owner_control":
-        return await _handle_job_owner_control(client, config, request, monitor)
+        return _handle_job_owner_control(request, monitor)
     if operation == "job_handoff":
         return await _handle_job_handoff(client, config, request, monitor)
     return None
@@ -3909,33 +3905,8 @@ async def _deliver_incident_notifications_locked(
         )
 
 
-def _owner_control_recognized(text: str) -> bool:
-    from autostop_manager import telegram_automation_control as controls
-
-    stripped = text.strip()
-    if (
-        not stripped
-        or len(stripped) > controls.MAX_COMMAND_CHARS
-        or any(ord(char) < 32 and char != "\t" for char in stripped)
-    ):
-        return False
-    return controls._normalized(stripped) in controls._STATUS_COMMANDS or any(
-        pattern.fullmatch(stripped) is not None
-        for pattern in (
-            controls._CONFIRM_PATTERN,
-            controls._CANCEL_PATTERN,
-            controls._TOGGLE_PATTERN,
-            controls._SCHEDULE_PATTERN,
-            controls._TIMEZONE_PATTERN,
-            controls._ACTIVE_WINDOW_PATTERN,
-            controls._CREATE_PATTERN,
-        )
-    )
-
-
-async def _handle_job_owner_control(
-    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
-) -> dict[str, Any]:
+def _handle_job_owner_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any]:
+    """Older workers may probe this endpoint; incoming messages never control automations."""
     arguments = _job_arguments(request)
     job = monitor.inbox.read_job(arguments["job_id"])
     if (
@@ -3944,103 +3915,7 @@ async def _handle_job_owner_control(
         or job["state"] != "claimed"
     ):
         raise BridgeError("job_owner_control_state_invalid")
-    coordinator = monitor.automation_coordinator
-    if coordinator is None or len(job["event_ids"]) != 1 or job["peer_id"] != _owner_peer_id(config):
-        return {"ok": True, "handled": False, "job": job}
-    ref = monitor.resolve(job["event_ids"][0])
-    source = (await _load_inbound_monitor_context_messages(client, [ref]))[0]
-    message = _automation_message_from_event(source)
-    if message is None or not _owner_control_recognized(message.text):
-        return {"ok": True, "handled": False, "job": job}
-    job = monitor.inbox.start_intent(**arguments, thread_id="owner-control")
-    job = monitor.inbox.bind_turn(
-        job_id=job["job_id"],
-        lease=job["lease"],
-        expected_revision=job["revision"],
-        turn_id=f"owner-control-{job['job_id']}",
-    )
-    mutation_key = monitor.inbox.reserve_effect(
-        job_id=job["job_id"],
-        lease=job["lease"],
-        expected_revision=job["revision"],
-        kind="mutation",
-        text_sha256=hashlib.sha256(message.text.encode()).hexdigest(),
-        peer_id=ref.peer_id,
-        reply_to_message_id=ref.message_id,
-    )
-    monitor.inbox.mark_effect_intent(mutation_key)
-    monitor.changed()
-    try:
-        # The existing owner adapter retains its grammar, authorization,
-        # confirmation and exact readback.  Durable intent replaces RAM replay.
-        async with coordinator._route_lock:
-            result = await asyncio.to_thread(coordinator.adapter.handle, message)
-        if not result.handled:
-            raise BridgeError("owner_control_outcome_uncertain")
-        if result.ok is not True:
-            failure_request = {"operation": "send_owner_notification", "text": result.reply_text, "mode": "dry_run"}
-            failure_dry = await _handle_owner_notification(client, config, failure_request)
-            await _handle_owner_notification(
-                client,
-                config,
-                failure_request
-                | {
-                    "mode": "apply",
-                    "contract_token": failure_dry["contract_token"],
-                    "idempotency_key": f"owner-control-failure-{job['job_id']}",
-                },
-            )
-            raise BridgeError("owner_control_readback_unverified")
-        monitor.inbox.verify_effect(effect_key=mutation_key, receipt_key=mutation_key, message_id=ref.message_id)
-        entity, target = await _resolve_owner_target(client, config)
-        send_request = {
-            "job_id": job["job_id"],
-            "lease": job["lease"],
-            "revision": job["revision"],
-            "kind": "result",
-        }
-        dry = await _handle_send_text_to_entity(
-            client,
-            config,
-            send_request,
-            entity=entity,
-            target=target,
-            text=result.reply_text,
-            mode="dry_run",
-            idempotency_key="",
-            reply_to_message_id=ref.message_id,
-            inbound_monitor=monitor,
-        )
-        applied = await _handle_send_text_to_entity(
-            client,
-            config,
-            send_request | {"contract_token": dry["contract_token"]},
-            entity=entity,
-            target=target,
-            text=result.reply_text,
-            mode="apply",
-            idempotency_key=dry["idempotency_key"],
-            reply_to_message_id=ref.message_id,
-            inbound_monitor=monitor,
-        )
-        job = monitor.inbox.result(
-            job_id=job["job_id"],
-            lease=job["lease"],
-            expected_revision=job["revision"],
-            outcome="answered",
-            event_ids=job["event_ids"],
-            receipt_keys=[mutation_key, applied["receipt_key"]],
-        )
-    except Exception:  # noqa: BLE001 - an attempted command never falls through into a second execution.
-        current = monitor.inbox.read_job(job["job_id"])
-        job = monitor.inbox.needs_review(
-            job_id=current["job_id"],
-            lease=current["lease"],
-            expected_revision=current["revision"],
-            reason_code="owner_control_outcome_uncertain",
-        )
-    monitor.changed()
-    return {"ok": True, "handled": True, "job": job}
+    return {"ok": True, "handled": False, "job": job}
 
 
 def _requires_mutation_lock(request: dict[str, Any]) -> bool:
@@ -4246,101 +4121,6 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
             print("work_telegram_wake_delivery_failed=true", file=sys.stderr, flush=True)
 
 
-def _automation_message_from_event(event: Any) -> Any | None:
-    if getattr(event, "is_private", None) is not True or bool(getattr(event, "out", False)):
-        return None
-    peer_id = getattr(event, "chat_id", None)
-    message_id = getattr(event, "id", None)
-    if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
-        return None
-    text = getattr(event, "raw_text", None)
-    if not isinstance(text, str):
-        raw_message = getattr(event, "message", None)
-        text = raw_message if isinstance(raw_message, str) else getattr(raw_message, "message", None)
-    if not isinstance(text, str):
-        return None
-    from autostop_manager.telegram_automation_control import TelegramAutomationMessage
-
-    return TelegramAutomationMessage(
-        peer_id=peer_id,
-        message_id=message_id,
-        text=text,
-        is_private=True,
-    )
-
-
-async def _send_owner_automation_reply(
-    client: Any,
-    config: TelegramConfig,
-    *,
-    text: str,
-    source_message_id: int,
-) -> bool:
-    if _owner_peer_id(config) is None or type(source_message_id) is not int or source_message_id <= 0:
-        return False
-    try:
-        contract_key = _ensure_private_key(config.state_dir / "contract.key")
-        reply_digest = hmac.new(
-            contract_key,
-            f"owner-automation-reply-v1\0{source_message_id}\0{hashlib.sha256(text.encode()).hexdigest()}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        dry_request = {"operation": "send_owner_notification", "text": text, "mode": "dry_run"}
-        async with _MUTATION_LOCK:
-            dry_run = await _handle_owner_notification(client, config, dry_request)
-            contract_token = dry_run.get("contract_token")
-            if not isinstance(contract_token, str) or not contract_token:
-                return False
-            applied = await _handle_owner_notification(
-                client,
-                config,
-                dry_request
-                | {
-                    "mode": "apply",
-                    "contract_token": contract_token,
-                    "idempotency_key": f"tg-auto-reply:{reply_digest[:40]}",
-                },
-            )
-    except Exception:  # noqa: BLE001 - a failed reply must never re-run a recognized command via Codex wake.
-        print("work_telegram_automation_reply_failed=true", file=sys.stderr, flush=True)
-        return False
-    return applied.get("verified") is True and type(applied.get("message_id")) is int
-
-
-async def _route_or_capture_incoming_event(
-    client: Any,
-    config: TelegramConfig,
-    monitor: InboundMonitor,
-    event: Any,
-    *,
-    automation_coordinator: Any | None,
-) -> None:
-    if isinstance(monitor, DurableInboundMonitor):
-        # Every accepted update first enters the durable registry.  Owner
-        # automation must subsequently use the same lease/receipt path; running
-        # it here could duplicate an action after process interruption.
-        await _capture_incoming_event(monitor, event)
-        return
-    if automation_coordinator is not None:
-        message = _automation_message_from_event(event)
-        if message is not None and message.peer_id == _owner_peer_id(config):
-
-            async def reply(text: str, source_message_id: int) -> bool:
-                return await _send_owner_automation_reply(
-                    client,
-                    config,
-                    text=text,
-                    source_message_id=source_message_id,
-                )
-
-            try:
-                if await automation_coordinator.route(message, reply=reply):
-                    return
-            except (OSError, RuntimeError, TimeoutError, ValueError):
-                pass
-    await _capture_incoming_event(monitor, event)
-
-
 def _abort_daemon_cleanup() -> None:
     # Cleanup may be stuck behind a shielded task, cancellation-resistant
     # handler, or asyncio.run's final task cancellation. Exit the service rather
@@ -4422,35 +4202,13 @@ async def run_daemon(
             raise
     else:
         inbound_monitor = InboundMonitor() if monitor_incoming else None
-    automation_coordinator: Any | None = None
     if inbound_monitor is not None:
         # Telethon otherwise persists entity names, phones and usernames while processing updates.
         client.session.save_entities = False
         events = _load_telegram_events()
-        owner_peer_id = _owner_peer_id(config)
-        if owner_peer_id is not None:
-            from autostop_manager.telegram_automation_control import (
-                TelegramAutomationIncomingCoordinator,
-                build_runtime_owner_adapter,
-            )
-
-            automation_coordinator = TelegramAutomationIncomingCoordinator(
-                build_runtime_owner_adapter(
-                    owner_peer_id=owner_peer_id,
-                    idempotency_secret=_ensure_private_key(config.state_dir / "contract.key"),
-                )
-            )
-            if isinstance(inbound_monitor, DurableInboundMonitor):
-                inbound_monitor.automation_coordinator = automation_coordinator
 
         async def capture(event: Any) -> None:
-            await _route_or_capture_incoming_event(
-                client,
-                config,
-                inbound_monitor,
-                event,
-                automation_coordinator=automation_coordinator,
-            )
+            await _capture_incoming_event(inbound_monitor, event)
 
         client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
     try:

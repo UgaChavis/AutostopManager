@@ -1394,38 +1394,54 @@ def test_migration_import_is_atomic_and_held(tmp_path):
     monitor.inbox.close()
 
 
-def test_owner_control_uses_existing_adapter_once_then_receipts(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "state", ["claimed", "running", "needs_review", "unknown_effect", "wrong_lease", "stale_revision"]
+)
+def test_retired_owner_control_is_read_only_and_keeps_claim_guards(tmp_path, monkeypatch, state):
     config, monitor = _runtime(tmp_path)
     source = _message(100, text="/automations")
     monitor.record(source)
-    job = _job(monitor, running=False)
-    calls = []
+    job = _job(monitor, running=state in {"running", "unknown_effect"})
+    if state == "needs_review":
+        job = monitor.inbox.needs_review(
+            job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"], reason_code="synthetic_hold"
+        )
+    if state == "unknown_effect":
+        key = monitor.inbox.reserve_effect(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=job["revision"],
+            kind="result",
+            text_sha256="a" * 64,
+            peer_id=42,
+            reply_to_message_id=100,
+        )
+        monitor.inbox.mark_effect_intent(key)
 
-    def handle(message):
-        calls.append(message.message_id)
-        return SimpleNamespace(handled=True, ok=True, reply_text="Ready")
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("retired owner ingress must not read identity, messages or call an adapter")
 
-    monitor.automation_coordinator = SimpleNamespace(_route_lock=asyncio.Lock(), adapter=SimpleNamespace(handle=handle))
-    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 42)
-
-    async def owner(_client, _config):
-        return 42, {"id": 42, "kind": "private"}
-
-    monkeypatch.setattr(bridge, "_resolve_owner_target", owner)
-    client = Client([source])
+    monitor.automation_coordinator = SimpleNamespace(adapter=SimpleNamespace(handle=forbidden))
+    monkeypatch.setattr(bridge, "_owner_peer_id", forbidden)
+    client = SimpleNamespace(get_messages=forbidden, send_message=forbidden)
     request = {
         "operation": "job_owner_control",
         "job_id": job["job_id"],
         "lease": job["lease"],
         "expected_revision": job["revision"],
     }
-    result = asyncio.run(bridge._handle_job_operation(client, config, request, monitor))
-    assert result["handled"] is True
-    assert result["job"]["state"] == "completed"
-    assert calls == [100]
-    with pytest.raises(bridge.BridgeError, match="job_owner_control_state_invalid"):
-        asyncio.run(bridge._handle_job_operation(client, config, request, monitor))
-    assert calls == [100]
+    if state == "wrong_lease":
+        request["lease"] += "stale"
+    if state == "stale_revision":
+        request["expected_revision"] += 1
+    before = monitor.inbox.read_job(job["job_id"])
+    if state == "claimed":
+        result = asyncio.run(bridge._handle_job_operation(client, config, request, monitor))
+        assert result == {"ok": True, "handled": False, "job": before}
+    else:
+        with pytest.raises(bridge.BridgeError, match="job_owner_control_state_invalid"):
+            asyncio.run(bridge._handle_job_operation(client, config, request, monitor))
+    assert monitor.inbox.read_job(job["job_id"]) == before
     monitor.inbox.close()
 
 

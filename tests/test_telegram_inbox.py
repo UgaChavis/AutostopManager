@@ -319,13 +319,6 @@ def test_claim_batches_only_same_peer_and_five_minute_window(inbox: TelegramInbo
     assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
 
 
-def test_configured_owner_is_unbatched(inbox: TelegramInbox) -> None:
-    first = inbox.record(7, 1)
-    inbox.record(7, 2)
-    job = claim(inbox, unbatched_peer_id=7)
-    assert job["event_ids"] == [first]
-
-
 def test_disabled_duty_retains_pending_event_until_explicit_enable(inbox: TelegramInbox, clock: Clock) -> None:
     event = inbox.record(1, 1)
     clock.advance(1)

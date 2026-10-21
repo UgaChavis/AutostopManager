@@ -137,11 +137,22 @@ def _url_component_contains_sensitive(value: str) -> bool:
         # path.  Join only whole adjacent path segments; this avoids a regex
         # accidentally treating a following URL segment as a document suffix.
         for start in range(len(segments)):
+            # Leading separators cannot change the identifier or its terminal
+            # document suffix; the first nonempty identifier start covers them.
+            if not _VIN_SEPARATORS.sub("", segments[start]):
+                continue
             candidate = ""
             for end in range(start, len(segments)):
                 candidate = segments[end] if not candidate else candidate + "/" + segments[end]
-                if _VIN_TOKEN.fullmatch(candidate) and _is_full_url_vin(candidate):
+                if not _VIN_TOKEN.fullmatch(candidate):
+                    break
+                if _is_full_url_vin(candidate):
                     return True
+                # A later suffix belongs to a new segment: it cannot remove
+                # any of this prefix. Check the current document suffix first,
+                # then stop once the prefix already exceeds a complete VIN.
+                if len(_VIN_SEPARATORS.sub("", candidate)) > 17:
+                    break
         return False
 
     return bool(

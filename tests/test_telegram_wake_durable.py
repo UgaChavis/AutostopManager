@@ -98,8 +98,6 @@ class FakeJobs:
             return {"ok": True}
         if operation == "job_execution_set":
             return {"ok": True, "status": self.inbox.set_execution_paused(**arguments)}
-        if operation == "job_owner_control":
-            return {"ok": True, "handled": False, "job": self.inbox.read_job(arguments["job_id"])}
         functions = {
             "job_claim": self.inbox.claim,
             "job_start_intent": self.inbox.start_intent,
@@ -185,12 +183,14 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
                 assert inbox.status()["open_events"] == 0
                 methods = [name for name, _args in jobs.calls]
                 assert methods.index("job_start_intent") < methods.index("job_turn_bound")
+                assert "job_owner_control" not in methods
                 assert not hasattr(dispatcher, "queue")
                 prompt = next(
                     call["params"]["input"][0]["text"] for call in server.calls if call.get("method") == "turn/start"
                 )
                 assert str(bundle) + "/AGENTS.md" in prompt
                 assert "job-result" in prompt and "ack/result/clarification/handoff" in prompt
+                assert "role=client" in prompt
             finally:
                 await stop_dispatcher(dispatcher)
                 inbox.close()

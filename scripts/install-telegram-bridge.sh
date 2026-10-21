@@ -177,19 +177,9 @@ finalize_work_candidate_runtime() {
 validate_bridge_imports() {
   "${venv_root}/bin/python" -I -B -c '
 import sys
-from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from autostop_manager.telegram_bridge import InboundMonitor
-from autostop_manager.telegram_automation_control import (
-    TelegramAutomationIncomingCoordinator,
-    build_runtime_owner_adapter,
-)
 InboundMonitor()
-TelegramAutomationIncomingCoordinator(build_runtime_owner_adapter(
-    owner_peer_id=1,
-    socket_path=Path("/nonexistent/autostop-telegram-import-probe.sock"),
-    idempotency_secret=b"0" * 32,
-))
 ' "${PROJECT_ROOT}"
 }
 

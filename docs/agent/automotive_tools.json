@@ -5431,7 +5431,8 @@
       ],
       "errors": [
         "invalid_input без policy.version/allowed basis/rate или при malformed inputs",
-        "partial при неизвестной цене/часах/range/расходах/нерешенном overlap; total и range=null, известная часть сохраняется known_subtotal"
+        "partial при неизвестной цене/часах/range/расходах/нерешенном overlap; total и range=null, известная часть сохраняется known_subtotal",
+        "invalid_input с missing_fields=[\"calculation_overflow\"] и data={} при результате, непредставимом конечным числом; произвольный лимит цены не вводится"
       ],
       "limitations": [
         "Неизвестный расход не ноль; pure calculation не читает experience/CRM.",

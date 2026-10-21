@@ -10,6 +10,37 @@ import pytest
 from autostop_manager import j1_fetch
 
 
+@pytest.mark.parametrize("segment", ["ab", "-", "._-"])
+def test_segmented_non_vin_path_bounds_candidate_scans(monkeypatch: pytest.MonkeyPatch, segment: str) -> None:
+    pattern = j1_fetch._VIN_TOKEN
+    calls = 0
+
+    class CountedPattern:
+        def fullmatch(self, value: str):
+            nonlocal calls
+            calls += 1
+            return pattern.fullmatch(value)
+
+    monkeypatch.setattr(j1_fetch, "_VIN_TOKEN", CountedPattern())
+    segments = 120
+    assert not j1_fetch._url_component_contains_sensitive("/".join([segment] * segments))
+    # Two characters per segment cannot form a 17-character VIN; separator-only
+    # starts cannot add identifier characters and must not restore quadratic work.
+    assert calls <= 9 * segments
+
+
+def test_segment_scan_keeps_document_suffixes_and_later_sensitive_fields() -> None:
+    vin = "ZZZ00000000000000"
+    for width in (1, 3, 8):
+        path = "/".join(vin[index : index + width] for index in range(0, len(vin), width))
+        for suffix in ("", ".pdf", ".xhtml"):
+            assert j1_fetch.public_url("https://example.org/" + path.lower() + suffix) == ""
+            assert j1_fetch.public_url("https://example.org/?id=" + quote(path + suffix, safe="")) == ""
+    prefix = "/".join(["ab"] * 30)
+    assert j1_fetch.public_url("https://example.org/" + prefix + "/owner%40example.org") == ""
+    assert j1_fetch.public_url("https://example.org/" + prefix + "?token=abcdefghijklmnop") == ""
+
+
 @pytest.mark.parametrize("key", ["api_key", "token", "password", "secret"])
 @pytest.mark.parametrize("representation", ["json", "mapping"])
 def test_quoted_secret_keys_are_rejected_and_redacted(key: str, representation: str) -> None:
