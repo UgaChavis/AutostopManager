@@ -1,4 +1,4 @@
-"""Regressions for AutomationStore.run_claim_is_current.
+"""Regressions for AutomationStore run/outbox claim checks.
 
 Uses real SQLite, real control commands and a synthetic clock. Delays occur at
 connection entry or immediately before the real claim SELECT. The target store
@@ -72,7 +72,7 @@ def command(service, operation, payload, key, *, expected_revision=None, actor=N
 
 
 @pytest.fixture
-def case(tmp_path, monkeypatch):
+def case(tmp_path, monkeypatch, request):
     clock = Clock()
     monkeypatch.setattr(automation_registry, "utc_now", clock)
     store = AutomationStore(tmp_path / "claim-current" / "manager.sqlite3")
@@ -90,29 +90,44 @@ def case(tmp_path, monkeypatch):
     reconciled = store.reconcile_next_job()
     assert reconciled is not None and reconciled["applied"] is True
     job = reconciled["job"]
+    outbox = getattr(request, "param", "run") == "outbox"
     queued = command(
         service,
-        "run_now",
+        "test_notification" if outbox else "run_now",
         {"job_id": job["job_id"]},
         "current-check-run-0001",
         expected_revision=job["revision"],
     )
-    assert queued["queued"] is True and queued["coalesced"] is False
-    claim = store.claim_next_run(owner=OWNER, lease_seconds=10)
-    assert claim is not None and claim["run_id"] == queued["run_id"]
+    if outbox:
+        assert queued["external_message_sent"] is False
+        claim = store.claim_outbox(owner=OWNER, lease_seconds=10)
+        assert claim is not None and claim["outbox_id"] == queued["outbox_id"]
+    else:
+        assert queued["queued"] is True and queued["coalesced"] is False
+        claim = store.claim_next_run(owner=OWNER, lease_seconds=10)
+        assert claim is not None and claim["run_id"] == queued["run_id"]
     # Independent supported control connection, not direct mutation of SQL rows.
     control = AutomationControlService(AutomationStore(store.path))
     return Case(store, control, clock, claim)
 
 
 def current_args(case):
+    identity = (
+        {"outbox_id": case.claim["outbox_id"]}
+        if "outbox_id" in case.claim
+        else {"job_id": case.claim["job_id"], "run_id": case.claim["run_id"]}
+    )
     return {
-        "job_id": case.claim["job_id"],
-        "run_id": case.claim["run_id"],
+        **identity,
         "owner": OWNER,
         "fencing_token": case.claim["fencing_token"],
         "claimed_revision": case.claim["claimed_revision"],
     }
+
+
+def claim_current(case, **arguments):
+    check = case.store.outbox_claim_is_current if "outbox_id" in case.claim else case.store.run_claim_is_current
+    return check(**arguments)
 
 
 def snapshot(store):
@@ -141,11 +156,12 @@ def set_hold(case, enabled, expected_revision):
 def assert_read_check(case, expected, **overrides):
     arguments = {**current_args(case), **overrides}
     before = snapshot(case.store)
-    current = case.store.run_claim_is_current(**arguments)
+    current = claim_current(case, **arguments)
     assert snapshot(case.store) == before
     assert current is expected
 
 
+@pytest.mark.parametrize("case", ["run", "outbox"], indirect=True)
 @pytest.mark.parametrize("delay_point", ["connect_entry", "before_select"])
 @pytest.mark.parametrize(
     ("seconds_from_expiry", "expected"),
@@ -193,7 +209,8 @@ def test_current_uses_lease_time_consistent_with_legal_hold_release(
         def execute(self, sql, *args, **kwargs):
             nonlocal select_calls
             normalized = " ".join(sql.split()).casefold()
-            if normalized.startswith("select ") and "from manager_automation_runs" in normalized:
+            table = "manager_automation_outbox" if "outbox_id" in case.claim else "manager_automation_runs"
+            if normalized.startswith("select ") and f"from {table}" in normalized:
                 select_calls += 1
                 if delay_point == "before_select" and not injected:
                     release_hold(self.connection)
@@ -216,7 +233,7 @@ def test_current_uses_lease_time_consistent_with_legal_hold_release(
 
     with monkeypatch.context() as patch:
         patch.setattr(store_class, "connect", connection_with_boundary)
-        current = case.store.run_claim_is_current(**current_args(case))
+        current = claim_current(case, **current_args(case))
 
     release_time = lease_deadline(case) + timedelta(seconds=seconds_from_expiry)
     assert injected and select_calls == 1
@@ -233,6 +250,27 @@ def test_current_uses_lease_time_consistent_with_legal_hold_release(
         "observations": observations,
         "current": current,
     }
+
+
+@pytest.mark.parametrize("case", ["outbox"], indirect=True)
+def test_outbox_current_checks_lease_after_read_context(case, monkeypatch):
+    before = snapshot(case.store)
+    store_class = type(case.store)
+    real_connect = store_class.connect
+
+    @contextmanager
+    def delayed_read_exit(self):
+        with real_connect(self) as connection:
+            yield connection
+        if self is case.store:
+            case.clock.value = lease_deadline(case)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store_class, "connect", delayed_read_exit)
+        current = claim_current(case, **current_args(case))
+
+    assert snapshot(case.store) == before
+    assert current is False
 
 
 @pytest.mark.parametrize(
