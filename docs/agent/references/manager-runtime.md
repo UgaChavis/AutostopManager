@@ -261,7 +261,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-manager-mcp.sh` | Runtime installer: `--activate [--replace-unit]`. |
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate`, `--replace-unit`. После попытки активации ошибка требует ручного восстановления: автоматического возврата прежнего writer нет. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |
-| `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. |
+| `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. Непрерывный BUSY/LOCKED источника ограничен 10 с (`automation_backup_source_busy`); прогресс копирования сбрасывает этот бюджет, общего deadline копии нет. |
 | `scripts/autostop-complete-backup.py` | Прежний complete-bundle helper для исторических manifests; с текущим Store helper не запускается. Действующие копии и восстановление — [правила backup](complete-backup.md). |
 | `scripts/store-backup.py` | Root-only текущая копия Store DB, files и settings; `--root` и `--lock` задают точные пути. Проверяет dump и стабильность источника, затем атомарно публикует одну генерацию. Live restore не выполняет. |
 | `scripts/technical-retention.py` | Без `--apply` планирует уборку; `--apply --days 3 --docker` ограничивает только закрытые технические логи и разрешённые download/build caches. Busy/open guards сохраняют активные файлы; business data не входит. |

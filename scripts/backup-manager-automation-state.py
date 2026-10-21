@@ -10,10 +10,12 @@ import os
 import sqlite3
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 
 DEFAULT_SOURCE = Path("/var/lib/autostop-manager-scheduler/registry.sqlite3")
+SOURCE_BUSY_TIMEOUT_SECONDS = 10.0
 
 
 def _absolute_path(raw: str, *, code: str) -> Path:
@@ -62,10 +64,23 @@ def backup(source: Path, output: Path) -> dict[str, object]:
             os.fchmod(descriptor, 0o600)
         finally:
             os.close(descriptor)
+        busy_since: float | None = None
+
+        def progress(status: int, _remaining: int, _total: int) -> None:
+            nonlocal busy_since
+            if status in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                now = time.monotonic()
+                if busy_since is None:
+                    busy_since = now
+                elif now - busy_since >= SOURCE_BUSY_TIMEOUT_SECONDS:
+                    raise ValueError("automation_backup_source_busy")
+            elif status == sqlite3.SQLITE_OK:
+                busy_since = None
+
         source_uri = source.absolute().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(source_uri, uri=True, timeout=10)) as origin, origin:
+        with closing(sqlite3.connect(source_uri, uri=True, timeout=0)) as origin, origin:
             with closing(sqlite3.connect(temporary, timeout=10)) as destination, destination:
-                origin.backup(destination)
+                origin.backup(destination, pages=128, progress=progress)
                 check = destination.execute("PRAGMA quick_check").fetchone()
                 version = destination.execute(
                     "SELECT version FROM manager_automation_schema WHERE component = 'automation_center'"
