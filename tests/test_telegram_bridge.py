@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -3670,6 +3671,79 @@ def test_text_send_dry_run_apply_replay_and_conflict(monkeypatch, tmp_path) -> N
                 apply_request | {"text": "changed", "contract_token": changed_dry["contract_token"]},
             )
         )
+
+
+def test_send_ledger_growth_preserves_replay_and_unknown_outcomes(monkeypatch, tmp_path) -> None:
+    config = _runtime_config(tmp_path)
+    client = _owner_notification_client(monkeypatch)
+    historical_text = "Synthetic historical delivery."
+    unknown_text = "Synthetic uncertain delivery."
+    sample = {
+        "operation": "send_text",
+        "message_id": 100000,
+        "peer_id": 20,
+        "reply_message_sha256": "",
+        "reply_to_message_id": 0,
+        "text_sha256": hashlib.sha256(historical_text.encode()).hexdigest(),
+        "readback_verified": True,
+    }
+    unknown = sample | {
+        "message_id": 0,
+        "text_sha256": hashlib.sha256(unknown_text.encode()).hexdigest(),
+        "readback_verified": False,
+    }
+    ledger = {"uncertain-send": unknown}
+    old_limit = 5 * 1024 * 1024
+    entry_bytes = len(json.dumps({"historical-0000000000000000": sample}, separators=(",", ":")).encode()) - 1
+    record_count = (old_limit - len(json.dumps(ledger, separators=(",", ":")).encode())) // entry_bytes
+    ledger.update(
+        (f"historical-{index:016d}", sample | {"message_id": 100000 + index}) for index in range(record_count)
+    )
+    path = config.state_dir / "idempotency.json"
+    telegram_bridge._save_idempotency(path, ledger)
+    assert path.stat().st_size <= old_limit
+    historical_id = 100000 + record_count - 1
+    client.messages[historical_id] = SimpleNamespace(
+        id=historical_id, chat_id=20, is_private=True, out=True, message=historical_text, date=datetime.now(UTC)
+    )
+
+    def send(key, text):
+        request = {"operation": "send", "peer": "20", "text": text, "mode": "dry_run"}
+        dry = asyncio.run(telegram_bridge._handle_operation(client, config, request))
+        return asyncio.run(
+            telegram_bridge._handle_operation(
+                client,
+                config,
+                request | {"mode": "apply", "idempotency_key": key, "contract_token": dry["contract_token"]},
+            )
+        )
+
+    first_key = "fresh-" + "a" * 120
+    assert send(first_key, "First new delivery.")["verified"] is True
+    assert path.stat().st_size > old_limit
+    assert send("next-send", "Next new delivery.")["verified"] is True
+    assert send(first_key, "First new delivery.")["replayed"] is True
+    old = send(f"historical-{record_count - 1:016d}", historical_text)
+    assert old["replayed"] is True and old["message_id"] == historical_id
+    with pytest.raises(BridgeError, match=r"^send_outcome_uncertain$"):
+        send("uncertain-send", unknown_text)
+    assert client.sends == 2
+    retained = telegram_bridge._load_idempotency(path)
+    assert all(retained[key] == entry for key, entry in ledger.items())
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "world_readable"])
+def test_send_ledger_still_rejects_untrusted_files(tmp_path, unsafe) -> None:
+    path = tmp_path / "idempotency.json"
+    telegram_bridge._save_idempotency(path, {})
+    if unsafe == "symlink":
+        target = tmp_path / "target.json"
+        path.rename(target)
+        path.symlink_to(target)
+    else:
+        path.chmod(0o644)
+    with pytest.raises(BridgeError, match=r"^idempotency_state_(unreadable|invalid)$"):
+        telegram_bridge._load_idempotency(path)
 
 
 def test_owner_notification_dry_run_apply_replay_and_exact_readback(monkeypatch, tmp_path) -> None:
