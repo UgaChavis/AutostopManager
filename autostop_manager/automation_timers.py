@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import hashlib
 import re
@@ -261,6 +262,15 @@ class SystemTimerController:
         return self.dropin_root / f"{policy.unit_name}.d" / "50-autostop-automation.conf"
 
     @staticmethod
+    def _write_all(descriptor: int, content: bytes) -> None:
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "system_timer_dropin_write_incomplete")
+            remaining = remaining[written:]
+
+    @staticmethod
     def _fsync_directory(path: Path) -> None:
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         if hasattr(os, "O_NOFOLLOW"):
@@ -316,19 +326,23 @@ class SystemTimerController:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        descriptor = os.open(temporary, flags, int(snapshot["mode"]))
+        temporary_owned = False
         try:
-            os.write(descriptor, content)
-            os.fchmod(descriptor, int(snapshot["mode"]))
-            os.fchown(descriptor, int(snapshot["uid"]), int(snapshot["gid"]))
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        try:
+            descriptor = os.open(temporary, flags, int(snapshot["mode"]))
+            temporary_owned = True
+            try:
+                self._write_all(descriptor, content)
+                os.fchmod(descriptor, int(snapshot["mode"]))
+                os.fchown(descriptor, int(snapshot["uid"]), int(snapshot["gid"]))
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
             os.replace(temporary, target)
+            temporary_owned = False
             self._fsync_directory(target_dir)
         finally:
-            temporary.unlink(missing_ok=True)
+            if temporary_owned:
+                temporary.unlink(missing_ok=True)
 
     def stage_interval_dropin(
         self,
@@ -374,20 +388,24 @@ class SystemTimerController:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        descriptor = os.open(temporary, flags, 0o644)
+        temporary_owned = False
         try:
-            os.write(descriptor, content.encode())
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        try:
+            descriptor = os.open(temporary, flags, 0o644)
+            temporary_owned = True
+            try:
+                self._write_all(descriptor, content.encode())
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
             os.replace(temporary, target)
+            temporary_owned = False
             os.chmod(target, 0o644, follow_symlinks=False)
             with target.open("rb") as installed:
                 os.fsync(installed.fileno())
             self._fsync_directory(target_dir)
         finally:
-            temporary.unlink(missing_ok=True)
+            if temporary_owned:
+                temporary.unlink(missing_ok=True)
         return {
             "timer_id": timer_id,
             "path": str(target),
