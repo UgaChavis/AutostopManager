@@ -138,9 +138,9 @@ async def _async_http_get(
                 if response.status_code not in {301, 302, 303, 307, 308}:
                     async for chunk in response.aiter_bytes():
                         _remaining_time(deadline)
-                        body.extend(chunk)
-                        if len(body) > maximum:
+                        if len(body) + len(chunk) > maximum:
                             raise CatalogReadError("catalog_response_too_large")
+                        body.extend(chunk)
                 result = response.status_code, bytes(body), dict(response.headers)
             finally:
                 # Caller timeout never releases capacity before the owned transport is closed.
