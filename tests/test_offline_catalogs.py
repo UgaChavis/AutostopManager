@@ -51,11 +51,12 @@ def _index(root: Path, *entries: dict[str, object]) -> None:
     (root / "catalog_index.json").write_text(json.dumps({"entries": entries}), encoding="utf-8")
 
 
-def test_pdf_search_excludes_page_markers_before_result_limit(cache_root: Path) -> None:
+@pytest.mark.parametrize("bom", ["", "\ufeff"], ids=["utf8-plain", "utf8-bom"])
+def test_pdf_search_excludes_page_markers_before_result_limit(cache_root: Path, bom: str) -> None:
     entry = _entry(
         cache_root,
         "pdf_a",
-        "\f[PAGE 123]\nHeading\nPart ABC123 fits listed model\n\f[PAGE 124]\nOther part\n",
+        bom + "\f[PAGE 123]\nHeading\nPart ABC123 fits listed model\n\f[PAGE 124]\nOther part\n",
     )
     _index(cache_root, entry)
 
