@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1131,6 +1132,59 @@ def test_history_respects_enabled_windows_and_off_messages(tmp_path):
     assert monitor.inbox.checkpoint(42) == 103
     assert monitor.inbox.health()["intake"]["state"] == "ready"
     monitor.inbox.close()
+
+
+@pytest.mark.parametrize("checkpoint_current", [False, True])
+def test_retention_keeps_answered_input_deduplicated_before_startup_catchup(tmp_path, checkpoint_current):
+    config, first = _runtime(tmp_path)
+    source = _message(100)
+    client = Client([source])
+    try:
+        asyncio.run(bridge._capture_incoming_event(first, source))
+        job = _job(first)
+        old_event_id = job["event_ids"][0]
+        dry = asyncio.run(_send(client, config, first, job, kind="result", text="Synthetic result."))
+        proof = asyncio.run(
+            _send(client, config, first, job, kind="result", text="Synthetic result.", mode="apply", dry=dry)
+        )
+        result = asyncio.run(
+            bridge._handle_job_operation(
+                client,
+                config,
+                {
+                    "operation": "job_result",
+                    "job_id": job["job_id"],
+                    "lease": job["lease"],
+                    "expected_revision": job["revision"],
+                    "outcome": "answered",
+                    "event_ids": job["event_ids"],
+                    "receipt_keys": [proof["receipt_key"]],
+                },
+                first,
+            )
+        )
+        assert result["job"]["state"] == "completed" and first.reconcile_requested.is_set()
+        if checkpoint_current:
+            first.inbox.advance_checkpoint(42, 100)
+    finally:
+        first.inbox.close()
+
+    future = datetime.now(UTC) + timedelta(days=8)
+    path = config.state_dir / "inbound.sqlite3"
+    with TelegramInbox(path, clock=lambda: future) as inbox:
+        monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+        assert inbox.event_state(old_event_id) == "reply_verified"
+        fresh = _message(200, peer=43, at=future)
+        client.messages[200] = fresh
+        # A startup callback can precede the previously queued history sweep.
+        asyncio.run(bridge._capture_incoming_event(monitor, fresh))
+        if checkpoint_current:
+            assert old_event_id not in {event["event_id"] for event in inbox.events()}
+        asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        assert inbox.health()["intake"]["state"] == "ready" and client.sent == 1
+    with sqlite3.connect(path) as independent:
+        open_locators = independent.execute("SELECT peer_id,message_id FROM events WHERE state='open'").fetchall()
+    assert open_locators == [(43, 200)]
 
 
 def test_capacity_keeps_checkpoint_before_missing_message(tmp_path):

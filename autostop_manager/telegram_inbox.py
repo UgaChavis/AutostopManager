@@ -1339,8 +1339,13 @@ class TelegramInbox:
 
     def _prune(self) -> int:
         cutoff = _timestamp(datetime.fromisoformat(self._now()) - timedelta(seconds=self._retention_seconds))
+        # Recovery may encounter an old completed locator again until history
+        # has durably covered it. Keep its dedup evidence in the meantime.
         removed = self._db.execute(
-            "DELETE FROM events WHERE completed_at IS NOT NULL AND completed_at<?", (cutoff,)
+            "DELETE FROM events WHERE completed_at IS NOT NULL AND completed_at<? "
+            "AND EXISTS (SELECT 1 FROM checkpoints WHERE checkpoints.peer_id=events.peer_id "
+            "AND checkpoints.message_id>=events.message_id)",
+            (cutoff,),
         ).rowcount
         self._db.execute(
             "DELETE FROM jobs WHERE state IN ('completed','released') AND updated_at<? "
