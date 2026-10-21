@@ -320,7 +320,10 @@ def recommend_automotive_sources(
         warnings.append(f"No exact data-type route found for {data_type}; use repair source playbook.")
     if not include_licensed and (brand_key or data_type_key) and not rows:
         warnings.append("No open-only source route remained after licensed or license-dependent sources were filtered.")
-    if normalized_data_type in _SAFETY_CRITICAL_DATA_TYPES:
+    if (
+        normalized_data_type in _SAFETY_CRITICAL_DATA_TYPES
+        or _normalize_key(data_type_key) in _SAFETY_CRITICAL_DATA_TYPES
+    ):
         warnings.append("Safety-critical route: use OEM or licensed professional sources only.")
 
     endpoints = []
