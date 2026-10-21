@@ -1443,6 +1443,7 @@ class AutomationStore:
                     FROM manager_automations a
                     JOIN manager_automation_runtime r ON r.job_id = a.job_id
                     WHERE a.desired_state = 'on' AND a.archived_at IS NULL
+                      AND r.applied_revision = a.revision
                       AND r.next_run_at IS NOT NULL AND r.next_run_at <= ?
                       AND (r.lease_until IS NULL OR r.lease_until <= ?)
                     ORDER BY r.next_run_at LIMIT ?

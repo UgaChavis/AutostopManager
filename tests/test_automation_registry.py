@@ -487,6 +487,8 @@ def test_missed_interval_is_coalesced_to_window_opening(monkeypatch, tmp_path: P
         idempotency_key="enable-window-0001",
         expected_revision=scheduled["revision"],
     )
+    reconciled = store.reconcile_next_job()
+    assert reconciled and reconciled["applied"] is True
     with sqlite3.connect(store.path) as connection:
         connection.execute(
             "UPDATE manager_automation_runtime SET next_run_at = ? WHERE job_id = ?",
