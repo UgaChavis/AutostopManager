@@ -1962,23 +1962,23 @@ class AutomationStore:
         claimed_revision: int,
     ) -> bool:
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now = isoformat(utc_now())
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT 1
+                SELECT o.lease_until
                 FROM manager_automation_outbox o
                 JOIN manager_automations a ON a.job_id = o.job_id
                 JOIN manager_automation_controller_runtime c ON c.singleton = 1
                 WHERE o.outbox_id = ? AND o.status = 'sending'
-                  AND o.lease_owner_hash = ? AND o.fencing_token = ? AND o.lease_until > ?
+                  AND o.lease_owner_hash = ? AND o.fencing_token = ?
                   AND a.archived_at IS NULL AND a.revision = ?
                   AND (a.desired_state = 'on' OR o.kind = 'notification_test')
                   AND c.hold_enabled = 0
                 """,
-                (outbox_id, owner_hash, fencing_token, now, claimed_revision),
+                (outbox_id, owner_hash, fencing_token, claimed_revision),
             ).fetchone()
-        return row is not None
+        lease_until = parse_time(row["lease_until"]) if row is not None else None
+        return lease_until is not None and lease_until > utc_now()
 
     def cancel_outbox_claim(
         self,

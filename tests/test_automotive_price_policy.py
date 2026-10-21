@@ -76,6 +76,63 @@ def assert_invalid(response, field="policy_version_basis_rate"):
     assert response["execution"] == {"network_calls": 0, "attempts": []}
 
 
+@pytest.mark.parametrize(
+    "fields,basis,observations,expected",
+    [
+        ({"hours": 1e30}, "hourly_rate", [], 1e30),
+        ({"hours": 1e308}, "hourly_rate", [], 1e308),
+        ({"range_hours": [1e308, 1e308]}, "hourly_rate", [], 1e308),
+        ({}, "public_observations", [quote(price=1e308), quote(price=1e308)], 1e308),
+    ],
+)
+def test_finite_large_prices_and_midpoints_remain_calculable(fields, basis, observations, expected):
+    response = call(
+        {
+            "labor": [{"operation_name": "demo", **fields}],
+            "policy": {"version": "v1", "basis": basis},
+            "hourly_rate": 1,
+            "observations": observations,
+        }
+    )
+    assert response["outcome"] == "success"
+    assert response["data"]["total"] == expected
+    assert response["data"]["range"] == [expected, expected]
+    json.dumps(response, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "rows,options,rate",
+    [
+        ([{"hours": 1e308}], {}, 2),
+        ([{"hours": 1e200}], {"coefficient": 1e200}, 1),
+        ([{"hours": 1.7e308}], {"rounding": 1e308}, 1),
+        ([{"hours": 1e308}, {"hours": 1e308}], {}, 1),
+        ([{"range_hours": [7e307, 1e308]}, {"range_hours": [7e307, 1e308]}], {}, 1),
+    ],
+)
+def test_computed_overflow_uses_invalid_envelope_instead_of_nonfinite_prices(rows, options, rate):
+    response = call(
+        {
+            "labor": [{"operation_id": str(index), **row} for index, row in enumerate(rows)],
+            "policy": {"version": "v1", "basis": "hourly_rate", **options},
+            "hourly_rate": rate,
+        }
+    )
+    assert_invalid(response, "calculation_overflow")
+    json.dumps(response, allow_nan=False)
+
+
+def test_registered_native_tool_keeps_overflow_envelope_in_both_result_channels(native_tool):
+    arguments = {
+        "labor": [{"hours": 1e308}],
+        "policy": {"version": "v1", "basis": "hourly_rate"},
+        "hourly_rate": 2,
+    }
+    content, response = asyncio.run(native_tool.run(arguments, convert_result=True))
+    assert json.loads(content[0].text) == response
+    assert_invalid(response, "calculation_overflow")
+
+
 @pytest.mark.parametrize("basis", INVALID_BASES)
 def test_invalid_basis_is_a_global_validation_error_not_a_partial_price(basis):
     response = call(

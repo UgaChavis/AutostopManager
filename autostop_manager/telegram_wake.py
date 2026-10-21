@@ -1681,6 +1681,40 @@ class DurableWakeDispatcher:
                         raise WakeError("wake_job_status_invalid")
                     if not intake_enabled or execution_paused:
                         await self._health("paused")
+                        # A recovered transport need not resume execution to
+                        # retire its old disconnect diagnostic. Require fresh
+                        # instructions, ledger status and healthy paused IPC;
+                        # never clear an execution/review/unknown-outcome hold.
+                        if (
+                            self.last_error == "wake_bridge_disconnected"
+                            and self.last_health == ("paused", None)
+                            and all(
+                                (
+                                    self.jobs.connected,
+                                    self.jobs.last_error is None,
+                                    self.execution_error is None,
+                                    self.app.connected,
+                                    self.app.ready_event.is_set(),
+                                    self.app.recovery_state == "ready",
+                                    not self.app.blocked,
+                                    self.app.recovery_error is None,
+                                    self.app.last_rpc_error_code is None,
+                                    not self.app.outcome_unknown,
+                                    not self.active,
+                                    self.current_job is None,
+                                    self.app.active_turn is None,
+                                    self.app.active_event_id is None,
+                                    self.app.failed_turn is None,
+                                )
+                            )
+                            and all(
+                                type(self.inbox_status.get(field)) is int and self.inbox_status[field] == 0
+                                for field in ("active_jobs", "needs_review_jobs", "needs_review_events", "gap_count")
+                            )
+                            and type(self.inbox_status.get("needs_review", 0)) is int
+                            and self.inbox_status.get("needs_review", 0) == 0
+                        ):
+                            self.last_error = None
                         continue
                     await self._reconcile_active()
                     await self._read_status()

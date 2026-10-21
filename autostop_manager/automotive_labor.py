@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 import time
-from decimal import Decimal, ROUND_HALF_UP
+import math
+from decimal import Decimal, InvalidOperation, localcontext, ROUND_HALF_UP
 from typing import Any
 from urllib.error import HTTPError, URLError
 
@@ -225,10 +226,28 @@ def collect_work_price_evidence(
 
 
 def _price_round(value: float, quantum: float) -> float:
-    return float(
-        (Decimal(str(value)) / Decimal(str(quantum))).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-        * Decimal(str(quantum))
-    )
+    if not math.isfinite(value):
+        raise OverflowError("work_price_overflow")
+    amount, step = Decimal(str(value)), Decimal(str(quantum))
+    with localcontext() as context:
+        try:
+            rounded = (amount / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
+        except InvalidOperation:
+            # Keep every previously successful rounding unchanged. Only a
+            # larger integer quotient needs more than the default 28 digits;
+            # finite float inputs bound this precision to a few hundred.
+            integer_digits = max(1, amount.adjusted() - step.adjusted() + 1)
+            context.prec = max(context.prec, integer_digits + len(step.as_tuple().digits) + 2)
+            rounded = (amount / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
+    price = float(rounded)
+    if not math.isfinite(price):
+        raise OverflowError("work_price_overflow")
+    return price
+
+
+def _price_midpoint(lower: float, upper: float) -> float:
+    combined = lower + upper
+    return combined / 2 if math.isfinite(combined) else lower / 2 + upper / 2
 
 
 def _operation_price(
@@ -247,7 +266,7 @@ def _operation_price(
             lower, upper = finite_number(bounds[0]), finite_number(bounds[1])
             if lower is not None and upper is not None:
                 low, high = lower * rate, upper * rate
-                return ((low + high) / 2, [low, high]) if low <= high else (None, None)
+                return (_price_midpoint(low, high), [low, high]) if low <= high else (None, None)
         if "range_hours" in row:
             return None, None
         return (hours * rate, [hours * rate, hours * rate]) if hours is not None else (None, None)
@@ -267,7 +286,7 @@ def _operation_price(
     if not prices:
         return None, None
     middle = len(prices) // 2
-    median = prices[middle] if len(prices) % 2 else (prices[middle - 1] + prices[middle]) / 2
+    median = prices[middle] if len(prices) % 2 else _price_midpoint(prices[middle - 1], prices[middle])
     return median, [prices[0], prices[-1]]
 
 
@@ -328,16 +347,21 @@ def calculate_work_price(
             missing.append(key + ".price_basis")
             exclusions.append({"operation_id": key, "reason": "unknown_labor_or_price"})
             continue
-        prices.append(
-            {
-                "operation_id": key,
-                "operation_name": row.get("operation_name"),
-                "price": _price_round(price * coefficient, quantum),
-                "range": [_price_round(value * coefficient, quantum) for value in bounds],
-            }
-        )
+        try:
+            prices.append(
+                {
+                    "operation_id": key,
+                    "operation_name": row.get("operation_name"),
+                    "price": _price_round(price * coefficient, quantum),
+                    "range": [_price_round(value * coefficient, quantum) for value in bounds],
+                }
+            )
+        except (InvalidOperation, OverflowError):
+            return invalid("calculate_work_price", "calculation_overflow")
     subtotal = sum(row["price"] for row in prices)
     total_range = [sum(row["range"][index] for row in prices) for index in (0, 1)]
+    if not all(math.isfinite(value) for value in [subtotal, *total_range]):
+        return invalid("calculate_work_price", "calculation_overflow")
     data = {
         "basis": basis,
         "hourly_rate": rate,
