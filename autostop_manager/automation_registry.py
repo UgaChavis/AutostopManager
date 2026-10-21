@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .config import get_automation_db_path
 
 
-AUTOMATION_SCHEMA_VERSION = 6
+AUTOMATION_SCHEMA_VERSION = 7
 MIN_INTERVAL_MINUTES = 5
 MAX_INTERVAL_MINUTES = 24 * 60
 MAX_JOBS = 100
@@ -335,6 +335,7 @@ SCHEMA_STATEMENTS = (
         fencing_token INTEGER,
         result_code TEXT,
         coalesced_count INTEGER NOT NULL DEFAULT 0,
+        claimed_revision INTEGER,
         FOREIGN KEY(job_id) REFERENCES manager_automations(job_id) ON DELETE CASCADE,
         FOREIGN KEY(command_id) REFERENCES manager_automation_commands(command_id) ON DELETE SET NULL
     )
@@ -496,6 +497,11 @@ class AutomationStore:
                 connection.execute(
                     "UPDATE manager_automation_runtime SET applied_at = updated_at WHERE applied_at IS NULL"
                 )
+            run_columns = {
+                str(item["name"]) for item in connection.execute("PRAGMA table_info(manager_automation_runs)")
+            }
+            if "claimed_revision" not in run_columns:
+                connection.execute("ALTER TABLE manager_automation_runs ADD COLUMN claimed_revision INTEGER")
             controller_columns = {
                 str(item["name"])
                 for item in connection.execute("PRAGMA table_info(manager_automation_controller_runtime)")
@@ -876,7 +882,7 @@ class AutomationStore:
             SELECT q.run_id, q.coalesced_count FROM manager_automation_runs q
             WHERE q.job_id = ? AND (
                 q.status = 'queued'
-                OR (q.status = 'running' AND EXISTS (
+                OR (q.status = 'running' AND q.claimed_revision = ? AND EXISTS (
                     SELECT 1 FROM manager_automation_runtime r
                     WHERE r.job_id = q.job_id AND r.lease_until > ?
                       AND r.lease_owner_hash = q.lease_owner_hash
@@ -885,7 +891,7 @@ class AutomationStore:
             )
             ORDER BY q.requested_at LIMIT 1
             """,
-            (job_id, now),
+            (job_id, int(row["revision"]), now),
         ).fetchone()
         if pending:
             connection.execute(
@@ -1520,10 +1526,10 @@ class AutomationStore:
             connection.execute(
                 """
                 UPDATE manager_automation_runs
-                SET status = 'running', started_at = ?, lease_owner_hash = ?, fencing_token = ?
+                SET status = 'running', started_at = ?, lease_owner_hash = ?, fencing_token = ?, claimed_revision = ?
                 WHERE run_id = ? AND status = 'queued'
                 """,
-                (now, owner_hash, fencing_token, queued["run_id"]),
+                (now, owner_hash, fencing_token, int(queued["revision"]), queued["run_id"]),
             )
             return {
                 "run_id": queued["run_id"],

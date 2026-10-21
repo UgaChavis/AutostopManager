@@ -6,7 +6,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from autostop_manager.automation_registry import AutomationStore
+from autostop_manager.automation_registry import AUTOMATION_SCHEMA_VERSION, AutomationStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +32,7 @@ def test_online_backup_is_private_atomic_and_component_versioned(tmp_path: Path)
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["format"] == "autostop_manager_automation_backup_v1"
-    assert report["schema_version"] == 6
+    assert report["schema_version"] == AUTOMATION_SCHEMA_VERSION
     assert output.stat().st_mode & 0o777 == 0o600
     assert not any(path.name.endswith(".tmp") for path in backup_dir.iterdir())
     with sqlite3.connect(output) as connection:
