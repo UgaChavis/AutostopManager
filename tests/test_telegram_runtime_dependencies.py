@@ -11,40 +11,26 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_owner_incoming_control_initializes_without_manager_site_packages() -> None:
+def test_work_client_monitor_initializes_without_manager_site_packages() -> None:
     probe = """
-import asyncio
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 sys.path.insert(0, sys.argv[1])
 from autostop_manager.diagnostics import audit_documentation, instruction_paths
-from autostop_manager.telegram_bridge import InboundMonitor
-from autostop_manager.telegram_automation_control import (
-    TelegramAutomationIncomingCoordinator,
-    TelegramAutomationMessage,
-    build_runtime_owner_adapter,
-)
+from autostop_manager.telegram_bridge import InboundMonitor, _monitor_incoming_from_args
 
 assert 'markdown_it' not in sys.modules
 assert 'autostop_manager.markdown_links' not in sys.modules
 assert 'AGENTS.md' in instruction_paths(Path(sys.argv[1]))
 assert audit_documentation(Path(sys.argv[1]), check_external_links=False)['ok'] is False
 monitor = InboundMonitor()
-adapter = build_runtime_owner_adapter(
-    owner_peer_id=1,
-    socket_path=Path('/nonexistent/import-probe.sock'),
-    idempotency_secret=b'0' * 32,
-)
-coordinator = TelegramAutomationIncomingCoordinator(adapter)
-
-async def reply(*args):
-    raise AssertionError('A non-owner message must not trigger a reply.')
-
-assert asyncio.run(coordinator.route(
-    TelegramAutomationMessage(peer_id=2, message_id=1, text='/automations', is_private=True),
-    reply=reply,
-)) is False
-print('owner_incoming_dependency_boundary=ok')
+monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=2, id=1))
+assert len(monitor.events()) == 1
+assert _monitor_incoming_from_args(SimpleNamespace(account='work', monitor_incoming=True))
+assert not _monitor_incoming_from_args(SimpleNamespace(account='personal', monitor_incoming=True))
+assert 'autostop_manager.telegram_automation_control' not in sys.modules
+print('work_client_dependency_boundary=ok')
 """
     result = subprocess.run(
         [sys.executable, "-I", "-S", "-B", "-c", probe, str(ROOT)],
@@ -55,10 +41,10 @@ print('owner_incoming_dependency_boundary=ok')
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "owner_incoming_dependency_boundary=ok"
+    assert result.stdout.strip() == "work_client_dependency_boundary=ok"
 
 
-def test_installer_checks_real_owner_lane_before_accepting_dependencies(tmp_path: Path) -> None:
+def test_installer_checks_work_monitor_before_accepting_dependencies(tmp_path: Path) -> None:
     installer = (ROOT / "scripts/install-telegram-bridge.sh").read_text(encoding="utf-8")
     function = re.search(r"(?ms)^validate_bridge_imports\(\) \{\n.*?^\}", installer)
     assert function is not None

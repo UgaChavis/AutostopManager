@@ -619,12 +619,8 @@ class TelegramInbox:
         ):
             raise InboxError("inbox_instruction_invalid")
 
-    def claim(
-        self, *, instruction_root: str, instruction_revision: str, unbatched_peer_id: int | None = None
-    ) -> dict[str, Any] | None:
+    def claim(self, *, instruction_root: str, instruction_revision: str) -> dict[str, Any] | None:
         self._instruction(instruction_root, instruction_revision)
-        if unbatched_peer_id is not None:
-            _positive(unbatched_peer_id, "inbound_peer_invalid")
         if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
             return None
         self._promote_boundary_holds(instruction_root, instruction_revision)
@@ -638,12 +634,11 @@ class TelegramInbox:
         if first is None:
             return None
         upper = _timestamp(datetime.fromisoformat(first["received_at"]) + timedelta(seconds=300))
-        limit = 1 if first["peer_id"] == unbatched_peer_id else 5
         rows = list(
             self._db.execute(
                 "SELECT sequence FROM events WHERE state='open' AND job_id IS NULL AND peer_id=? "
                 "AND received_at BETWEEN ? AND ? ORDER BY received_at,rowid LIMIT ?",
-                (first["peer_id"], first["received_at"], upper, limit),
+                (first["peer_id"], first["received_at"], upper, 5),
             )
         )
         job_id = "job-" + secrets.token_hex(16)

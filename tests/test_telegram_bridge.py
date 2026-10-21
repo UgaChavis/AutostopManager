@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
@@ -212,8 +213,8 @@ def test_owner_status_is_content_free_and_missing_identity_does_not_escalate(tmp
         asyncio.run(telegram_bridge._handle_operation(object(), config, {"operation": "owner_target"}))
 
 
-@pytest.mark.parametrize(("configured_id", "expected_role"), [(20, "owner"), (21, "client"), (None, "client")])
-def test_monitor_target_role_uses_only_trusted_exact_id(monkeypatch, tmp_path, configured_id, expected_role) -> None:
+@pytest.mark.parametrize("configured_id", [20, 21, None])
+def test_work_monitor_target_is_client_independent_of_owner_binding(monkeypatch, tmp_path, configured_id) -> None:
     monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
 
@@ -226,7 +227,13 @@ def test_monitor_target_role_uses_only_trusted_exact_id(monkeypatch, tmp_path, c
 
     monkeypatch.setattr(telegram_bridge, "_load_inbound_monitor_context_messages", load)
     monkeypatch.setattr(telegram_bridge, "_resolve_peer", resolve)
-    monkeypatch.setattr(telegram_bridge, "_owner_peer_id", lambda _config: configured_id)
+    owner_reads = []
+
+    def owner_identity(_config):
+        owner_reads.append(configured_id)
+        return configured_id
+
+    monkeypatch.setattr(telegram_bridge, "_owner_peer_id", owner_identity)
     result = asyncio.run(
         telegram_bridge._handle_operation(
             object(),
@@ -239,9 +246,10 @@ def test_monitor_target_role_uses_only_trusted_exact_id(monkeypatch, tmp_path, c
         "ok": True,
         "event_id": "inbound-1",
         "target": {"id": 20, "kind": "private"},
-        "role": expected_role,
+        "role": "client",
         "reply_to_message_id": 100,
     }
+    assert owner_reads == []
     with pytest.raises(BridgeError, match="inbound_event_unavailable"):
         asyncio.run(
             telegram_bridge._handle_operation(
@@ -4582,115 +4590,6 @@ def test_main_enables_inbound_monitor_only_when_explicitly_requested(monkeypatch
     assert selected == [False, False, True, True, False]
 
 
-def test_owner_automation_command_is_consumed_before_codex_wake(monkeypatch, tmp_path) -> None:
-    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
-    monitor = telegram_bridge.InboundMonitor()
-    routed: list[object] = []
-    replies: list[tuple[str, int]] = []
-    captured: list[object] = []
-
-    class Coordinator:
-        async def route(self, message, *, reply):
-            routed.append(message)
-            return await reply("Задание включено. Состояние: ON.", message.message_id)
-
-    async def send_reply(_client, _config, *, text, source_message_id):
-        replies.append((text, source_message_id))
-        return True
-
-    async def capture(_monitor, event):
-        captured.append(event)
-
-    monkeypatch.setattr(telegram_bridge, "_send_owner_automation_reply", send_reply)
-    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
-    event = SimpleNamespace(is_private=True, out=False, chat_id=10, id=77, raw_text="включи CRM")
-
-    asyncio.run(
-        telegram_bridge._route_or_capture_incoming_event(
-            object(), config, monitor, event, automation_coordinator=Coordinator()
-        )
-    )
-
-    assert len(routed) == 1
-    assert routed[0].peer_id == 10
-    assert routed[0].message_id == 77
-    assert replies == [("Задание включено. Состояние: ON.", 77)]
-    assert captured == []
-
-
-def test_foreign_peer_never_reaches_owner_automation_adapter(monkeypatch, tmp_path) -> None:
-    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
-    monitor = telegram_bridge.InboundMonitor()
-    captured: list[object] = []
-
-    class Coordinator:
-        async def route(self, _message, *, reply):
-            raise AssertionError(f"unexpected owner command route: {reply}")
-
-    async def capture(_monitor, event):
-        captured.append(event)
-
-    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
-    event = SimpleNamespace(is_private=True, out=False, chat_id=11, id=78, raw_text="включи CRM")
-
-    asyncio.run(
-        telegram_bridge._route_or_capture_incoming_event(
-            object(), config, monitor, event, automation_coordinator=Coordinator()
-        )
-    )
-
-    assert captured == [event]
-
-
-def test_unknown_owner_text_passes_through_to_existing_codex_wake(monkeypatch, tmp_path) -> None:
-    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
-    monitor = telegram_bridge.InboundMonitor()
-    captured: list[object] = []
-
-    class Coordinator:
-        async def route(self, message, *, reply):
-            assert message.text == "обычный вопрос"
-            assert callable(reply)
-            return False
-
-    async def capture(_monitor, event):
-        captured.append(event)
-
-    monkeypatch.setattr(telegram_bridge, "_capture_incoming_event", capture)
-    event = SimpleNamespace(is_private=True, out=False, chat_id=10, id=79, raw_text="обычный вопрос")
-
-    asyncio.run(
-        telegram_bridge._route_or_capture_incoming_event(
-            object(), config, monitor, event, automation_coordinator=Coordinator()
-        )
-    )
-
-    assert captured == [event]
-
-
-def test_owner_automation_reply_uses_fixed_target_dry_run_apply_and_verified_readback(monkeypatch, tmp_path) -> None:
-    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=10)
-    requests: list[dict[str, object]] = []
-
-    async def owner_notification(_client, _config, request):
-        requests.append(dict(request))
-        if request["mode"] == "dry_run":
-            return {"ok": True, "contract_token": "proof"}
-        return {"ok": True, "verified": True, "message_id": 88}
-
-    monkeypatch.setattr(telegram_bridge, "_handle_owner_notification", owner_notification)
-
-    verified = asyncio.run(
-        telegram_bridge._send_owner_automation_reply(object(), config, text="Состояние: ON.", source_message_id=77)
-    )
-
-    assert verified is True
-    assert [request["mode"] for request in requests] == ["dry_run", "apply"]
-    assert requests[1]["contract_token"] == "proof"
-    assert str(requests[1]["idempotency_key"]).startswith("tg-auto-reply:")
-    assert all("peer" not in request and "address" not in request for request in requests)
-
-
 def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> None:
     config = _runtime_config(tmp_path)
     state: dict[str, bool] = {}
@@ -4737,10 +4636,25 @@ def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> N
     assert state == {"connected": True, "served": True, "disconnected": True}
 
 
-def test_work_daemon_registers_inbound_handler_before_connect(monkeypatch, tmp_path) -> None:
-    config = _runtime_config(tmp_path)
+@pytest.mark.parametrize("peer", [20, 21], ids=["former-owner", "client"])
+@pytest.mark.parametrize("text", ["обычный вопрос", "включи CRM"], ids=["question", "old-owner-command"])
+def test_work_daemon_captures_every_private_sender_without_owner_command_adapter(
+    monkeypatch, tmp_path, peer, text
+) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path, owner_peer_id=20)
     state: dict[str, object] = {}
     captured_monitors: list[telegram_bridge.InboundMonitor] = []
+
+    def retired_adapter(*_args, **_kwargs):
+        raise AssertionError("work intake must not initialize an owner command adapter")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "autostop_manager.telegram_automation_control",
+        SimpleNamespace(
+            TelegramAutomationIncomingCoordinator=retired_adapter, build_runtime_owner_adapter=retired_adapter
+        ),
+    )
 
     class Client:
         def __init__(self, *_args, **kwargs):
@@ -4790,7 +4704,11 @@ def test_work_daemon_registers_inbound_handler_before_connect(monkeypatch, tmp_p
     monkeypatch.setattr(telegram_bridge.asyncio, "start_unix_server", start_unix_server)
 
     asyncio.run(telegram_bridge.run_daemon(config, monitor_incoming=True))
-    asyncio.run(state["callback"](SimpleNamespace(is_private=True, out=False, chat_id=20, id=100, input_chat=object())))
+    asyncio.run(
+        state["callback"](
+            SimpleNamespace(is_private=True, out=False, chat_id=peer, id=100, input_chat=object(), raw_text=text)
+        )
+    )
 
     assert state["handler_added_before_connect"] is True
     assert state["entity_persistence_disabled_before_connect"] is True
@@ -4800,6 +4718,7 @@ def test_work_daemon_registers_inbound_handler_before_connect(monkeypatch, tmp_p
     monitor_events = captured_monitors[0].events()
     assert len(monitor_events) == 1
     assert captured_monitors[0].resolve(monitor_events[0]["event_id"]).message_id == 100
+    assert captured_monitors[0].resolve(monitor_events[0]["event_id"]).peer_id == peer
 
 
 def test_rpc_boundary_maps_invalid_and_supported_requests(monkeypatch, tmp_path) -> None:

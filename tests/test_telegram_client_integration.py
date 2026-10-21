@@ -137,7 +137,8 @@ def test_client_clarification_continuation_preserves_history_and_current_target(
                     call["params"]["input"][0]["text"] for call in server.calls if call.get("method") == "turn/start"
                 )
                 assert str(bundle / "AGENTS.md") in prompt and str(bundle / "docs/agent/modules/B2.md") in prompt
-                assert "после роли client прочитай клиентский скилл из этого комплекта целиком" in prompt
+                assert "role=client" in prompt
+                assert "прочитай клиентский скилл из этого комплекта целиком" in prompt
                 assert (bundle / ".agents/skills/manage-autostop-client/SKILL.md").read_bytes() == (
                     source / ".agents/skills/manage-autostop-client/SKILL.md"
                 ).read_bytes()
@@ -264,10 +265,11 @@ def test_private_client_owner_name_text_and_forward_cannot_override_role_or_excl
     asyncio.run(scenario())
 
 
-def test_client_cannot_dispatch_owner_automation_command_through_job_route(tmp_path, bundle):
+@pytest.mark.parametrize("peer", [CLIENT, OWNER], ids=["client", "former-owner"])
+def test_no_work_sender_can_dispatch_owner_command_through_compat_route(tmp_path, bundle, peer):
     async def scenario():
         async with bridge_runtime(tmp_path) as runtime:
-            event = runtime.monitor.record(runtime.client.inbound(100, text="/automations"))
+            event = runtime.monitor.record(runtime.client.inbound(100, peer=peer, text="/automations"))
             privileged = Mock(side_effect=AssertionError("a client must not reach the owner adapter"))
             runtime.monitor.automation_coordinator = SimpleNamespace(
                 _route_lock=asyncio.Lock(), adapter=SimpleNamespace(handle=privileged)

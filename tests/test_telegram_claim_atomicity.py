@@ -283,17 +283,11 @@ def test_equal_timestamps_keep_fifo_tie_order_and_do_not_mix_peers(queue: Telegr
     assert _snapshot(queue) == before
 
 
-@pytest.mark.parametrize(
-    ("unbatched_peer_id", "expected_count"),
-    [pytest.param(17, 1, id="configured-owner-unbatched"), pytest.param(99, 5, id="other-peer-five-item-limit")],
-)
-def test_unbatched_owner_exception_is_exact_and_other_peer_keeps_five_item_limit(
-    queue: TelegramInbox, unbatched_peer_id: int, expected_count: int
-) -> None:
+def test_same_sender_keeps_five_item_limit_and_remaining_events_unbound(queue: TelegramInbox) -> None:
     event_ids = [_record(queue, 17, message) for message in range(1, 7)]
 
-    job = _claim(queue, unbatched_peer_id=unbatched_peer_id)
+    job = _claim(queue)
 
-    assert job is not None and job["event_ids"] == event_ids[:expected_count]
-    _assert_bindings(queue, event_ids[:expected_count], job["job_id"])
-    _assert_bindings(queue, event_ids[expected_count:], None)
+    assert job is not None and job["event_ids"] == event_ids[:5]
+    _assert_bindings(queue, event_ids[:5], job["job_id"])
+    _assert_bindings(queue, event_ids[5:], None)

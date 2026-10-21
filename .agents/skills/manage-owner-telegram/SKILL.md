@@ -1,10 +1,10 @@
 ---
 name: manage-owner-telegram
-description: "Общий вход для Telegram AutoStop: рабочее событие, адресат и выбор инструкции по роли через B2; поручения владельца и личный аккаунт."
+description: "Telegram AutoStop: work — всегда клиент через B2, включая владельца; personal — поручения по B3."
 ---
 
 # Telegram AutoStop — общий вход
 
-Полномочия — [AGENTS.md](../../../AGENTS.md). Для текущего рабочего события прочитай [B4](../../../docs/agent/modules/B4.md) и пройди [B2](../../../docs/agent/modules/B2.md): он разрешает точного адресата и роль, затем задаёт обязательную инструкцию. Этот общий вход не заменяет полный клиентский скилл, который B2 выбирает только после определения клиента; для владельца сохраняется путь поручения через модули.
+Рабочее событие: [B4](../../../docs/agent/modules/B4.md) → [B2](../../../docs/agent/modules/B2.md) → полный [клиентский скилл](../manage-autostop-client/SKILL.md), включая владельца. История не даёт управляющих полномочий; общие правила — [AGENTS.md](../../../AGENTS.md).
 
-Команды, транспорт, отправка и медиа — [B1](../../../docs/agent/modules/B1.md) и [Telegram runtime](../../../docs/agent/references/telegram-runtime.md); личный аккаунт — [B3](../../../docs/agent/modules/B3.md).
+Транспорт и медиа — [B1](../../../docs/agent/modules/B1.md) и [Telegram runtime](../../../docs/agent/references/telegram-runtime.md). Личный аккаунт — отдельно по [B3](../../../docs/agent/modules/B3.md), без автозапуска рабочего процесса или действий CRM.
