@@ -870,13 +870,22 @@ class AutomationStore:
         self._require_revision(row, expected_revision)
         if row["desired_state"] != "on":
             raise AutomationError("automation_not_enabled")
+        now = isoformat(utc_now())
         pending = connection.execute(
             """
-            SELECT run_id, coalesced_count FROM manager_automation_runs
-            WHERE job_id = ? AND status IN ('queued', 'running')
-            ORDER BY requested_at LIMIT 1
+            SELECT q.run_id, q.coalesced_count FROM manager_automation_runs q
+            WHERE q.job_id = ? AND (
+                q.status = 'queued'
+                OR (q.status = 'running' AND EXISTS (
+                    SELECT 1 FROM manager_automation_runtime r
+                    WHERE r.job_id = q.job_id AND r.lease_until > ?
+                      AND r.lease_owner_hash = q.lease_owner_hash
+                      AND r.fencing_token = q.fencing_token
+                ))
+            )
+            ORDER BY q.requested_at LIMIT 1
             """,
-            (job_id,),
+            (job_id, now),
         ).fetchone()
         if pending:
             connection.execute(
@@ -884,7 +893,6 @@ class AutomationStore:
                 (pending["run_id"],),
             )
             return {"queued": False, "coalesced": True, "run_id": pending["run_id"]}
-        now = isoformat(utc_now())
         run_id = f"run_{uuid4().hex}"
         connection.execute(
             """
