@@ -10,7 +10,8 @@ import pytest
 from autostop_manager import j1_fetch
 
 
-def test_segmented_non_vin_path_bounds_candidate_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("segment", ["ab", "-", "._-"])
+def test_segmented_non_vin_path_bounds_candidate_scans(monkeypatch: pytest.MonkeyPatch, segment: str) -> None:
     pattern = j1_fetch._VIN_TOKEN
     calls = 0
 
@@ -22,9 +23,9 @@ def test_segmented_non_vin_path_bounds_candidate_scans(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(j1_fetch, "_VIN_TOKEN", CountedPattern())
     segments = 120
-    assert not j1_fetch._url_component_contains_sensitive("/".join(["ab"] * segments))
-    # Two characters per segment cannot form a 17-character VIN. Once a
-    # prefix has 18, extending it cannot make that prefix a VIN again.
+    assert not j1_fetch._url_component_contains_sensitive("/".join([segment] * segments))
+    # Two characters per segment cannot form a 17-character VIN; separator-only
+    # starts cannot add identifier characters and must not restore quadratic work.
     assert calls <= 9 * segments
 
 

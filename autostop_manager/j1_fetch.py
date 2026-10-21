@@ -137,6 +137,10 @@ def _url_component_contains_sensitive(value: str) -> bool:
         # path.  Join only whole adjacent path segments; this avoids a regex
         # accidentally treating a following URL segment as a document suffix.
         for start in range(len(segments)):
+            # Leading separators cannot change the identifier or its terminal
+            # document suffix; the first nonempty identifier start covers them.
+            if not _VIN_SEPARATORS.sub("", segments[start]):
+                continue
             candidate = ""
             for end in range(start, len(segments)):
                 candidate = segments[end] if not candidate else candidate + "/" + segments[end]
