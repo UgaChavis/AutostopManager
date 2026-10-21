@@ -605,6 +605,77 @@ def test_direct_owner_media_without_inbound_job_preserves_send_policy(tmp_path, 
 
 
 @pytest.mark.parametrize("operation", ["send_photo", "send_document"])
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [("source", "contract_reply_source_changed"), ("reply_target", "contract_reply_target_changed")],
+)
+def test_job_media_contract_binds_reply_source(tmp_path, monkeypatch, operation, change, error):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    second = _message(101)
+    monitor.record(source)
+    monitor.record(second)
+    job = _job(monitor)
+    client = MediaClient([source, second])
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    request = _media_request(config, operation) | {
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+        "kind": "result",
+        "reply_to_message_id": 100,
+    }
+
+    def call(payload):
+        return asyncio.run(bridge._handle_operation(client, config, payload, inbound_monitor=monitor))
+
+    dry = call(request)
+    if change == "source":
+        source.message = "Edited request after dry-run"
+        key = dry["idempotency_key"]
+    else:
+        request |= {"reply_to_message_id": 101, "effect_slot": 1}
+        key = call(request)["idempotency_key"]
+    with pytest.raises(bridge.BridgeError, match=error):
+        call(request | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": key})
+    assert client.sent == 0
+    assert not (config.state_dir / "idempotency.json").exists()
+    assert all(
+        not effect["attempted"] and not effect["verified"]
+        for effect in monitor.inbox.read_job(job["job_id"])["effects"]
+    )
+
+    refreshed = call(request)
+    apply = request | {
+        "mode": "apply",
+        "contract_token": refreshed["contract_token"],
+        "idempotency_key": refreshed["idempotency_key"],
+    }
+    sent = call(apply)
+    replay = call(apply)
+    assert sent["verified"] and replay["replayed"] and client.sent == 1
+    assert client.messages[sent["message_id"]].reply_to_msg_id == request["reply_to_message_id"]
+    assert monitor.inbox.read_effect(refreshed["idempotency_key"])["verified"] == 1
+    client.messages[request["reply_to_message_id"]].message = "Edited again after verified send"
+    refreshed = call(request)
+    with pytest.raises(bridge.BridgeError, match="idempotency_key_conflict"):
+        call(
+            request
+            | {
+                "mode": "apply",
+                "contract_token": refreshed["contract_token"],
+                "idempotency_key": refreshed["idempotency_key"],
+            }
+        )
+    assert client.sent == 1
+    monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send_photo", "send_document"])
 def test_job_media_verifies_result_but_cannot_forge_handoff(tmp_path, monkeypatch, operation):
     config, monitor = _runtime(tmp_path)
     source = _message(100)
@@ -909,6 +980,12 @@ def test_media_effect_readback_uses_native_intent_and_exact_receipt(tmp_path, mo
     client.fail_readback = False
     if operation == "send_photo" and known:
         client.messages[101].synthetic_content = b"Telegram transformed image"
+    if known:
+        # Pre-fix media intents have no source digest; exact readback still recovers them.
+        path = config.state_dir / "idempotency.json"
+        ledger = bridge._load_idempotency(path)
+        del ledger[dry["idempotency_key"]]["reply_message_sha256"]
+        bridge._save_idempotency(path, ledger)
     params = {} if known else {"message_id": 101, "effects_reviewed": True}
     proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"], **params))
     assert proof["verified"] and proof["receipt_key"] == dry["idempotency_key"] and client.sent == 1
