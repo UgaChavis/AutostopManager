@@ -21,8 +21,7 @@ Defaults: `{"hourly_rate":null,"observations":null,"unknown_costs":null}`.
 ```
 
 Выход: Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.; basis/hourly_rate/policy/currency/operations[{operation_id,operation_name,price,range}]; known_subtotal/total/range/exclusions/unknown_costs; policy остается явным входом, version/coefficient/rounding не являются отдельными полями выхода.
-Ошибки и неполнота: invalid_input без policy.version/allowed basis/rate или при malformed inputs; partial при неизвестной цене/часах/range/расходах/нерешенном overlap; total и range=null, известная часть сохраняется known_subtotal.
-Непредставимый конечным числом результат расчёта возвращает invalid_input с missing_fields=["calculation_overflow"] и data={}; произвольный лимит цены не вводится.
+Ошибки и неполнота: invalid_input без policy.version/allowed basis/rate или при malformed inputs; partial при неизвестной цене/часах/range/расходах/нерешенном overlap; total и range=null, известная часть сохраняется known_subtotal; invalid_input с missing_fields=["calculation_overflow"] и data={} при результате, непредставимом конечным числом; произвольный лимит цены не вводится.
 
 - Неизвестный расход не ноль; pure calculation не читает experience/CRM.
 - basis: hourly_rate или public_observations; coefficient/rounding берутся из policy, default1, finite positive. hourly_rate явный; цена включает только труд.
