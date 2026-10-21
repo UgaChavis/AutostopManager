@@ -102,9 +102,9 @@ class HttpCrmDigestSource:
                 with client.stream("POST", path, json=dict(payload)) as response:
                     content = bytearray()
                     for chunk in response.iter_bytes():
-                        content.extend(chunk)
-                        if len(content) > MAX_CRM_RESPONSE_BYTES:
+                        if len(content) + len(chunk) > MAX_CRM_RESPONSE_BYTES:
                             raise AutomationJobError("automation_crm_response_too_large")
+                        content.extend(chunk)
                     status_code = response.status_code
         except AutomationJobError:
             raise
