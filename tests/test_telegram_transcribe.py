@@ -541,6 +541,7 @@ def test_system_owned_model_requires_read_only_root_owned_files(tmp_path) -> Non
         pytest.skip("requires a root-owned temporary model fixture")
     model_dir = tmp_path / "model"
     model_dir.mkdir(mode=0o750)
+    model_dir.chmod(0o750)
     required_files = (
         "config.json",
         "model.bin",
