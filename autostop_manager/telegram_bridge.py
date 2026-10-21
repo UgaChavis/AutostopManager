@@ -73,8 +73,6 @@ DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
 DAEMON_CLEANUP_TIMEOUT_SECONDS = 15.0
 OWNER_NOTIFICATION_KINDS = ("help", "approval", "error", "completion")
-OWNER_NOTIFICATION_HISTORY_LIMIT = 20
-OWNER_NOTIFICATION_HISTORY_SECONDS = 24 * 60 * 60
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 WORK_DURABLE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX"
@@ -2489,7 +2487,6 @@ async def _handle_send_text_to_entity(
     idempotency_target: dict[str, Any] | None = None,
     contract_target_role: str | None = None,
     owner_notification: bool = False,
-    known_message_id: int = 0,
     bound_effect: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if target["kind"] != "private":
@@ -2572,34 +2569,28 @@ async def _handle_send_text_to_entity(
         ):
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
-            if not owner_notification or not known_message_id:
-                error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
-                raise BridgeError(error)
-            previous["message_id"] = known_message_id
-            _save_idempotency(idempotency_path, idempotency)
+            error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
+            raise BridgeError(error)
     else:
-        if not known_message_id and contract["last_message_id"] != last_message_id:
+        if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
         _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
-            "message_id": known_message_id,
+            "message_id": 0,
             **target_binding,
             "reply_message_sha256": reply_message_sha256,
             "reply_to_message_id": reply_to_message_id,
             "text_sha256": text_sha256,
             "readback_verified": False,
         }
-        if owner_notification:
-            entry["notification_after_message_id"] = last_message_id
         # A lost response must leave a durable intent that blocks blind retries.
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
-        if not known_message_id:
-            sent = await client.send_message(
-                entity, text, parse_mode=None, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
-            )
-            entry["message_id"] = int(sent.id)
+        sent = await client.send_message(
+            entity, text, parse_mode=None, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
+        )
+        entry["message_id"] = int(sent.id)
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
     message_id = int(idempotency[idempotency_key]["message_id"])
@@ -2785,23 +2776,6 @@ async def _resolve_owner_target(client: Any, config: TelegramConfig) -> tuple[An
     return entity, {"id": target["id"], "kind": "private", "role": "owner"}
 
 
-async def _recent_owner_notification(client: Any, entity: Any, text: str, *, after_message_id: int) -> int:
-    cutoff = time.time() - OWNER_NOTIFICATION_HISTORY_SECONDS
-    async for message in client.iter_messages(entity, limit=OWNER_NOTIFICATION_HISTORY_LIMIT):
-        date = getattr(message, "date", None)
-        if (
-            bool(getattr(message, "out", False))
-            and isinstance(date, datetime)
-            and date.tzinfo is not None
-            and date.timestamp() >= cutoff
-            and int(message.id) > after_message_id
-            and str(getattr(message, "message", "") or "") == text
-            and _message_reply_to_id(message) == 0
-        ):
-            return int(message.id)
-    return 0
-
-
 async def _handle_notify_owner(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
     # There is deliberately no caller-supplied peer or reply anchor.
     if any(key in request for key in ("peer", "reply_to_message_id", "idempotency_key")):
@@ -2825,13 +2799,9 @@ async def _handle_notify_owner(client: Any, config: TelegramConfig, request: dic
         or previous.get("reply_to_message_id", 0) != 0
     ):
         raise BridgeError("idempotency_key_conflict")
-    known_message_id = 0
     if previous is not None and not previous.get("message_id"):
-        known_message_id = await _recent_owner_notification(
-            client, entity, text, after_message_id=int(previous["notification_after_message_id"])
-        )
-        if not known_message_id:
-            raise BridgeError("owner_notification_outcome_uncertain")
+        # Identical text in history does not identify this notification's send.
+        raise BridgeError("owner_notification_outcome_uncertain")
     response = await _handle_send_text_to_entity(
         client,
         config,
@@ -2842,9 +2812,8 @@ async def _handle_notify_owner(client: Any, config: TelegramConfig, request: dic
         mode=mode,
         idempotency_key=idempotency_key,
         owner_notification=True,
-        known_message_id=known_message_id,
     )
-    return response | {"notification_kind": kind, "duplicate_suppressed": bool(known_message_id)}
+    return response | {"notification_kind": kind, "duplicate_suppressed": False}
 
 
 def _owner_target_summary(target: dict[str, Any]) -> dict[str, Any]:
@@ -2865,13 +2834,8 @@ async def _handle_owner_notification(
     )
     entity, target = await _resolve_owner_target(client, config)
     previous = _load_idempotency(config.state_dir / "idempotency.json").get(idempotency_key)
-    known_message_id = 0
     if previous is not None and not previous.get("message_id"):
-        known_message_id = await _recent_owner_notification(
-            client, entity, text, after_message_id=int(previous["notification_after_message_id"])
-        )
-        if not known_message_id:
-            raise BridgeError("owner_notification_outcome_uncertain")
+        raise BridgeError("owner_notification_outcome_uncertain")
     response = await _handle_send_text_to_entity(
         client,
         config,
@@ -2888,7 +2852,6 @@ async def _handle_owner_notification(
         contract_target_role="owner",
         owner_notification=True,
         bound_effect=bound_effect,
-        known_message_id=known_message_id,
     )
     response["target"] = _owner_target_summary(target)
     return response

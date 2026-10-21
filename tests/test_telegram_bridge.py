@@ -319,7 +319,6 @@ def _owner_notification_client(monkeypatch):
 
         async def iter_messages(self, target, *, limit):
             assert target is entity
-            assert limit == telegram_bridge.OWNER_NOTIFICATION_HISTORY_LIMIT
             for message in sorted(self.messages.values(), key=lambda message: message.id, reverse=True)[:limit]:
                 yield message
 
@@ -363,7 +362,9 @@ def test_owner_notification_guards_dedupes_and_preserves_distinct_case_keys(monk
 
 
 @pytest.mark.parametrize("delivered", [True, False])
-def test_owner_notification_unknown_outcome_reconciles_history_or_stops(monkeypatch, tmp_path, delivered) -> None:
+def test_owner_notification_unknown_outcome_never_infers_delivery_from_history(
+    monkeypatch, tmp_path, delivered
+) -> None:
     config = _owner_logic_config(monkeypatch, tmp_path)
     client = _owner_notification_client(monkeypatch)
     # An identical notification before this attempt is not proof of delivery.
@@ -374,14 +375,53 @@ def test_owner_notification_unknown_outcome_reconciles_history_or_stops(monkeypa
     with pytest.raises(TimeoutError):
         _notify_owner(client, config, mode="apply", contract_token=dry["contract_token"])
     client.timeout = False
-    if delivered:
-        recovery = _notify_owner(client, config)
-        result = _notify_owner(client, config, mode="apply", contract_token=recovery["contract_token"])
-        assert result["verified"] is True and result["duplicate_suppressed"] is True
-    else:
+    before = (config.state_dir / "idempotency.json").read_bytes()
+    for updates in ({}, {"mode": "apply", "contract_token": dry["contract_token"]}):
         with pytest.raises(BridgeError, match="owner_notification_outcome_uncertain"):
-            _notify_owner(client, config)
+            _notify_owner(client, config, **updates)
+    assert (config.state_dir / "idempotency.json").read_bytes() == before
     assert client.sends == 1
+
+
+@pytest.mark.parametrize("operation", ["notify_owner", "send_owner_notification"])
+@pytest.mark.parametrize("other_source", ["different_key", "untracked_message"])
+def test_unknown_owner_notification_cannot_claim_another_identical_message(
+    monkeypatch, tmp_path, operation, other_source
+) -> None:
+    config = _owner_logic_config(monkeypatch, tmp_path)
+    client = _owner_notification_client(monkeypatch)
+    request = {"operation": operation, "text": "Synthetic owner notification.", "mode": "dry_run"}
+    if operation == "notify_owner":
+        request.update(kind="help", notification_key="event-A")
+    else:
+        request["idempotency_key"] = "event-A"
+
+    def call(payload):
+        return asyncio.run(telegram_bridge._handle_operation(client, config, payload))
+
+    dry = call(request)
+    apply = request | {"mode": "apply", "contract_token": dry["contract_token"]}
+    client.timeout, client.deliver = True, False
+    with pytest.raises(TimeoutError):
+        call(apply)
+    client.timeout, client.deliver = False, True
+    if other_source == "different_key":
+        other = request | {"notification_key" if operation == "notify_owner" else "idempotency_key": "event-B"}
+        other_dry = call(other)
+        assert call(other | {"mode": "apply", "contract_token": other_dry["contract_token"]})["verified"] is True
+    else:
+        client.messages[21] = SimpleNamespace(
+            id=21, chat_id=20, is_private=True, message=request["text"], out=True, date=datetime.now(UTC)
+        )
+    before = (config.state_dir / "idempotency.json").read_bytes()
+    sends = client.sends
+    for retry in (request, apply):
+        with pytest.raises(BridgeError, match="owner_notification_outcome_uncertain"):
+            call(retry)
+    assert client.sends == sends
+    assert (config.state_dir / "idempotency.json").read_bytes() == before
+    entries = telegram_bridge._load_idempotency(config.state_dir / "idempotency.json")
+    assert sum(entry["message_id"] == 0 and entry["readback_verified"] is False for entry in entries.values()) == 1
 
 
 @pytest.mark.parametrize("override", [{"peer": "20"}, {"reply_to_message_id": 100}, {"idempotency_key": "override"}])

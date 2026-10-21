@@ -958,7 +958,82 @@ def test_unknown_media_effect_rejects_content_with_matching_metadata(tmp_path, m
     monitor.inbox.close()
 
 
-def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_path, monkeypatch):
+def test_unknown_handoff_cannot_claim_another_identical_owner_message(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    source = _message(100)
+    monitor.record(source)
+    job = _job(monitor)
+    client = Client([source])
+    monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 84)
+
+    async def resolve(_client, peer):
+        return int(peer), {"id": int(peer), "kind": "private"}
+
+    async def owner(_client, _config):
+        return 84, {"id": 84, "kind": "private"}
+
+    async def history(entity, *, limit):
+        for message in sorted(client.messages.values(), key=lambda item: item.id, reverse=True)[:limit]:
+            if message.chat_id == entity:
+                yield message
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+    monkeypatch.setattr(bridge, "_resolve_owner_target", owner)
+    monkeypatch.setattr(client, "iter_messages", history)
+    request = {
+        "operation": "job_handoff",
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "expected_revision": job["revision"],
+        "reply_to_message_id": 100,
+        "text": "Synthetic human handoff",
+        "mode": "dry_run",
+    }
+
+    def call(payload):
+        return asyncio.run(bridge._handle_operation(client, config, payload, inbound_monitor=monitor))
+
+    try:
+        dry = call(request)
+        key = dry["idempotency_key"]
+        apply = request | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": key}
+        client.fail_send = True
+        with pytest.raises(OSError):
+            call(apply)
+        client.fail_send = False
+        other = {
+            "operation": "send_owner_notification",
+            "idempotency_key": "independent-owner-event",
+            "text": request["text"],
+            "mode": "dry_run",
+        }
+        other_dry = call(other)
+        assert call(other | {"mode": "apply", "contract_token": other_dry["contract_token"]})["verified"]
+        before = (config.state_dir / "idempotency.json").read_bytes()
+        for retry in (request, apply):
+            with pytest.raises(bridge.BridgeError, match="owner_notification_outcome_uncertain"):
+                call(retry)
+        assert client.sent == 2
+        assert (config.state_dir / "idempotency.json").read_bytes() == before
+        effect = monitor.inbox.read_effect(key)
+        assert effect["attempted"] == 1 and effect["verified"] == 0 and effect["receipt_key"] is None
+        with pytest.raises(InboxError, match="inbox_receipt_unverified"):
+            call(
+                request
+                | {
+                    "operation": "job_result",
+                    "outcome": "handoff",
+                    "event_ids": job["event_ids"],
+                    "receipt_keys": [key],
+                }
+            )
+        assert monitor.inbox.read_job(job["job_id"])["state"] == "running" and monitor.status()["open_events"] == 1
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize("known", [True, False])
+def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_path, monkeypatch, known):
     config, monitor = _runtime(tmp_path)
     source = _message(100)
     monitor.record(source)
@@ -985,7 +1060,8 @@ def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_pa
         "mode": "dry_run",
     }
     dry = asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
-    client.fail_readback = True
+    client.fail_readback = known
+    client.lose_text_response = not known
     with pytest.raises(OSError):
         asyncio.run(
             bridge._handle_operation(
@@ -997,13 +1073,15 @@ def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_pa
             )
         )
     client.fail_readback = False
+    client.lose_text_response = False
     client.reads.clear()
     owner_id = 85
     with pytest.raises(bridge.BridgeError, match="job_effect_ledger_conflict"):
         asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
     assert client.reads == []
     owner_id = 84
-    proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"]))
+    params = {} if known else {"message_id": 101, "effects_reviewed": True}
+    proof = asyncio.run(_readback(client, config, monitor, job, dry["idempotency_key"], **params))
     assert proof["verified"] and proof["message_id"] == 101 and client.sent == 1
     assert client.messages[101].chat_id == 84 and monitor.status()["open_events"] == 1
     monitor.inbox.close()
