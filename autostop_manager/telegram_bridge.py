@@ -684,6 +684,8 @@ def issue_photo_contract(
     caption: str,
     photo_sha256: str,
     last_message_id: int,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -693,6 +695,8 @@ def issue_photo_contract(
         "last_message_id": int(last_message_id),
         "peer_id": int(peer_id),
         "photo_sha256": photo_sha256,
+        "reply_message_sha256": reply_message_sha256,
+        "reply_to_message_id": int(reply_to_message_id),
         "type": "photo",
     }
     return _issue_contract(secret, payload)
@@ -705,6 +709,8 @@ def verify_photo_contract(
     peer_id: int,
     caption: str,
     photo_sha256: str,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -716,6 +722,10 @@ def verify_photo_contract(
         raise BridgeError("contract_text_changed")
     if payload.get("photo_sha256") != photo_sha256:
         raise BridgeError("contract_photo_changed")
+    if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
+        raise BridgeError("contract_reply_target_changed")
+    if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
         raise BridgeError("contract_invalid")
@@ -731,6 +741,8 @@ def issue_document_contract(
     document_bytes: int,
     document_name: str,
     last_message_id: int,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -742,6 +754,8 @@ def issue_document_contract(
         "issued_at": issued_at,
         "last_message_id": int(last_message_id),
         "peer_id": int(peer_id),
+        "reply_message_sha256": reply_message_sha256,
+        "reply_to_message_id": int(reply_to_message_id),
         "type": "document",
     }
     return _issue_contract(secret, payload)
@@ -756,6 +770,8 @@ def verify_document_contract(
     document_sha256: str,
     document_bytes: int,
     document_name: str,
+    reply_to_message_id: int = 0,
+    reply_message_sha256: str = "",
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -771,6 +787,10 @@ def verify_document_contract(
         raise BridgeError("contract_document_size_changed")
     if payload.get("document_name") != document_name:
         raise BridgeError("contract_document_name_changed")
+    if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
+        raise BridgeError("contract_reply_target_changed")
+    if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
         raise BridgeError("contract_invalid")
@@ -2001,6 +2021,8 @@ async def _handle_send_photo(
     effect, idempotency_key, reply_to = await _prepare_job_media(
         client, entity, inbound_monitor, request, target, caption, photo_sha256, mode, idempotency_key
     )
+    reply_source = await _load_reply_source(client, entity, reply_to)
+    reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2020,6 +2042,8 @@ async def _handle_send_photo(
                 caption=caption,
                 photo_sha256=photo_sha256,
                 last_message_id=last_message_id,
+                reply_to_message_id=reply_to,
+                reply_message_sha256=reply_message_sha256,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2033,6 +2057,8 @@ async def _handle_send_photo(
         peer_id=target["id"],
         caption=caption,
         photo_sha256=photo_sha256,
+        reply_to_message_id=reply_to,
+        reply_message_sha256=reply_message_sha256,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2045,6 +2071,7 @@ async def _handle_send_photo(
             or previous.get("caption_sha256") != caption_sha256
             or previous.get("photo_sha256") != photo_sha256
             or previous.get("reply_to_message_id", 0) != reply_to
+            or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
@@ -2060,6 +2087,7 @@ async def _handle_send_photo(
             "caption_sha256": caption_sha256,
             "photo_sha256": photo_sha256,
             "reply_to_message_id": reply_to,
+            "reply_message_sha256": reply_message_sha256,
             "readback_verified": False,
         }
         idempotency[idempotency_key] = entry
@@ -2143,6 +2171,8 @@ async def _handle_send_document(
     effect, idempotency_key, reply_to = await _prepare_job_media(
         client, entity, inbound_monitor, request, target, caption, document_sha256, mode, idempotency_key
     )
+    reply_source = await _load_reply_source(client, entity, reply_to)
+    reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2165,6 +2195,8 @@ async def _handle_send_document(
                 document_bytes=document_bytes,
                 document_name=document_path.name,
                 last_message_id=last_message_id,
+                reply_to_message_id=reply_to,
+                reply_message_sha256=reply_message_sha256,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2180,6 +2212,8 @@ async def _handle_send_document(
         document_sha256=document_sha256,
         document_bytes=document_bytes,
         document_name=document_path.name,
+        reply_to_message_id=reply_to,
+        reply_message_sha256=reply_message_sha256,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2194,6 +2228,7 @@ async def _handle_send_document(
             or previous.get("document_bytes") != document_bytes
             or previous.get("document_name") != document_path.name
             or previous.get("reply_to_message_id", 0) != reply_to
+            or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
@@ -2212,6 +2247,7 @@ async def _handle_send_document(
             "document_name": document_path.name,
             "readback_verified": False,
             "reply_to_message_id": reply_to,
+            "reply_message_sha256": reply_message_sha256,
         }
         # Persist the exact intent before the network call. If the process dies
         # after Telegram accepts the document, this key blocks a blind resend.
