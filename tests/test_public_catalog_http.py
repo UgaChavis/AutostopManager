@@ -155,14 +155,14 @@ def test_dns_pinning_preserves_tls_hostname_and_original_host(monkeypatch):
         seen.append(request)
         return httpx.Response(200, content=b"okay")
 
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     def client(**kwargs):
         assert kwargs["trust_env"] is False
         return real_client(transport=httpx.MockTransport(handle), **kwargs)
 
     monkeypatch.setattr(transport, "_public_address", lambda *args: "8.8.8.8")
-    monkeypatch.setattr(httpx, "Client", client)
+    monkeypatch.setattr(httpx, "AsyncClient", client)
     assert transport._http_get(ROOT, 1, 100)[1] == b"okay"
     assert seen[0].url.host == "8.8.8.8"
     assert seen[0].headers["Host"] == "www.elcats.ru"
@@ -173,7 +173,7 @@ def test_bounded_wait_holds_admission_until_worker_finishes(monkeypatch):
     started, release = threading.Event(), threading.Event()
     semaphore = threading.BoundedSemaphore(1)
 
-    def get(*args):
+    def get(*args, **kwargs):
         started.set()
         release.wait(1)
         return 200, b"okay", {}

@@ -9,25 +9,25 @@ from autostop_manager import public_catalog_http as catalog
 ROOT = "https://www.elcats.ru/vw/"
 
 
-class TrackedBody(httpx.SyncByteStream):
+class TrackedBody(httpx.AsyncByteStream):
     def __init__(self, size=catalog.MAX_CATALOG_BYTES + 1):
         self.size = size
         self.read = False
         self.closed = False
 
-    def __iter__(self):
+    async def __aiter__(self):
         self.read = True
         yield b"x" * self.size
 
-    def close(self):
+    async def aclose(self):
         self.closed = True
 
 
 def use_mock_http(monkeypatch, handle):
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
     monkeypatch.setattr(catalog, "_public_address", lambda *_args: "8.8.8.8")
     monkeypatch.setattr(
-        catalog.httpx, "Client", lambda **kwargs: real_client(transport=httpx.MockTransport(handle), **kwargs)
+        catalog.httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(handle), **kwargs)
     )
 
 
