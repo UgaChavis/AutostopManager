@@ -18,6 +18,7 @@ from autostop_manager import telegram_wake as wake
         None,
         "intake_only",
         "execution_only",
+        "review_alias_zero",
         "other_error",
         "execution_error",
         "app_disconnected",
@@ -36,10 +37,17 @@ from autostop_manager import telegram_wake as wake
         "review_jobs",
         "review_events",
         "review_alias",
+        "review_alias_none",
+        "review_alias_bool",
+        "review_alias_float",
         "active_jobs",
         "counts_missing",
         "bad_count",
         "gap_count",
+        "gap_missing",
+        "gap_none",
+        "gap_bool",
+        "gap_float",
         "instruction_invalid",
         "health_failure",
         "bridge_lost_on_health",
@@ -62,6 +70,7 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
             "active_jobs": 0,
             "needs_review_jobs": 0,
             "needs_review_events": 0,
+            "gap_count": 0,
         }
 
         class Jobs:
@@ -130,17 +139,27 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
                     "review_jobs": {"needs_review_jobs": 1},
                     "review_events": {"needs_review_events": 1},
                     "review_alias": {"needs_review": 1},
+                    "review_alias_zero": {"needs_review": 0},
+                    "review_alias_none": {"needs_review": None},
+                    "review_alias_bool": {"needs_review": False},
+                    "review_alias_float": {"needs_review": 0.0},
                     "active_jobs": {"active_jobs": 1},
                     "gap_count": {"gap_count": 1},
+                    "gap_none": {"gap_count": None},
+                    "gap_bool": {"gap_count": False},
+                    "gap_float": {"gap_count": 0.0},
                     "bad_count": {"active_jobs": False},
                 }.get(blocker, {})
             )
             if blocker == "counts_missing":
                 del status["active_jobs"]
+            if blocker == "gap_missing":
+                del status["gap_count"]
             jobs.changed.set()
             await asyncio.wait_for(jobs.health_done.wait(), 1)
             public = dispatcher.status()
-            expected = None if blocker in {None, "intake_only", "execution_only"} else "wake_bridge_disconnected"
+            healthy = blocker in {None, "intake_only", "execution_only", "review_alias_zero"}
+            expected = None if healthy else "wake_bridge_disconnected"
             if blocker == "other_error":
                 expected = "known_failure"
             elif blocker == "instruction_invalid":
@@ -158,7 +177,7 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
             app.request.assert_not_called()
             if blocker != "execution_error":
                 assert validated == [("/synthetic/instructions", "a" * 40)]
-            if blocker in {None, "intake_only", "execution_only"}:
+            if healthy:
                 assert public["execution_paused"] is status["execution_paused"]
                 assert public["intake_enabled"] is status["enabled"]
         finally:

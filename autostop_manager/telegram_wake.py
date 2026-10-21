@@ -1721,10 +1721,10 @@ class DurableWakeDispatcher:
                             )
                             and all(
                                 type(self.inbox_status.get(field)) is int and self.inbox_status[field] == 0
-                                for field in ("active_jobs", "needs_review_jobs", "needs_review_events")
+                                for field in ("active_jobs", "needs_review_jobs", "needs_review_events", "gap_count")
                             )
-                            and not self.inbox_status.get("needs_review", 0)
-                            and not self.inbox_status.get("gap_count", 0)
+                            and type(self.inbox_status.get("needs_review", 0)) is int
+                            and self.inbox_status.get("needs_review", 0) == 0
                         ):
                             self.last_error = None
                         continue
