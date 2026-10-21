@@ -99,6 +99,9 @@ def _http_get(url: str, timeout: float, maximum: int) -> tuple[int, bytes, dict[
         request.extensions["sni_hostname"] = host
         response = client.send(request, stream=True, follow_redirects=False)
         try:
+            # Navigation needs only headers; close intermediate bodies without buffering them.
+            if response.status_code in {301, 302, 303, 307, 308}:
+                return response.status_code, b"", dict(response.headers)
             body = bytearray()
             for chunk in response.iter_bytes():
                 body.extend(chunk)
