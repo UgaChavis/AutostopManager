@@ -140,8 +140,15 @@ def _url_component_contains_sensitive(value: str) -> bool:
             candidate = ""
             for end in range(start, len(segments)):
                 candidate = segments[end] if not candidate else candidate + "/" + segments[end]
-                if _VIN_TOKEN.fullmatch(candidate) and _is_full_url_vin(candidate):
+                if not _VIN_TOKEN.fullmatch(candidate):
+                    break
+                if _is_full_url_vin(candidate):
                     return True
+                # A later suffix belongs to a new segment: it cannot remove
+                # any of this prefix. Check the current document suffix first,
+                # then stop once the prefix already exceeds a complete VIN.
+                if len(_VIN_SEPARATORS.sub("", candidate)) > 17:
+                    break
         return False
 
     return bool(
