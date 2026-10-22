@@ -630,6 +630,27 @@ def _verify_contract_age(payload: dict[str, Any], now: int | None) -> None:
         raise BridgeError("contract_expired")
 
 
+def _reply_source_media_fields(
+    reply_to_message_id: int, binding: Any, *, error_code: str = "contract_invalid"
+) -> dict[str, Any]:
+    if not reply_to_message_id:
+        return {}
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != {"version", "fingerprint"}
+        or type(binding["version"]) is not int
+        or binding["version"] != 1
+        or (
+            binding["fingerprint"] is not None
+            and (
+                type(binding["fingerprint"]) is not str or re.fullmatch(r"[0-9a-f]{64}", binding["fingerprint"]) is None
+            )
+        )
+    ):
+        raise BridgeError(error_code)
+    return {"reply_source_media": {"version": 1, "fingerprint": binding["fingerprint"]}}
+
+
 def issue_send_contract(
     secret: bytes,
     *,
@@ -638,6 +659,7 @@ def issue_send_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -648,6 +670,7 @@ def issue_send_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -660,6 +683,7 @@ def verify_send_contract(
     text: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -670,6 +694,10 @@ def verify_send_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -686,6 +714,7 @@ def issue_photo_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -698,6 +727,7 @@ def issue_photo_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "type": "photo",
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -711,6 +741,7 @@ def verify_photo_contract(
     photo_sha256: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -725,6 +756,10 @@ def verify_photo_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -743,6 +778,7 @@ def issue_document_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -757,6 +793,7 @@ def issue_document_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "type": "document",
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -772,6 +809,7 @@ def verify_document_contract(
     document_name: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -790,6 +828,10 @@ def verify_document_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -2023,6 +2065,12 @@ async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[
     return {
         "message_id": message_id,
         "text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "reply_source_media": {
+            "version": 1,
+            "fingerprint": _message_media_metadata(message)["fingerprint"]
+            if getattr(message, "media", None) is not None
+            else None,
+        },
         "out": bool(getattr(message, "out", False)),
         "date": message.date.isoformat() if getattr(message, "date", None) else None,
     }
@@ -2044,6 +2092,7 @@ async def _handle_send_photo(
     )
     reply_source = await _load_reply_source(client, entity, reply_to)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2065,6 +2114,7 @@ async def _handle_send_photo(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2080,6 +2130,7 @@ async def _handle_send_photo(
         photo_sha256=photo_sha256,
         reply_to_message_id=reply_to,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2097,6 +2148,10 @@ async def _handle_send_photo(
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
             raise BridgeError("send_photo_outcome_uncertain")
+        if _reply_source_media_fields(
+            reply_to, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2109,6 +2164,7 @@ async def _handle_send_photo(
             "photo_sha256": photo_sha256,
             "reply_to_message_id": reply_to,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to, reply_source_media),
             "readback_verified": False,
         }
         idempotency[idempotency_key] = entry
@@ -2194,6 +2250,7 @@ async def _handle_send_document(
     )
     reply_source = await _load_reply_source(client, entity, reply_to)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2218,6 +2275,7 @@ async def _handle_send_document(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2235,6 +2293,7 @@ async def _handle_send_document(
         document_name=document_path.name,
         reply_to_message_id=reply_to,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2254,6 +2313,10 @@ async def _handle_send_document(
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
             raise BridgeError("send_document_outcome_uncertain")
+        if _reply_source_media_fields(
+            reply_to, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2269,6 +2332,7 @@ async def _handle_send_document(
             "readback_verified": False,
             "reply_to_message_id": reply_to,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to, reply_source_media),
         }
         # Persist the exact intent before the network call. If the process dies
         # after Telegram accepts the document, this key blocks a blind resend.
@@ -2573,6 +2637,7 @@ async def _handle_send_text_to_entity(
         job_effect = bound_effect
     reply_source = await _load_reply_source(client, entity, reply_to_message_id)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     contract_peer_id = int(target["id"])
@@ -2600,6 +2665,7 @@ async def _handle_send_text_to_entity(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to_message_id,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, job_effect, idempotency_key)
@@ -2614,6 +2680,7 @@ async def _handle_send_text_to_entity(
         text=text,
         reply_to_message_id=reply_to_message_id,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2637,6 +2704,10 @@ async def _handle_send_text_to_entity(
         if not previous.get("message_id"):
             error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
             raise BridgeError(error)
+        if _reply_source_media_fields(
+            reply_to_message_id, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to_message_id, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2646,6 +2717,7 @@ async def _handle_send_text_to_entity(
             "message_id": 0,
             **target_binding,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to_message_id, reply_source_media),
             "reply_to_message_id": reply_to_message_id,
             "text_sha256": text_sha256,
             "readback_verified": False,

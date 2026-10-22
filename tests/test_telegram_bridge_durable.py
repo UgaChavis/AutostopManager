@@ -1853,3 +1853,266 @@ def test_events_pagination_and_legacy_file_reject_symlink(tmp_path):
     with pytest.raises(bridge.BridgeError, match="legacy_references_invalid"):
         bridge._read_legacy_references(link)
     monitor.inbox.close()
+
+
+@pytest.fixture
+def source_media_reply(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+
+    async def resolve(_client, _peer):
+        return 42, {"id": 42, "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+
+    class SourceMediaClient(ReadbackClient):
+        async def download_media(self, message, *, file):
+            assert message.id != 100, "reply-source media must not be downloaded"
+            return await super().download_media(message, file=file)
+
+    def prepare(operation, incoming_kind):
+        source = _message(100, text="  **raw caption** _source_\n ")
+        identity = SimpleNamespace(id=1001, dc_id=2, attributes=[], file_reference=b"old", access_hash=123)
+        source.media = SimpleNamespace() if incoming_kind is not None else None
+        source.photo = identity if incoming_kind == "photo" else None
+        source.document = identity if incoming_kind == "document" else None
+        source.file = SimpleNamespace(
+            name="incoming.pdf" if incoming_kind == "document" else "incoming.jpg",
+            mime_type="application/pdf" if incoming_kind == "document" else "image/jpeg",
+            size=128,
+        )
+        monitor.record(source)
+        job = _job(monitor)
+        client = SourceMediaClient([source])
+        payload = (
+            {"operation": "send", "peer": "42", "text": "Synthetic answer", "mode": "dry_run"}
+            if operation == "send"
+            else _media_request(config, operation)
+        ) | {
+            "job_id": job["job_id"],
+            "lease": job["lease"],
+            "revision": job["revision"],
+            "kind": "result",
+            "reply_to_message_id": source.id,
+        }
+
+        def call(request):
+            return asyncio.run(bridge._handle_operation(client, config, request, inbound_monitor=monitor))
+
+        return SimpleNamespace(
+            config=config,
+            monitor=monitor,
+            source=source,
+            identity=identity,
+            job=job,
+            client=client,
+            payload=payload,
+            call=call,
+        )
+
+    try:
+        yield prepare
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize("operation", ["send", "send_photo", "send_document"])
+@pytest.mark.parametrize("incoming_kind", ["photo", "document"])
+def test_reply_rejects_media_replaced_after_dry_run(source_media_reply, request, operation, incoming_kind):
+    runtime = source_media_reply(operation, incoming_kind)
+    dry = runtime.call(runtime.payload)
+    ledger_path = runtime.config.state_dir / "idempotency.json"
+    ledger_before = ledger_path.read_bytes() if ledger_path.exists() else None
+    job_before = runtime.monitor.inbox.read_job(runtime.job["job_id"])
+    fingerprint_before = bridge._message_media_metadata(runtime.source)["fingerprint"]
+    runtime.identity.id = 1002
+    before_apply = {
+        "source_message_id": runtime.source.id,
+        "caption_sha256": hashlib.sha256(runtime.source.message.encode()).hexdigest(),
+        "last_message_id": max(runtime.client.messages),
+        "context_revision": runtime.monitor.inbox.read_job(runtime.job["job_id"])["context_revision"],
+        "media_fingerprint": bridge._message_media_metadata(runtime.source)["fingerprint"],
+    }
+    error = None
+    result = None
+    try:
+        result = runtime.call(
+            runtime.payload
+            | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]}
+        )
+    except bridge.BridgeError as exc:
+        error = str(exc)
+    job_after = runtime.monitor.inbox.read_job(runtime.job["job_id"])
+    effect = next(effect for effect in job_after["effects"] if effect["effect_key"] == dry["idempotency_key"])
+    ledger_after = ledger_path.read_bytes() if ledger_path.exists() else None
+    observation = {
+        "error": error,
+        "result": result,
+        "sent": runtime.client.sent,
+        "effect_attempted": effect["attempted"],
+        "effect_verified": effect["verified"],
+        "ledger_changed": ledger_after != ledger_before,
+        "ledger_before_sha256": hashlib.sha256(ledger_before).hexdigest() if ledger_before is not None else None,
+        "ledger_after_sha256": hashlib.sha256(ledger_after).hexdigest() if ledger_after is not None else None,
+        "ledger_entry": json.loads(ledger_after).get(dry["idempotency_key"]) if ledger_after else None,
+        "before_apply": before_apply,
+        "original_media_fingerprint": fingerprint_before,
+        "original_context_revision": job_before["context_revision"],
+        "dry_last_message_id": dry["last_message_id"],
+    }
+    request.node.user_properties.append(("source_media_observation", observation))
+    assert before_apply["media_fingerprint"] != fingerprint_before
+    assert before_apply["last_message_id"] == dry["last_message_id"] == 100
+    assert before_apply["context_revision"] == job_before["context_revision"]
+    assert error == "contract_reply_source_changed", observation
+    assert result is None and runtime.client.sent == 0
+    assert effect["attempted"] == effect["verified"] == 0
+    assert ledger_after == ledger_before
+
+
+@pytest.mark.parametrize("operation", ["send", "send_photo", "send_document"])
+def test_reply_media_reference_rotation_preserves_caption_and_replay(source_media_reply, request, operation):
+    runtime = source_media_reply(operation, "document" if operation == "send_document" else "photo")
+    dry = runtime.call(runtime.payload)
+    secret = bridge._ensure_private_key(runtime.config.state_dir / "contract.key")
+    token_payload = bridge._decode_contract(dry["contract_token"], secret)
+    caption_sha256 = hashlib.sha256(runtime.source.message.encode()).hexdigest()
+    fingerprint_before = bridge._message_media_metadata(runtime.source)["fingerprint"]
+    runtime.identity.file_reference = b"rotated-reference"
+    runtime.identity.access_hash = 456
+    apply = runtime.payload | {
+        "mode": "apply",
+        "contract_token": dry["contract_token"],
+        "idempotency_key": dry["idempotency_key"],
+    }
+    sent = runtime.call(apply)
+    replayed = runtime.call(apply)
+    effect = runtime.monitor.inbox.read_job(runtime.job["job_id"])["effects"][0]
+    request.node.user_properties.append(
+        (
+            "source_media_observation",
+            {
+                "sent": runtime.client.sent,
+                "verified": sent["verified"],
+                "replayed": replayed["replayed"],
+                "effect_attempted": effect["attempted"],
+                "effect_verified": effect["verified"],
+            },
+        )
+    )
+    assert token_payload["reply_message_sha256"] == caption_sha256
+    assert bridge._message_media_metadata(runtime.source)["fingerprint"] == fingerprint_before
+    assert sent["verified"] is True and replayed["replayed"] is True
+    assert runtime.client.sent == 1 and effect["attempted"] == effect["verified"] == 1
+    ledger_path = runtime.config.state_dir / "idempotency.json"
+    ledger_before = ledger_path.read_bytes()
+    runtime.identity.id = 1002
+    refreshed = runtime.call(runtime.payload)
+    assert refreshed["idempotency_key"] == dry["idempotency_key"]
+    with pytest.raises(bridge.BridgeError, match=r"^idempotency_key_conflict$"):
+        runtime.call(apply | {"contract_token": refreshed["contract_token"]})
+    assert runtime.client.sent == 1 and ledger_path.read_bytes() == ledger_before
+
+
+@pytest.mark.parametrize(
+    ("operation", "incoming_kind"), [("send", None), ("send_photo", "photo"), ("send_document", "document")]
+)
+def test_legacy_reply_token_requires_fresh_dry_run(source_media_reply, operation, incoming_kind):
+    runtime = source_media_reply(operation, incoming_kind)
+    dry = runtime.call(runtime.payload)
+    secret = bridge._ensure_private_key(runtime.config.state_dir / "contract.key")
+    payload = bridge._decode_contract(dry["contract_token"], secret)
+    assert payload["reply_source_media"]["version"] == 1
+    assert (payload["reply_source_media"]["fingerprint"] is None) == (incoming_kind is None)
+    del payload["reply_source_media"]
+    with pytest.raises(bridge.BridgeError, match=r"^contract_invalid$"):
+        runtime.call(
+            runtime.payload
+            | {
+                "mode": "apply",
+                "contract_token": bridge._issue_contract(secret, payload),
+                "idempotency_key": dry["idempotency_key"],
+            }
+        )
+    effect = runtime.monitor.inbox.read_effect(dry["idempotency_key"])
+    assert runtime.client.sent == effect["attempted"] == effect["verified"] == 0
+    assert not (runtime.config.state_dir / "idempotency.json").exists()
+    applied = runtime.call(
+        runtime.payload
+        | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]}
+    )
+    assert applied["verified"] and runtime.client.sent == 1
+
+
+@pytest.mark.parametrize("change", ["add", "remove"])
+def test_reply_rejects_media_added_or_removed_after_dry_run(source_media_reply, change):
+    runtime = source_media_reply("send", None if change == "add" else "photo")
+    dry = runtime.call(runtime.payload)
+    if change == "add":
+        runtime.source.media = SimpleNamespace()
+        runtime.source.photo = runtime.identity
+    else:
+        runtime.source.media = None
+        runtime.source.photo = None
+    with pytest.raises(bridge.BridgeError, match=r"^contract_reply_source_changed$"):
+        runtime.call(
+            runtime.payload
+            | {"mode": "apply", "contract_token": dry["contract_token"], "idempotency_key": dry["idempotency_key"]}
+        )
+    effect = runtime.monitor.inbox.read_effect(dry["idempotency_key"])
+    assert runtime.client.sent == effect["attempted"] == effect["verified"] == 0
+    assert not (runtime.config.state_dir / "idempotency.json").exists()
+
+
+@pytest.mark.parametrize("operation", ["send", "send_photo", "send_document"])
+@pytest.mark.parametrize("known", [True, False])
+def test_legacy_reply_ledger_is_held_until_exact_readback(source_media_reply, operation, known):
+    runtime = source_media_reply(operation, "document" if operation == "send_document" else "photo")
+    dry = runtime.call(runtime.payload)
+    apply = runtime.payload | {
+        "mode": "apply",
+        "contract_token": dry["contract_token"],
+        "idempotency_key": dry["idempotency_key"],
+    }
+    runtime.client.fail_readback = known
+    runtime.client.lose_text_response = not known and operation == "send"
+    runtime.client.lose_file_response = not known and operation != "send"
+    with pytest.raises(OSError):
+        runtime.call(apply)
+    runtime.client.fail_readback = False
+    runtime.client.lose_text_response = False
+    runtime.client.lose_file_response = False
+    path = runtime.config.state_dir / "idempotency.json"
+    ledger = bridge._load_idempotency(path)
+    entry = ledger[dry["idempotency_key"]]
+    assert entry["message_id"] == (101 if known else 0)
+    del entry["reply_source_media"]
+    bridge._save_idempotency(path, ledger)
+    legacy_bytes = path.read_bytes()
+    refreshed = runtime.call(runtime.payload)
+    assert refreshed["idempotency_key"] == dry["idempotency_key"]
+    expected = (
+        "idempotency_key_conflict"
+        if known
+        else {
+            "send": "send_outcome_uncertain",
+            "send_photo": "send_photo_outcome_uncertain",
+            "send_document": "send_document_outcome_uncertain",
+        }[operation]
+    )
+    with pytest.raises(bridge.BridgeError, match=r"^" + expected + "$"):
+        runtime.call(apply | {"contract_token": refreshed["contract_token"]})
+    effect = runtime.monitor.inbox.read_effect(dry["idempotency_key"])
+    assert runtime.client.sent == effect["attempted"] == 1 and effect["verified"] == 0
+    assert path.read_bytes() == legacy_bytes
+    runtime.identity.id = 1002
+    params = {} if known else {"message_id": 101, "effects_reviewed": True}
+    proof = asyncio.run(
+        _readback(runtime.client, runtime.config, runtime.monitor, runtime.job, dry["idempotency_key"], **params)
+    )
+    assert proof["verified"] and proof["receipt_key"] == dry["idempotency_key"]
+    assert runtime.client.sent == 1 and runtime.monitor.inbox.read_effect(dry["idempotency_key"])["verified"] == 1
+    recovered = bridge._load_idempotency(path)[dry["idempotency_key"]]
+    assert recovered["message_id"] == 101 and recovered["readback_verified"]
+    assert "reply_source_media" not in recovered
+    assert runtime.monitor.status()["open_events"] == 1
+    assert runtime.monitor.inbox.read_job(runtime.job["job_id"])["state"] == "running"
