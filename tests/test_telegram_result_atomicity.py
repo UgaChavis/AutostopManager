@@ -33,6 +33,8 @@ def _snapshot(inbox: TelegramInbox) -> dict[str, Any]:
         "events": [tuple(row) for row in inbox._db.execute("SELECT * FROM events ORDER BY rowid")],
         "effects": [tuple(row) for row in inbox._db.execute("SELECT * FROM effects ORDER BY rowid")],
         "peers": [tuple(row) for row in inbox._db.execute("SELECT * FROM peers ORDER BY peer_id")],
+        "peer_threads": [tuple(row) for row in inbox._db.execute("SELECT * FROM peer_threads ORDER BY peer_id")],
+        "global_slot": [tuple(row) for row in inbox._db.execute("SELECT * FROM global_slot")],
     }
 
 
@@ -45,6 +47,8 @@ def case(tmp_path: Path):
         assert all(isinstance(value, str) for value in event_ids)
         job = inbox.claim(instruction_root=ROOT, instruction_revision=REVISION)
         assert job is not None and job["event_ids"] == event_ids
+        mapping = inbox.prepare_peer_thread(**_guard(job))
+        inbox.bind_peer_thread(**_guard(job), creation_key=mapping["creation_key"], thread_id="synthetic-thread")
         job = inbox.start_intent(**_guard(job), thread_id="synthetic-thread")
         job = inbox.bind_turn(**_guard(job), turn_id="synthetic-turn")
         key = inbox.reserve_effect(

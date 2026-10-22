@@ -22,8 +22,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 2
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2)
+INBOX_SCHEMA_VERSION = 3
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3)
+WORKER_PROTOCOL_VERSION = 2
+REQUEST_DEADLINE_SECONDS = 1200
 
 EVENT_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,39})")
 JOB_PATTERN = re.compile(r"job-[a-f0-9]{32}")
@@ -230,8 +232,31 @@ class TelegramInbox:
                 sequence TEXT PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 reason_code TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS peer_threads (
+                peer_id INTEGER PRIMARY KEY REFERENCES peers(peer_id),
+                thread_id TEXT UNIQUE, creation_key TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL CHECK(state IN ('creating','ready','creation_unknown')),
+                revision INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS global_slot (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id), lease TEXT NOT NULL,
+                phase TEXT NOT NULL CHECK(phase IN ('claimed','start_intent','running','manual'))
+            );
                 """
             )
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
+            additions = {
+                "deadline_at": "TEXT",
+                "execution_revision": "INTEGER",
+                "execution_proof": "TEXT",
+                "proof_at": "TEXT",
+                "context_mode": "TEXT NOT NULL DEFAULT 'legacy'",
+                "manual_recovery": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in additions.items():
+                if name not in columns:
+                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
             self._db.execute(
                 "UPDATE metadata SET value=? WHERE key='schema_version' AND value<>?",
                 (str(INBOX_SCHEMA_VERSION), str(INBOX_SCHEMA_VERSION)),
@@ -544,6 +569,10 @@ class TelegramInbox:
 
     def job_status(self) -> dict[str, Any]:
         counts = dict(self._db.execute("SELECT state,COUNT(*) FROM jobs GROUP BY state"))
+        slot = self._db.execute(
+            "SELECT jobs.job_id,jobs.deadline_at,global_slot.phase AS slot_phase "
+            "FROM global_slot JOIN jobs USING(job_id) WHERE singleton=1"
+        ).fetchone()
         return {
             "active_jobs": sum(counts.get(state, 0) for state in ACTIVE_STATES),
             "needs_review_jobs": counts.get("needs_review", 0),
@@ -553,7 +582,35 @@ class TelegramInbox:
                 "WHERE events.state='open' AND (jobs.state='needs_review' OR EXISTS "
                 "(SELECT 1 FROM boundary_holds WHERE boundary_holds.sequence=events.sequence))"
             ).fetchone()[0],
+            "schema_version": INBOX_SCHEMA_VERSION,
+            "worker_protocol": WORKER_PROTOCOL_VERSION,
+            "context_mode": "serial_peer_v1",
+            "global_slot": (
+                {key: slot[key] for key in ("job_id", "deadline_at", "slot_phase")} if slot is not None else None
+            ),
+            "compatibility_hold": self._compatibility_hold(),
+            "held_peers": self._db.execute(
+                "SELECT COUNT(*) FROM peers WHERE EXISTS "
+                "(SELECT 1 FROM jobs WHERE jobs.peer_id=peers.peer_id AND jobs.state='needs_review') "
+                "OR EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=peers.peer_id "
+                "AND peer_threads.state<>'ready')"
+            ).fetchone()[0],
         }
+
+    def _compatibility_hold(self) -> bool:
+        return (
+            self._db.execute(
+                "SELECT 1 FROM jobs WHERE context_mode='legacy' AND execution_proof IS NULL "
+                "AND state IN ('claimed','start_intent','running','needs_review') LIMIT 1"
+            ).fetchone()
+            is not None
+        )
+
+    def execution_slot(self) -> dict[str, Any] | None:
+        row = self._db.execute("SELECT job_id,phase FROM global_slot WHERE singleton=1").fetchone()
+        if row is None:
+            return None
+        return {**self.read_job(row["job_id"]), "slot_phase": row["phase"]}
 
     def configure_instructions(self, instruction_root: str, instruction_revision: str) -> None:
         """Set the bridge's validated physical capture snapshot for new holds."""
@@ -568,7 +625,8 @@ class TelegramInbox:
         now = self._now()
         self._db.execute(
             "INSERT INTO jobs(job_id,peer_id,state,revision,lease,context_revision,instruction_root,"
-            "instruction_revision,created_at,updated_at,reason_code) VALUES (?,?,'needs_review',1,?,?,?,?,?,?,?)",
+            "instruction_revision,created_at,updated_at,reason_code,context_mode,execution_proof,proof_at) "
+            "VALUES (?,?,'needs_review',1,?,?,?,?,?,?,?,'peer_v1','not_started',?)",
             (
                 job_id,
                 peer_id,
@@ -579,6 +637,7 @@ class TelegramInbox:
                 now,
                 now,
                 reason_code,
+                now,
             ),
         )
         self._db.executemany(
@@ -624,12 +683,14 @@ class TelegramInbox:
         if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
             return None
         self._promote_boundary_holds(instruction_root, instruction_revision)
-        if self._db.execute(
-            "SELECT 1 FROM jobs WHERE state IN ('claimed','start_intent','running','needs_review') LIMIT 1"
-        ).fetchone():
+        if self.execution_slot() is not None or self._compatibility_hold():
             return None
         first = self._db.execute(
-            "SELECT * FROM events WHERE state='open' AND job_id IS NULL ORDER BY received_at,rowid LIMIT 1"
+            "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.peer_id=events.peer_id "
+            "AND jobs.state IN ('claimed','start_intent','running','needs_review')) "
+            "AND NOT EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=events.peer_id "
+            "AND peer_threads.state<>'ready') ORDER BY received_at,events.rowid LIMIT 1"
         ).fetchone()
         if first is None:
             return None
@@ -644,10 +705,12 @@ class TelegramInbox:
         job_id = "job-" + secrets.token_hex(16)
         lease = secrets.token_urlsafe(32)
         now = self._now()
+        deadline = _timestamp(datetime.fromisoformat(now) + timedelta(seconds=REQUEST_DEADLINE_SECONDS))
         with self._write():
             self._db.execute(
                 "INSERT INTO jobs(job_id,peer_id,state,revision,lease,context_revision,instruction_root,"
-                "instruction_revision,created_at,updated_at) VALUES (?,?,'claimed',1,?,?,?,?,?,?)",
+                "instruction_revision,created_at,updated_at,deadline_at,execution_revision,context_mode) "
+                "VALUES (?,?,'claimed',1,?,?,?,?,?,?,?,?, 'peer_v1')",
                 (
                     job_id,
                     first["peer_id"],
@@ -657,8 +720,11 @@ class TelegramInbox:
                     instruction_revision,
                     now,
                     now,
+                    deadline,
+                    int(self._meta("execution_revision")),
                 ),
             )
+            self._db.execute("INSERT INTO global_slot VALUES (1,?,?,'claimed')", (job_id, lease))
             self._db.executemany("UPDATE events SET job_id=? WHERE sequence=?", [(job_id, row[0]) for row in rows])
         return self.read_job(job_id)
 
@@ -716,7 +782,8 @@ class TelegramInbox:
         rows = list(
             self._db.execute(
                 "SELECT job_id,peer_id,state,revision,lease,context_revision,instruction_revision,"
-                "thread_id,turn_id,reason_code FROM jobs "
+                "thread_id,turn_id,reason_code,deadline_at,execution_revision,execution_proof,proof_at,"
+                "context_mode,manual_recovery FROM jobs "
                 "WHERE rowid>? AND state IN ('claimed','start_intent','running','needs_review') "
                 "ORDER BY rowid LIMIT ?",
                 (cursor, limit + 1),
@@ -727,6 +794,12 @@ class TelegramInbox:
         return {"jobs": jobs, "next_job_id": jobs[-1]["job_id"] if has_more else None}
 
     def _lease(self, job_id: str, lease: str, expected_revision: int) -> sqlite3.Row:
+        job = self._binding(job_id, lease, expected_revision)
+        if job["state"] not in ACTIVE_STATES:
+            raise InboxError("inbox_job_not_active")
+        return job
+
+    def _binding(self, job_id: str, lease: str, expected_revision: int) -> sqlite3.Row:
         _token(lease, "inbox_lease_invalid")
         _positive(expected_revision, "inbox_revision_invalid")
         job = self._job_row(job_id)
@@ -734,9 +807,219 @@ class TelegramInbox:
             raise InboxError("inbox_lease_mismatch")
         if job["revision"] != expected_revision:
             raise InboxError("inbox_revision_conflict")
-        if job["state"] not in ACTIVE_STATES:
-            raise InboxError("inbox_job_not_active")
         return job
+
+    def _require_execution(self, job: sqlite3.Row) -> None:
+        slot = self._db.execute("SELECT * FROM global_slot WHERE singleton=1").fetchone()
+        if slot is None or slot["job_id"] != job["job_id"] or not hmac.compare_digest(slot["lease"], job["lease"]):
+            raise InboxError("inbox_execution_slot_mismatch")
+        paused = self._meta("execution_paused") == "1"
+        if job["manual_recovery"]:
+            if not paused:
+                raise InboxError("inbox_execution_stale")
+        elif paused or self._meta("duty_enabled") != "1":
+            raise InboxError("inbox_execution_paused")
+        if job["execution_revision"] != int(self._meta("execution_revision")):
+            raise InboxError("inbox_execution_stale")
+        if not job["manual_recovery"] and (
+            job["deadline_at"] is None
+            or datetime.fromisoformat(job["deadline_at"]) <= datetime.fromisoformat(self._now())
+        ):
+            raise InboxError("inbox_execution_deadline")
+
+    def execution_authority(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
+        """A revocable write permit; delivery readback never requires this permit."""
+
+        job = self._lease(job_id, lease, expected_revision)
+        if job["state"] != "running":
+            raise InboxError("inbox_effect_state_invalid")
+        self._require_execution(job)
+        return {
+            "job_id": job_id,
+            "lease": lease,
+            "revision": expected_revision,
+            "execution_revision": job["execution_revision"],
+            "deadline_at": job["deadline_at"],
+            "thread_id": job["thread_id"],
+            "turn_id": job["turn_id"],
+            "manual_recovery": bool(job["manual_recovery"]),
+            "duty_window_id": self._db.execute(
+                "SELECT MAX(window_id) FROM duty_windows WHERE closed_at IS NULL"
+            ).fetchone()[0],
+        }
+
+    def check_execution_authority(self, snapshot: dict[str, Any]) -> None:
+        if not isinstance(snapshot, dict):
+            raise InboxError("inbox_execution_stale")
+        try:
+            current = self.execution_authority(
+                job_id=snapshot["job_id"], lease=snapshot["lease"], expected_revision=snapshot["revision"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise InboxError("inbox_execution_stale") from exc
+        if snapshot != current:
+            raise InboxError("inbox_execution_stale")
+
+    def read_peer_thread(self, job_id: str) -> dict[str, Any] | None:
+        job = self._job_row(job_id)
+        row = self._db.execute("SELECT * FROM peer_threads WHERE peer_id=?", (job["peer_id"],)).fetchone()
+        return dict(row) if row is not None else None
+
+    def prepare_peer_thread(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
+        job = self._lease(job_id, lease, expected_revision)
+        if job["state"] != "claimed" or job["context_mode"] != "peer_v1":
+            raise InboxError("inbox_peer_thread_state_invalid")
+        self._require_execution(job)
+        existing = self.read_peer_thread(job_id)
+        if existing is not None:
+            return {**existing, "created": False}
+        key = secrets.token_urlsafe(32)
+        with self._write():
+            self._db.execute("INSERT INTO peer_threads VALUES (?,NULL,?,'creating',1)", (job["peer_id"], key))
+        return {
+            "peer_id": job["peer_id"],
+            "thread_id": None,
+            "creation_key": key,
+            "state": "creating",
+            "revision": 1,
+            "created": True,
+        }
+
+    def bind_peer_thread(
+        self,
+        *,
+        job_id: str,
+        lease: str,
+        expected_revision: int,
+        creation_key: str,
+        thread_id: str,
+        effects_reviewed: bool = False,
+    ) -> dict[str, Any]:
+        job = self._lease(job_id, lease, expected_revision)
+        _token(creation_key, "inbox_peer_thread_key_invalid")
+        _token(thread_id, "inbox_thread_invalid")
+        existing = self.read_peer_thread(job_id)
+        if existing is None or not hmac.compare_digest(existing["creation_key"], creation_key):
+            raise InboxError("inbox_peer_thread_conflict")
+        if existing["state"] == "ready":
+            if existing["thread_id"] != thread_id:
+                raise InboxError("inbox_peer_thread_conflict")
+            return existing
+        if effects_reviewed is True:
+            if (
+                self._meta("execution_paused") != "1"
+                or job["state"] != "needs_review"
+                or job["execution_proof"] != "not_started"
+                or job["thread_id"] is not None
+                or job["turn_id"] is not None
+                or self.execution_slot() is not None
+                or self._db.execute(
+                    "SELECT 1 FROM effects WHERE job_id=? AND (attempted=1 OR verified=1) LIMIT 1", (job_id,)
+                ).fetchone()
+            ):
+                raise InboxError("inbox_peer_thread_recovery_required")
+        else:
+            if job["state"] != "claimed" or existing["state"] != "creating":
+                raise InboxError("inbox_peer_thread_unknown")
+            self._require_execution(job)
+        if self._db.execute("SELECT 1 FROM peer_threads WHERE thread_id=?", (thread_id,)).fetchone():
+            raise InboxError("inbox_peer_thread_conflict")
+        with self._write():
+            self._db.execute(
+                "UPDATE peer_threads SET state='ready',thread_id=?,revision=revision+1 WHERE peer_id=?",
+                (thread_id, job["peer_id"]),
+            )
+        return self.read_peer_thread(job_id) or {}
+
+    def mark_peer_thread_unknown(
+        self, *, job_id: str, lease: str, expected_revision: int, creation_key: str
+    ) -> dict[str, Any]:
+        job = self._lease(job_id, lease, expected_revision)
+        _token(creation_key, "inbox_peer_thread_key_invalid")
+        existing = self.read_peer_thread(job_id)
+        if existing is None or not hmac.compare_digest(existing["creation_key"], creation_key):
+            raise InboxError("inbox_peer_thread_conflict")
+        if existing["state"] == "creating":
+            with self._write():
+                self._db.execute(
+                    "UPDATE peer_threads SET state='creation_unknown',revision=revision+1 WHERE peer_id=?",
+                    (job["peer_id"],),
+                )
+        return self.read_peer_thread(job_id) or {}
+
+    def finish_execution(
+        self,
+        *,
+        job_id: str,
+        lease: str,
+        expected_revision: int,
+        proof_kind: str,
+        local_tasks_done: bool,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        terminal_status: str | None = None,
+    ) -> dict[str, Any]:
+        _token(lease, "inbox_lease_invalid")
+        _positive(expected_revision, "inbox_revision_invalid")
+        job = self._job_row(job_id)
+        if not hmac.compare_digest(job["lease"], lease):
+            raise InboxError("inbox_lease_mismatch")
+        if local_tasks_done is not True:
+            raise InboxError("inbox_execution_proof_invalid")
+        if proof_kind == "not_started":
+            if any(value is not None for value in (thread_id, turn_id, terminal_status)):
+                raise InboxError("inbox_execution_proof_invalid")
+            if job["thread_id"] is not None or job["turn_id"] is not None:
+                raise InboxError("inbox_execution_proof_invalid")
+            proof = "not_started"
+        elif proof_kind == "terminal":
+            if (
+                not isinstance(thread_id, str)
+                or not thread_id
+                or not isinstance(turn_id, str)
+                or not turn_id
+                or (thread_id, turn_id) != (job["thread_id"], job["turn_id"])
+                or not isinstance(terminal_status, str)
+                or terminal_status not in {"completed", "failed", "interrupted"}
+            ):
+                raise InboxError("inbox_execution_proof_invalid")
+            proof = terminal_status
+        else:
+            raise InboxError("inbox_execution_proof_invalid")
+        if job["execution_proof"] is not None:
+            if job["execution_proof"] != proof:
+                raise InboxError("inbox_execution_proof_invalid")
+            slot = self._db.execute("SELECT * FROM global_slot WHERE job_id=?", (job_id,)).fetchone()
+            if slot is not None and slot["phase"] == "manual":
+                if job["revision"] != expected_revision:
+                    raise InboxError("inbox_revision_conflict")
+                with self._write():
+                    self._transition(job_id, "needs_review", reason_code="manual_execution_stopped")
+                    self._db.execute("UPDATE jobs SET manual_recovery=0 WHERE job_id=?", (job_id,))
+                    self._db.execute("DELETE FROM global_slot WHERE job_id=?", (job_id,))
+            return self.read_job(job_id)
+        if job["revision"] != expected_revision:
+            raise InboxError("inbox_revision_conflict")
+        slot = self._db.execute("SELECT * FROM global_slot WHERE singleton=1").fetchone()
+        legacy = job["context_mode"] == "legacy" and job["state"] in ACTIVE_STATES
+        if slot is None:
+            if not legacy or proof_kind != "terminal":
+                raise InboxError("inbox_execution_slot_mismatch")
+        elif slot["job_id"] != job_id or not hmac.compare_digest(slot["lease"], lease):
+            raise InboxError("inbox_execution_slot_mismatch")
+        elif proof_kind == "not_started" and slot["phase"] != "claimed":
+            raise InboxError("inbox_execution_proof_invalid")
+        with self._write():
+            self._db.execute(
+                "UPDATE jobs SET execution_proof=?,proof_at=?,revision=revision+1,updated_at=? WHERE job_id=?",
+                (proof, self._now(), self._now(), job_id),
+            )
+            if job["state"] in ACTIVE_STATES and job["state"] != "needs_review":
+                self._db.execute(
+                    "UPDATE jobs SET state='needs_review',reason_code='execution_stopped' WHERE job_id=?", (job_id,)
+                )
+            self._db.execute("DELETE FROM global_slot WHERE job_id=?", (job_id,))
+        return self.read_job(job_id)
 
     def _transition(self, job_id: str, state: str, *, reason_code: str | None = None) -> None:
         if reason_code is not None:
@@ -751,30 +1034,63 @@ class TelegramInbox:
         _token(thread_id, "inbox_thread_invalid")
         if job["state"] != "claimed":
             raise InboxError("inbox_start_state_invalid")
+        self._require_execution(job)
+        mapping = self.read_peer_thread(job_id)
+        if (
+            job["context_mode"] != "peer_v1"
+            or mapping is None
+            or mapping["state"] != "ready"
+            or mapping["thread_id"] != thread_id
+            or job["execution_proof"] is not None
+        ):
+            raise InboxError("inbox_peer_thread_conflict")
         with self._write():
             self._transition(job_id, "start_intent")
             self._db.execute("UPDATE jobs SET thread_id=? WHERE job_id=?", (thread_id, job_id))
+            self._db.execute("UPDATE global_slot SET phase='start_intent' WHERE job_id=?", (job_id,))
         return self.read_job(job_id)
 
     begin_start = start_intent
 
     def bind_turn(self, *, job_id: str, lease: str, expected_revision: int, turn_id: str) -> dict[str, Any]:
-        job = self._lease(job_id, lease, expected_revision)
         _token(turn_id, "inbox_turn_invalid")
-        if job["state"] != "start_intent" or job["turn_id"] is not None:
+        job = self._job_row(job_id)
+        if not isinstance(lease, str) or not hmac.compare_digest(job["lease"], lease):
+            raise InboxError("inbox_lease_mismatch")
+        if job["turn_id"] == turn_id:
+            return self.read_job(job_id)
+        job = self._lease(job_id, lease, expected_revision)
+        if job["state"] not in {"start_intent", "needs_review"} or job["turn_id"] is not None:
             raise InboxError("inbox_turn_state_invalid")
+        slot = self._db.execute("SELECT * FROM global_slot WHERE job_id=?", (job_id,)).fetchone()
+        if slot is None or slot["phase"] != "start_intent" or job["thread_id"] is None:
+            raise InboxError("inbox_execution_slot_mismatch")
         with self._write():
             self._transition(job_id, "running")
             self._db.execute("UPDATE jobs SET turn_id=? WHERE job_id=?", (turn_id, job_id))
+            self._db.execute("UPDATE global_slot SET phase='running' WHERE job_id=?", (job_id,))
         return self.read_job(job_id)
 
     def release_job(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] != "claimed":
             raise InboxError("inbox_release_unsafe")
+        mapping = self.read_peer_thread(job_id)
         with self._write():
-            self._transition(job_id, "released")
-            self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job_id,))
+            if mapping is not None and mapping["state"] != "ready":
+                self._transition(job_id, "needs_review", reason_code="peer_thread_creation_unknown")
+                self._db.execute(
+                    "UPDATE peer_threads SET state='creation_unknown',revision=revision+1 "
+                    "WHERE peer_id=? AND state='creating'",
+                    (job["peer_id"],),
+                )
+                self._db.execute(
+                    "UPDATE jobs SET execution_proof='not_started',proof_at=? WHERE job_id=?", (self._now(), job_id)
+                )
+            else:
+                self._transition(job_id, "released")
+                self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job_id,))
+            self._db.execute("DELETE FROM global_slot WHERE job_id=? AND phase='claimed'", (job_id,))
         return self.read_job(job_id)
 
     release_claim = release_job
@@ -797,8 +1113,21 @@ class TelegramInbox:
         with self._write():
             for job in jobs:
                 if job["state"] == "claimed":
-                    self._transition(job["job_id"], "released")
-                    self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job["job_id"],))
+                    mapping = self.read_peer_thread(job["job_id"])
+                    if mapping is not None and mapping["state"] in {"creating", "creation_unknown"}:
+                        self._db.execute(
+                            "UPDATE peer_threads SET state='creation_unknown',revision=revision+1 WHERE peer_id=?",
+                            (job["peer_id"],),
+                        )
+                        self._transition(job["job_id"], "needs_review", reason_code="peer_thread_creation_unknown")
+                        self._db.execute(
+                            "UPDATE jobs SET execution_proof='not_started',proof_at=? WHERE job_id=?",
+                            (self._now(), job["job_id"]),
+                        )
+                    else:
+                        self._transition(job["job_id"], "released")
+                        self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job["job_id"],))
+                    self._db.execute("DELETE FROM global_slot WHERE job_id=? AND phase='claimed'", (job["job_id"],))
                 elif job["state"] in {"start_intent", "running"}:
                     self._transition(job["job_id"], "needs_review", reason_code="restart_outcome_unknown")
 
@@ -810,6 +1139,7 @@ class TelegramInbox:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] not in {"claimed", "running"}:
             raise InboxError("inbox_context_state_invalid")
+        self._require_execution(job)
         current = self.read_job(job_id)["event_ids"]
         extra: list[sqlite3.Row] = []
         if event_ids is not None:
@@ -861,6 +1191,7 @@ class TelegramInbox:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] != "running":
             raise InboxError("inbox_effect_state_invalid")
+        self.execution_authority(job_id=job_id, lease=lease, expected_revision=expected_revision)
         if not isinstance(kind, str) or kind not in EFFECT_KINDS:
             raise InboxError("inbox_effect_kind_invalid")
         if type(effect_slot) is not int or not 0 <= effect_slot <= 31:
@@ -924,6 +1255,8 @@ class TelegramInbox:
         self._require_no_other_unknown_effects(effect["job_id"], effect_key)
         if effect["attempted"]:
             return effect
+        job = self._job_row(effect["job_id"])
+        self.execution_authority(job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"])
         with self._write():
             self._db.execute("UPDATE effects SET attempted=1 WHERE effect_key=?", (effect_key,))
         return self.read_effect(effect_key)
@@ -1015,6 +1348,8 @@ class TelegramInbox:
                 "UPDATE events SET state=?,completed_at=? WHERE job_id=?",
                 ("no_reply_needed" if outcome == "no_reply_needed" else "reply_verified", self._now(), job_id),
             )
+            if job["manual_recovery"] and job["execution_proof"] is not None:
+                self._db.execute("DELETE FROM global_slot WHERE job_id=? AND phase='manual'", (job_id,))
             self._prune()
         return self.read_job(job_id)
 
@@ -1034,6 +1369,16 @@ class TelegramInbox:
             raise InboxError("inbox_resolution_review_required")
         if decision not in {"retry_no_effects", "continue_bound_turn"}:
             raise InboxError("inbox_resolution_invalid")
+        if self._meta("execution_paused") != "1":
+            raise InboxError("inbox_resolution_pause_required")
+        if job["execution_proof"] is None:
+            raise InboxError("inbox_execution_proof_required")
+        if self.execution_slot() is not None:
+            raise InboxError("inbox_execution_slot_mismatch")
+        if self._db.execute(
+            "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND verified=0 LIMIT 1", (job_id,)
+        ).fetchone():
+            raise InboxError("inbox_effect_outcome_unknown")
         if decision == "continue_bound_turn":
             if job["thread_id"] is None or job["turn_id"] is None:
                 raise InboxError("inbox_turn_unavailable")
@@ -1046,9 +1391,16 @@ class TelegramInbox:
             state = "released"
         with self._write():
             self._transition(job_id, state)
+            new_lease = secrets.token_urlsafe(32)
+            self._db.execute(
+                "UPDATE jobs SET lease=?,execution_revision=?,manual_recovery=? WHERE job_id=?",
+                (new_lease, int(self._meta("execution_revision")), int(state == "running"), job_id),
+            )
             if state == "released":
                 self._db.execute("DELETE FROM effects WHERE job_id=? AND attempted=0 AND verified=0", (job_id,))
                 self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job_id,))
+            else:
+                self._db.execute("INSERT INTO global_slot VALUES (1,?,?,'manual')", (job_id, new_lease))
         return self.read_job(job_id)
 
     def duty_set(self, enabled: bool, *, at: str | None = None) -> dict[str, Any]:
@@ -1073,9 +1425,28 @@ class TelegramInbox:
         _positive(expected_revision, "inbox_execution_revision_invalid")
         if int(self._meta("execution_revision")) != expected_revision:
             raise InboxError("inbox_execution_revision_conflict")
-        if paused == (self._meta("execution_paused") == "1"):
+        # An explicit pause also revokes a grant issued under that pause.
+        # Once revoked, repeating it must leave the control revision alone.
+        if paused == (self._meta("execution_paused") == "1") and (
+            not paused
+            or self._db.execute(
+                "SELECT 1 FROM global_slot s JOIN jobs j ON j.job_id=s.job_id "
+                "WHERE s.phase='manual' AND j.state NOT IN ('completed','released') "
+                "AND j.execution_revision=? LIMIT 1",
+                (expected_revision,),
+            ).fetchone()
+            is None
+        ):
             return self.status()
         with self._write():
+            if (
+                not paused
+                and self._db.execute(
+                    "SELECT 1 FROM global_slot s JOIN jobs j ON j.job_id=s.job_id "
+                    "WHERE s.phase='manual' AND j.state NOT IN ('completed','released') LIMIT 1"
+                ).fetchone()
+            ):
+                raise InboxError("inbox_manual_recovery_active")
             self._db.execute("UPDATE metadata SET value=? WHERE key='execution_paused'", ("1" if paused else "0",))
             self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='execution_revision'")
         return self.status()
@@ -1359,12 +1730,14 @@ class TelegramInbox:
         # has durably covered it. Keep its dedup evidence in the meantime.
         removed = self._db.execute(
             "DELETE FROM events WHERE completed_at IS NOT NULL AND completed_at<? "
+            "AND NOT EXISTS (SELECT 1 FROM global_slot WHERE global_slot.job_id=events.job_id) "
             "AND EXISTS (SELECT 1 FROM checkpoints WHERE checkpoints.peer_id=events.peer_id "
             "AND checkpoints.message_id>=events.message_id)",
             (cutoff,),
         ).rowcount
         self._db.execute(
             "DELETE FROM jobs WHERE state IN ('completed','released') AND updated_at<? "
+            "AND NOT EXISTS (SELECT 1 FROM global_slot WHERE global_slot.job_id=jobs.job_id) "
             "AND NOT EXISTS (SELECT 1 FROM events WHERE events.job_id=jobs.job_id)",
             (cutoff,),
         )

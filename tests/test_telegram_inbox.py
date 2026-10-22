@@ -52,7 +52,10 @@ def guard(job: dict[str, Any]) -> dict[str, Any]:
 
 def running(inbox: TelegramInbox) -> dict[str, Any]:
     job = claim(inbox)
-    job = inbox.start_intent(**guard(job), thread_id="thread-1")
+    mapping = inbox.prepare_peer_thread(**guard(job))
+    thread_id = mapping["thread_id"] or f"thread-{job['peer_id']}"
+    inbox.bind_peer_thread(**guard(job), creation_key=mapping["creation_key"], thread_id=thread_id)
+    job = inbox.start_intent(**guard(job), thread_id=thread_id)
     return inbox.bind_turn(**guard(job), turn_id="turn-1")
 
 
@@ -70,7 +73,29 @@ def receipt(inbox: TelegramInbox, job: dict[str, Any], kind: str = "result", *, 
 
 
 def finish(inbox: TelegramInbox, job: dict[str, Any], key: str, outcome: str = "answered") -> dict[str, Any]:
-    return inbox.result(**guard(job), outcome=outcome, event_ids=job["event_ids"], receipt_keys=[key])
+    done = inbox.result(**guard(job), outcome=outcome, event_ids=job["event_ids"], receipt_keys=[key])
+    # This helper models the complete workflow, including ended model work.
+    return inbox.finish_execution(
+        **guard(done),
+        proof_kind="terminal",
+        thread_id=done["thread_id"],
+        turn_id=done["turn_id"],
+        terminal_status="completed",
+        local_tasks_done=True,
+    )
+
+
+def review_stopped(inbox: TelegramInbox, job: dict[str, Any]) -> dict[str, Any]:
+    stopped = inbox.finish_execution(
+        **guard(job),
+        proof_kind="terminal",
+        thread_id=job["thread_id"],
+        turn_id=job["turn_id"],
+        terminal_status="failed",
+        local_tasks_done=True,
+    )
+    inbox.set_execution_paused(paused=True, expected_revision=inbox.status()["execution_revision"])
+    return stopped
 
 
 def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock: Clock) -> None:
@@ -82,7 +107,7 @@ def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock:
     generation = first.generation
     assert first._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert first._db.execute("PRAGMA synchronous").fetchone()[0] == 2
-    assert first._meta("schema_version") == "2"
+    assert first._meta("schema_version") == "3"
     assert path.parent.stat().st_mode & 0o777 == 0o700
     for suffix in ("", "-wal", "-shm", ".lock"):
         assert Path(str(path) + suffix).stat().st_mode & 0o777 == 0o600
@@ -126,7 +151,7 @@ def test_schema_v1_upgrade_preserves_pending_identity_effects_context_and_pause(
         peer_context = old._peer_revision(1)
         windows = old.duty_windows()
     with TelegramInbox(path, clock=clock) as upgraded:
-        assert upgraded._meta("schema_version") == "2"
+        assert upgraded._meta("schema_version") == "3"
         assert upgraded.read_job(job["job_id"]) == before_job
         assert upgraded.events() == before_events
         assert upgraded.require_open(first).message_id == 1
@@ -146,7 +171,7 @@ def test_unknown_schema_is_rejected_before_registry_or_journal_mutations(tmp_pat
     path.parent.mkdir()
     with sqlite3.connect(path) as future:
         future.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        future.execute("INSERT INTO metadata VALUES ('schema_version','3')")
+        future.execute("INSERT INTO metadata VALUES ('schema_version','4')")
         future.execute("CREATE TABLE future_state (value TEXT)")
         future.execute("INSERT INTO future_state VALUES ('synthetic')")
         before = list(future.iterdump())
@@ -177,7 +202,7 @@ def test_failed_v1_upgrade_rolls_back_defaults_and_schema_version(tmp_path: Path
         assert list(unchanged.iterdump()) == before
         unchanged.execute("DROP TRIGGER fail_upgrade")
     with TelegramInbox(path, clock=clock) as recovered:
-        assert recovered._meta("schema_version") == "2"
+        assert recovered._meta("schema_version") == "3"
         assert recovered.require_open(event).message_id == 1
         assert recovered.status()["execution_paused"] is False
 
@@ -300,7 +325,9 @@ def test_ambiguous_locator_survives_missing_pin_and_restart_until_review(tmp_pat
         assert restored.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
         with pytest.raises(InboxError, match="inbox_resolution_review_required"):
             restored.resolve_job(**guard(held), decision="retry_no_effects")
+        restored.set_execution_paused(paused=True, expected_revision=restored.status()["execution_revision"])
         restored.resolve_job(**guard(held), decision="retry_no_effects", effects_reviewed=True)
+        restored.set_execution_paused(paused=False, expected_revision=restored.status()["execution_revision"])
         assert claim(restored)["event_ids"] == [event_id]
 
 
@@ -414,6 +441,8 @@ def test_claim_lease_and_revision_prevent_stale_or_unauthorized_transition(inbox
     job = claim(inbox)
     with pytest.raises(InboxError, match="inbox_lease_mismatch"):
         inbox.start_intent(job_id=job["job_id"], lease="wrong", expected_revision=job["revision"], thread_id="thread-1")
+    mapping = inbox.prepare_peer_thread(**guard(job))
+    inbox.bind_peer_thread(**guard(job), creation_key=mapping["creation_key"], thread_id="thread-1")
     new = inbox.start_intent(**guard(job), thread_id="thread-1")
     with pytest.raises(InboxError, match="inbox_revision_conflict"):
         inbox.bind_turn(**guard(job), turn_id="turn-1")
@@ -428,6 +457,8 @@ def test_restart_releases_only_proven_unstarted_claims(tmp_path: Path, clock: Cl
         event_id = first.record(1, 1)
         job = claim(first)
         if started:
+            mapping = first.prepare_peer_thread(**guard(job))
+            first.bind_peer_thread(**guard(job), creation_key=mapping["creation_key"], thread_id="thread-1")
             job = first.start_intent(**guard(job), thread_id="thread-1")
     with TelegramInbox(path, clock=clock) as restored:
         restored.recover_on_startup()
@@ -912,6 +943,7 @@ def test_manual_recovery_does_not_retry_unknown_actions(inbox: TelegramInbox) ->
     job = running(inbox)
     receipt(inbox, job, "ack")
     job = inbox.needs_review(**guard(job), reason_code="codex_turn_failed")
+    job = review_stopped(inbox, job)
     with pytest.raises(InboxError, match="inbox_resolution_review_required"):
         inbox.resolve_job(**guard(job), decision="retry_no_effects")
     with pytest.raises(InboxError, match="inbox_retry_effects_present"):
@@ -926,6 +958,7 @@ def test_explicitly_reviewed_retry_releases_only_harmless_preparations(inbox: Te
     job = running(inbox)
     key = inbox.reserve_effect(**guard(job), kind="result", text_sha256="b" * 64, peer_id=1, reply_to_message_id=1)
     job = inbox.needs_review(**guard(job), reason_code="codex_turn_failed")
+    job = review_stopped(inbox, job)
     with pytest.raises(InboxError, match="inbox_resolution_review_required"):
         inbox.resolve_job(**guard(job), decision="retry_no_effects")
     assert inbox.read_effect(key)["attempted"] == 0
@@ -934,6 +967,7 @@ def test_explicitly_reviewed_retry_releases_only_harmless_preparations(inbox: Te
     assert inbox.require_open(event)
     with pytest.raises(InboxError, match="inbox_effect_unavailable"):
         inbox.read_effect(key)
+    inbox.set_execution_paused(paused=False, expected_revision=inbox.status()["execution_revision"])
     retried = claim(inbox)
     assert retried["event_ids"] == [event] and retried["job_id"] != job["job_id"]
 
@@ -947,8 +981,10 @@ def test_reviewed_retry_retains_unknown_or_verified_external_effects(inbox: Tele
     if verified:
         inbox.verify_effect(effect_key=key, receipt_key=key, message_id=101)
     job = inbox.needs_review(**guard(job), reason_code="codex_turn_failed")
+    job = review_stopped(inbox, job)
     generation = inbox.generation
-    with pytest.raises(InboxError, match="inbox_retry_effects_present"):
+    error = "inbox_retry_effects_present" if verified else "inbox_effect_outcome_unknown"
+    with pytest.raises(InboxError, match=error):
         inbox.resolve_job(**guard(job), decision="retry_no_effects", effects_reviewed=True)
     assert inbox.read_job(job["job_id"])["state"] == "needs_review"
     assert inbox.read_effect(key)["attempted"] == 1
@@ -1022,6 +1058,7 @@ def test_active_job_cursor_survives_previous_job_leaving_active_state(inbox: Tel
     cursor = first["next_job_id"]
     assert cursor == first["jobs"][0]["job_id"]
     job = inbox.read_job(cursor)
+    inbox.set_execution_paused(paused=True, expected_revision=inbox.status()["execution_revision"])
     inbox.resolve_job(**guard(job), decision="retry_no_effects", effects_reviewed=True)
     remaining = inbox.active_job_page(limit=100, after_job_id=cursor)
     assert len(remaining["jobs"]) == 2 and remaining["next_job_id"] is None
