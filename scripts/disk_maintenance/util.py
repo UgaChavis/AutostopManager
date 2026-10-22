@@ -106,11 +106,14 @@ def atomic_json(path: Path, payload: dict) -> None:
     encoded = (json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
     descriptor, temporary = tempfile.mkstemp(prefix=".maintenance-", dir=path.parent)
     try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(encoded)
-            output.flush()
-            os.fsync(output.fileno())
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
         os.replace(temporary, path)
         fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
