@@ -296,3 +296,13 @@ Automation backup читает точное имя исходного файла
 Units в `deploy/systemd/`: Manager MCP, scheduler, J1 static/browser, work/personal Telegram, Codex wake/start. `systemctl is-active` показывает процесс, не правильность его контракта. Службы и backup: [host-operations.md](host-operations.md); Telegram/G1: [telegram-runtime.md](telegram-runtime.md).
 
 Диагностика: `transport_route_unavailable` → socket/port/unit; `transport_auth_failure` → transport permissions; `tool_not_registered` → client/endpoint revision; `schema_mismatch` → imported PYTHONPATH и SHA; `annotation_mismatch` → active annotations/revision; provider failure → отдельный downstream. Ошибка provider/auth не повод перезапускать MCP.
+
+## Журнал M2
+
+Для совместной работы передавай `append --record PRIVATE_JSON --expected-state-sha256 TOKEN`. Вычисли SHA-256 из тех же точных байтов свежего снимка `current-state.md`, по которому готовишь полный `state`, включая заголовок и переводы строк. `TOKEN` — ровно 64 lowercase hex; для отсутствующего файла используй `absent`. Отсутствие файла отличается от существующего пустого файла. Флаг необязателен и доступен только для `append`; девять полей записи не меняются.
+
+Для нового UUID скрипт проверяет token под блокировкой перед принятием записи. При `journal_state_conflict` новая запись не принята: перечитай состояние, сохрани чужие вопросы и подготовь новое тело с новым UUID. Проверка выполняется после восстановления ранее принятой pending-записи; восстановление и создание недельных файлов уже могли изменить служебное состояние. Неверный token отклоняется с `journal_state_precondition_invalid`; передача token в `run` без записи — с `journal_state_precondition_requires_record`.
+
+При неизвестном исходе сначала проверь или повтори исходные UUID, девять полей и token. Не меняй UUID или тело, чтобы обойти неизвестный результат. Точный повтор уже принятого UUID, включая его допустимые формы, проходит и с прежним token, не заменяя более новое состояние. Ранее принятая pending-запись восстанавливается независимо от token нового запроса.
+
+Защита действует для согласованно использующих token писателей. Старые вызовы без token сохраняют полную замену состояния; прямые редакторы вне блокировки также не защищены. Скрипт не объединяет текст автоматически и не повторяет устаревшее тело после конфликта.
