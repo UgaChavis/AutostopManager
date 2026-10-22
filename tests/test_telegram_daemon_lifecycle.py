@@ -134,6 +134,8 @@ def _committed_unknown_state(root: Path) -> dict[str, list[tuple]]:
     def binding():
         return {"job_id": job["job_id"], "lease": job["lease"], "expected_revision": job["revision"]}
 
+    mapping = inbox.prepare_peer_thread(**binding())
+    inbox.bind_peer_thread(**binding(), creation_key=mapping["creation_key"], thread_id="synthetic-worker")
     job = inbox.start_intent(**binding(), thread_id="synthetic-worker")
     job = inbox.bind_turn(**binding(), turn_id="synthetic-turn")
     effect = inbox.reserve_effect(**binding(), kind="result", text_sha256="b" * 64, peer_id=42, reply_to_message_id=100)
