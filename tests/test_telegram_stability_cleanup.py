@@ -20,6 +20,7 @@ def isolated(monkeypatch):
 
 
 @pytest.mark.parametrize("replace", [False, True])
+@pytest.mark.skipif(os.geteuid() != 0, reason="real root-owned owner configuration requires root")
 def test_owner_short_writes_publish_complete_binding(tmp_path, monkeypatch, replace):
     path = tmp_path / "owner.json"
     if replace:
@@ -40,6 +41,7 @@ def test_owner_short_writes_publish_complete_binding(tmp_path, monkeypatch, repl
 
 
 @pytest.mark.parametrize("failure", ["zero", "error"])
+@pytest.mark.skipif(os.geteuid() != 0, reason="real root-owned owner configuration requires root")
 def test_owner_partial_failure_preserves_binding_and_closes_fd(tmp_path, monkeypatch, failure):
     path = tmp_path / "owner.json"
     owner.configure_owner_peer_id(path, 41, reader_gid=os.getgid())
@@ -162,6 +164,7 @@ def test_event_voice_cleanup_rejects_replaced_directory_even_when_path_is_missin
 
 def test_voice_wrapper_event_recovery_has_no_transcription(tmp_path, monkeypatch):
     requests = []
+    monkeypatch.setattr(voice, "_require_root", lambda: None)
 
     def request(payload):
         requests.append(payload)
