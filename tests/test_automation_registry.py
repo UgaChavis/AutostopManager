@@ -87,7 +87,7 @@ def test_schema_is_component_versioned_without_hijacking_sqlite_user_version(tmp
         "manager_automation_outbox",
         "manager_automation_schema",
     } <= tables
-    assert version == 6
+    assert version == automation_registry.AUTOMATION_SCHEMA_VERSION
     assert user_version == 2
     assert path.stat().st_mode & 0o777 == 0o600
 
