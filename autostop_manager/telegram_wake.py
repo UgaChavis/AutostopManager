@@ -1594,6 +1594,7 @@ class DurableWakeDispatcher:
         self.control_lock = asyncio.Lock()
         self.current_job: dict[str, Any] | None = None
         self.inbox_status: dict[str, Any] = {}
+        self.inbox_status_at: float | None = None
         self.last_health: tuple[str, str | None] | None = None
         self.health_lock = asyncio.Lock()
         self.lifecycle_monitor: asyncio.Task[None] | None = None
@@ -1653,7 +1654,10 @@ class DurableWakeDispatcher:
     def status(self) -> dict[str, Any]:
         fresh = getattr(self.jobs, "status_fresh", False)
         snapshot = getattr(self.jobs, "snapshot", {})
-        status = snapshot if fresh and snapshot else self.inbox_status
+        snapshot_at = getattr(self.jobs, "snapshot_at", None)
+        status = self.inbox_status
+        if snapshot and (snapshot_at is None or self.inbox_status_at is None or snapshot_at >= self.inbox_status_at):
+            status = snapshot
         remaining = (
             None if self.request_deadline is None else max(0, self.request_deadline - asyncio.get_running_loop().time())
         )
@@ -1688,9 +1692,9 @@ class DurableWakeDispatcher:
             "last_disconnect_code": self.app.last_disconnect_code,
             "outcome_unknown": self.app.outcome_unknown,
             "active": self.active,
-            "queued": status.get("pending", status.get("pending_events", 0)),
-            "needs_review": status.get("needs_review", status.get("needs_review_jobs", 0)),
-            "held_peers": status.get("held_peers", 0),
+            "queued": status.get("pending", status.get("pending_events")),
+            "needs_review": status.get("needs_review", status.get("needs_review_jobs")),
+            "held_peers": status.get("held_peers"),
             "oldest_pending_age": status.get("oldest_pending_age", status.get("oldest_pending_age_seconds")),
             "accepted": self.accepted,
             "completed": self.completed,
@@ -1916,6 +1920,7 @@ class DurableWakeDispatcher:
     async def _read_status(self) -> None:
         result = await self.jobs.request("job_status")
         self.inbox_status = _job_status_entity(result)
+        self.inbox_status_at = asyncio.get_running_loop().time()
 
     async def _read_job(self, job: dict[str, Any]) -> dict[str, Any]:
         result = _job_entity(await self.jobs.request("job_read", job_id=job["job_id"]))
@@ -1938,6 +1943,7 @@ class DurableWakeDispatcher:
         ):
             raise WakeError("wake_job_status_invalid")
         self.inbox_status = status
+        self.inbox_status_at = asyncio.get_running_loop().time()
 
     async def _review(self, job: dict[str, Any], code: str, *, global_hold: bool = True) -> None:
         # Binding may have committed while its response was lost: always reread.
