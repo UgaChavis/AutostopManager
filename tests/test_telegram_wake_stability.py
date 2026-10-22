@@ -256,7 +256,17 @@ def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, 
                 "sandbox": {"type": "dangerFullAccess"},
             }
             ident = "00000000-0000-4000-8000-000000000002"
-            app.request = AsyncMock(return_value={"thread": {"id": ident}})
+            app.request = AsyncMock(
+                return_value={
+                    "thread": {
+                        "id": ident,
+                        "cwd": wake.PROJECT_DIR,
+                        "ephemeral": False,
+                        "turns": [],
+                        "status": {"type": "idle"},
+                    }
+                }
+            )
             if failure == "start_reply":
                 app.request.side_effect = wake.TransportLost("codex_disconnected")
             elif failure == "shared_rejection":
@@ -296,8 +306,10 @@ def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, 
             if failure == "bootstrap_protocol":
                 app.request.assert_not_awaited()
             else:
-                app.request.assert_awaited_once()
-                assert app.request.await_args.args[0] == "thread/start"
+                expected = ["thread/start"]
+                if failure in {"bind_reply", "peer_protocol"}:
+                    expected.extend(["thread/archive", "thread/unarchive"])
+                assert [call.args[0] for call in app.request.await_args_list] == expected
 
     asyncio.run(scenario())
 
