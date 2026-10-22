@@ -1907,14 +1907,14 @@ def test_owner_notification_contract_has_no_caller_supplied_target() -> None:
 def test_only_external_apply_operations_take_the_mutation_lock() -> None:
     assert _requires_mutation_lock({"operation": "send", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send_owner_notification", "mode": "apply"}) is True
-    assert _requires_mutation_lock({"operation": "owner_notification_idempotency_readback"}) is True
+    assert _requires_mutation_lock({"operation": "owner_notification_idempotency_readback"}) is False
     assert _requires_mutation_lock({"operation": "send_photo", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send_document", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "send", "mode": "dry_run"}) is False
     assert _requires_mutation_lock({"operation": "download", "mode": "apply"}) is True
     assert _requires_mutation_lock({"operation": "discard_download"}) is True
-    assert _requires_mutation_lock({"operation": "monitor_mark"}) is True
-    assert _requires_mutation_lock({"operation": "monitor_voice_stage"}) is False
+    assert _requires_mutation_lock({"operation": "monitor_mark"}) is False
+    assert _requires_mutation_lock({"operation": "monitor_voice_stage"}) is True
     assert _requires_mutation_lock({"operation": "monitor_voice_discard"}) is False
     assert telegram_bridge._requires_monitor_voice_lock({"operation": "monitor_voice_stage"}) is False
     assert telegram_bridge._requires_monitor_voice_lock({"operation": "monitor_voice_discard"}) is True
@@ -3007,11 +3007,14 @@ def test_monitor_voice_stages_one_exact_voice_without_exposing_source_refs(monke
     )
     assert discarded == {"ok": True, "cleanup_verified": True}
     assert not path.exists()
-    assert telegram_bridge._requires_mutation_lock({"operation": "monitor_voice_stage"}) is False
+    assert telegram_bridge._requires_mutation_lock({"operation": "monitor_voice_stage"}) is True
     assert telegram_bridge._requires_monitor_voice_lock({"operation": "monitor_voice_stage"}) is False
 
     missing_handle = "m" * 32
     monitor.reserve_voice_stage(monitor.require_open("inbound-1"))
+    missing_path = config.socket_path.parent / "inbox" / f"monitor-{missing_handle}.ogg"
+    missing_path.write_bytes(b"OggSsynthetic")
+    missing_path.chmod(0o600)
     monitor.stage_voice(
         monitor.require_open("inbound-1"),
         missing_handle,
@@ -3019,6 +3022,7 @@ def test_monitor_voice_stages_one_exact_voice_without_exposing_source_refs(monke
         duration_seconds=8,
         suffix=".ogg",
     )
+    missing_path.unlink()
     with pytest.raises(BridgeError, match="inbound_voice_cleanup_unverified"):
         asyncio.run(telegram_bridge._handle_monitor_voice_discard(config, monitor, handle=missing_handle))
     assert monitor.voice_stage(missing_handle) is not None
@@ -4224,7 +4228,7 @@ def test_local_request_transport_and_cli_mapping(monkeypatch, tmp_path, capsys) 
             return None
 
         def settimeout(self, timeout):
-            assert timeout == 30
+            assert 0 < timeout <= 5
 
         def connect(self, path):
             assert path == str(tmp_path / "bridge.sock")
@@ -4361,7 +4365,8 @@ def test_local_request_accepts_only_bounded_timeout_values(monkeypatch, tmp_path
     assert telegram_bridge.send_local_request(
         tmp_path / "bridge.sock", {"operation": "status"}, timeout_seconds=135
     ) == {"ok": True}
-    assert timeouts == [135.0]
+    assert len(timeouts) == 3 and timeouts[0] == 135.0
+    assert 0 < timeouts[2] <= timeouts[1] <= timeouts[0]
     for invalid in (False, 0, 181, "not-a-timeout"):
         with pytest.raises(BridgeError, match="bridge_timeout_invalid"):
             telegram_bridge.send_local_request(

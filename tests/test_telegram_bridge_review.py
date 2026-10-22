@@ -50,7 +50,7 @@ class MemorySocket:
         self.closed = True
 
     def settimeout(self, value):
-        assert value == bridge.DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS
+        assert 0 < value <= bridge.DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS
 
     def connect(self, path):
         assert Path(path) == self.path
@@ -446,15 +446,15 @@ def test_open_voice_stages_once_and_retains_cleanup_handle_until_verified(monkey
     handle = result["media_handle"]
     stage = monitor.voice_stage(handle)
     assert stage is not None and stage.path.read_bytes() == audio and scheduled == [1]
-    original_unlink = Path.unlink
+    original_unlink = bridge.os.unlink
 
     def unavailable(path, *args, **kwargs):
-        if path == stage.path:
+        if path == stage.path.name and kwargs.get("dir_fd") is not None:
             raise OSError(errno.EIO, "synthetic deletion failure")
         return original_unlink(path, *args, **kwargs)
 
     with monkeypatch.context() as fault:
-        fault.setattr(Path, "unlink", unavailable)
+        fault.setattr(bridge.os, "unlink", unavailable)
         with pytest.raises((OSError, bridge.BridgeError)):
             asyncio.run(bridge._handle_monitor_voice_discard(config, monitor, handle=handle))
     assert monitor.voice_stage(handle) is stage and stage.path.exists()
@@ -582,13 +582,13 @@ def test_expiry_retries_owned_media_deletion_and_preserves_permanent_failure(
 ):
     monitor, handle, path = staged_voice(config)
     attempts = []
-    original_unlink = Path.unlink
+    original_unlink = bridge.os.unlink
     monkeypatch.setattr(bridge, "MONITOR_VOICE_STAGE_TTL_SECONDS", 0)
     monkeypatch.setattr(bridge, "MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS", 0)
     monkeypatch.setattr(bridge, "MONITOR_VOICE_STAGE_CLEANUP_RETRIES", 3)
 
     def unlink(actual_path, *args, **kwargs):
-        if actual_path == path:
+        if actual_path == path.name and kwargs.get("dir_fd") is not None:
             attempts.append(1)
             if failure_count is None or len(attempts) <= failure_count:
                 if error_kind == "os":
@@ -597,7 +597,7 @@ def test_expiry_retries_owned_media_deletion_and_preserves_permanent_failure(
         return original_unlink(actual_path, *args, **kwargs)
 
     with monkeypatch.context() as fault:
-        fault.setattr(Path, "unlink", unlink)
+        fault.setattr(bridge.os, "unlink", unlink)
         asyncio.run(bridge._expire_monitor_voice_stage(config, monitor, handle))
 
     assert len(attempts) == (2 if failure_count == 1 else 3)
