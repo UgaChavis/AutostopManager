@@ -999,6 +999,20 @@ class AutomationStore:
         lease_until = parse_time(runtime["lease_until"]) if runtime else None
         if lease_until and lease_until > utc_now():
             raise AutomationError("automation_lease_active")
+        now = isoformat(utc_now())
+        # OFF pauses incident alerts; archive can cancel these retryable intents.
+        # Explicit test notifications and uncertain sending deliveries stay protected.
+        connection.execute(
+            """
+            UPDATE manager_automation_outbox
+            SET status = 'cancelled', result_code = 'automation_archived',
+                lease_owner_hash = NULL, lease_until = NULL, updated_at = ?
+            WHERE job_id = ? AND kind IN ('job_error_alert', 'job_recovery_alert')
+              AND status IN ('queued', 'failed')
+              AND (lease_until IS NULL OR lease_until <= ?)
+            """,
+            (now, job_id, now),
+        )
         pending_delivery = connection.execute(
             """
             SELECT 1 FROM manager_automation_outbox
@@ -1008,7 +1022,6 @@ class AutomationStore:
         ).fetchone()
         if pending_delivery is not None:
             raise AutomationError("automation_delivery_pending")
-        now = isoformat(utc_now())
         connection.execute(
             """
             UPDATE manager_automations
