@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 from mcp.server.fastmcp import Context
+from pydantic import BeforeValidator
 
 from .automotive_identity import (
     compare_vehicle_modifications,
@@ -23,6 +24,26 @@ from .automotive_parts import (
     normalize_parts_request,
     resolve_catalog_group,
 )
+
+
+def _reject_boolean_hourly_rate(value: Any) -> Any:
+    if isinstance(value, bool):
+        raise ValueError("hourly_rate must be numeric")
+    return value
+
+
+def _guard_work_price_hourly_rate(server: Any) -> None:
+    if not hasattr(server, "_tool_manager"):
+        return
+    tool = server._tool_manager.get_tool("calculate_work_price")
+    if tool is None:
+        return
+    model = tool.fn_metadata.arg_model
+    field = model.model_fields["hourly_rate"]
+    validator = BeforeValidator(_reject_boolean_hourly_rate)
+    if validator not in field.metadata:
+        field.metadata.append(validator)
+        model.model_rebuild(force=True)
 
 
 def register_automotive_tools(server: Any) -> None:
@@ -116,6 +137,8 @@ def register_automotive_tools(server: Any) -> None:
                 readOnlyHint=True, destructiveHint=False, idempotentHint=not network, openWorldHint=network
             ),
         )(function)
+
+    _guard_work_price_hourly_rate(server)
 
     @server.tool(
         name="decode_vehicle_batch",
