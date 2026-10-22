@@ -1899,12 +1899,12 @@ class AutomationStore:
         if not 10 <= lease_seconds <= 600:
             raise AutomationError("automation_lease_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
         self.initialize()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
             controller = connection.execute(
                 "SELECT hold_enabled FROM manager_automation_controller_runtime WHERE singleton = 1"
             ).fetchone()
