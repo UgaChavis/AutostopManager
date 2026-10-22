@@ -105,3 +105,79 @@ def test_busy_gate_never_invokes_docker_or_unlinks(monkeypatch):
     monkeypatch.setattr(retention.subprocess, "run", lambda *args, **kwargs: pytest.fail("unexpected Docker call"))
     result = retention.retain(3, 1024, True, True)
     assert result["docker_status"] == "skipped_busy" and result["removed_bytes"] == 0
+
+
+def fake_process(tmp_path, argv):
+    proc = tmp_path / "proc"
+    process = proc / "99999999"
+    process.mkdir(parents=True)
+    command = process / "cmdline"
+    command.write_bytes(b"\0".join(os.fsencode(argument) for argument in argv) + b"\0")
+    (process / "fd").mkdir()
+    (process / "maps").write_text("")
+    return proc, command
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["/usr/bin/python3", "/synthetic/.venv/bin/pip", "install", "example"],
+        ["/usr/bin/python3.12", "/synthetic/.venv/bin/pip3.12", "install", "example"],
+        ["/synthetic/python tools/python3.12", "-I", "-B", "/synthetic/pip tools/pip3", "install", "example"],
+    ],
+    ids=["entry-script", "versioned-entry-script", "space-paths-and-flags"],
+)
+def test_python_package_entrypoints_defer_real_private_cache_removal(tmp_path, monkeypatch, request, argv):
+    proc, command = fake_process(tmp_path, ["/usr/bin/python3", "-m", "pip", "install", "example"])
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    candidate = cache / "closed-download"
+    candidate.write_bytes(b"synthetic" * 1024)
+    allocated = candidate.stat().st_blocks * 512
+    assert allocated > 1
+    original_usage = retention.usage
+    monkeypatch.setattr(retention, "usage", lambda: original_usage(proc))
+    monkeypatch.setattr(retention, "DOWNLOAD_ROOTS", (cache,))
+    monkeypatch.setattr(retention, "LOG_ROOTS", ())
+
+    control = retention.retain(3, 1, True, False)
+    assert candidate.exists()
+    assert control["busy_or_unknown_usage"] is True
+    assert control["download_candidate_files"] == 1 and control["removed_download_files"] == 0
+    assert control["download_after_bytes"] == allocated
+
+    command.write_bytes(b"\0".join(os.fsencode(argument) for argument in argv) + b"\0")
+    result = retention.retain(3, 1, True, False)
+    request.node.user_properties.extend(
+        [("control", control), ("entrypoint", result), ("candidate_exists", candidate.exists())]
+    )
+    assert candidate.exists(), result
+    assert result["busy_or_unknown_usage"] is True
+    assert result["removed_download_files"] == result["removed_bytes"] == 0
+    assert result["download_after_bytes"] == allocated
+
+
+@pytest.mark.parametrize(
+    "argv,busy",
+    [
+        (["/synthetic/bin/pip3.12", "install", "example"], True),
+        (["/synthetic/bin/npm", "install"], True),
+        (["/usr/bin/node", "/synthetic/npm/bin/npm-cli.js", "install"], True),
+        (["/usr/bin/docker", "build", "."], True),
+        (["/usr/bin/docker", "buildx", "build", "."], True),
+        (["/synthetic/actions/bin/Runner.Worker", "spawnclient"], True),
+        (["/usr/bin/python3", "-I", "-B", "-m", "pip", "install", "example"], True),
+        (["/usr/bin/python3", "-IB", "-m", "pip", "install", "example"], True),
+        (["/usr/bin/python3", "-W", "ignore", "-X", "dev", "-m", "pip"], True),
+        (["/bin/sh", "-c", "/synthetic/bin/pip install example"], False),
+        (["/usr/bin/python3", "-c", "pip install example"], False),
+        (["/usr/bin/python3", "helper.py", "/synthetic/bin/pip", "install"], False),
+        (["/usr/bin/python3", "-m", "other", "/synthetic/bin/pip"], False),
+        (["/usr/bin/python3", "/synthetic/bin/pipeline.py"], False),
+        (["/synthetic/bin/python-helper", "/synthetic/bin/pip"], False),
+        (["/usr/bin/python3", "-X", "/synthetic/bin/pip"], False),
+    ],
+)
+def test_busy_inventory_uses_the_actual_executable_or_python_operand(tmp_path, argv, busy):
+    proc, _ = fake_process(tmp_path, argv)
+    assert retention.usage(proc)[1] is busy
