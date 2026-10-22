@@ -319,6 +319,8 @@ class AppServer:
         self.worker_archived = False
         self.thread_archive_sequence = 0
         self.resumed_settings: dict[str, Any] = {}
+        self.resume_overrides: dict[str, Any] = {}
+        self.expected_resume_settings: dict[str, Any] | None = None
         self.cleanup_tasks: set[asyncio.Future[Any]] = set()
         self.collaboration_mode: dict[str, Any] | None = None
         self.turn_collaboration_mode: dict[str, Any] | None = None
@@ -345,7 +347,13 @@ class AppServer:
         self.connected = True
         self.disconnected.clear()
         self.reader = asyncio.create_task(self._read(websocket, generation))
-        await self.request("initialize", {"clientInfo": {"name": "autostop_telegram_wake", "version": "1"}})
+        await self.request(
+            "initialize",
+            {
+                "clientInfo": {"name": "autostop_telegram_wake", "version": "1"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
         await self._write({"method": "initialized", "params": {}})
 
     async def _drop_connection(self) -> None:
@@ -610,7 +618,12 @@ class AppServer:
                 self.events.put_nowait({"method": "connection_lost", "generation": generation})
 
     async def resume(self, *, allow_active: bool = False) -> str:
-        params = {"threadId": self.config.thread_id, "cwd": self.config.project_dir, "excludeTurns": True}
+        params = {
+            **self.resume_overrides,
+            "threadId": self.config.thread_id,
+            "cwd": self.config.project_dir,
+            "excludeTurns": True,
+        }
         archive_sequence = self.thread_archive_sequence
         try:
             result = await self.request("thread/resume", params)
@@ -656,6 +669,12 @@ class AppServer:
                 "collaborationMode",
             )
         }
+        if self.expected_resume_settings is not None and any(
+            self.resumed_settings.get(key) != value
+            for key, value in self.expected_resume_settings.items()
+            if key != "collaborationMode"
+        ):
+            raise WakeError("wake_worker_settings_mismatch")
         self.collaboration_mode = result.get("collaborationMode")
         self.worker_archived = False
         return str(status["type"])
@@ -1763,22 +1782,26 @@ class DurableWakeDispatcher:
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle()) if self.enabled else None
 
     async def _use_thread(self, thread_id: str, *, verify_settings: bool = True) -> None:
-        if self.app is not self.bootstrap_app and self.app.config.thread_id == thread_id:
+        if (
+            self.app is not self.bootstrap_app
+            and self.app.config.thread_id == thread_id
+            and (self.app.expected_resume_settings is not None) == verify_settings
+        ):
             return
         deadline = asyncio.get_running_loop().time() + CONNECT_TIMEOUT
         await self._retire_peer(deadline)
         await _cancel_task_until(self.lifecycle_monitor, deadline, self.cleanup_tasks)
         app = AppServer(replace(self.bootstrap_app.config, thread_id=thread_id))
+        if verify_settings:
+            app.resume_overrides = self.bootstrap_app.peer_start_params()
+            app.resume_overrides.pop("ephemeral")
+            app.expected_resume_settings = dict(self.bootstrap_app.resumed_settings)
         self.app = app
         self.supervisor = asyncio.create_task(app.supervise())
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
         await _await_until(app.ensure_ready(), deadline, self.cleanup_tasks)
         if verify_settings:
             expected = self.bootstrap_app.resumed_settings
-            if any(
-                app.resumed_settings.get(key) != value for key, value in expected.items() if key != "collaborationMode"
-            ):
-                raise WakeError("wake_worker_settings_mismatch")
             mode = expected.get("collaborationMode")
             if mode is not None:
                 if (
@@ -1789,6 +1812,28 @@ class DurableWakeDispatcher:
                 ):
                     raise WakeError("wake_worker_settings_unrepresentable")
                 app.turn_collaboration_mode = mode
+
+    async def _materialize_new_peer(self, thread: dict[str, Any]) -> None:
+        """Persist only the newly created empty peer, without starting a model turn."""
+        thread_id = thread["id"]
+        if (
+            thread_id == self.bootstrap_app.config.thread_id
+            or thread.get("cwd") != self.bootstrap_app.config.project_dir
+            or thread.get("ephemeral") is not False
+            or thread.get("turns") != []
+            or thread.get("status") != {"type": "idle"}
+        ):
+            raise WakeError("wake_peer_thread_invalid")
+        await self.bootstrap_app.request("thread/archive", {"threadId": thread_id})
+        restored = rpc_entity(await self.bootstrap_app.request("thread/unarchive", {"threadId": thread_id}), "thread")
+        if (
+            restored["id"] != thread_id
+            or restored.get("cwd") != self.bootstrap_app.config.project_dir
+            or restored.get("ephemeral") is not False
+            or restored.get("turns") != []
+            or restored.get("status") not in ({"type": "idle"}, {"type": "notLoaded"})
+        ):
+            raise WakeError("wake_peer_thread_invalid")
 
     async def _select_peer(self, job: dict[str, Any]) -> None:
         if job.get("context_mode") != "peer_v1":
@@ -1806,24 +1851,24 @@ class DurableWakeDispatcher:
                     raise WakeError("wake_peer_thread_unknown")
                 await self.bootstrap_app.ensure_ready()
                 result = await self.bootstrap_app.request("thread/start", self.bootstrap_app.peer_start_params())
-                thread_id = rpc_entity(result, "thread")["id"]
+                thread = rpc_entity(result, "thread")
+                thread_id = thread["id"]
                 if thread_id == self.bootstrap_app.config.thread_id:
                     raise WakeError("wake_peer_thread_invalid")
-                try:
-                    bound = await self.jobs.request(
+                with suppress(OSError, TimeoutError, TransportLost):
+                    await self.jobs.request(
                         "job_peer_thread_bind", **self._guard(job), creation_key=key, thread_id=thread_id
                     )
-                    mapping = bound.get("peer_thread")
-                except (OSError, TimeoutError, TransportLost):
-                    readback = await self.jobs.request("job_peer_thread_read", job_id=job["job_id"])
-                    mapping = readback.get("peer_thread")
-                    if (
-                        not isinstance(mapping, dict)
-                        or mapping.get("state") != "ready"
-                        or mapping.get("creation_key") != key
-                        or mapping.get("thread_id") != thread_id
-                    ):
-                        raise WakeError("wake_peer_thread_unknown") from None
+                readback = await self.jobs.request("job_peer_thread_read", job_id=job["job_id"])
+                mapping = readback.get("peer_thread")
+                if (
+                    not isinstance(mapping, dict)
+                    or mapping.get("state") != "ready"
+                    or mapping.get("creation_key") != key
+                    or mapping.get("thread_id") != thread_id
+                ):
+                    raise WakeError("wake_peer_thread_unknown")
+                await self._materialize_new_peer(thread)
             except (OSError, TimeoutError, WakeError) as exc:
                 with suppress(OSError, TimeoutError, WakeError):
                     await self.jobs.request("job_peer_thread_unknown", **self._guard(job), creation_key=key)

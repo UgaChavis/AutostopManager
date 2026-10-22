@@ -22,7 +22,9 @@ def ready_app():
 
 
 class MockServer:
-    def __init__(self, *, complete=True, status="completed", disconnect=False, peer_threads=False):
+    def __init__(
+        self, *, complete=True, status="completed", disconnect=False, peer_threads=False, strict_peer_lifecycle=False
+    ):
         self.calls = []
         self.complete = complete
         self.status = status
@@ -37,6 +39,7 @@ class MockServer:
         self.thread_status = "idle"
         self.sockets = []
         self.loaded_by_socket = {}
+        self.experimental_api_by_socket = {}
         self.turn_statuses = {}
         self.disconnect_after_start_response = False
         self.metadata_pages = None
@@ -62,6 +65,12 @@ class MockServer:
         self.turn_threads = {}
         self.peer_thread_status = None
         self.thread_statuses = {}
+        self.strict_peer_lifecycle = strict_peer_lifecycle
+        self.materialized_threads = {THREAD}
+        self.archived_threads = set()
+        self.thread_settings = {}
+        self.peer_resume_overrides = {}
+        self.archive_observer = None
 
     def _thread_response(self, thread_id):
         status = self.thread_status
@@ -90,7 +99,29 @@ class MockServer:
                 runtimeWorkspaceRoots=[wake.PROJECT_DIR],
                 cwd=wake.PROJECT_DIR,
             )
+            result.update(self.thread_settings.get(thread_id, {}))
+            if thread_id in self.created_threads and thread_id not in self.turn_threads.values():
+                result["thread"]["turns"] = []
         return result
+
+    def _resume_peer_settings(self, thread_id, params):
+        settings = self.thread_settings.setdefault(thread_id, {})
+        settings.update(
+            reasoningEffort=params.get("config", {}).get("model_reasoning_effort"),
+            activePermissionProfile={"id": params["permissions"], "extends": None}
+            if params.get("permissions")
+            else None,
+        )
+        for key in (
+            "model",
+            "modelProvider",
+            "serviceTier",
+            "approvalPolicy",
+            "approvalsReviewer",
+            "runtimeWorkspaceRoots",
+        ):
+            if key in params:
+                settings[key] = params[key]
 
     def _request_thread(self, msg):
         thread_id = msg.get("params", {}).get("threadId", THREAD)
@@ -100,23 +131,82 @@ class MockServer:
             self.created_threads.append(thread_id)
         return thread_id
 
+    def _experimental_request_denied(self, socket, msg):
+        return (
+            msg.get("method") in {"thread/start", "thread/resume", "turn/start"}
+            and any(msg.get("params", {}).get(key) is not None for key in ("permissions", "runtimeWorkspaceRoots"))
+            and not self.experimental_api_by_socket[socket]
+        )
+
+    async def _peer_lifecycle(self, socket, msg, thread_id):
+        method = msg["method"]
+        if self.strict_peer_lifecycle and method == "thread/start":
+            self._resume_peer_settings(thread_id, msg["params"])
+        if (
+            self.strict_peer_lifecycle
+            and method == "thread/resume"
+            and (thread_id not in self.materialized_threads or thread_id in self.archived_threads)
+        ):
+            await socket.send(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "no rollout found"}}))
+            return False
+        if self.strict_peer_lifecycle and method == "thread/resume" and thread_id in self.created_threads:
+            self._resume_peer_settings(thread_id, msg["params"])
+        if method == "thread/archive":
+            if self.archive_observer is not None:
+                self.archive_observer(thread_id)
+            self.materialized_threads.add(thread_id)
+            self.archived_threads.add(thread_id)
+        if method == "thread/unarchive":
+            self.archived_threads.discard(thread_id)
+        return True
+
+    def _thread_method_response(self, method, thread_id):
+        result = self._thread_response(thread_id)
+        if method in {"thread/start", "thread/unarchive"}:
+            result["thread"]["status"] = {"type": "idle"}
+        if method == "thread/resume" and thread_id in self.created_threads:
+            result.update(self.peer_resume_overrides)
+        return result
+
+    async def _complete_turn(self, socket, method, thread_id):
+        if (method == "turn/start" and self.complete) or method == "turn/interrupt":
+            status = "interrupted" if method == "turn/interrupt" else self.status
+            params = {
+                "threadId": thread_id if self.peer_threads else THREAD,
+                "turn": {"id": str(self.counter), "status": status},
+            }
+            if self.unload_after_turn:
+                self.loaded = False
+                self.loaded_by_socket[socket] = False
+            self.turn_statuses[str(self.counter)] = status
+            await socket.send(json.dumps({"method": "turn/completed", "params": params}))
+
     async def handle(self, socket):
         self.sockets.append(socket)
         self.loaded_by_socket[socket] = False
+        self.experimental_api_by_socket[socket] = False
         async for raw in socket:
             msg = json.loads(raw)
             self.calls.append(msg)
             method = msg.get("method")
             if "id" not in msg:
                 continue
-            if method == self.reject_method or (method == "turn/start" and not self.loaded_by_socket[socket]):
+            if (
+                self._experimental_request_denied(socket, msg)
+                or method == self.reject_method
+                or (method == "turn/start" and not self.loaded_by_socket[socket])
+            ):
                 await socket.send(
                     json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
                 )
                 continue
             result = {}
             thread_id = self._request_thread(msg)
+            if not await self._peer_lifecycle(socket, msg, thread_id):
+                continue
             if method == "initialize":
+                capabilities = msg.get("params", {}).get("capabilities") or {}
+                self.experimental_api_by_socket[socket] = capabilities.get("experimentalApi") is True
                 self.initializing.set()
                 await self.release_initialize.wait()
             if method == "thread/resume":
@@ -130,9 +220,10 @@ class MockServer:
                 self.loaded = True
                 self.loaded_by_socket[socket] = True
                 self.socket_threads[socket] = thread_id
-            if method in {"thread/start", "thread/resume", "thread/read"}:
-                result = self._thread_response(thread_id)
+            if method in {"thread/start", "thread/resume", "thread/read", "thread/unarchive"}:
+                result = self._thread_method_response(method, thread_id)
             if method == "turn/start":
+                self.materialized_threads.add(thread_id)
                 self.counter += 1
                 turn = {"id": str(self.counter), "status": "inProgress"}
                 self.turn_statuses[str(self.counter)] = "inProgress"
@@ -178,17 +269,7 @@ class MockServer:
                 self.disconnect_after_start_response = False
                 await socket.close()
                 return
-            if (method == "turn/start" and self.complete) or method == "turn/interrupt":
-                status = "interrupted" if method == "turn/interrupt" else self.status
-                params = {
-                    "threadId": thread_id if self.peer_threads else THREAD,
-                    "turn": {"id": str(self.counter), "status": status},
-                }
-                if self.unload_after_turn:
-                    self.loaded = False
-                    self.loaded_by_socket[socket] = False
-                self.turn_statuses[str(self.counter)] = status
-                await socket.send(json.dumps({"method": "turn/completed", "params": params}))
+            await self._complete_turn(socket, method, thread_id)
 
 
 async def until(predicate):

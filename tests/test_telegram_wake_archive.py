@@ -48,7 +48,14 @@ class ArchiveServer:
                         self.archived = False
                 if "error" not in response:
                     thread = self.restored_thread if method == "thread/unarchive" else None
-                    response["result"] = {"thread": thread or self.thread, "model": "gpt-6.1-sol"}
+                    response["result"] = {
+                        "thread": thread or self.thread,
+                        "model": "gpt-6.1-sol",
+                        "modelProvider": "test-provider",
+                        "approvalPolicy": "never",
+                        "approvalsReviewer": "user",
+                        "sandbox": {"type": "dangerFullAccess"},
+                    }
             await socket.send(json.dumps(response))
 
     def methods(self):
@@ -175,6 +182,7 @@ def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tm
         async with unix_serve(server.handle, str(path), compression=None):
             try:
                 await app.connect()
+                await app.resume()
                 app.ready_event.set()
                 generation = app.generation
                 await dispatcher._execute(job)

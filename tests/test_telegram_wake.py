@@ -50,6 +50,28 @@ def test_app_server_lifecycle_and_idle_has_no_model_or_telegram_calls(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("permission_profile", [None, {"id": ":danger-full-access"}])
+def test_peer_thread_start_negotiates_experimental_api(tmp_path, permission_profile):
+    async def scenario():
+        server = MockServer(peer_threads=True)
+        async with connected_app(tmp_path, server) as app:
+            await app.resume()
+            app.resumed_settings["activePermissionProfile"] = permission_profile
+            params = app.peer_start_params()
+            result = await app.request("thread/start", params)
+            assert result["thread"]["id"] != THREAD
+            assert server.created_threads == [result["thread"]["id"]]
+            assert server.counter == 0
+            assert params["runtimeWorkspaceRoots"] == [wake.PROJECT_DIR]
+            if permission_profile is not None:
+                assert params["permissions"] == permission_profile["id"]
+                assert "sandbox" not in params
+            else:
+                assert params["sandbox"] == "danger-full-access"
+
+    asyncio.run(scenario())
+
+
 def test_each_event_resumes_task_after_previous_turn_unloaded_it(tmp_path):
     async def scenario():
         server = MockServer()
