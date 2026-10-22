@@ -1708,6 +1708,7 @@ def test_send_contract_binds_reply_target_and_source() -> None:
         last_message_id=7,
         reply_to_message_id=5,
         reply_message_sha256=digest,
+        reply_source_media={"version": 1, "fingerprint": None},
         now=100,
     )
 
@@ -1718,6 +1719,7 @@ def test_send_contract_binds_reply_target_and_source() -> None:
         text="hello",
         reply_to_message_id=5,
         reply_message_sha256=digest,
+        reply_source_media={"version": 1, "fingerprint": None},
         now=101,
     )
 
@@ -1730,6 +1732,7 @@ def test_send_contract_binds_reply_target_and_source() -> None:
             text="hello",
             reply_to_message_id=6,
             reply_message_sha256=digest,
+            reply_source_media={"version": 1, "fingerprint": None},
             now=101,
         )
     with pytest.raises(BridgeError, match="contract_reply_source_changed"):
@@ -1740,6 +1743,7 @@ def test_send_contract_binds_reply_target_and_source() -> None:
             text="hello",
             reply_to_message_id=5,
             reply_message_sha256="b" * 64,
+            reply_source_media={"version": 1, "fingerprint": None},
             now=101,
         )
 
@@ -4882,3 +4886,90 @@ def test_rpc_boundary_maps_invalid_and_supported_requests(monkeypatch, tmp_path)
     invalid_writer = Writer()
     asyncio.run(telegram_bridge._serve_client(object(), config, Reader(b"not-json\n"), invalid_writer))
     assert json.loads(invalid_writer.payload) == {"ok": False, "error": "request_invalid"}
+
+
+def _reply_contract_case(operation):
+    arguments = {"peer_id": 10}
+    if operation == "send":
+        arguments["text"] = "  **raw answer** _text_\n "
+    else:
+        arguments["caption"] = "  **raw caption** _text_\n "
+        if operation == "photo":
+            arguments["photo_sha256"] = "a" * 64
+        else:
+            arguments |= {"document_sha256": "a" * 64, "document_bytes": 123, "document_name": "synthetic.pdf"}
+    return (
+        getattr(telegram_bridge, "issue_" + operation + "_contract"),
+        getattr(telegram_bridge, "verify_" + operation + "_contract"),
+        arguments,
+    )
+
+
+@pytest.mark.parametrize("operation", ["send", "photo", "document"])
+def test_reply_contract_requires_observed_media(operation):
+    issue, verify, arguments = _reply_contract_case(operation)
+    secret = b"x" * 32
+    anchored = arguments | {"reply_to_message_id": 5, "reply_message_sha256": "b" * 64}
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        issue(secret, **anchored, last_message_id=7, now=100)
+    observed = {"version": 1, "fingerprint": None}
+    token = issue(secret, **anchored, reply_source_media=observed, last_message_id=7, now=100)
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        verify(token, secret, **anchored, now=101)
+    payload = verify(token, secret, **anchored, reply_source_media=observed, now=101)
+    assert payload["reply_source_media"] == observed
+    assert payload["reply_message_sha256"] == "b" * 64
+    legacy = dict(payload)
+    del legacy["reply_source_media"]
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        verify(
+            telegram_bridge._issue_contract(secret, legacy), secret, **anchored, reply_source_media=observed, now=101
+        )
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"version": True, "fingerprint": None},
+        {"version": 2, "fingerprint": None},
+        {"version": 1},
+        {"version": 1, "fingerprint": 123},
+        {"version": 1, "fingerprint": "A" * 64},
+        {"version": 1, "fingerprint": None, "extra": 0},
+    ],
+)
+def test_reply_contract_rejects_malformed_media(binding):
+    secret = b"x" * 32
+    arguments = {"peer_id": 10, "text": "answer", "reply_to_message_id": 5, "reply_message_sha256": "b" * 64}
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        issue_send_contract(secret, **arguments, reply_source_media=binding, last_message_id=7, now=100)
+    observed = {"version": 1, "fingerprint": None}
+    token = issue_send_contract(secret, **arguments, reply_source_media=observed, last_message_id=7, now=100)
+    payload = telegram_bridge._decode_contract(token, secret) | {"reply_source_media": binding}
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        verify_send_contract(
+            telegram_bridge._issue_contract(secret, payload), secret, **arguments, reply_source_media=observed, now=101
+        )
+    with pytest.raises(BridgeError, match=r"^contract_invalid$"):
+        verify_send_contract(token, secret, **arguments, reply_source_media=binding, now=101)
+
+
+@pytest.mark.parametrize("operation", ["send", "photo", "document"])
+def test_no_reply_contract_preserves_legacy_payload(operation):
+    issue, verify, arguments = _reply_contract_case(operation)
+    secret = b"x" * 32
+    expected = {
+        "issued_at": 100,
+        "last_message_id": 7,
+        "peer_id": 10,
+        "reply_message_sha256": "",
+        "reply_to_message_id": 0,
+    }
+    if operation == "send":
+        expected["text_sha256"] = hashlib.sha256(arguments["text"].encode()).hexdigest()
+    else:
+        expected |= {"type": operation, "caption_sha256": hashlib.sha256(arguments["caption"].encode()).hexdigest()}
+        expected |= {key: value for key, value in arguments.items() if key.startswith(operation + "_")}
+    token = issue(secret, **arguments, last_message_id=7, now=100)
+    assert token == telegram_bridge._issue_contract(secret, expected)
+    assert verify(token, secret, **arguments, now=101) == expected
