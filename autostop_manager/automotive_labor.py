@@ -250,6 +250,69 @@ def _price_midpoint(lower: float, upper: float) -> float:
     return combined / 2 if math.isfinite(combined) else lower / 2 + upper / 2
 
 
+def _public_observation_key(
+    item: dict[str, Any], observed_name: str, price: float, matcher: OperationMatcher
+) -> tuple[str, float, str, str, str] | None:
+    source = item.get("source")
+    evidence = item.get("evidence_source", {})
+    if not isinstance(evidence, dict) or (source is not None and not isinstance(source, (str, dict))):
+        return None
+    metadata = (evidence, source if isinstance(source, dict) else {})
+    lineages = [entry.get("primary_lineage") for entry in metadata]
+    plain_source = source if isinstance(source, str) else None
+    locators = [item.get("locator"), item.get("url"), *(entry.get("locator") for entry in metadata)]
+    cities = [item.get("city"), item.get("city_region"), item.get("region")]
+    identity_values = [*lineages, plain_source, *locators, *cities, *(entry.get("provider") for entry in metadata)]
+    if any(value is not None and not isinstance(value, str) for value in identity_values):
+        return None
+    identifier = next(
+        (
+            value.strip()
+            for value in [*lineages, plain_source]
+            if isinstance(value, str)
+            and value.strip()
+            and value.strip().casefold() not in {"public_web", "provided_aggregate"}
+        ),
+        "",
+    )
+    locator = next((value.strip() for value in locators if isinstance(value, str) and value.strip()), "")
+    city = next((value.strip().casefold() for value in cities if isinstance(value, str) and value.strip()), "")
+    if not identifier and not locator:
+        return None
+    return matcher.identity(observed_name), price, identifier, locator, city
+
+
+def _public_price_sample(
+    observations: list[dict[str, Any]], requested_name: str, matcher: OperationMatcher
+) -> list[float]:
+    prices: list[float] = []
+    eligible: set[tuple[str, float, str, str, str]] = set()
+    vetoed: set[tuple[str, float, str, str, str]] = set()
+    for item in observations:
+        observed_name = item.get("operation_name")
+        if (
+            not isinstance(observed_name, str)
+            or not observed_name.strip()
+            or not (
+                observed_name == requested_name or matcher.matches_known_qualification(requested_name, observed_name)
+            )
+        ):
+            continue
+        price = finite_number(item.get("price_rub"))
+        if price is None:
+            continue
+        key = _public_observation_key(item, observed_name, price, matcher)
+        is_eligible = item.get("labor_only") is True and item.get("includes_parts") is False
+        if key is None:
+            if is_eligible:
+                prices.append(price)
+        elif item.get("includes_parts") is True or item.get("labor_only") is False:
+            vetoed.add(key)
+        elif is_eligible:
+            eligible.add(key)
+    return [*prices, *(key[1] for key in eligible - vetoed)]
+
+
 def _operation_price(
     row: dict[str, Any],
     rate: float | None,
@@ -273,16 +336,7 @@ def _operation_price(
     requested_name = row.get("operation_name")
     if not isinstance(requested_name, str) or not requested_name.strip():
         return None, None
-    sample = [
-        finite_number(item.get("price_rub"))
-        for item in observations
-        if isinstance(observed_name := item.get("operation_name"), str)
-        and observed_name.strip()
-        and (observed_name == requested_name or matcher.matches_known_qualification(requested_name, observed_name))
-        and item.get("labor_only") is True
-        and item.get("includes_parts") is False
-    ]
-    prices = sorted(value for value in sample if value is not None)
+    prices = sorted(_public_price_sample(observations, requested_name, matcher))
     if not prices:
         return None, None
     middle = len(prices) // 2
