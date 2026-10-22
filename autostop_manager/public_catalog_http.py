@@ -16,6 +16,7 @@ import re
 import socket
 import threading
 import time
+import zlib
 from typing import Any, cast
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
@@ -111,6 +112,58 @@ class _OwnedResponseStream(httpx.AsyncByteStream):
             await self._stream.aclose()
 
 
+async def _iter_catalog_response_bytes(
+    response: httpx.Response, *, maximum: int, deadline: float
+) -> AsyncIterator[bytes]:
+    encodings = [value.strip().lower() for value in response.headers.get_list("content-encoding", split_commas=True)]
+    # Buffered responses must retain HTTPX's existing decoded-content path.
+    if response.is_stream_consumed or encodings != ["gzip"]:
+        async for chunk in response.aiter_bytes():
+            yield chunk
+        return
+    chunk_size = 16 * 1024
+    decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+    emitted = 0
+
+    def group(raw: bytes, room: int) -> bytes:
+        kept = bytearray()
+
+        def drain(data: bytes) -> None:
+            while not decoder.eof:
+                _remaining_time(deadline)
+                try:
+                    part = decoder.decompress(data, max_length=chunk_size)
+                except zlib.error as error:
+                    raise httpx.DecodingError(str(error), request=response.request) from error
+                remaining = room - len(kept)
+                if remaining > 0:
+                    kept.extend(part[:remaining])
+                data = decoder.unconsumed_tail
+                if decoder.eof or (not data and len(part) < chunk_size):
+                    return
+
+        # Splitting input is internal only: the caller-visible transaction
+        # boundary remains one original raw group, including CRC/error order.
+        for offset in range(0, len(raw), chunk_size):
+            drain(raw[offset : offset + chunk_size])
+            if decoder.eof:
+                break  # Match HTTPX's first-member behavior, ignoring trailing bytes.
+        if not raw:
+            drain(b"")
+        return bytes(kept)
+
+    async for raw in response.aiter_raw():
+        part = group(raw, maximum + 1 - emitted)
+        if part:
+            yield part
+            emitted += len(part)
+    # HTTPX accepts missing trailers; do not add an EOF validity policy.
+    # Capped empty-input drains avoid treating zlib.flush(length) as a cap.
+    part = group(b"", maximum + 1 - emitted)
+    if part:
+        yield part
+
+
 async def _async_http_get(
     url: str, *, address: str, deadline: float, maximum: int
 ) -> tuple[int, bytes, dict[str, str]]:
@@ -136,7 +189,7 @@ async def _async_http_get(
                 body = bytearray()
                 # Navigation needs only headers; close intermediate bodies without buffering them.
                 if response.status_code not in {301, 302, 303, 307, 308}:
-                    async for chunk in response.aiter_bytes():
+                    async for chunk in _iter_catalog_response_bytes(response, maximum=maximum, deadline=deadline):
                         _remaining_time(deadline)
                         if len(body) + len(chunk) > maximum:
                             raise CatalogReadError("catalog_response_too_large")

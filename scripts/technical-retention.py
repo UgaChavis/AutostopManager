@@ -38,6 +38,7 @@ LOG_ROOTS = tuple(
 BUSY = re.compile(
     r"(?:^|[ /])(?:pip(?:3)?|npm|npx|uv|apt(?:-get)?|dpkg|Runner\.Worker|buildctl)(?:$|[ /])|docker(?:\s+buildx)?\s+build(?:\s|$)"
 )
+PIP_ENTRY = re.compile(r"pip(?:\d+(?:\.\d+)*)?\Z")
 ROTATED = re.compile(
     r"(?:syslog|mail\.(?:log|err)|kern\.log|auth\.log|user\.log|cron\.log|ufw\.log|fail2ban\.log|dpkg\.log|alternatives\.log|apport\.log|cloud-init(?:-output)?\.log|boot\.log|ubuntu-advantage[^/]*\.log|dmesg)\.\d+(?:\.(?:gz|xz|bz2))?\Z"
 )
@@ -103,6 +104,41 @@ def is_rotated_log(path: Path) -> bool:
     return path.parent in LOG_ROOTS and bool(re.fullmatch(r"[^/]+\.log\.\d+(?:\.(?:gz|xz|bz2))?", path.name))
 
 
+def python_runs_pip(arguments: list[str]) -> bool:
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "-m":
+            return index + 1 < len(arguments) and arguments[index + 1] == "pip"
+        if argument.startswith("-m"):
+            return argument[2:] == "pip"
+        if argument == "--":
+            return index + 1 < len(arguments) and bool(PIP_ENTRY.fullmatch(Path(arguments[index + 1]).name))
+        if argument.startswith("-") and len(argument) > 1 and set(argument[1:]) <= set("bBdEiIOPqsSuvx"):
+            index += 1
+        elif argument in {"-W", "-X", "--check-hash-based-pycs"}:
+            index += 2
+        elif argument.startswith(("-W", "-X")):
+            index += 1
+        else:
+            # -c, stdin, other scripts and unknown options stop operand parsing.
+            return not argument.startswith("-") and bool(PIP_ENTRY.fullmatch(Path(argument).name))
+    return False
+
+
+def busy_argv(arguments: list[str]) -> bool:
+    if not arguments:
+        return False
+    executable = Path(arguments[0]).name
+    if BUSY.fullmatch(executable) or PIP_ENTRY.fullmatch(executable) or "Runner.Worker" in executable:
+        return True
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable):
+        return python_runs_pip(arguments[1:])
+    if executable == "docker":
+        return arguments[1:2] == ["build"] or arguments[1:3] == ["buildx", "build"]
+    return executable == "node" and len(arguments) > 1 and Path(arguments[1]).name in {"npm-cli.js", "npx-cli.js"}
+
+
 def usage(proc: Path = Path("/proc")) -> tuple[set[tuple[int, int]], bool]:
     """No process arguments, credentials or file contents are returned or recorded."""
     opened: set[tuple[int, int]] = set()
@@ -111,16 +147,11 @@ def usage(proc: Path = Path("/proc")) -> tuple[set[tuple[int, int]], bool]:
         if not process.name.isdigit() or int(process.name) == os.getpid():
             continue
         try:
-            command = process.joinpath("cmdline").read_bytes().decode(errors="replace").replace("\0", " ")
-            executable = command.split(" ", 1)[0]
-            # Shell command bodies are not running package tools; inspect executable and python -m pip.
-            busy |= bool(
-                BUSY.search(executable)
-                or re.search(r"^\S*python\S*\s+(?:-\S+\s+)*-m\s+pip(?:\s|$)", command)
-                or re.search(r"^\S*/?docker\s+(?:buildx\s+)?build(?:\s|$)", command)
-                or "Runner.Worker" in executable
-                or re.search(r"^\S*/?node\s+\S*/(?:npm|npx)-cli\.js(?:\s|$)", command)
-            )
+            arguments = process.joinpath("cmdline").read_bytes().split(b"\0")
+            if arguments[-1] == b"":
+                arguments.pop()
+            # Preserve argv boundaries, including empty operands and paths with spaces.
+            busy |= busy_argv([argument.decode(errors="replace") for argument in arguments])
             for descriptor in process.joinpath("fd").iterdir():
                 try:
                     value = descriptor.stat()

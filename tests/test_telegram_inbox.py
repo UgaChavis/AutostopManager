@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1042,6 +1043,57 @@ def test_active_job_page_validates_cursor_and_handles_empty_tail(inbox: Telegram
     inbox.record(1, 1)
     job = claim(inbox)
     assert inbox.active_job_page(after_job_id=job["job_id"]) == {"jobs": [], "next_job_id": None}
+
+
+def _health_snapshot(path: Path) -> dict[str, Any]:
+    with closing(sqlite3.connect(path)) as db:
+        return {
+            "health": db.execute("SELECT * FROM health ORDER BY component").fetchall(),
+            "incidents": db.execute("SELECT * FROM incidents ORDER BY opened_at,rowid").fetchall(),
+            "generation": int(db.execute("SELECT value FROM metadata WHERE key='generation'").fetchone()[0]),
+        }
+
+
+@pytest.mark.parametrize("old_code", [None, "transport_lost"], ids=["first_incident", "changed_cause"])
+def test_failed_health_write_rolls_back_all_incident_changes(
+    tmp_path: Path, clock: Clock, old_code: str | None
+) -> None:
+    path = tmp_path / "inbox" / "inbound.sqlite3"
+    old_state = "ready" if old_code is None else "offline"
+    with TelegramInbox(path, clock=clock) as inbox:
+        inbox.set_health("codex", old_state, old_code)
+        if old_code is not None:
+            error = inbox.pending_notifications()[0]
+            inbox.notification_verified(error["notification_id"], "receipt-old-error")
+        before = _health_snapshot(path)
+        clock.advance(1)
+        inbox._db.execute(
+            "CREATE TRIGGER fail_health_write BEFORE INSERT ON health BEGIN SELECT RAISE(ABORT, 'synthetic'); END"
+        )
+        inbox._db.commit()
+        with pytest.raises(InboxError, match="inbox_storage_failed"):
+            inbox.set_health("codex", "held", "rpc_error")
+        assert _health_snapshot(path) == before
+        inbox._db.execute("DROP TRIGGER fail_health_write")
+        inbox._db.commit()
+        inbox.set_health("codex", old_state, old_code)
+        assert _health_snapshot(path) == before and inbox.pending_notifications() == []
+
+        inbox.set_health("codex", "held", "rpc_error")
+        pending = inbox.pending_notifications()
+        expected_kinds = ["error"] if old_code is None else ["recovery", "error"]
+        assert [item["kind"] for item in pending] == expected_kinds
+        assert pending[-1]["code"] == "codex_rpc_error" and pending[-1]["recovered_at"] is None
+        if old_code is not None:
+            assert pending[0]["incident_id"] == error["incident_id"]
+            assert pending[0]["opened_receipt"] == "receipt-old-error"
+            assert pending[0]["recovered_at"] is not None
+        after = _health_snapshot(path)
+        assert after["generation"] == before["generation"] + 1
+    with TelegramInbox(path, clock=clock) as restored:
+        assert restored.health()["codex"] == {"state": "held", "error_code": "rpc_error"}
+        assert restored.pending_notifications() == pending
+    assert _health_snapshot(path) == after
 
 
 def test_incident_and_recovery_notifications_survive_restart_once(tmp_path: Path, clock: Clock) -> None:

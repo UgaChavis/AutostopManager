@@ -439,6 +439,8 @@ class SystemTimerController:
         original_error: AutomationError | OSError | None = None
         try:
             self._systemctl_action("enable" if enabled else "disable", "--now", policy.unit_name)
+            if not enabled:
+                self._systemctl_action("disable", "--runtime", policy.unit_name)
             status = self.inspect(timer_id)
             if (
                 not status["inspection_ok"]
@@ -452,11 +454,19 @@ class SystemTimerController:
         try:
             previous_desired = str(before["state"]["desired_state"])
             previous_actual = str(before["state"]["actual_state"])
-            self._systemctl_action("enable" if previous_desired == "on" else "disable", policy.unit_name)
+            previous_unit_file_state = str(before["state"]["unit_file_state"])
+            if previous_unit_file_state == "enabled-runtime":
+                # A failed persistent enable can already have installed links.
+                # Clear those before reconstructing runtime-only enablement.
+                self._systemctl_action("disable", policy.unit_name)
+                self._systemctl_action("enable", "--runtime", policy.unit_name)
+            else:
+                self._systemctl_action("enable" if previous_desired == "on" else "disable", policy.unit_name)
             self._systemctl_action("start" if previous_actual == "active" else "stop", policy.unit_name)
             restored = self.inspect(timer_id)
             if (
                 not restored["inspection_ok"]
+                or restored["state"]["unit_file_state"] != previous_unit_file_state
                 or restored["state"]["desired_state"] != previous_desired
                 or restored["state"]["actual_state"] != previous_actual
             ):

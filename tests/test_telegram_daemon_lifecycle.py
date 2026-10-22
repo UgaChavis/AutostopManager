@@ -1,18 +1,22 @@
-"""Whole-process shutdown, using private SQLite and local IPC only."""
+"""Daemon startup and whole-process shutdown using private SQLite and local IPC."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
+import socket
 import sqlite3
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from autostop_manager import telegram_bridge as bridge
-from autostop_manager.telegram_inbox import TelegramInbox
+from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 
 
 CHILD = r"""
@@ -209,3 +213,86 @@ def test_cleanup_never_unlinks_replacement_socket_path(tmp_path):
     bridge._unlink_daemon_socket(path, (current.st_dev, current.st_ino))
     assert not path.exists()
     bridge._unlink_daemon_socket(path, (current.st_dev, current.st_ino))
+
+
+@pytest.mark.parametrize("monitor_incoming", [False, True])
+def test_duplicate_durable_startup_preserves_incumbent_listener(tmp_path, monkeypatch, monitor_incoming):
+    calls = []
+
+    class Client:
+        def __init__(self, *_args, **_kwargs):
+            calls.append("constructed")
+
+    monkeypatch.setenv(bridge.WORK_DURABLE_ENVIRONMENT, "1")
+    monkeypatch.setattr(bridge, "_load_telethon", lambda: (Client, None, None))
+    with TemporaryDirectory(prefix="tg-socket-", dir="/tmp") as directory:
+        path = Path(directory) / "s"
+        config = bridge.TelegramConfig(
+            123456,
+            "0" * 32,
+            state_dir=tmp_path / "state",
+            session_path=tmp_path / "state" / "account",
+            socket_path=path,
+            owner_config_path=bridge.WORK_OWNER_CONFIG_PATH,
+        )
+        with (
+            TelegramInbox(config.state_dir / "inbound.sqlite3") as incumbent,
+            socket.socket(socket.AF_UNIX) as listener,
+        ):
+            listener.bind(str(path))
+            listener.listen(2)
+            listener.settimeout(1)
+            original = path.lstat()
+            with pytest.raises(InboxError, match=r"^inbox_writer_active$"):
+                asyncio.run(bridge.run_daemon(config, monitor_incoming=monitor_incoming))
+            current = path.lstat()
+            assert (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino)
+            with socket.socket(socket.AF_UNIX) as probe:
+                probe.connect(str(path))
+                accepted, _ = listener.accept()
+                accepted.close()
+            assert incumbent.health() == {} and calls == []
+            with pytest.raises(InboxError, match=r"^inbox_writer_active$"):
+                TelegramInbox(config.state_dir / "inbound.sqlite3")
+
+
+@pytest.mark.parametrize("failure", ["constructor", "handler"])
+def test_startup_failure_releases_writer_and_preserves_old_socket(tmp_path, monkeypatch, failure):
+    path = tmp_path / "bridge.sock"
+    path.write_text("previous listener")
+    config = bridge.TelegramConfig(
+        123456,
+        "0" * 32,
+        state_dir=tmp_path / "state",
+        session_path=tmp_path / "state" / "account",
+        socket_path=path,
+        owner_config_path=bridge.WORK_OWNER_CONFIG_PATH,
+    )
+    disconnected = []
+
+    class Client:
+        def __init__(self, *_args, **_kwargs):
+            with pytest.raises(InboxError, match=r"^inbox_writer_active$"):
+                with TelegramInbox(config.state_dir / "inbound.sqlite3"):
+                    pass
+            if failure == "constructor":
+                raise OSError("synthetic startup failure")
+            self.session = SimpleNamespace(save_entities=True)
+
+        def add_event_handler(self, *_args):
+            raise OSError("synthetic startup failure")
+
+        async def disconnect(self):
+            disconnected.append(True)
+
+    monkeypatch.setenv(bridge.WORK_DURABLE_ENVIRONMENT, "1")
+    monkeypatch.setattr(bridge, "_load_telethon", lambda: (Client, None, None))
+    monkeypatch.setattr(bridge, "_configure_durable_instructions", lambda _inbox: None)
+    monkeypatch.setattr(bridge, "_install_reconnect_signal", lambda *_args: None)
+    monkeypatch.setattr(bridge, "_load_telegram_events", lambda: SimpleNamespace(NewMessage=lambda **_kwargs: object()))
+    with pytest.raises(OSError, match=r"^synthetic startup failure$"):
+        asyncio.run(bridge.run_daemon(config, monitor_incoming=True))
+    with TelegramInbox(config.state_dir / "inbound.sqlite3") as restored:
+        assert restored.status()["open_events"] == 0
+    assert path.read_text() == "previous listener"
+    assert disconnected == ([] if failure == "constructor" else [True])

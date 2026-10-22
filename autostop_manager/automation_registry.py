@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .config import get_automation_db_path
 
 
-AUTOMATION_SCHEMA_VERSION = 6
+AUTOMATION_SCHEMA_VERSION = 7
 MIN_INTERVAL_MINUTES = 5
 MAX_INTERVAL_MINUTES = 24 * 60
 MAX_JOBS = 100
@@ -335,6 +335,7 @@ SCHEMA_STATEMENTS = (
         fencing_token INTEGER,
         result_code TEXT,
         coalesced_count INTEGER NOT NULL DEFAULT 0,
+        claimed_revision INTEGER,
         FOREIGN KEY(job_id) REFERENCES manager_automations(job_id) ON DELETE CASCADE,
         FOREIGN KEY(command_id) REFERENCES manager_automation_commands(command_id) ON DELETE SET NULL
     )
@@ -496,6 +497,11 @@ class AutomationStore:
                 connection.execute(
                     "UPDATE manager_automation_runtime SET applied_at = updated_at WHERE applied_at IS NULL"
                 )
+            run_columns = {
+                str(item["name"]) for item in connection.execute("PRAGMA table_info(manager_automation_runs)")
+            }
+            if "claimed_revision" not in run_columns:
+                connection.execute("ALTER TABLE manager_automation_runs ADD COLUMN claimed_revision INTEGER")
             controller_columns = {
                 str(item["name"])
                 for item in connection.execute("PRAGMA table_info(manager_automation_controller_runtime)")
@@ -516,6 +522,7 @@ class AutomationStore:
                 INSERT INTO manager_automation_schema(component, version, upgraded_at)
                 VALUES('automation_center', ?, ?)
                 ON CONFLICT(component) DO UPDATE SET version = excluded.version, upgraded_at = excluded.upgraded_at
+                WHERE manager_automation_schema.version != excluded.version
                 """,
                 (AUTOMATION_SCHEMA_VERSION, now),
             )
@@ -870,13 +877,22 @@ class AutomationStore:
         self._require_revision(row, expected_revision)
         if row["desired_state"] != "on":
             raise AutomationError("automation_not_enabled")
+        now = isoformat(utc_now())
         pending = connection.execute(
             """
-            SELECT run_id, coalesced_count FROM manager_automation_runs
-            WHERE job_id = ? AND status IN ('queued', 'running')
-            ORDER BY requested_at LIMIT 1
+            SELECT q.run_id, q.coalesced_count FROM manager_automation_runs q
+            WHERE q.job_id = ? AND (
+                q.status = 'queued'
+                OR (q.status = 'running' AND q.claimed_revision = ? AND EXISTS (
+                    SELECT 1 FROM manager_automation_runtime r
+                    WHERE r.job_id = q.job_id AND r.lease_until > ?
+                      AND r.lease_owner_hash = q.lease_owner_hash
+                      AND r.fencing_token = q.fencing_token
+                ))
+            )
+            ORDER BY q.requested_at LIMIT 1
             """,
-            (job_id,),
+            (job_id, int(row["revision"]), now),
         ).fetchone()
         if pending:
             connection.execute(
@@ -884,7 +900,6 @@ class AutomationStore:
                 (pending["run_id"],),
             )
             return {"queued": False, "coalesced": True, "run_id": pending["run_id"]}
-        now = isoformat(utc_now())
         run_id = f"run_{uuid4().hex}"
         connection.execute(
             """
@@ -999,6 +1014,20 @@ class AutomationStore:
         lease_until = parse_time(runtime["lease_until"]) if runtime else None
         if lease_until and lease_until > utc_now():
             raise AutomationError("automation_lease_active")
+        now = isoformat(utc_now())
+        # OFF pauses incident alerts; archive can cancel these retryable intents.
+        # Explicit test notifications and uncertain sending deliveries stay protected.
+        connection.execute(
+            """
+            UPDATE manager_automation_outbox
+            SET status = 'cancelled', result_code = 'automation_archived',
+                lease_owner_hash = NULL, lease_until = NULL, updated_at = ?
+            WHERE job_id = ? AND kind IN ('job_error_alert', 'job_recovery_alert')
+              AND status IN ('queued', 'failed')
+              AND (lease_until IS NULL OR lease_until <= ?)
+            """,
+            (now, job_id, now),
+        )
         pending_delivery = connection.execute(
             """
             SELECT 1 FROM manager_automation_outbox
@@ -1008,7 +1037,6 @@ class AutomationStore:
         ).fetchone()
         if pending_delivery is not None:
             raise AutomationError("automation_delivery_pending")
-        now = isoformat(utc_now())
         connection.execute(
             """
             UPDATE manager_automations
@@ -1367,12 +1395,12 @@ class AutomationStore:
         if not 10 <= lease_seconds <= 600:
             raise AutomationError("automation_lease_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
         self.initialize()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
             controller = connection.execute(
                 "SELECT hold_enabled FROM manager_automation_controller_runtime WHERE singleton = 1"
             ).fetchone()
@@ -1512,10 +1540,10 @@ class AutomationStore:
             connection.execute(
                 """
                 UPDATE manager_automation_runs
-                SET status = 'running', started_at = ?, lease_owner_hash = ?, fencing_token = ?
+                SET status = 'running', started_at = ?, lease_owner_hash = ?, fencing_token = ?, claimed_revision = ?
                 WHERE run_id = ? AND status = 'queued'
                 """,
-                (now, owner_hash, fencing_token, queued["run_id"]),
+                (now, owner_hash, fencing_token, int(queued["revision"]), queued["run_id"]),
             )
             return {
                 "run_id": queued["run_id"],
@@ -1650,11 +1678,11 @@ class AutomationStore:
         lease_seconds: int = 60,
     ) -> bool:
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
             changed = connection.execute(
                 """
                 UPDATE manager_automation_runtime
@@ -1872,12 +1900,12 @@ class AutomationStore:
         if not 10 <= lease_seconds <= 600:
             raise AutomationError("automation_lease_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
         self.initialize()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
             controller = connection.execute(
                 "SELECT hold_enabled FROM manager_automation_controller_runtime WHERE singleton = 1"
             ).fetchone()

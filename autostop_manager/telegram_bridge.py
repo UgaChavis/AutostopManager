@@ -630,6 +630,27 @@ def _verify_contract_age(payload: dict[str, Any], now: int | None) -> None:
         raise BridgeError("contract_expired")
 
 
+def _reply_source_media_fields(
+    reply_to_message_id: int, binding: Any, *, error_code: str = "contract_invalid"
+) -> dict[str, Any]:
+    if not reply_to_message_id:
+        return {}
+    if (
+        not isinstance(binding, dict)
+        or set(binding) != {"version", "fingerprint"}
+        or type(binding["version"]) is not int
+        or binding["version"] != 1
+        or (
+            binding["fingerprint"] is not None
+            and (
+                type(binding["fingerprint"]) is not str or re.fullmatch(r"[0-9a-f]{64}", binding["fingerprint"]) is None
+            )
+        )
+    ):
+        raise BridgeError(error_code)
+    return {"reply_source_media": {"version": 1, "fingerprint": binding["fingerprint"]}}
+
+
 def issue_send_contract(
     secret: bytes,
     *,
@@ -638,6 +659,7 @@ def issue_send_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -648,6 +670,7 @@ def issue_send_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -660,6 +683,7 @@ def verify_send_contract(
     text: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -670,6 +694,10 @@ def verify_send_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -686,6 +714,7 @@ def issue_photo_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -698,6 +727,7 @@ def issue_photo_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "type": "photo",
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -711,6 +741,7 @@ def verify_photo_contract(
     photo_sha256: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -725,6 +756,10 @@ def verify_photo_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -743,6 +778,7 @@ def issue_document_contract(
     last_message_id: int,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else int(now)
@@ -757,6 +793,7 @@ def issue_document_contract(
         "reply_message_sha256": reply_message_sha256,
         "reply_to_message_id": int(reply_to_message_id),
         "type": "document",
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
     }
     return _issue_contract(secret, payload)
 
@@ -772,6 +809,7 @@ def verify_document_contract(
     document_name: str,
     reply_to_message_id: int = 0,
     reply_message_sha256: str = "",
+    reply_source_media: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     payload = _decode_contract(token, secret)
@@ -790,6 +828,10 @@ def verify_document_contract(
     if payload.get("reply_to_message_id", 0) != int(reply_to_message_id):
         raise BridgeError("contract_reply_target_changed")
     if payload.get("reply_message_sha256", "") != reply_message_sha256:
+        raise BridgeError("contract_reply_source_changed")
+    if _reply_source_media_fields(reply_to_message_id, payload.get("reply_source_media")) != _reply_source_media_fields(
+        reply_to_message_id, reply_source_media
+    ):
         raise BridgeError("contract_reply_source_changed")
     _verify_contract_age(payload, now)
     if not isinstance(payload.get("last_message_id"), int):
@@ -1160,7 +1202,9 @@ def _validate_download_content(content: bytes, *, mime_type: str, suffix: str) -
         raise BridgeError("download_content_invalid")
 
 
-def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbox_dir: Path) -> tuple[Path, str]:
+def _save_private_download(
+    content: bytes, *, message_id: int, suffix: str, inbox_dir: Path
+) -> tuple[Path, str, tuple[int, int] | None]:
     inbox_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
     inbox_stat = inbox_dir.stat()
@@ -1172,7 +1216,7 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
         existing = _read_private_download(output_path, inbox_dir=inbox_dir)
         if not hmac.compare_digest(hashlib.sha256(existing).hexdigest(), digest):
             raise BridgeError("download_existing_conflict")
-        return output_path, digest
+        return output_path, digest, None
     temp_path = inbox_dir / f".{message_id}-{secrets.token_hex(8)}.tmp"
     committed = False
     try:
@@ -1185,12 +1229,14 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+            file_stat = os.fstat(stream.fileno())
+            owned_inode = (file_stat.st_dev, file_stat.st_ino)
         os.replace(temp_path, output_path)
         committed = True
     finally:
         if not committed:
             temp_path.unlink(missing_ok=True)
-    return output_path, digest
+    return output_path, digest, owned_inode
 
 
 def _monitor_voice_stage_path(handle: str, *, suffix: str, inbox_dir: Path) -> Path:
@@ -1282,6 +1328,23 @@ def _discard_private_download(path: Path, *, inbox_dir: Path) -> bool:
     _read_private_download(path, inbox_dir=inbox_dir)
     path.unlink()
     return True
+
+
+def _discard_unreceipted_download(
+    path: Path, *, inbox_dir: Path, idempotency_path: Path, owned_inode: tuple[int, int]
+) -> None:
+    # Apply/download and discard share the mutation lock. Keep any committed
+    # receipt's file, and preserve uncertain state if readback or cleanup fails.
+    try:
+        ledger = _load_idempotency(idempotency_path)
+        if any(entry.get("saved_path") == str(path) for entry in ledger.values()):
+            return
+        file_stat = path.lstat()
+        if (file_stat.st_dev, file_stat.st_ino) != owned_inode:
+            return
+        _discard_private_download(path, inbox_dir=inbox_dir)
+    except (BridgeError, OSError):
+        return
 
 
 def _load_validated_photo_file(
@@ -2002,6 +2065,12 @@ async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[
     return {
         "message_id": message_id,
         "text_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "reply_source_media": {
+            "version": 1,
+            "fingerprint": _message_media_metadata(message)["fingerprint"]
+            if getattr(message, "media", None) is not None
+            else None,
+        },
         "out": bool(getattr(message, "out", False)),
         "date": message.date.isoformat() if getattr(message, "date", None) else None,
     }
@@ -2023,6 +2092,7 @@ async def _handle_send_photo(
     )
     reply_source = await _load_reply_source(client, entity, reply_to)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2044,6 +2114,7 @@ async def _handle_send_photo(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2059,6 +2130,7 @@ async def _handle_send_photo(
         photo_sha256=photo_sha256,
         reply_to_message_id=reply_to,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2076,6 +2148,10 @@ async def _handle_send_photo(
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
             raise BridgeError("send_photo_outcome_uncertain")
+        if _reply_source_media_fields(
+            reply_to, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2088,6 +2164,7 @@ async def _handle_send_photo(
             "photo_sha256": photo_sha256,
             "reply_to_message_id": reply_to,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to, reply_source_media),
             "readback_verified": False,
         }
         idempotency[idempotency_key] = entry
@@ -2173,6 +2250,7 @@ async def _handle_send_document(
     )
     reply_source = await _load_reply_source(client, entity, reply_to)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
@@ -2197,6 +2275,7 @@ async def _handle_send_document(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, effect, idempotency_key)
@@ -2214,6 +2293,7 @@ async def _handle_send_document(
         document_name=document_path.name,
         reply_to_message_id=reply_to,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2233,6 +2313,10 @@ async def _handle_send_document(
             raise BridgeError("idempotency_key_conflict")
         if not previous.get("message_id"):
             raise BridgeError("send_document_outcome_uncertain")
+        if _reply_source_media_fields(
+            reply_to, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2248,6 +2332,7 @@ async def _handle_send_document(
             "readback_verified": False,
             "reply_to_message_id": reply_to,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to, reply_source_media),
         }
         # Persist the exact intent before the network call. If the process dies
         # after Telegram accepts the document, this key blocks a blind resend.
@@ -2476,7 +2561,7 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     if metadata["size_bytes"] != len(content):
         raise BridgeError("download_size_mismatch")
     _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
-    saved_path, digest = _save_private_download(
+    saved_path, digest, owned_inode = _save_private_download(
         content,
         message_id=message_id,
         suffix=metadata["suffix"],
@@ -2491,7 +2576,17 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
         "sha256": digest,
         "size_bytes": len(content),
     }
-    _save_idempotency(idempotency_path, idempotency)
+    try:
+        _save_idempotency(idempotency_path, idempotency)
+    except OSError:
+        if owned_inode is not None:
+            _discard_unreceipted_download(
+                saved_path,
+                inbox_dir=config.socket_path.parent / "inbox",
+                idempotency_path=idempotency_path,
+                owned_inode=owned_inode,
+            )
+        raise
     return {
         "ok": True,
         "mode": "apply",
@@ -2542,6 +2637,7 @@ async def _handle_send_text_to_entity(
         job_effect = bound_effect
     reply_source = await _load_reply_source(client, entity, reply_to_message_id)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
+    reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     contract_peer_id = int(target["id"])
@@ -2569,6 +2665,7 @@ async def _handle_send_text_to_entity(
                 last_message_id=last_message_id,
                 reply_to_message_id=reply_to_message_id,
                 reply_message_sha256=reply_message_sha256,
+                reply_source_media=reply_source_media,
             ),
         }
         return _job_send_response(response, request, job_effect, idempotency_key)
@@ -2583,6 +2680,7 @@ async def _handle_send_text_to_entity(
         text=text,
         reply_to_message_id=reply_to_message_id,
         reply_message_sha256=reply_message_sha256,
+        reply_source_media=reply_source_media,
     )
     idempotency_path = config.state_dir / "idempotency.json"
     idempotency = _load_idempotency(idempotency_path)
@@ -2606,6 +2704,10 @@ async def _handle_send_text_to_entity(
         if not previous.get("message_id"):
             error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
             raise BridgeError(error)
+        if _reply_source_media_fields(
+            reply_to_message_id, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+        ) != _reply_source_media_fields(reply_to_message_id, reply_source_media):
+            raise BridgeError("idempotency_key_conflict")
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
@@ -2615,6 +2717,7 @@ async def _handle_send_text_to_entity(
             "message_id": 0,
             **target_binding,
             "reply_message_sha256": reply_message_sha256,
+            **_reply_source_media_fields(reply_to_message_id, reply_source_media),
             "reply_to_message_id": reply_to_message_id,
             "text_sha256": text_sha256,
             "readback_verified": False,
@@ -4177,60 +4280,57 @@ async def run_daemon(
     inbox_dir = config.socket_path.parent / "inbox"
     inbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
-    config.socket_path.unlink(missing_ok=True)
     durable = (
         os.environ.get(WORK_DURABLE_ENVIRONMENT, "").strip() == "1"
         and config.owner_config_path == WORK_OWNER_CONFIG_PATH
     )
-    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
-    inbound_monitor: InboundMonitor | None
-    if durable:
-        inbox = TelegramInbox(config.state_dir / "inbound.sqlite3")
-        try:
-            _configure_durable_instructions(inbox)
-        except BridgeError:
-            inbox.close()
-            raise
-        inbox.duty_set(enabled=monitor_incoming)
-        inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
-        try:
-            _install_reconnect_signal(client, inbound_monitor)
-        except BridgeError:
-            inbox.close()
-            raise
-    else:
-        inbound_monitor = InboundMonitor() if monitor_incoming else None
-    if inbound_monitor is not None:
-        # Telethon otherwise persists entity names, phones and usernames while processing updates.
-        client.session.save_entities = False
-        events = _load_telegram_events()
-
-        async def capture(event: Any) -> None:
-            await _capture_incoming_event(inbound_monitor, event)
-
-        client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
+    # Claim the durable writer before opening a session or touching a listener
+    # belonging to another process, even when incoming capture is disabled.
+    inbox = TelegramInbox(config.state_dir / "inbound.sqlite3") if durable else None
+    client: Any = None
+    inbound_monitor: InboundMonitor | None = None
     try:
+        if inbox is not None:
+            _configure_durable_instructions(inbox)
+            inbox.duty_set(enabled=monitor_incoming)
+            inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
+        else:
+            inbound_monitor = InboundMonitor() if monitor_incoming else None
+        client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            _install_reconnect_signal(client, inbound_monitor)
+        if inbound_monitor is not None:
+            # Telethon otherwise persists entity names, phones and usernames while processing updates.
+            client.session.save_entities = False
+            events = _load_telegram_events()
+
+            async def capture(event: Any) -> None:
+                await _capture_incoming_event(inbound_monitor, event)
+
+            client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
         await client.connect()
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            inbound_monitor.transport_ready = True
+            inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+            inbound_monitor.request_reconciliation()
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
-            if isinstance(inbound_monitor, DurableInboundMonitor):
-                inbound_monitor.inbox.close()
-            with suppress(Exception):
-                await client.disconnect()
+            if inbox is not None:
+                inbox.close()
+            if client is not None:
+                with suppress(Exception):
+                    await client.disconnect()
         finally:
             if _cleanup_watchdog is None:
                 watchdog.cancel()
         raise
-    if isinstance(inbound_monitor, DurableInboundMonitor):
-        inbound_monitor.transport_ready = True
-        inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
-        inbound_monitor.request_reconciliation()
     tasks: list[asyncio.Task[Any]] = []
     socket_identity: tuple[int, int] | None = None
     try:
+        config.socket_path.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(
             lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
             path=str(config.socket_path),
