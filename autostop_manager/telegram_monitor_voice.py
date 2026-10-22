@@ -186,10 +186,26 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
     }
 
 
+def recover_monitored_voice(event_id: str) -> dict[str, Any]:
+    """Recover an expired event stage without exposing its private cleanup handle."""
+    _require_root()
+    if INBOUND_EVENT_ID_PATTERN.fullmatch(event_id) is None:
+        raise MonitorVoiceError("inbound_event_invalid")
+    result = _request({"operation": "monitor_voice_cleanup", "event_id": event_id})
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "cleanup_verified": result.get("cleanup_verified") is True,
+        "stage_active": result.get("stage_active") is True,
+        "recovered": result.get("recovered") is True,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autostop-work-telegram-monitor-voice")
     request = parser.add_mutually_exclusive_group(required=True)
     request.add_argument("--event-id")
+    request.add_argument("--recover-event")
     request.add_argument("--self-check", action="store_true")
     parser.add_argument("--language", default="ru")
     return parser
@@ -198,7 +214,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        payload = self_check() if args.self_check else transcribe_monitored_voice(args.event_id, language=args.language)
+        if args.self_check:
+            payload = self_check()
+        elif args.recover_event:
+            payload = recover_monitored_voice(args.recover_event)
+        else:
+            payload = transcribe_monitored_voice(args.event_id, language=args.language)
     except MonitorVoiceError as exc:
         payload = {"ok": False, "error": exc.code, "cleanup_verified": exc.cleanup_verified}
     print(json.dumps(payload, ensure_ascii=False, indent=2))

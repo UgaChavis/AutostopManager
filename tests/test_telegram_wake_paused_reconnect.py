@@ -65,6 +65,8 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
 
     async def scenario():
         status = {
+            "worker_protocol": 2,
+            "context_mode": "serial_peer_v1",
             "enabled": blocker == "execution_only",
             "execution_paused": blocker != "intake_only",
             "active_jobs": 0,
@@ -81,11 +83,12 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
                 self.changed = asyncio.Event()
                 self.health_done = asyncio.Event()
                 self.operations = []
+                self.cleanup_tasks = set()
 
             async def request(self, operation, **arguments):
                 self.operations.append(operation)
                 if operation == "job_status":
-                    return {"status": dict(status)}
+                    return {"ok": True, "status": dict(status)}
                 assert operation == "job_health", "paused reconnect must not claim or mutate execution"
                 self.health_done.set()
                 if blocker == "health_failure":

@@ -54,6 +54,8 @@ def _snapshot(queue: TelegramInbox) -> dict[str, Any]:
         "peers": [tuple(row) for row in queue._db.execute("SELECT * FROM peers ORDER BY peer_id")],
         "effects": [tuple(row) for row in queue._db.execute("SELECT * FROM effects ORDER BY rowid")],
         "boundary_holds": [tuple(row) for row in queue._db.execute("SELECT * FROM boundary_holds ORDER BY rowid")],
+        "peer_threads": [tuple(row) for row in queue._db.execute("SELECT * FROM peer_threads ORDER BY peer_id")],
+        "global_slot": [tuple(row) for row in queue._db.execute("SELECT * FROM global_slot")],
     }
 
 

@@ -22,7 +22,7 @@ def ready_app():
 
 
 class MockServer:
-    def __init__(self, *, complete=True, status="completed", disconnect=False):
+    def __init__(self, *, complete=True, status="completed", disconnect=False, peer_threads=False):
         self.calls = []
         self.complete = complete
         self.status = status
@@ -55,6 +55,50 @@ class MockServer:
         self.metadata_requested = asyncio.Event()
         self.release_metadata = asyncio.Event()
         self.release_metadata.set()
+        self.peer_threads = peer_threads
+        self.peer_counter = 1
+        self.socket_threads = {}
+        self.created_threads = []
+        self.turn_threads = {}
+        self.peer_thread_status = None
+        self.thread_statuses = {}
+
+    def _thread_response(self, thread_id):
+        status = self.thread_status
+        if self.peer_threads and thread_id != THREAD and self.peer_thread_status is not None:
+            status = self.peer_thread_status
+        status = self.thread_statuses.get(thread_id, status)
+        result = {
+            "thread": {
+                "id": thread_id if self.peer_threads else THREAD,
+                "cwd": wake.PROJECT_DIR,
+                "ephemeral": False,
+                "status": {"type": status},
+                "turns": [{"items": [{"type": "agentMessage", "text": "WAKE_PROBE_OK"}]}],
+            }
+        }
+        if self.peer_threads:
+            result.update(
+                model="test-model",
+                modelProvider="test-provider",
+                serviceTier=None,
+                reasoningEffort="medium",
+                approvalPolicy="never",
+                approvalsReviewer="user",
+                sandbox={"type": "dangerFullAccess"},
+                activePermissionProfile=None,
+                runtimeWorkspaceRoots=[wake.PROJECT_DIR],
+                cwd=wake.PROJECT_DIR,
+            )
+        return result
+
+    def _request_thread(self, msg):
+        thread_id = msg.get("params", {}).get("threadId", THREAD)
+        if self.peer_threads and msg.get("method") == "thread/start":
+            self.peer_counter += 1
+            thread_id = f"00000000-0000-4000-8000-{self.peer_counter:012d}"
+            self.created_threads.append(thread_id)
+        return thread_id
 
     async def handle(self, socket):
         self.sockets.append(socket)
@@ -71,6 +115,7 @@ class MockServer:
                 )
                 continue
             result = {}
+            thread_id = self._request_thread(msg)
             if method == "initialize":
                 self.initializing.set()
                 await self.release_initialize.wait()
@@ -84,25 +129,24 @@ class MockServer:
             if method in {"thread/start", "thread/resume"}:
                 self.loaded = True
                 self.loaded_by_socket[socket] = True
+                self.socket_threads[socket] = thread_id
             if method in {"thread/start", "thread/resume", "thread/read"}:
-                result = {
-                    "thread": {
-                        "id": THREAD,
-                        "cwd": wake.PROJECT_DIR,
-                        "ephemeral": False,
-                        "status": {"type": self.thread_status},
-                        "turns": [{"items": [{"type": "agentMessage", "text": "WAKE_PROBE_OK"}]}],
-                    }
-                }
+                result = self._thread_response(thread_id)
             if method == "turn/start":
                 self.counter += 1
                 turn = {"id": str(self.counter), "status": "inProgress"}
                 self.turn_statuses[str(self.counter)] = "inProgress"
+                self.turn_threads[str(self.counter)] = thread_id
                 self.started.set()
                 await self.release_start.wait()
                 if self.emit_started:
                     await socket.send(
-                        json.dumps({"method": "turn/started", "params": {"threadId": THREAD, "turn": turn}})
+                        json.dumps(
+                            {
+                                "method": "turn/started",
+                                "params": {"threadId": thread_id if self.peer_threads else THREAD, "turn": turn},
+                            }
+                        )
                     )
                 result = {"turn": turn}
             if method == "reject":
@@ -136,7 +180,10 @@ class MockServer:
                 return
             if (method == "turn/start" and self.complete) or method == "turn/interrupt":
                 status = "interrupted" if method == "turn/interrupt" else self.status
-                params = {"threadId": THREAD, "turn": {"id": str(self.counter), "status": status}}
+                params = {
+                    "threadId": thread_id if self.peer_threads else THREAD,
+                    "turn": {"id": str(self.counter), "status": status},
+                }
                 if self.unload_after_turn:
                     self.loaded = False
                     self.loaded_by_socket[socket] = False

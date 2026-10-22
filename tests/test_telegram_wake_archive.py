@@ -9,7 +9,7 @@ import pytest
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_wake as wake
-from test_telegram_wake_durable import REVISION, FakeJobs, new_inbox
+from test_telegram_wake_durable import REVISION, FakeJobs, bind_test_peer, new_inbox
 from test_telegram_wake_durable import bundle as bundle
 from telegram_wake_fakes import THREAD, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
@@ -150,21 +150,23 @@ def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tm
         path = tmp_path / "app.sock"
         inbox, event = new_inbox(tmp_path)
         job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+        bind_test_peer(inbox, job)
         app = wake.AppServer(config(path, bundle))
 
         class IntentInterruptionJobs(FakeJobs):
             async def request(self, operation, **arguments):
                 result = await super().request(operation, **arguments)
                 if operation == "job_start_intent":
+                    target = dispatcher.app
                     if cause == "archive":
-                        sequence = app.thread_archive_sequence
+                        sequence = target.thread_archive_sequence
                         server.archived = True
                         await server.sockets[-1].send(
                             json.dumps({"method": "thread/archived", "params": {"threadId": THREAD}})
                         )
-                        await until(lambda: app.thread_archive_sequence > sequence)
+                        await until(lambda: target.thread_archive_sequence > sequence)
                     else:
-                        app.ready_event.clear()
+                        target.ready_event.clear()
                 return result
 
         jobs = IntentInterruptionJobs(inbox)
@@ -181,7 +183,7 @@ def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tm
                 assert held["thread_id"] == THREAD and held["turn_id"] is None
                 assert held["effects"] == [] and inbox.event_state(event) == "open"
                 assert app.generation == generation and app.connected
-                assert app.outcome_unknown and app.active_turn is None
+                assert dispatcher.app.outcome_unknown and dispatcher.app.active_turn is None
                 assert server.methods().count("turn/start") == 0
                 assert "thread/unarchive" not in server.methods()
                 assert held["reason_code"] == (
@@ -189,6 +191,7 @@ def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tm
                 )
                 assert dispatcher.failed == 1 and dispatcher.completed == 0
             finally:
+                await dispatcher.close()
                 await app.close()
                 inbox.close()
 

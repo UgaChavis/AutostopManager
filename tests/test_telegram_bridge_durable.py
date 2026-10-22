@@ -211,6 +211,17 @@ def _job(monitor, *, running=True):
     job = monitor.inbox.claim(instruction_root="/test/snapshot", instruction_revision=REVISION)
     assert job is not None
     if running:
+        mapping = monitor.inbox.prepare_peer_thread(
+            job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"]
+        )
+        if mapping["state"] != "ready":
+            monitor.inbox.bind_peer_thread(
+                job_id=job["job_id"],
+                lease=job["lease"],
+                expected_revision=job["revision"],
+                creation_key=mapping["creation_key"],
+                thread_id="test-thread",
+            )
         job = monitor.inbox.start_intent(
             job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"], thread_id="test-thread"
         )
@@ -1241,6 +1252,16 @@ def test_retention_keeps_answered_input_deduplicated_before_startup_catchup(tmp_
             )
         )
         assert result["job"]["state"] == "completed" and first.reconcile_requested.is_set()
+        first.inbox.finish_execution(
+            job_id=job["job_id"],
+            lease=job["lease"],
+            expected_revision=result["job"]["revision"],
+            proof_kind="terminal",
+            thread_id="test-thread",
+            turn_id="test-turn",
+            terminal_status="completed",
+            local_tasks_done=True,
+        )
         if checkpoint_current:
             first.inbox.advance_checkpoint(42, 100)
     finally:

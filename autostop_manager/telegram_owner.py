@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 from contextlib import suppress
 from pathlib import Path
@@ -95,7 +96,12 @@ def configure_owner_peer_id(path: Path, peer_id: int, *, reader_gid: int, replac
         os.fchown(file_fd, 0, reader_gid)
         os.fchmod(file_fd, 0o640)
         payload = {"schema_version": 1, "owner_peer_id": peer_id, "kind": "private"}
-        os.write(file_fd, (json.dumps(payload) + "\n").encode("ascii"))
+        remaining = memoryview((json.dumps(payload) + "\n").encode("ascii"))
+        while remaining:
+            written = os.write(file_fd, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "owner config write made no progress")
+            remaining = remaining[written:]
         os.fsync(file_fd)
         if replace:
             os.replace(temporary_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)

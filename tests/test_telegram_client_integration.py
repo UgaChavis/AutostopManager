@@ -275,12 +275,18 @@ def test_no_work_sender_can_dispatch_owner_command_through_compat_route(tmp_path
                 _route_lock=asyncio.Lock(), adapter=SimpleNamespace(handle=privileged)
             )
             job = (
-                await runtime.jobs.request("job_claim", instruction_root=str(bundle), instruction_revision=REVISION)
+                await runtime.jobs.request(
+                    "job_claim", instruction_root=str(bundle), instruction_revision=REVISION, worker_protocol=2
+                )
             )["job"]
             assert (await runtime.jobs.request("monitor_target", event_id=event))["role"] == "client"
             result = await runtime.jobs.request("job_owner_control", **binding(job))
             assert result["handled"] is False and result["job"]["state"] == "claimed"
             assert result["job"]["effects"] == [] and privileged.call_count == runtime.client.sent == 0
+            prepared = (await runtime.jobs.request("job_peer_thread_prepare", **binding(job)))["peer_thread"]
+            await runtime.jobs.request(
+                "job_peer_thread_bind", **binding(job), creation_key=prepared["creation_key"], thread_id=THREAD
+            )
             started = (await runtime.jobs.request("job_start_intent", **binding(job), thread_id=THREAD))["job"]
             assert started["state"] == "start_intent" and started["effects"] == []
 

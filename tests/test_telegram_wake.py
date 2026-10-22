@@ -16,10 +16,13 @@ from unittest.mock import AsyncMock
 import pytest
 from telegram_duty_fakes import duty_fixture
 from telegram_wake_fakes import THREAD, MockServer, connected_app, ready_app
+from test_telegram_wake_durable import REVISION, FakeJobs
+from test_telegram_wake_durable import bundle as bundle
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager import telegram_wake as wake
+from autostop_manager.telegram_inbox import TelegramInbox
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -396,7 +399,7 @@ def test_resume_rpc_rejection_is_not_bypassed_when_active_is_allowed(allow_activ
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="daemon control socket is root-only by contract")
-def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupting_turn(monkeypatch, tmp_path):
+def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupting_turn(monkeypatch, tmp_path, bundle):
     async def scenario():
         server = MockServer()
         server.thread_status = "active"
@@ -412,7 +415,6 @@ def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupt
             return result
 
         monkeypatch.setattr(wake, "SOCKET_PATH", wake_socket)
-        monkeypatch.setattr(wake.BridgeJobs, "_connect", AsyncMock(side_effect=OSError("offline")))
         monkeypatch.setattr(
             wake.pwd, "getpwnam", lambda _name: SimpleNamespace(pw_uid=os.geteuid(), pw_gid=os.getegid())
         )
@@ -423,23 +425,36 @@ def test_daemon_startup_attaches_active_owner_task_without_starting_or_interrupt
             lambda sig, callback: stop_callbacks.__setitem__(sig, callback),
         )
         monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
-        async with unix_serve(server.handle, app_socket, compression=None):
-            task = asyncio.create_task(wake.daemon(wake.WakeConfig(THREAD, app_socket=app_socket)))
-            try:
-                await asyncio.wait_for(ready.wait(), 2)
-                async with asyncio.timeout(2):
-                    while True:
-                        status = await wake.local_request({"operation": "status"}, path=wake_socket)
-                        if status["connected"]:
-                            break
-                        await asyncio.sleep(0.001)
-                status = await wake.local_request({"operation": "status"}, path=wake_socket)
-                assert status["enabled"] and status["connected"]
-                assert not status["active"] and status["queued"] == status["accepted"] == 0
-            finally:
-                stop_callbacks[signal.SIGTERM]()
-                await asyncio.wait_for(task, 2)
-        assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
+        with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
+            inbox.duty_set(True)
+            event_id = inbox.record(123, 1)
+            jobs = FakeJobs(inbox)
+            monkeypatch.setattr(wake, "BridgeJobs", lambda _uid: jobs)
+            async with unix_serve(server.handle, app_socket, compression=None):
+                config = wake.WakeConfig(
+                    THREAD, app_socket=app_socket, instruction_root=str(bundle), instruction_revision=REVISION
+                )
+                task = asyncio.create_task(wake.daemon(config))
+                try:
+                    await asyncio.wait_for(ready.wait(), 2)
+                    async with asyncio.timeout(2):
+                        while True:
+                            status = await wake.local_request({"operation": "status"}, path=wake_socket)
+                            if status["execution_state"] == "held":
+                                break
+                            await asyncio.sleep(0.001)
+                    assert status["enabled"] and status["connected"] and status["status_fresh"]
+                    assert status["last_error"] == "wake_legacy_execution_requires_review"
+                    assert not status["active"] and status["queued"] == 1 and status["accepted"] == 0
+                    assert not status["ready"] and not status["queue_can_advance"]
+                    assert not any(operation == "job_claim" for operation, _arguments in jobs.calls)
+                    assert inbox.event_state(event_id) == "open" and inbox.active_jobs() == []
+                finally:
+                    stop_callbacks[signal.SIGTERM]()
+                    await asyncio.wait_for(task, 2)
+        methods = [call["method"] for call in server.calls]
+        assert methods[:3] == ["initialize", "initialized", "thread/resume"]
+        assert all(method in {"initialize", "initialized", "thread/resume"} for method in methods)
         assert server.counter == 0
         assert not wake_socket.exists()
 

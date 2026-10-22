@@ -9,6 +9,7 @@ import struct
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import NAMESPACE_OID, uuid5
 
 import pytest
 from telegram_wake_fakes import THREAD, MockServer, until
@@ -167,6 +168,7 @@ async def bridge_runtime(tmp_path):
 
 @asynccontextmanager
 async def worker(runtime, tmp_path, bundle, server):
+    server.peer_threads = True
     path = str(tmp_path / "a.sock")
     async with unix_serve(server.handle, path, compression=None):
         app = wake.AppServer(
@@ -186,9 +188,20 @@ def binding(job):
 
 
 async def claim_running(runtime, bundle):
-    job = (await runtime.jobs.request("job_claim", instruction_root=str(bundle), instruction_revision=REVISION))["job"]
+    job = (
+        await runtime.jobs.request(
+            "job_claim", instruction_root=str(bundle), instruction_revision=REVISION, worker_protocol=2
+        )
+    )["job"]
     assert job is not None
-    job = (await runtime.jobs.request("job_start_intent", **binding(job), thread_id=THREAD))["job"]
+    prepared = (await runtime.jobs.request("job_peer_thread_prepare", **binding(job)))["peer_thread"]
+    thread = prepared["thread_id"]
+    if thread is None:
+        thread = str(uuid5(NAMESPACE_OID, f"synthetic-client-{job['peer_id']}"))
+        await runtime.jobs.request(
+            "job_peer_thread_bind", **binding(job), creation_key=prepared["creation_key"], thread_id=thread
+        )
+    job = (await runtime.jobs.request("job_start_intent", **binding(job), thread_id=thread))["job"]
     return (await runtime.jobs.request("job_turn_bound", **binding(job), turn_id="synthetic-turn"))["job"]
 
 
@@ -211,12 +224,66 @@ async def send(runtime, job, *, kind, text, slot=0, dry=None):
 
 async def model_complete(server):
     turn = str(server.counter)
+    target = next(call["params"]["threadId"] for call in reversed(server.calls) if call.get("method") == "turn/start")
     server.turn_statuses[turn] = "completed"
     await server.sockets[-1].send(
         json.dumps(
-            {"method": "turn/completed", "params": {"threadId": THREAD, "turn": {"id": turn, "status": "completed"}}}
+            {"method": "turn/completed", "params": {"threadId": target, "turn": {"id": turn, "status": "completed"}}}
         )
     )
+
+
+def test_three_clients_are_serial_and_reuse_only_their_own_context(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            peers = (CLIENT, OTHER, OTHER + 1)
+            for identifier, peer in enumerate(peers, 100):
+                runtime.monitor.record(runtime.client.inbound(identifier, peer=peer, text=f"synthetic-car-{peer}"))
+            server = MockServer(complete=False, peer_threads=True)
+            threads = {}
+            async with worker(runtime, tmp_path, bundle, server) as dispatcher:
+                for sequence, peer in enumerate((*peers, CLIENT), 1):
+                    if sequence == 4:
+                        await until(lambda: runtime.inbox.execution_slot() is None)
+                        runtime.monitor.record(runtime.client.inbound(200, peer=CLIENT, text="synthetic follow-up"))
+
+                    def current(expected_peer=peer):
+                        job = runtime.inbox.execution_slot()
+                        return job if job and job["peer_id"] == expected_peer and job["state"] == "running" else None
+
+                    await until(lambda: current() is not None)
+                    job = current()
+                    thread = job["thread_id"]
+                    assert thread != THREAD
+                    if peer in threads:
+                        assert threads[peer] == thread
+                    else:
+                        assert thread not in threads.values()
+                        threads[peer] = thread
+                    assert server.counter == sequence
+                    dry = await send(runtime, job, kind="result", text=f"synthetic reply {sequence}")
+                    receipt = await send(runtime, job, kind="result", text=f"synthetic reply {sequence}", dry=dry)
+                    await runtime.jobs.request(
+                        "job_result",
+                        **binding(job),
+                        outcome="answered",
+                        event_ids=job["event_ids"],
+                        receipt_keys=[receipt["receipt_key"]],
+                    )
+                    # Delivery and business completion cannot free a still-running model turn.
+                    await asyncio.sleep(0.01)
+                    assert runtime.inbox.execution_slot()["job_id"] == job["job_id"]
+                    assert server.counter == sequence
+                    await model_complete(server)
+                    await until(lambda target=sequence: dispatcher.completed == target)
+                await until(lambda: runtime.inbox.execution_slot() is None)
+                assert len(threads) == 3 and len(server.created_threads) == 3
+                starts = [call for call in server.calls if call.get("method") == "turn/start"]
+                assert [call["params"]["threadId"] for call in starts] == [threads[peer] for peer in (*peers, CLIENT)]
+                assert not any(call.get("method") == "thread/fork" for call in server.calls)
+                assert runtime.client.sent == 4 and runtime.inbox.status()["open_events"] == 0
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(("kind", "outcome"), [("result", "answered"), ("clarification", "awaiting_client")])
@@ -231,7 +298,7 @@ def test_real_ipc_dispatcher_ack_result_and_exact_coverage(tmp_path, bundle, kin
                 await until(lambda: server.started.is_set())
                 job = runtime.inbox.active_jobs()[0]
                 assert job["state"] == "start_intent" and job["turn_id"] is None
-                assert job["event_ids"] == refs and job["thread_id"] == THREAD
+                assert job["event_ids"] == refs and job["thread_id"] != THREAD
                 server.release_start.set()
                 await until(lambda: runtime.inbox.read_job(job["job_id"])["state"] == "running")
                 job = (await runtime.jobs.request("job_read", job_id=job["job_id"]))["job"]
@@ -288,7 +355,7 @@ def test_former_owner_and_other_senders_are_clients_with_identical_batching(tmp_
             assert owner["role"] == "client" and owner["target"] == {"id": OWNER, "kind": "private"}
             assert client["role"] == "client" and client["target"] == {"id": CLIENT, "kind": "private"}
             claimed = await runtime.jobs.request(
-                "job_claim", instruction_root=str(bundle), instruction_revision=REVISION
+                "job_claim", instruction_root=str(bundle), instruction_revision=REVISION, worker_protocol=2
             )
             assert claimed["job"]["event_ids"] == [owner_ref, followup]
             with pytest.raises(wake.WakeError, match=r"^inbound_event_unavailable$"):
@@ -319,23 +386,26 @@ def test_subscription_reconnect_recovers_lost_hint_from_durable_intake(tmp_path,
     asyncio.run(scenario())
 
 
-def test_completed_model_without_job_result_holds_execution_but_preserves_intake(tmp_path, bundle):
+def test_completed_model_without_job_result_holds_only_its_client(tmp_path, bundle):
     async def scenario():
         async with bridge_runtime(tmp_path) as runtime:
             initial = runtime.monitor.record(runtime.client.inbound(100))
             server = MockServer()
             async with worker(runtime, tmp_path, bundle, server) as dispatcher:
-                await until(lambda: dispatcher.execution_state == "held" and not dispatcher.active)
+                await until(lambda: runtime.inbox.status()["needs_review_jobs"] == 1 and not dispatcher.active)
                 job = runtime.inbox.active_jobs()[0]
                 assert job["state"] == "needs_review" and job["turn_id"] == "1"
                 assert dispatcher.completed == 0 and runtime.inbox.event_state(initial) == "open"
                 later = runtime.monitor.record(runtime.client.inbound(101, peer=OTHER))
-                await until(lambda: runtime.jobs.generation == runtime.inbox.generation)
-                await asyncio.sleep(0.02)
-                assert server.counter == 1 and runtime.inbox.event_state(later) == "open"
+                await until(lambda: server.counter == 2 and runtime.inbox.status()["needs_review_jobs"] == 2)
+                assert runtime.inbox.event_state(later) == "open"
+                assert runtime.inbox.read_job(job["job_id"])["turn_id"] == "1"
+                assert len(set(server.turn_threads.values())) == 2
                 status = await runtime.jobs.request("job_status")
                 assert status["status"]["open_events"] == 2 and status["status"]["enabled"]
-                assert status["status"]["needs_review_jobs"] == 1
+                assert status["status"]["needs_review_jobs"] == 2
+                await until(lambda: runtime.inbox.execution_slot() is None and dispatcher.status()["ready"])
+                assert dispatcher.status()["ready"]
 
     asyncio.run(scenario())
 
@@ -356,30 +426,31 @@ def test_warm_thread_failure_holds_acknowledged_job_without_replay(tmp_path, bun
                 failure = json.dumps(
                     {
                         "method": "thread/status/changed",
-                        "params": {"threadId": THREAD, "status": {"type": "systemError"}},
+                        "params": {"threadId": job["thread_id"], "status": {"type": "systemError"}},
                     }
                 )
                 await server.sockets[-1].send(failure)
-                await until(lambda: not dispatcher.active and dispatcher.execution_state == "held")
+                await until(lambda: not dispatcher.active and runtime.inbox.execution_slot() is None)
                 held = runtime.inbox.read_job(job["job_id"])
                 assert held["state"] == "needs_review" and held["turn_id"] == job["turn_id"]
                 assert held["reason_code"] == "codex_thread_system_error"
                 assert held["effects"][0]["receipt_key"] == receipt["receipt_key"]
-                assert not dispatcher.status()["ready"] and dispatcher.completed == 0
+                assert dispatcher.completed == 0
                 newer = runtime.monitor.record(runtime.client.inbound(110, peer=OTHER))
+                await until(lambda: server.counter == 2)
+                # A late notification for A cannot interrupt B's own thread.
                 await server.sockets[-1].send(failure)
                 await until(lambda: runtime.jobs.generation == runtime.inbox.generation)
-                await dispatcher.resume_execution()
                 await asyncio.sleep(0.02)
-                assert server.counter == 1 and runtime.client.sent == 1
+                assert server.counter == 2 and runtime.client.sent == 1
                 assert runtime.inbox.event_state(initial) == runtime.inbox.event_state(newer) == "open"
                 assert runtime.inbox.status()["enabled"] and runtime.inbox.status()["needs_review_jobs"] == 1
-                assert not dispatcher.status()["ready"]
+                assert dispatcher.app.config.thread_id != job["thread_id"]
             # A new executor connection may be healthy; the saved job still
             # requires review and cannot replay either its model or its ack.
             async with worker(runtime, tmp_path, bundle, server) as replacement:
-                await until(lambda: replacement.execution_state == "held" and not replacement.active)
-                assert server.counter == 1 and runtime.client.sent == 1
+                await until(lambda: replacement.status()["ready"] and not replacement.active)
+                assert server.counter == 2 and runtime.client.sent == 1
                 assert runtime.inbox.read_job(job["job_id"])["turn_id"] == job["turn_id"]
                 assert runtime.inbox.status()["open_events"] == 2
 
@@ -745,6 +816,25 @@ def test_paused_operator_finishes_terminal_job_with_verified_effect_and_new_cont
                     "job_effect_readback", **binding(job), effect_key=dry["idempotency_key"]
                 )
                 assert proof["verified"] and runtime.client.sent == 1
+                with pytest.raises(wake.WakeError, match=r"^inbox_execution_proof_required$"):
+                    await runtime.jobs.request(
+                        "job_resolve", **binding(job), decision="continue_bound_turn", effects_reviewed=True
+                    )
+                metadata = await dispatcher.app.request(
+                    "thread/turns/list", {"threadId": job["thread_id"], "limit": 100}
+                )
+                assert {"id": job["turn_id"], "status": "completed"} in metadata["data"]
+                job = (
+                    await runtime.jobs.request(
+                        "job_execution_proof",
+                        **binding(job),
+                        proof_kind="terminal",
+                        thread_id=job["thread_id"],
+                        turn_id=job["turn_id"],
+                        terminal_status="completed",
+                        local_tasks_done=True,
+                    )
+                )["job"]
                 with pytest.raises(wake.WakeError, match=r"^inbox_retry_effects_present$"):
                     await runtime.jobs.request(
                         "job_resolve", **binding(job), decision="retry_no_effects", effects_reviewed=True

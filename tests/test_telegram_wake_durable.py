@@ -29,6 +29,7 @@ def test_authoritative_empty_queue_clears_stale_resolved_hold(tmp_path, bundle):
         app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
         app.connected = True
         app.ready_event.set()
+        app.resume = AsyncMock(return_value="idle")
         dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
         dispatcher.execution_state = "held"
         dispatcher.last_error = "codex_job_requires_review"
@@ -78,6 +79,19 @@ class FakeJobs:
         self.listener = None
         self.calls = []
         self.health = []
+        self.cleanup_tasks = set()
+
+    @property
+    def status_fresh(self):
+        return self.connected
+
+    @property
+    def status_age(self):
+        return 0 if self.connected else None
+
+    @property
+    def snapshot(self):
+        return self.inbox.status()
 
     def start(self):
         self.changed.set()
@@ -86,11 +100,13 @@ class FakeJobs:
         self.connected = False
 
     async def request(self, operation, **arguments):
-        self.calls.append((operation, arguments))
+        self.calls.append((operation, dict(arguments)))
         if operation == "job_status":
             return {"ok": True, "status": self.inbox.status()}
         if operation == "job_active":
             return {"ok": True, **self.inbox.active_job_page(**arguments)}
+        if operation == "job_execution_slot":
+            return {"ok": True, "job": self.inbox.execution_slot()}
         if operation == "job_read":
             return {"ok": True, "job": self.inbox.read_job(arguments["job_id"])}
         if operation == "job_health":
@@ -98,12 +114,26 @@ class FakeJobs:
             return {"ok": True}
         if operation == "job_execution_set":
             return {"ok": True, "status": self.inbox.set_execution_paused(**arguments)}
+        if operation == "job_claim":
+            assert arguments.pop("worker_protocol") == wake.WORKER_PROTOCOL
+        peer_functions = {
+            "job_peer_thread_prepare": self.inbox.prepare_peer_thread,
+            "job_peer_thread_read": self.inbox.read_peer_thread,
+            "job_peer_thread_bind": self.inbox.bind_peer_thread,
+            "job_peer_thread_unknown": self.inbox.mark_peer_thread_unknown,
+        }
+        if operation in peer_functions:
+            try:
+                return {"ok": True, "peer_thread": peer_functions[operation](**arguments)}
+            except InboxError as exc:
+                raise wake.WakeError(str(exc)) from exc
         functions = {
             "job_claim": self.inbox.claim,
             "job_start_intent": self.inbox.start_intent,
             "job_turn_bound": self.inbox.bind_turn,
             "job_needs_review": self.inbox.needs_review,
             "job_release": self.inbox.release_job,
+            "job_execution_proof": self.inbox.finish_execution,
         }
         try:
             job = functions[operation](**arguments)
@@ -132,6 +162,18 @@ def new_inbox(tmp_path):
     return inbox, event_id
 
 
+def bind_test_peer(inbox, job, thread_id=THREAD):
+    """Explicitly provision a synthetic peer context for manually staged runs."""
+    mapping = inbox.prepare_peer_thread(job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"])
+    inbox.bind_peer_thread(
+        job_id=job["job_id"],
+        lease=job["lease"],
+        expected_revision=job["revision"],
+        creation_key=mapping["creation_key"],
+        thread_id=thread_id,
+    )
+
+
 async def stop_dispatcher(dispatcher):
     await dispatcher.close()
     await dispatcher.app.close()
@@ -152,8 +194,8 @@ def test_turn_metadata_bad_status_is_fixed_error(status):
 
 def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tmp_path, bundle):
     async def scenario():
-        server = MockServer()
-        server.thread_status = "active"
+        server = MockServer(peer_threads=True)
+        server.peer_thread_status = "active"
         path = str(tmp_path / "app.sock")
         inbox, _ = new_inbox(tmp_path)
         jobs = FakeJobs(inbox, finish=True)
@@ -164,17 +206,20 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: dispatcher.execution_state == "waiting_thread" and server.resume_calls >= 2)
+                await until(lambda: dispatcher.execution_state == "waiting_thread" and server.resume_calls >= 4)
                 calls = len(server.calls)
                 await asyncio.sleep(0.02)
                 assert len(server.calls) == calls
                 assert server.counter == 0 and dispatcher.enabled
-                server.thread_status = "idle"
+                server.peer_thread_status = "idle"
                 await server.sockets[-1].send(
                     json.dumps(
                         {
                             "method": "turn/completed",
-                            "params": {"threadId": THREAD, "turn": {"id": "manual", "status": "completed"}},
+                            "params": {
+                                "threadId": dispatcher.app.config.thread_id,
+                                "turn": {"id": "manual", "status": "completed"},
+                            },
                         }
                     )
                 )
@@ -201,7 +246,7 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
 def test_model_completed_without_result_holds_durable_event(tmp_path, bundle):
     async def scenario():
         inbox, event_id = new_inbox(tmp_path)
-        server = MockServer()
+        server = MockServer(peer_threads=True)
         jobs = FakeJobs(inbox)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
@@ -211,7 +256,13 @@ def test_model_completed_without_result_holds_durable_event(tmp_path, bundle):
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: dispatcher.execution_state == "held" and not dispatcher.active)
+                await until(
+                    lambda: (
+                        inbox.status()["needs_review_jobs"] == 1
+                        and inbox.execution_slot() is None
+                        and dispatcher.status()["ready"]
+                    )
+                )
                 assert dispatcher.completed == 0 and server.counter == 1
                 assert inbox.resolve(event_id) is not None
                 assert inbox.active_jobs()[0]["state"] == "needs_review"
@@ -219,10 +270,8 @@ def test_model_completed_without_result_holds_durable_event(tmp_path, bundle):
                 assert dispatcher.status()["intake_enabled"]
                 assert inbox.record(124, 2) is not None
                 jobs.changed.set()
-                calls = len(server.calls)
-                await asyncio.sleep(0.02)
-                assert server.counter == 1
-                assert all(call.get("method") != "turn/start" for call in server.calls[calls:])
+                await until(lambda: server.counter == 2 and inbox.status()["needs_review_jobs"] == 2)
+                assert inbox.execution_slot() is None
             finally:
                 await stop_dispatcher(dispatcher)
                 inbox.close()
@@ -233,7 +282,7 @@ def test_model_completed_without_result_holds_durable_event(tmp_path, bundle):
 def test_lost_start_response_survives_restart_without_replay(tmp_path, bundle):
     async def scenario():
         inbox, _ = new_inbox(tmp_path)
-        server = MockServer(disconnect=True)
+        server = MockServer(peer_threads=True, disconnect=True)
         jobs = FakeJobs(inbox)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
@@ -258,8 +307,10 @@ def test_lost_start_response_survives_restart_without_replay(tmp_path, bundle):
                 await until(lambda: second.execution_state == "held")
                 assert server.counter == 1
                 assert reopened.status()["needs_review_jobs"] == 1
-                await second.pause()
-                await second.resume_execution()
+                with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
+                    await second.pause()
+                with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
+                    await second.resume_execution()
                 await asyncio.sleep(0.02)
                 assert server.counter == 1 and reopened.status()["needs_review_jobs"] == 1
             finally:
@@ -272,8 +323,8 @@ def test_lost_start_response_survives_restart_without_replay(tmp_path, bundle):
 def test_pause_returns_unstarted_claim_and_preserves_events(tmp_path, bundle):
     async def scenario():
         inbox, event_id = new_inbox(tmp_path)
-        server = MockServer()
-        server.thread_status = "active"
+        server = MockServer(peer_threads=True)
+        server.peer_thread_status = "active"
         jobs = FakeJobs(inbox)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
@@ -286,7 +337,10 @@ def test_pause_returns_unstarted_claim_and_preserves_events(tmp_path, bundle):
                 await until(lambda: dispatcher.execution_state == "waiting_thread")
                 await dispatcher.pause()
                 assert not dispatcher.enabled and not dispatcher.active
-                assert inbox.resolve(event_id) is not None and inbox.active_jobs() == []
+                assert inbox.resolve(event_id) is not None
+                assert inbox.active_jobs()[0]["state"] == "needs_review"
+                assert inbox.active_jobs()[0]["execution_proof"] == "not_started"
+                assert inbox.execution_slot() is None
                 assert server.counter == 0
                 assert not any(call.get("method") == "turn/interrupt" for call in server.calls)
             finally:
@@ -301,7 +355,7 @@ def test_initial_subscription_snapshot_recovers_lost_notification(tmp_path, bund
         inbox, _ = new_inbox(tmp_path)
         jobs = FakeJobs(inbox, finish=True)
         # No event handoff was sent. The initial subscription snapshot suffices.
-        server = MockServer()
+        server = MockServer(peer_threads=True)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -419,7 +473,7 @@ def test_verified_ack_is_not_business_completion(tmp_path, bundle):
     async def scenario():
         inbox, event_id = new_inbox(tmp_path)
         jobs = FakeJobs(inbox)
-        server = MockServer(complete=False)
+        server = MockServer(peer_threads=True, complete=False)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -445,12 +499,18 @@ def test_verified_ack_is_not_business_completion(tmp_path, bundle):
                     json.dumps(
                         {
                             "method": "turn/completed",
-                            "params": {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}},
+                            "params": {"threadId": job["thread_id"], "turn": {"id": "1", "status": "completed"}},
                         }
                     )
                 )
                 server.turn_statuses["1"] = "completed"
-                await until(lambda: dispatcher.execution_state == "held" and not dispatcher.active)
+                await until(
+                    lambda: (
+                        inbox.status()["needs_review_jobs"] == 1
+                        and inbox.execution_slot() is None
+                        and dispatcher.status()["ready"]
+                    )
+                )
                 assert dispatcher.completed == 0
                 assert inbox.status()["open_events"] == 1
                 assert inbox.active_jobs()[0]["effects"][0]["verified"]
@@ -472,7 +532,7 @@ def test_binding_response_loss_reads_exact_committed_turn_and_never_replays(tmp_
     async def scenario():
         inbox, _ = new_inbox(tmp_path)
         jobs = LoseBindingResponse(inbox)
-        server = MockServer(complete=False)
+        server = MockServer(peer_threads=True, complete=False)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -481,9 +541,16 @@ def test_binding_response_loss_reads_exact_committed_turn_and_never_replays(tmp_
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: server.metadata_calls >= 1)
+                await until(
+                    lambda: (
+                        bool(inbox.active_jobs())
+                        and inbox.active_jobs()[0]["state"] == "running"
+                        and any(name == "job_read" for name, _args in jobs.calls)
+                    )
+                )
                 job = inbox.active_jobs()[0]
-                assert job["turn_id"] == "1" and job["thread_id"] == THREAD
+                assert job["turn_id"] == "1" and job["thread_id"] == dispatcher.app.config.thread_id
+                assert job["thread_id"] != THREAD
                 assert server.counter == 1
                 current = inbox.read_job(job["job_id"])
                 inbox.result(
@@ -501,7 +568,7 @@ def test_binding_response_loss_reads_exact_committed_turn_and_never_replays(tmp_
                     json.dumps(
                         {
                             "method": "turn/completed",
-                            "params": {"threadId": THREAD, "turn": {"id": "1", "status": "completed"}},
+                            "params": {"threadId": job["thread_id"], "turn": {"id": "1", "status": "completed"}},
                         }
                     )
                 )
@@ -610,7 +677,7 @@ def test_empty_queue_block_publishes_one_incident_without_an_incoming_event(tmp_
         inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
         inbox.duty_set(True)
         jobs = FakeJobs(inbox)
-        server = MockServer()
+        server = MockServer(peer_threads=True)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -645,7 +712,7 @@ def test_empty_queue_disconnect_and_recovery_publish_once_each(tmp_path, bundle,
         inbox = TelegramInbox(tmp_path / "db" / "inbound.sqlite3")
         inbox.duty_set(True)
         jobs = FakeJobs(inbox)
-        server = MockServer()
+        server = MockServer(peer_threads=True)
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -654,7 +721,7 @@ def test_empty_queue_disconnect_and_recovery_publish_once_each(tmp_path, bundle,
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: dispatcher.status()["ready"] and bool(jobs.health))
+                await until(lambda: dispatcher.status()["ready"] and dispatcher.bootstrap_checked and bool(jobs.health))
                 await server.sockets[-1].close()
                 await until(lambda: len(server.sockets) == 2 and dispatcher.status()["ready"] and len(jobs.health) >= 3)
                 assert [item["state"] for item in jobs.health] == ["ready", "offline", "ready"]
@@ -676,9 +743,9 @@ def test_disconnect_during_manual_thread_wait_preserves_wait_and_reports_health(
     async def scenario():
         inbox, _ = new_inbox(tmp_path)
         jobs = FakeJobs(inbox, finish=True)
-        server = MockServer()
-        server.thread_status = "active"
-        server.disconnect_resume_on_call = 2
+        server = MockServer(peer_threads=True)
+        server.peer_thread_status = "active"
+        server.disconnect_resume_on_call = 4
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(
@@ -687,7 +754,11 @@ def test_disconnect_during_manual_thread_wait_preserves_wait_and_reports_health(
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: len(server.sockets) == 2 and app.ready_event.is_set() and server.resume_calls >= 4)
+                await until(
+                    lambda: (
+                        len(server.sockets) == 3 and dispatcher.app.ready_event.is_set() and server.resume_calls >= 6
+                    )
+                )
                 assert dispatcher.execution_state == "waiting_thread"
                 assert inbox.active_jobs()[0]["state"] == "claimed"
                 assert server.counter == 0
@@ -696,12 +767,15 @@ def test_disconnect_during_manual_thread_wait_preserves_wait_and_reports_health(
                     {"component": "codex", "state": "offline", "error_code": "codex_transport_failed_or_unknown"}
                 ]
                 assert any(item["state"] == "waiting_thread" and item["error_code"] is None for item in jobs.health)
-                server.thread_status = "idle"
+                server.peer_thread_status = "idle"
                 await server.sockets[-1].send(
                     json.dumps(
                         {
                             "method": "turn/completed",
-                            "params": {"threadId": THREAD, "turn": {"id": "manual", "status": "completed"}},
+                            "params": {
+                                "threadId": dispatcher.app.config.thread_id,
+                                "turn": {"id": "manual", "status": "completed"},
+                            },
                         }
                     )
                 )
