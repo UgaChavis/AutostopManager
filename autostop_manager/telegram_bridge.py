@@ -4177,60 +4177,57 @@ async def run_daemon(
     inbox_dir = config.socket_path.parent / "inbox"
     inbox_dir.mkdir(mode=0o700, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
-    config.socket_path.unlink(missing_ok=True)
     durable = (
         os.environ.get(WORK_DURABLE_ENVIRONMENT, "").strip() == "1"
         and config.owner_config_path == WORK_OWNER_CONFIG_PATH
     )
-    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
-    inbound_monitor: InboundMonitor | None
-    if durable:
-        inbox = TelegramInbox(config.state_dir / "inbound.sqlite3")
-        try:
-            _configure_durable_instructions(inbox)
-        except BridgeError:
-            inbox.close()
-            raise
-        inbox.duty_set(enabled=monitor_incoming)
-        inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
-        try:
-            _install_reconnect_signal(client, inbound_monitor)
-        except BridgeError:
-            inbox.close()
-            raise
-    else:
-        inbound_monitor = InboundMonitor() if monitor_incoming else None
-    if inbound_monitor is not None:
-        # Telethon otherwise persists entity names, phones and usernames while processing updates.
-        client.session.save_entities = False
-        events = _load_telegram_events()
-
-        async def capture(event: Any) -> None:
-            await _capture_incoming_event(inbound_monitor, event)
-
-        client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
+    # Claim the durable writer before opening a session or touching a listener
+    # belonging to another process, even when incoming capture is disabled.
+    inbox = TelegramInbox(config.state_dir / "inbound.sqlite3") if durable else None
+    client: Any = None
+    inbound_monitor: InboundMonitor | None = None
     try:
+        if inbox is not None:
+            _configure_durable_instructions(inbox)
+            inbox.duty_set(enabled=monitor_incoming)
+            inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
+        else:
+            inbound_monitor = InboundMonitor() if monitor_incoming else None
+        client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            _install_reconnect_signal(client, inbound_monitor)
+        if inbound_monitor is not None:
+            # Telethon otherwise persists entity names, phones and usernames while processing updates.
+            client.session.save_entities = False
+            events = _load_telegram_events()
+
+            async def capture(event: Any) -> None:
+                await _capture_incoming_event(inbound_monitor, event)
+
+            client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
         await client.connect()
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            inbound_monitor.transport_ready = True
+            inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+            inbound_monitor.request_reconciliation()
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
-            if isinstance(inbound_monitor, DurableInboundMonitor):
-                inbound_monitor.inbox.close()
-            with suppress(Exception):
-                await client.disconnect()
+            if inbox is not None:
+                inbox.close()
+            if client is not None:
+                with suppress(Exception):
+                    await client.disconnect()
         finally:
             if _cleanup_watchdog is None:
                 watchdog.cancel()
         raise
-    if isinstance(inbound_monitor, DurableInboundMonitor):
-        inbound_monitor.transport_ready = True
-        inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
-        inbound_monitor.request_reconciliation()
     tasks: list[asyncio.Task[Any]] = []
     socket_identity: tuple[int, int] | None = None
     try:
+        config.socket_path.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(
             lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
             path=str(config.socket_path),
