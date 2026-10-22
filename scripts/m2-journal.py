@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, UTC
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -55,6 +56,29 @@ def validate(record):
         raise ValueError("journal_record_sha")
     if type(record["release_required"]) is not bool:
         raise ValueError("journal_record_release")
+
+
+def validate_state_precondition(token, record):
+    if token is None:
+        return
+    if not isinstance(token, str) or (token != "absent" and re.fullmatch(r"[0-9a-f]{64}", token) is None):
+        raise ValueError("journal_state_precondition_invalid")
+    if record is None:
+        raise ValueError("journal_state_precondition_requires_record")
+
+
+def check_state_precondition(root, token):
+    path = root / "current-state.md"
+    if path.is_symlink():
+        raise ValueError("journal_symlink")
+    try:
+        content = path.read_bytes()
+    except FileNotFoundError:
+        current = "absent"
+    else:
+        current = hashlib.sha256(content).hexdigest()
+    if current != token:
+        raise ValueError("journal_state_conflict")
 
 
 def week_for(at):
@@ -147,7 +171,8 @@ def recover(root):
     pending.unlink()
 
 
-def run(root=ROOT, record=None, at=None):
+def run(root=ROOT, record=None, at=None, *, expected_state_sha256=None):
+    validate_state_precondition(expected_state_sha256, record)
     if record is not None:
         validate(record)
     at = at or datetime.now(UTC)
@@ -177,6 +202,8 @@ def run(root=ROOT, record=None, at=None):
                 ):
                     raise ValueError("journal_record_conflict")
             else:
+                if expected_state_sha256 is not None:
+                    check_state_precondition(root, expected_state_sha256)
                 payload = {**record, "at": at.astimezone(UTC).isoformat()}
                 atomic_write(root / ".pending-record.json", json.dumps(payload, ensure_ascii=False))
                 recover(root)
@@ -193,11 +220,17 @@ def main():
         type=Path,
         help="Private JSON with id, task, before, actions, checks, result, git_sha, release_required, state",
     )
+    parser.add_argument(
+        "--expected-state-sha256",
+        help="Expected current-state.md SHA-256 (64 lowercase hex) or absent; append only",
+    )
     args = parser.parse_args()
     if (args.operation == "append") != (args.record is not None):
         parser.error("append requires --record; start has no record")
+    if args.expected_state_sha256 is not None and args.operation != "append":
+        parser.error("--expected-state-sha256 requires append")
     record = json.loads(args.record.read_text()) if args.record else None
-    print(json.dumps(run(record=record)))
+    print(json.dumps(run(record=record, expected_state_sha256=args.expected_state_sha256)))
 
 
 if __name__ == "__main__":
