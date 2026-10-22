@@ -522,6 +522,7 @@ class AutomationStore:
                 INSERT INTO manager_automation_schema(component, version, upgraded_at)
                 VALUES('automation_center', ?, ?)
                 ON CONFLICT(component) DO UPDATE SET version = excluded.version, upgraded_at = excluded.upgraded_at
+                WHERE manager_automation_schema.version != excluded.version
                 """,
                 (AUTOMATION_SCHEMA_VERSION, now),
             )

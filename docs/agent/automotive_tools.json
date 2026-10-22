@@ -5835,10 +5835,11 @@
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента.",
-        "Preview существующего job может инициализировать registry и обновить schema metadata текущей схемы.",
+        "Preview существующего job может создавать, обновлять или восстанавливать техническую схему registry.",
         "Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.",
+        "upgraded_at фиксирует создание записи компонента или смену версии; repair текущей версии сохраняет эту метку. Полностью актуальный registry повторный preview существующего job не меняет.",
         "Preview не выполняет предлагаемое guarded действие, не меняет desired_state/revision заданий, не ставит сообщения в очередь и не отправляет их; preview создания из template не обращается к registry.",
-        "Whole-tool idempotentHint=false: identical preview of an existing job can update schema metadata again. Guarded mutation idempotency keys, exact-revision CAS, stored receipts and controller permissions retain their existing guarantees."
+        "Whole-tool idempotentHint=false conservatively covers initialization, version upgrades and repairs. Fully current repeated existing-job previews preserve registry state. Guarded mutation idempotency keys, exact-revision CAS, stored receipts and controller permissions retain their existing guarantees."
       ],
       "example": {
         "operation": "preview",
@@ -5893,8 +5894,9 @@
       "limitations": [
         "Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.",
         "Наличие в общем native inventory не разрешает business action или чтение клиента.",
-        "Default/status/readiness могут инициализировать registry и обновить schema metadata текущей схемы.",
+        "Default/status/readiness могут создавать, обновлять или восстанавливать техническую схему registry.",
         "Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.",
+        "upgraded_at фиксирует создание записи компонента или смену версии; repair текущей версии сохраняет эту метку. Полностью актуальный registry повторный вызов не меняет.",
         "Status/readiness не меняют desired_state/revision заданий, не выполняют guarded действия, не ставят сообщения в очередь и не отправляют их.",
         "templates возвращает allowlisted шаблоны без доступа к registry и без записи."
       ],

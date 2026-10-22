@@ -374,6 +374,11 @@ def _exercise_g1(operation, g1_native_tools):
             "idempotency_key": "synthetic-create-g1-0001",
         }
         job = service.handle(command)["job"]
+    # Exercise a real repair write on the native route, even when the component
+    # version is current. The later fully initialized repeat must be a no-op.
+    with closing(sqlite3.connect(registry.path)) as connection:
+        connection.execute("DELETE FROM manager_automation_controller_runtime WHERE singleton = 1")
+        connection.commit()
     before = _snapshot(registry)
     clock[0] = datetime(2026, 1, 2, tzinfo=UTC)
     if operation == "preview":
@@ -392,7 +397,10 @@ def _exercise_g1(operation, g1_native_tools):
     assert changed, "native G1 route must demonstrate real registry metadata writes"
     with closing(sqlite3.connect(registry.path.as_uri() + "?mode=ro", uri=True)) as connection:
         schema = connection.execute("SELECT upgraded_at FROM manager_automation_schema").fetchone()
-        assert schema == ("2026-01-02T00:00:00Z",)
+        assert schema == ("2026-01-01T00:00:00Z",)
+        assert connection.execute(
+            "SELECT updated_at FROM manager_automation_controller_runtime WHERE singleton = 1"
+        ).fetchone() == ("2026-01-02T00:00:00Z",)
         assert connection.execute("SELECT COUNT(*) FROM manager_automation_outbox").fetchone() == (0,)
         if job is not None:
             assert connection.execute("SELECT desired_state, revision FROM manager_automations").fetchone() == (
@@ -400,8 +408,8 @@ def _exercise_g1(operation, g1_native_tools):
                 job["revision"],
             )
     if operation in {"status", "readiness", "preview"}:
-        # Native annotations must cover the observed SQLite writes, including a
-        # repeat with identical arguments after the schema metadata clock advances.
+        # Whole-tool hints still cover initialization/upgrade/repair writes.
+        # A warm repeat after the clock advances must preserve technical state.
         tool_name = "manager_automation_control" if operation == "preview" else "manager_automations"
         hints = annotations[tool_name]
         assert hints.readOnlyHint is False
@@ -422,10 +430,10 @@ def _exercise_g1(operation, g1_native_tools):
         )
         assert repeated["ok"] is True
         assert requests == [operation, operation]
-        assert _snapshot(registry) != first_state
+        assert _snapshot(registry) == first_state
         with closing(sqlite3.connect(registry.path.as_uri() + "?mode=ro", uri=True)) as connection:
             assert connection.execute("SELECT upgraded_at FROM manager_automation_schema").fetchone() == (
-                "2026-01-03T00:00:00Z",
+                "2026-01-01T00:00:00Z",
             )
             assert connection.execute("SELECT COUNT(*) FROM manager_automations").fetchone() == (int(job is not None),)
             if job is not None:
