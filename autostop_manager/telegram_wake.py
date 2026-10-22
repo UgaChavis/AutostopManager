@@ -345,7 +345,13 @@ class AppServer:
         self.connected = True
         self.disconnected.clear()
         self.reader = asyncio.create_task(self._read(websocket, generation))
-        await self.request("initialize", {"clientInfo": {"name": "autostop_telegram_wake", "version": "1"}})
+        await self.request(
+            "initialize",
+            {
+                "clientInfo": {"name": "autostop_telegram_wake", "version": "1"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
         await self._write({"method": "initialized", "params": {}})
 
     async def _drop_connection(self) -> None:

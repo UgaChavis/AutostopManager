@@ -37,6 +37,7 @@ class MockServer:
         self.thread_status = "idle"
         self.sockets = []
         self.loaded_by_socket = {}
+        self.experimental_api_by_socket = {}
         self.turn_statuses = {}
         self.disconnect_after_start_response = False
         self.metadata_pages = None
@@ -100,16 +101,28 @@ class MockServer:
             self.created_threads.append(thread_id)
         return thread_id
 
+    def _experimental_request_denied(self, socket, msg):
+        return (
+            msg.get("method") in {"thread/start", "thread/resume", "turn/start"}
+            and any(msg.get("params", {}).get(key) is not None for key in ("permissions", "runtimeWorkspaceRoots"))
+            and not self.experimental_api_by_socket[socket]
+        )
+
     async def handle(self, socket):
         self.sockets.append(socket)
         self.loaded_by_socket[socket] = False
+        self.experimental_api_by_socket[socket] = False
         async for raw in socket:
             msg = json.loads(raw)
             self.calls.append(msg)
             method = msg.get("method")
             if "id" not in msg:
                 continue
-            if method == self.reject_method or (method == "turn/start" and not self.loaded_by_socket[socket]):
+            if (
+                self._experimental_request_denied(socket, msg)
+                or method == self.reject_method
+                or (method == "turn/start" and not self.loaded_by_socket[socket])
+            ):
                 await socket.send(
                     json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
                 )
@@ -117,6 +130,8 @@ class MockServer:
             result = {}
             thread_id = self._request_thread(msg)
             if method == "initialize":
+                capabilities = msg.get("params", {}).get("capabilities") or {}
+                self.experimental_api_by_socket[socket] = capabilities.get("experimentalApi") is True
                 self.initializing.set()
                 await self.release_initialize.wait()
             if method == "thread/resume":
