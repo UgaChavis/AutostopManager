@@ -1215,12 +1215,15 @@ class TelegramInbox:
         ).fetchone()
         if old is not None:
             return dict(old)
-        incident = "incident-" + secrets.token_hex(16)
         with self._write():
-            self._db.execute(
-                "INSERT INTO incidents(incident_id,reason_code,opened_at) VALUES (?,?,?)",
-                (incident, reason_code, self._now()),
-            )
+            return self._create_incident(reason_code)
+
+    def _create_incident(self, reason_code: str) -> dict[str, Any]:
+        incident = "incident-" + secrets.token_hex(16)
+        self._db.execute(
+            "INSERT INTO incidents(incident_id,reason_code,opened_at) VALUES (?,?,?)",
+            (incident, reason_code, self._now()),
+        )
         return self.read_incident(incident)
 
     def read_incident(self, incident_id: str) -> dict[str, Any]:
@@ -1234,8 +1237,15 @@ class TelegramInbox:
         old = self.read_incident(incident_id)
         if old["recovered_at"] is None:
             with self._write():
-                self._db.execute("UPDATE incidents SET recovered_at=? WHERE incident_id=?", (self._now(), incident_id))
-        return self.read_incident(incident_id)
+                return self._recover_incident(old)
+        return old
+
+    def _recover_incident(self, incident: dict[str, Any]) -> dict[str, Any]:
+        if incident["recovered_at"] is None:
+            self._db.execute(
+                "UPDATE incidents SET recovered_at=? WHERE incident_id=?", (self._now(), incident["incident_id"])
+            )
+        return self.read_incident(incident["incident_id"])
 
     def pending_notifications(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -1289,18 +1299,24 @@ class TelegramInbox:
         old = self._db.execute("SELECT * FROM health WHERE component=?", (component,)).fetchone()
         if old is not None and (old["state"], old["error_code"]) == (state, error_code):
             return self.health()
-        cause = _health_incident_cause(component, error_code)
-        incident: dict[str, Any] | None = None
-        if old is not None and old["incident_id"] is not None:
-            if _health_incident_cause(component, old["error_code"]) == cause:
-                # A caller may report the same cause with or without its
-                # component prefix. Keep its existing receipt and legacy ID.
-                incident = self.read_incident(old["incident_id"])
-            else:
-                self.recover_incident(old["incident_id"])
-        if cause is not None and (incident is None or incident["recovered_at"] is not None):
-            incident = self.open_incident(cause)
         with self._write():
+            # Incident transitions and their health pointer must commit together.
+            # Public incident methods own standalone transactions, so use only
+            # private mutations inside this transaction.
+            cause = _health_incident_cause(component, error_code)
+            incident: dict[str, Any] | None = None
+            if old is not None and old["incident_id"] is not None:
+                previous = self.read_incident(old["incident_id"])
+                if _health_incident_cause(component, old["error_code"]) == cause:
+                    # Preserve the legacy ID and receipts for equivalent causes.
+                    incident = previous
+                else:
+                    self._recover_incident(previous)
+            if cause is not None and (incident is None or incident["recovered_at"] is not None):
+                existing = self._db.execute(
+                    "SELECT * FROM incidents WHERE reason_code=? AND recovered_at IS NULL", (cause,)
+                ).fetchone()
+                incident = dict(existing) if existing is not None else self._create_incident(cause)
             self._db.execute(
                 "INSERT INTO health VALUES (?,?,?,?) ON CONFLICT(component) DO UPDATE SET "
                 "state=excluded.state,error_code=excluded.error_code,incident_id=excluded.incident_id",
