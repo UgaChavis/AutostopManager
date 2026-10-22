@@ -200,7 +200,9 @@ def register_manager_tools(  # noqa: C901
         name="manager_automations",
         description=(
             "Inspect the Manager Automation Center status, allowlisted templates or readiness. "
-            "Status/readiness may initialize or migrate the technical registry and update schema metadata. "
+            "Status/readiness may initialize, upgrade or repair the technical registry. "
+            "The schema timestamp records component creation or version changes; same-version repairs retain it. "
+            "Fully current repeated calls preserve registry state. "
             "It does not execute guarded actions, enqueue messages, read CRM records or Telegram messages. "
             "Templates returns allowlisted metadata without opening the registry."
         ),
@@ -231,8 +233,9 @@ def register_manager_tools(  # noqa: C901
             "Mutations require an idempotency key; existing-job changes also require the exact revision. "
             "Creating crm_digest_v1 is singleton and starts OFF. Allowlisted system timers use timer_id; "
             "read-only timers reject changes. Test notification only queues an outbox intent. "
-            "Existing-job preview may initialize or migrate the registry and update schema metadata "
-            "again on an identical repeat, without executing the proposed guarded action. "
+            "Existing-job preview may initialize, upgrade or repair the registry without executing the proposed action. "
+            "The schema timestamp records component creation or version changes; same-version repairs retain it. "
+            "Fully current repeated existing-job previews preserve registry state. "
             "Mutation idempotency keys and exact-revision checks retain their existing guarantees."
         ),
         annotations=ToolAnnotations(

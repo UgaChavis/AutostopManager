@@ -27,8 +27,9 @@ Defaults: `{"include_archived":false,"job_id":"","operation":"status"}`.
 
 - Назначение и полномочия определяет профильный контур; automotive smoke не выполняет записи.
 - Наличие в общем native inventory не разрешает business action или чтение клиента.
-- Default/status/readiness могут инициализировать registry и обновить schema metadata текущей схемы.
+- Default/status/readiness могут создавать, обновлять или восстанавливать техническую схему registry.
 - Миграция старой схемы добавляет/заполняет технические поля jobs/runtime/controller, включая schedule_timezone и applied_at.
+- upgraded_at фиксирует создание записи компонента или смену версии; repair текущей версии сохраняет эту метку. Полностью актуальный registry повторный вызов не меняет.
 - Status/readiness не меняют desired_state/revision заданий, не выполняют guarded действия, не ставят сообщения в очередь и не отправляют их.
 - templates возвращает allowlisted шаблоны без доступа к registry и без записи.
 
