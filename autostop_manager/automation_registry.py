@@ -1677,11 +1677,11 @@ class AutomationStore:
         lease_seconds: int = 60,
     ) -> bool:
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            lease_until = isoformat(now_dt + timedelta(seconds=lease_seconds))
             changed = connection.execute(
                 """
                 UPDATE manager_automation_runtime
