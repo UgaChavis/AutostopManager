@@ -1160,7 +1160,9 @@ def _validate_download_content(content: bytes, *, mime_type: str, suffix: str) -
         raise BridgeError("download_content_invalid")
 
 
-def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbox_dir: Path) -> tuple[Path, str]:
+def _save_private_download(
+    content: bytes, *, message_id: int, suffix: str, inbox_dir: Path
+) -> tuple[Path, str, tuple[int, int] | None]:
     inbox_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(inbox_dir, 0o700)
     inbox_stat = inbox_dir.stat()
@@ -1172,7 +1174,7 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
         existing = _read_private_download(output_path, inbox_dir=inbox_dir)
         if not hmac.compare_digest(hashlib.sha256(existing).hexdigest(), digest):
             raise BridgeError("download_existing_conflict")
-        return output_path, digest
+        return output_path, digest, None
     temp_path = inbox_dir / f".{message_id}-{secrets.token_hex(8)}.tmp"
     committed = False
     try:
@@ -1185,12 +1187,14 @@ def _save_private_download(content: bytes, *, message_id: int, suffix: str, inbo
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+            file_stat = os.fstat(stream.fileno())
+            owned_inode = (file_stat.st_dev, file_stat.st_ino)
         os.replace(temp_path, output_path)
         committed = True
     finally:
         if not committed:
             temp_path.unlink(missing_ok=True)
-    return output_path, digest
+    return output_path, digest, owned_inode
 
 
 def _monitor_voice_stage_path(handle: str, *, suffix: str, inbox_dir: Path) -> Path:
@@ -1282,6 +1286,23 @@ def _discard_private_download(path: Path, *, inbox_dir: Path) -> bool:
     _read_private_download(path, inbox_dir=inbox_dir)
     path.unlink()
     return True
+
+
+def _discard_unreceipted_download(
+    path: Path, *, inbox_dir: Path, idempotency_path: Path, owned_inode: tuple[int, int]
+) -> None:
+    # Apply/download and discard share the mutation lock. Keep any committed
+    # receipt's file, and preserve uncertain state if readback or cleanup fails.
+    try:
+        ledger = _load_idempotency(idempotency_path)
+        if any(entry.get("saved_path") == str(path) for entry in ledger.values()):
+            return
+        file_stat = path.lstat()
+        if (file_stat.st_dev, file_stat.st_ino) != owned_inode:
+            return
+        _discard_private_download(path, inbox_dir=inbox_dir)
+    except (BridgeError, OSError):
+        return
 
 
 def _load_validated_photo_file(
@@ -2476,7 +2497,7 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
     if metadata["size_bytes"] != len(content):
         raise BridgeError("download_size_mismatch")
     _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
-    saved_path, digest = _save_private_download(
+    saved_path, digest, owned_inode = _save_private_download(
         content,
         message_id=message_id,
         suffix=metadata["suffix"],
@@ -2491,7 +2512,17 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
         "sha256": digest,
         "size_bytes": len(content),
     }
-    _save_idempotency(idempotency_path, idempotency)
+    try:
+        _save_idempotency(idempotency_path, idempotency)
+    except OSError:
+        if owned_inode is not None:
+            _discard_unreceipted_download(
+                saved_path,
+                inbox_dir=config.socket_path.parent / "inbox",
+                idempotency_path=idempotency_path,
+                owned_inode=owned_inode,
+            )
+        raise
     return {
         "ok": True,
         "mode": "apply",

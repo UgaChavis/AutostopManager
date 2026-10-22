@@ -531,10 +531,13 @@ def test_committed_media_is_returned_without_redundant_temporary_cleanup(monkeyp
         with pytest.raises(bridge.BridgeError, match="inbound_voice_stage_conflict"):
             bridge._save_monitor_voice_stage(content, handle="m" * 32, suffix=".ogg", inbox_dir=inbox)
     else:
-        output, digest = bridge._save_private_download(content, message_id=100, suffix=".ogg", inbox_dir=inbox)
+        output, digest, owned_inode = bridge._save_private_download(
+            content, message_id=100, suffix=".ogg", inbox_dir=inbox
+        )
         assert digest == hashlib.sha256(content).hexdigest()
+        assert owned_inode == (output.stat().st_dev, output.stat().st_ino)
         replay = bridge._save_private_download(content, message_id=100, suffix=".ogg", inbox_dir=inbox)
-        assert replay == (output, digest)
+        assert replay == (output, digest, None)
 
     assert output.read_bytes() == content
     assert output.stat().st_mode & 0o777 == 0o600
