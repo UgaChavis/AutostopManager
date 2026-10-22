@@ -439,6 +439,8 @@ class SystemTimerController:
         original_error: AutomationError | OSError | None = None
         try:
             self._systemctl_action("enable" if enabled else "disable", "--now", policy.unit_name)
+            if not enabled:
+                self._systemctl_action("disable", "--runtime", policy.unit_name)
             status = self.inspect(timer_id)
             if (
                 not status["inspection_ok"]
