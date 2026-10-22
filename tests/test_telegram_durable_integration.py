@@ -404,7 +404,7 @@ def test_completed_model_without_job_result_holds_only_its_client(tmp_path, bund
                 status = await runtime.jobs.request("job_status")
                 assert status["status"]["open_events"] == 2 and status["status"]["enabled"]
                 assert status["status"]["needs_review_jobs"] == 2
-                await until(lambda: runtime.inbox.execution_slot() is None)
+                await until(lambda: runtime.inbox.execution_slot() is None and dispatcher.status()["ready"])
                 assert dispatcher.status()["ready"]
 
     asyncio.run(scenario())
