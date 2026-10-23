@@ -578,6 +578,8 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_fence: tuple[int, int, int] | None = None
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
+        self.notification_requested = asyncio.Event()
+        self.notification_task: asyncio.Task[None] | None = None
 
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
@@ -4220,40 +4222,67 @@ async def _handle_job_handoff(
 
 async def _deliver_incident_notifications(
     client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, *, mutation_locked: bool = False
-) -> None:
+) -> asyncio.Event | None:
     # Existing direct callers may hold this short state gate. No network is
     # performed while acquiring it; actual delivery shares the single lane.
     if not mutation_locked:
         async with _MUTATION_LOCK:
             pass
-    await _effect_executor().submit(
-        lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
-    )
+    if not monitor.transport_ready or _owner_peer_id(config) is None or not monitor.inbox.pending_notifications():
+        return None
+    executor = _effect_executor()
+    progress = executor.progress_event
+    try:
+        more = await executor.submit(
+            lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
+        )
+    except EffectQueueError as exc:
+        if str(exc) not in {"bridge_busy", "bridge_queue_timeout"}:
+            raise
+        # Only rejected admission is retryable; a started send may be unknown.
+        return progress
+    # Continue only a fully verified batch, rejoining FIFO behind admitted work.
+    return progress if more else None
 
 
-def _schedule_incident_notifications(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
+def _schedule_incident_notifications(
+    client: Any,
+    config: TelegramConfig,
+    monitor: DurableInboundMonitor,
+    *,
+    retry_after: asyncio.Event | None = None,
+) -> None:
     # Coalesce health changes; persisted incident intents are the durable queue.
-    if any(not task.done() for task in _BACKGROUND_NOTIFICATIONS):
+    monitor.notification_requested.set()
+    if monitor.notification_task is not None and not monitor.notification_task.done():
         return
 
     async def deliver() -> None:
+        progress = retry_after
         with suppress(Exception):
-            await _deliver_incident_notifications(client, config, monitor)
+            while True:
+                if progress is not None:
+                    await progress.wait()
+                monitor.notification_requested.clear()
+                progress = await _deliver_incident_notifications(client, config, monitor)
+                if progress is None and not monitor.notification_requested.is_set():
+                    return
 
     task = asyncio.create_task(deliver(), name="telegram-incident-delivery")
+    monitor.notification_task = task
     _BACKGROUND_NOTIFICATIONS.add(task)
     task.add_done_callback(_BACKGROUND_NOTIFICATIONS.discard)
 
 
 async def _deliver_incident_notifications_locked(
     client: Any, config: TelegramConfig, monitor: DurableInboundMonitor
-) -> None:
+) -> bool:
     if not monitor.transport_ready or _owner_peer_id(config) is None:
-        return
+        return False
     for _attempt in range(32):
         pending = monitor.inbox.pending_notifications()
         if not pending:
-            return
+            return False
         notification = pending[0]
         recovered = notification["opened_receipt"] is not None
         notification_id = str(notification["incident_id"]) + (":recovery" if recovered else ":incident")
@@ -4276,14 +4305,15 @@ async def _deliver_incident_notifications_locked(
                 client, config, request | {"mode": "apply", "contract_token": dry["contract_token"]}
             )
         except Exception:  # noqa: BLE001 - keep an intent for recovery, never repeat a business action.
-            return
+            return False
         if applied.get("verified") is not True:
-            return
+            return False
         monitor.inbox.mark_notification(
             incident_id=str(notification["incident_id"]),
             recovery=recovered,
             receipt_key=f"owner-{applied['message_id']}",
         )
+    return bool(monitor.inbox.pending_notifications())
 
 
 def _handle_job_owner_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any]:
@@ -4715,7 +4745,9 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
                 monitor.reconciliation_fence = None
                 monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
                 monitor.changed()
-        await _deliver_incident_notifications(client, config, monitor)
+        progress = await _deliver_incident_notifications(client, config, monitor)
+        if progress is not None:
+            _schedule_incident_notifications(client, config, monitor, retry_after=progress)
 
 
 def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> None:

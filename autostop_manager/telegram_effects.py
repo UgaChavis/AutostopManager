@@ -76,6 +76,17 @@ class EffectExecutor:
         self.failed = asyncio.Event()
         self.closed = False
         self.active_job_id: str | None = None
+        self._progress_event = asyncio.Event()
+
+    @property
+    def progress_event(self) -> asyncio.Event:
+        """Capture a signal before admission so concurrent progress is not lost."""
+        return self._progress_event
+
+    def _signal_progress(self) -> None:
+        previous = self._progress_event
+        self._progress_event = asyncio.Event()
+        previous.set()
 
     @property
     def queued(self) -> int:
@@ -132,6 +143,7 @@ class EffectExecutor:
                     item.started = True
                     self.active_job_id = item.job_id
                     await self._execute(item)
+                    self._signal_progress()
                 if self.closed or self.failed.is_set() or not self._pending:
                     return
                 item = self._pending.popleft()
@@ -144,6 +156,7 @@ class EffectExecutor:
                     waiting.expiry.cancel()
                 if not waiting.future.done():
                     waiting.future.set_exception(EffectQueueError("bridge_effects_held"))
+            self._signal_progress()
 
     async def _execute(self, item: _Pending) -> None:
         if asyncio.get_running_loop().time() >= item.deadline:
@@ -185,6 +198,7 @@ class EffectExecutor:
 
     async def close(self) -> None:
         self.closed = True
+        self._signal_progress()
         if self._operation is not None:
             self._operation.cancel()
         if self._worker is not None and not self._worker.done():
