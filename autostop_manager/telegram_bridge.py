@@ -578,6 +578,8 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_fence: tuple[int, int, int] | None = None
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
+        self.notification_requested = asyncio.Event()
+        self.notification_task: asyncio.Task[None] | None = None
 
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
@@ -4220,35 +4222,51 @@ async def _handle_job_handoff(
 
 async def _deliver_incident_notifications(
     client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, *, mutation_locked: bool = False
-) -> None:
+) -> asyncio.Event | None:
     # Existing direct callers may hold this short state gate. No network is
     # performed while acquiring it; actual delivery shares the single lane.
     if not mutation_locked:
         async with _MUTATION_LOCK:
             pass
     if not monitor.transport_ready or _owner_peer_id(config) is None or not monitor.inbox.pending_notifications():
-        return
+        return None
+    executor = _effect_executor()
+    progress = executor.progress_event
     try:
-        await _effect_executor().submit(
-            lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
-        )
+        await executor.submit(lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0)
     except EffectQueueError as exc:
         if str(exc) not in {"bridge_busy", "bridge_queue_timeout"}:
             raise
-        # Admission failed before delivery started. Keep the persisted intent
-        # for the next reconciliation or health signal, without stopping intake.
+        # Only rejected admission is retryable; a started send may be unknown.
+        return progress
+    return None
 
 
-def _schedule_incident_notifications(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
+def _schedule_incident_notifications(
+    client: Any,
+    config: TelegramConfig,
+    monitor: DurableInboundMonitor,
+    *,
+    retry_after: asyncio.Event | None = None,
+) -> None:
     # Coalesce health changes; persisted incident intents are the durable queue.
-    if any(not task.done() for task in _BACKGROUND_NOTIFICATIONS):
+    monitor.notification_requested.set()
+    if monitor.notification_task is not None and not monitor.notification_task.done():
         return
 
     async def deliver() -> None:
+        progress = retry_after
         with suppress(Exception):
-            await _deliver_incident_notifications(client, config, monitor)
+            while True:
+                if progress is not None:
+                    await progress.wait()
+                monitor.notification_requested.clear()
+                progress = await _deliver_incident_notifications(client, config, monitor)
+                if progress is None and not monitor.notification_requested.is_set():
+                    return
 
     task = asyncio.create_task(deliver(), name="telegram-incident-delivery")
+    monitor.notification_task = task
     _BACKGROUND_NOTIFICATIONS.add(task)
     task.add_done_callback(_BACKGROUND_NOTIFICATIONS.discard)
 
@@ -4723,7 +4741,9 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
                 monitor.reconciliation_fence = None
                 monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
                 monitor.changed()
-        await _deliver_incident_notifications(client, config, monitor)
+        progress = await _deliver_incident_notifications(client, config, monitor)
+        if progress is not None:
+            _schedule_incident_notifications(client, config, monitor, retry_after=progress)
 
 
 def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> None:

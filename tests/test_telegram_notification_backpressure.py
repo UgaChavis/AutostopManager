@@ -46,8 +46,9 @@ def test_empty_incident_delivery_never_submits_to_effect_lane(notification_runti
 
 
 @pytest.mark.parametrize("backpressure", ["timeout", "capacity"])
-def test_notification_backpressure_preserves_intent_until_next_external_signal(
-    notification_runtime, monkeypatch, backpressure
+@pytest.mark.parametrize("recover_during_wait", [False, True], ids=["incident", "incident_and_recovery"])
+def test_notification_backpressure_preserves_intent_and_delivers_after_progress(
+    notification_runtime, monkeypatch, backpressure, recover_during_wait
 ):
     config, monitor, client = notification_runtime
     monitor.inbox.set_health("codex", "held", "synthetic_failure")
@@ -64,7 +65,7 @@ def test_notification_backpressure_preserves_intent_until_next_external_signal(
 
             async def observed_delivery(*args, **kwargs):
                 try:
-                    await deliver(*args, **kwargs)
+                    return await deliver(*args, **kwargs)
                 finally:
                     iterations.put_nowait(None)
 
@@ -91,24 +92,33 @@ def test_notification_backpressure_preserves_intent_until_next_external_signal(
                 assert not loop.done() and not executor.failed.is_set()
                 assert monitor.inbox.pending_notifications() == pending and client.sent == 0
                 assert not (config.state_dir / "idempotency.json").exists()
+                if recover_during_wait:
+                    await bridge._handle_operation(
+                        client,
+                        config,
+                        {"operation": "job_health", "component": "codex", "state": "ready"},
+                        inbound_monitor=monitor,
+                    )
                 release.set()
                 await active
                 await asyncio.gather(*waiting)
-                monitor.request_reconciliation()
                 await asyncio.wait_for(iterations.get(), 1)
-                assert not loop.done() and client.sent == 1
+                expected_sends = 2 if recover_during_wait else 1
+                assert not loop.done() and client.sent == expected_sends
                 assert monitor.inbox.pending_notifications() == []
                 incident = monitor.inbox.read_incident(pending[0]["incident_id"])
                 assert incident["opened_receipt"] == "owner-1"
+                if recover_during_wait:
+                    assert incident["recovery_receipt"] == "owner-2"
                 ledger_path = config.state_dir / "idempotency.json"
                 ledger = bridge._load_idempotency(ledger_path)
-                assert len(ledger) == 1
-                receipt = next(iter(ledger.values()))
-                assert receipt["message_id"] == 1 and receipt["readback_verified"] is True
+                assert len(ledger) == expected_sends
+                assert {entry["message_id"] for entry in ledger.values()} == set(range(1, expected_sends + 1))
+                assert all(entry["readback_verified"] is True for entry in ledger.values())
                 before = ledger_path.read_bytes()
                 monitor.request_reconciliation()
                 await asyncio.wait_for(iterations.get(), 1)
-                assert not loop.done() and client.sent == 1 and ledger_path.read_bytes() == before
+                assert not loop.done() and client.sent == expected_sends and ledger_path.read_bytes() == before
             finally:
                 release.set()
                 tasks = [active, *waiting, *([loop] if loop is not None else [])]
