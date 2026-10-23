@@ -4226,9 +4226,17 @@ async def _deliver_incident_notifications(
     if not mutation_locked:
         async with _MUTATION_LOCK:
             pass
-    await _effect_executor().submit(
-        lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
-    )
+    if not monitor.transport_ready or _owner_peer_id(config) is None or not monitor.inbox.pending_notifications():
+        return
+    try:
+        await _effect_executor().submit(
+            lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
+        )
+    except EffectQueueError as exc:
+        if str(exc) not in {"bridge_busy", "bridge_queue_timeout"}:
+            raise
+        # Admission failed before delivery started. Keep the persisted intent
+        # for the next reconciliation or health signal, without stopping intake.
 
 
 def _schedule_incident_notifications(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
