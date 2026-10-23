@@ -4233,13 +4233,16 @@ async def _deliver_incident_notifications(
     executor = _effect_executor()
     progress = executor.progress_event
     try:
-        await executor.submit(lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0)
+        more = await executor.submit(
+            lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
+        )
     except EffectQueueError as exc:
         if str(exc) not in {"bridge_busy", "bridge_queue_timeout"}:
             raise
         # Only rejected admission is retryable; a started send may be unknown.
         return progress
-    return None
+    # Continue only a fully verified batch, rejoining FIFO behind admitted work.
+    return progress if more else None
 
 
 def _schedule_incident_notifications(
@@ -4273,13 +4276,13 @@ def _schedule_incident_notifications(
 
 async def _deliver_incident_notifications_locked(
     client: Any, config: TelegramConfig, monitor: DurableInboundMonitor
-) -> None:
+) -> bool:
     if not monitor.transport_ready or _owner_peer_id(config) is None:
-        return
+        return False
     for _attempt in range(32):
         pending = monitor.inbox.pending_notifications()
         if not pending:
-            return
+            return False
         notification = pending[0]
         recovered = notification["opened_receipt"] is not None
         notification_id = str(notification["incident_id"]) + (":recovery" if recovered else ":incident")
@@ -4302,14 +4305,15 @@ async def _deliver_incident_notifications_locked(
                 client, config, request | {"mode": "apply", "contract_token": dry["contract_token"]}
             )
         except Exception:  # noqa: BLE001 - keep an intent for recovery, never repeat a business action.
-            return
+            return False
         if applied.get("verified") is not True:
-            return
+            return False
         monitor.inbox.mark_notification(
             incident_id=str(notification["incident_id"]),
             recovery=recovered,
             receipt_key=f"owner-{applied['message_id']}",
         )
+    return bool(monitor.inbox.pending_notifications())
 
 
 def _handle_job_owner_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any]:
