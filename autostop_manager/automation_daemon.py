@@ -356,14 +356,19 @@ class AutomationDaemon:
                             # so control requests and shutdown can run while waiting.
                             with suppress(TimeoutError):
                                 await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
+                        else:
+                            # Successful synchronous batches must also offer control a turn.
+                            await asyncio.sleep(0)
                         continue
                     outbox = self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
                     if outbox is not None:
                         await self._execute_outbox(outbox)
+                        await asyncio.sleep(0)
                         continue
                     claim = self.store.claim_next_run(owner=self.owner, lease_seconds=self.lease_seconds)
                     if claim is not None:
                         await self._execute_claim(claim)
+                        await asyncio.sleep(0)
                         continue
                 except Exception:  # noqa: BLE001 - retry without logging private state.
                     controller_state = "error"
