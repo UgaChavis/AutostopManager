@@ -10,6 +10,7 @@ import os
 import socket
 import stat
 import struct
+import time
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -717,6 +718,7 @@ class AutomationControlClient:
         idempotency_key: str | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        """Bound the transport exchange without retrying an already sent operation."""
         request_id = str(uuid4())
         request: dict[str, Any] = {
             "protocol": AUTOMATION_CONTROL_PROTOCOL,
@@ -734,16 +736,29 @@ class AutomationControlClient:
             raise AutomationError("automation_request_too_large")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(self.timeout)
+            deadline = time.monotonic() + self.timeout if self.timeout else None
+
+            def set_remaining_timeout() -> None:
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("automation_control_deadline_exceeded")
+                    client.settimeout(remaining)
+
+            set_remaining_timeout()
             client.connect(str(self.socket_path))
+            set_remaining_timeout()
             client.sendall(encoded)
             chunks = bytearray()
             while b"\n" not in chunks:
+                set_remaining_timeout()
                 chunk = client.recv(min(8192, MAX_RESPONSE_BYTES + 1 - len(chunks)))
                 if not chunk:
                     break
                 chunks.extend(chunk)
                 if len(chunks) > MAX_RESPONSE_BYTES:
                     raise AutomationError("automation_response_too_large")
+            set_remaining_timeout()
         line = bytes(chunks).split(b"\n", 1)[0]
         try:
             response = json.loads(line)
