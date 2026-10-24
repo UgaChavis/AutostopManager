@@ -125,6 +125,15 @@ def lookup_nhtsa_recalls(
     checked_at = _utc_now()
     try:
         payload = json.loads(_safe_get_bytes(request_url, timeout=timeout).decode("utf-8"))
+        source_rows = payload.get("results") if isinstance(payload, dict) else []
+        if not isinstance(source_rows, list):
+            source_rows = []
+        try:
+            record_count = (
+                int(payload.get("Count") or len(source_rows)) if isinstance(payload, dict) else len(source_rows)
+            )
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("NHTSA recall response contains an invalid Count") from None
     except (HTTPError, URLError, TimeoutError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         return {
             "ok": False,
@@ -137,9 +146,6 @@ def lookup_nhtsa_recalls(
             "error": str(exc),
         }
 
-    source_rows = payload.get("results") if isinstance(payload, dict) else []
-    if not isinstance(source_rows, list):
-        source_rows = []
     records = [_nhtsa_recall_record(row) for row in source_rows if isinstance(row, dict)][: _normalise_limit(limit)]
     return {
         "ok": True,
@@ -148,9 +154,7 @@ def lookup_nhtsa_recalls(
         "request_url": request_url,
         "scope": "US model-level",
         "records": records,
-        "record_count": int(payload.get("Count") or len(source_rows))
-        if isinstance(payload, dict)
-        else len(source_rows),
+        "record_count": record_count,
         "checked_at": checked_at,
         "warnings": [
             "NHTSA results describe U.S. model-level campaigns and do not confirm whether a specific VIN has an open recall."
