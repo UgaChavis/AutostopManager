@@ -75,7 +75,7 @@ def call_vehicle_tool(name: str, arguments: Any) -> dict[str, Any]:
 
     try:
         function = _load_tool(name)
-    except (ImportError, AttributeError, RuntimeError):
+    except (ImportError, AttributeError, RuntimeError, OSError):
         return _failure("tool_failed")
     try:
         parameters = inspect.signature(function).bind(**arguments)
