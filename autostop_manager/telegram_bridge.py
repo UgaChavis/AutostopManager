@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import errno
 import getpass
 import grp
 import hashlib
@@ -82,6 +83,7 @@ WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 WORK_DURABLE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX"
 MAX_RECONCILE_DIALOGS = 1000
 MAX_RECONCILE_MESSAGES = 10000
+MAX_HISTORY_TRANSPORT_RETRIES = 2
 INBOUND_EVENT_OPEN = "open"
 INBOUND_EVENT_REPLY_VERIFIED = "reply_verified"
 INBOUND_EVENT_NO_REPLY_NEEDED = "no_reply_needed"
@@ -578,6 +580,8 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_fence: tuple[int, int, int] | None = None
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
+        self.reconciliation_signal_revision = 0
+        self.reconciliation_transport_retries = 0
         self.notification_requested = asyncio.Event()
         self.notification_task: asyncio.Task[None] | None = None
 
@@ -585,6 +589,8 @@ class DurableInboundMonitor(InboundMonitor):
         """Give one external recovery signal a finite retry budget."""
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
+        self.reconciliation_signal_revision += 1
+        self.reconciliation_transport_retries = 0
         self.reconcile_requested.set()
 
     def changed(self) -> None:
@@ -4734,17 +4740,52 @@ async def run_daemon(
                 watchdog.cancel()
 
 
+def _history_transport_failure(error: Exception) -> bool:
+    """Retry only explicit network failures; generic/local OSErrors stay held."""
+    return not isinstance(error, PermissionError) and (
+        isinstance(error, (TimeoutError, ConnectionError))
+        or (
+            isinstance(error, OSError)
+            and error.errno
+            in {
+                errno.ECONNABORTED,
+                errno.ECONNREFUSED,
+                errno.ECONNRESET,
+                errno.EHOSTUNREACH,
+                errno.ENETDOWN,
+                errno.ENETRESET,
+                errno.ENETUNREACH,
+                errno.EPIPE,
+                errno.ETIMEDOUT,
+            }
+        )
+    )
+
+
 async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor: DurableInboundMonitor) -> None:
     while True:
         await monitor.reconcile_requested.wait()
         monitor.reconcile_requested.clear()
         if monitor.capture_enabled:
+            signal_revision = monitor.reconciliation_signal_revision
             try:
                 await _reconcile_incoming_history(client, monitor)
-            except Exception:  # noqa: BLE001 - preserve every checkpoint after any partial transport failure.
+            except Exception as exc:  # noqa: BLE001 - preserve committed checkpoints and classify only transport errors.
                 monitor.reconciliation_fence = None
                 monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
                 monitor.changed()
+                if (
+                    _history_transport_failure(exc)
+                    and monitor.capture_enabled
+                    and signal_revision == monitor.reconciliation_signal_revision
+                ):
+                    if monitor.reconciliation_transport_retries < MAX_HISTORY_TRANSPORT_RETRIES:
+                        monitor.reconciliation_transport_retries += 1
+                        # Internal continuation must not reset either retry
+                        # budget. Only a new external signal grants fresh work.
+                        monitor.reconcile_requested.set()
+                    else:
+                        monitor.reconciliation_stopped = True
         progress = await _deliver_incident_notifications(client, config, monitor)
         if progress is not None:
             _schedule_incident_notifications(client, config, monitor, retry_after=progress)
