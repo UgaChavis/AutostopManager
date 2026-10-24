@@ -189,6 +189,7 @@ class TelegramInbox:
                 instruction_revision TEXT NOT NULL, thread_id TEXT, turn_id TEXT,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, outcome TEXT, reason_code TEXT
             );
+            CREATE INDEX IF NOT EXISTS jobs_peer_state ON jobs(peer_id, state);
             CREATE TABLE IF NOT EXISTS events (
                 sequence TEXT PRIMARY KEY, peer_id INTEGER NOT NULL REFERENCES peers(peer_id),
                 message_id INTEGER NOT NULL, received_at TEXT NOT NULL, state TEXT NOT NULL,
