@@ -456,16 +456,17 @@ class AutomationStore:
         ):
             raise AutomationError("automation_db_file_invalid")
         connection = sqlite3.connect(path, timeout=5)
-        os.chmod(path, 0o600, follow_symlinks=False)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
         try:
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
+            os.chmod(path, 0o600, follow_symlinks=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         finally:
             connection.close()
 
