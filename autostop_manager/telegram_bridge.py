@@ -75,6 +75,7 @@ MONITOR_VOICE_STAGE_CLEANUP_RETRIES = 3
 MONITOR_VOICE_STAGE_CLEANUP_RETRY_SECONDS = 15
 DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_LOCAL_REQUEST_TIMEOUT_SECONDS = 180.0
+LOCAL_RPC_DRAIN_TIMEOUT_SECONDS = 5.0
 LOCAL_RPC_CLOSE_TIMEOUT_SECONDS = 1.0
 DAEMON_CLEANUP_TIMEOUT_SECONDS = 15.0
 JOB_SUBSCRIPTION_HEARTBEAT_SECONDS = 10.0
@@ -4473,7 +4474,7 @@ async def _serve_client_request(
         if len(encoded_response) > MAX_RESPONSE_BYTES:
             encoded_response = _canonical_json({"ok": False, "error": "response_invalid"}) + b"\n"
         writer.write(encoded_response)
-        async with asyncio.timeout(5.0):
+        async with asyncio.timeout(LOCAL_RPC_DRAIN_TIMEOUT_SECONDS):
             await writer.drain()
     finally:
         await _close_rpc_writer(writer)
@@ -4507,7 +4508,8 @@ async def _serve_job_subscription(
             if heartbeat:
                 frame["heartbeat"] = is_heartbeat
             writer.write(_canonical_json(frame) + b"\n")
-            await writer.drain()
+            async with asyncio.timeout(LOCAL_RPC_DRAIN_TIMEOUT_SECONDS):
+                await writer.drain()
             changed = asyncio.create_task(subscriber.wait())
             done, _pending = await asyncio.wait(
                 (changed, disconnected),
