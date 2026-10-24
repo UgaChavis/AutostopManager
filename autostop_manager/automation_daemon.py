@@ -382,6 +382,37 @@ class AutomationDaemon:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
 
+    async def _finish_shutdown(self, scheduler: asyncio.Task[None] | None) -> None:
+        async def cleanup() -> None:
+            try:
+                try:
+                    notify_systemd("STOPPING=1")
+                    with suppress(Exception):
+                        self.store.controller_heartbeat(owner=self.owner, state="stopping")
+                finally:
+                    # A failed notification must not abandon the owned worker.
+                    if scheduler is not None:
+                        await asyncio.shield(scheduler)
+                    with suppress(Exception):
+                        self.store.controller_heartbeat(owner=self.owner, state="stopped")
+            finally:
+                await self.control_server.close()
+
+        completion = asyncio.create_task(cleanup())
+        cancellation: asyncio.CancelledError | None = None
+        while True:
+            try:
+                # Repeated caller cancellation abandons waits, never this cleanup.
+                await asyncio.shield(completion)
+                break
+            except asyncio.CancelledError as exc:
+                if completion.cancelled():
+                    raise
+                if cancellation is None:
+                    cancellation = exc
+        if cancellation is not None:
+            raise cancellation
+
     async def run(self) -> None:
         reject_obsolete_runtime_config()
         self.store.initialize()
@@ -389,25 +420,20 @@ class AutomationDaemon:
         await asyncio.to_thread(self.timer_controller.adopt_all_current)
         self.store.controller_heartbeat(owner=self.owner, started=True)
         await self.control_server.start()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            with suppress(NotImplementedError):
-                loop.add_signal_handler(sig, self.stopping.set)
-        scheduler = asyncio.create_task(self.scheduler_loop())
-        notify_systemd("READY=1")
+        scheduler: asyncio.Task[None] | None = None
         try:
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                with suppress(NotImplementedError):
+                    loop.add_signal_handler(sig, self.stopping.set)
+            scheduler = asyncio.create_task(self.scheduler_loop())
+            notify_systemd("READY=1")
             await self.stopping.wait()
         finally:
             self.stopping.set()
-            notify_systemd("STOPPING=1")
-            with suppress(Exception):
-                self.store.controller_heartbeat(owner=self.owner, state="stopping")
             # Cancelling a to_thread await does not stop its worker. Drain the
             # current claim and its durable result before reporting stopped.
-            await asyncio.shield(scheduler)
-            with suppress(Exception):
-                self.store.controller_heartbeat(owner=self.owner, state="stopped")
-            await self.control_server.close()
+            await self._finish_shutdown(scheduler)
 
 
 def main(argv: list[str] | None = None) -> int:
