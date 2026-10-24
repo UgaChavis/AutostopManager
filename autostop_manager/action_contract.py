@@ -533,7 +533,9 @@ def _gateway_execution(
             }
         else:
             payload = {
-                key: value for key, value in changes.items() if key not in {"dry_run_proof", "dry_run_idempotency_key"}
+                key: value
+                for key, value in changes.items()
+                if key not in {"outstanding_amount", "dry_run_proof", "dry_run_idempotency_key"}
             }
             payload["expected_updated_at"] = revision
         arguments: dict[str, Any] = {
