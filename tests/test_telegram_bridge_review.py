@@ -32,6 +32,9 @@ class MemoryWriter:
     def close(self):
         self.closed = True
 
+    def is_closing(self):
+        return self.closed
+
     async def wait_closed(self):
         pass
 
@@ -310,6 +313,7 @@ async def serve_through_native_factory(config, request):
         "client": object(),
         "config": config,
         "inbound_monitor": monitor,
+        "handlers": bridge._DaemonRpcHandlers(object(), config, monitor),
     }
     result = await eval(compile(expression, "<native bridge factory>", "eval"), namespace)
     return result, inbox.imports
