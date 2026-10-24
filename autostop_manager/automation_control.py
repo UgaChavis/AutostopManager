@@ -589,6 +589,14 @@ class AutomationControlServer:
         self.server: asyncio.AbstractServer | None = None
 
     async def serve_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await self._serve_request(reader, writer)
+        finally:
+            writer.close()
+            with suppress(ConnectionError, OSError):
+                await writer.wait_closed()
+
+    async def _serve_request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         request_id = ""
         try:
             peer_socket = writer.get_extra_info("socket")
@@ -633,10 +641,6 @@ class AutomationControlServer:
             await writer.drain()
         except (ConnectionError, OSError):
             pass
-        finally:
-            writer.close()
-            with suppress(ConnectionError, OSError):
-                await writer.wait_closed()
 
     async def start(self) -> asyncio.AbstractServer:
         parent = self.socket_path.parent
