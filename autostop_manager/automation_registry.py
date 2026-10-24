@@ -345,6 +345,10 @@ SCHEMA_STATEMENTS = (
     ON manager_automation_runs(status, scheduled_for, requested_at)
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_manager_automation_runs_job_status
+    ON manager_automation_runs(job_id, status)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS manager_automation_cursors (
         job_id TEXT NOT NULL,
         cursor_name TEXT NOT NULL,
@@ -379,6 +383,10 @@ SCHEMA_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_manager_automation_outbox_queue
     ON manager_automation_outbox(status, next_attempt_at, lease_until)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_manager_automation_outbox_job_status
+    ON manager_automation_outbox(job_id, status)
     """,
     """
     CREATE TABLE IF NOT EXISTS manager_automation_controller_runtime (
