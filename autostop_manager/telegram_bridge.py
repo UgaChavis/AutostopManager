@@ -4641,6 +4641,53 @@ async def _await_daemon_task(task: asyncio.Future[Any]) -> None:
         raise BridgeError("telegram_transport_disconnected") from exc
 
 
+class _DaemonRpcHandlers:
+    """Own only this daemon's accepted clients until their writers are closed."""
+
+    def __init__(self, client: Any, config: TelegramConfig, monitor: InboundMonitor | None) -> None:
+        self.client = client
+        self.config = config
+        self.monitor = monitor
+        self.accepting = True
+        self.handlers: dict[asyncio.Task[None], asyncio.StreamWriter] = {}
+
+    def _done(self, task: asyncio.Task[None]) -> None:
+        writer = self.handlers.pop(task, None)
+        if not task.cancelled():
+            task.exception()
+        # External cancellation may reap a cold task before shutdown can take
+        # its snapshot. It never reached the coroutine's writer cleanup.
+        if writer is not None and not writer.is_closing():
+            with suppress(OSError):
+                writer.transport.abort()
+
+    def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> asyncio.Task[None]:
+        operation = (
+            _serve_client(self.client, self.config, reader, writer, inbound_monitor=self.monitor)
+            if self.accepting
+            else _close_rpc_writer(writer)
+        )
+        task = asyncio.create_task(operation)
+        self.handlers[task] = writer
+        task.add_done_callback(self._done)
+        return task
+
+    async def close(self, server: asyncio.AbstractServer | None) -> None:
+        self.accepting = False
+        if server is not None:
+            server.close()
+        while self.handlers:
+            pending = tuple(self.handlers.items())
+            for task, _writer in pending:
+                task.cancel()
+            try:
+                await asyncio.gather(*(task for task, _writer in pending), return_exceptions=True)
+            finally:
+                # A task cancelled before its first step never runs its finally.
+                # Keep each writer until this snapshot's explicit bounded close.
+                await asyncio.gather(*(_close_rpc_writer(writer) for _task, writer in pending), return_exceptions=True)
+
+
 async def run_daemon(
     config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
 ) -> None:
@@ -4707,11 +4754,14 @@ async def run_daemon(
                 watchdog.cancel()
         raise
     tasks: list[asyncio.Task[Any]] = []
+    handlers = _DaemonRpcHandlers(client, config, inbound_monitor)
+    server: asyncio.AbstractServer | None = None
     socket_identity: tuple[int, int] | None = None
+
     try:
         config.socket_path.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(
-            lambda reader, writer: _serve_client(client, config, reader, writer, inbound_monitor=inbound_monitor),
+            handlers.accept,
             path=str(config.socket_path),
             limit=MAX_REQUEST_BYTES,
         )
@@ -4738,10 +4788,12 @@ async def run_daemon(
                 # deadline and remove only our pathname before that await.
                 _start_daemon_cleanup_watchdog(watchdog)
                 _unlink_daemon_socket(config.socket_path, socket_identity)
+                await handlers.close(server)
     finally:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
             _unlink_daemon_socket(config.socket_path, socket_identity)
+            await handlers.close(server)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

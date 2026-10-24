@@ -96,6 +96,9 @@ class HangingServerExit:
     def __init__(self, server):
         self.server = server
 
+    def close(self):
+        self.server.close()
+
     async def __aenter__(self):
         return self
 
