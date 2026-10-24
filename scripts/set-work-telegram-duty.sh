@@ -25,7 +25,14 @@ if [[ $# -eq 3 ]]; then
   [[ -n "${expected_release_dir}" ]] || { usage; exit 2; }
 fi
 exec 9>"${control_lock}"
-flock -x 9
+if [[ "${operation}" == "--status" ]]; then
+  if ! flock -xn 9; then
+    printf '%s\n' '{"ok":false,"error":"duty_control_busy"}'
+    exit 1
+  fi
+else
+  flock -x 9
+fi
 if [[ -n "${expected_release_dir}" ]]; then
   current_release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   if [[ ! -L "${release_link}" || ( "${expected_release_dir}" != "$(dirname -- "${release_link}")/"* \
@@ -219,6 +226,8 @@ except (ValueError, TypeError):
   w={}
 if not isinstance(w, dict):
   w={}
+def observed_count(value):
+  return value if w.get("ok") is True and type(value) is int and value >= 0 else None
 inbound=bool(s.get("inbound_enabled"))
 connected=bool(w.get("ok") and w.get("connected"))
 ready=bool(w.get("ok") and w.get("enabled") and w.get("ready", connected))
@@ -238,8 +247,9 @@ print(json.dumps({
   "wake_ready": ready,
   "wake_recovery_state": recovery_state,
   "execution_state": execution_state,
-  "pending": w.get("pending", w.get("queued", 0)) if type(w.get("pending", w.get("queued", 0))) is int else 0,
-  "needs_review": w.get("needs_review", 0) if type(w.get("needs_review", 0)) is int else 0,
+  "pending": observed_count(w.get("pending", w.get("queued"))),
+  "needs_review": observed_count(w.get("needs_review")),
+  "status_fresh": bool(w.get("ok") and w.get("status_fresh") is True),
   "state": "inbound_enabled" if inbound else "outbound_only",
   "polling": False,
 }, separators=(",", ":"), sort_keys=True))'
