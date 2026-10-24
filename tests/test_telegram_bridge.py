@@ -4736,6 +4736,9 @@ def test_daemon_creates_private_outbox_and_cleans_up(monkeypatch, tmp_path) -> N
             state["disconnected"] = True
 
     class Server:
+        def close(self):
+            pass
+
         async def __aenter__(self):
             return self
 
@@ -4804,6 +4807,9 @@ def test_work_daemon_captures_every_private_sender_without_owner_command_adapter
             state["disconnected"] = True
 
     class Server:
+        def close(self):
+            pass
+
         async def __aenter__(self):
             return self
 
