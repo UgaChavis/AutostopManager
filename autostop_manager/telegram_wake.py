@@ -2164,9 +2164,9 @@ class DurableWakeDispatcher:
         try:
             await _await_until(self.execution_task, self.request_deadline, self.cleanup_tasks)
         except TimeoutError:
-            self.deadline_exceeded = True
+            self.deadline_exceeded = asyncio.get_running_loop().time() >= self.request_deadline
             self.failed += 1
-            code = "wake_request_deadline_exceeded"
+            code = "wake_request_deadline_exceeded" if self.deadline_exceeded else "codex_transport_failed_or_unknown"
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - no provider/client data crosses diagnostics.
