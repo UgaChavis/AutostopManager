@@ -2652,6 +2652,10 @@ class DurableWakeDispatcher:
         with suppress(WakeError):
             await self.pause(persist=False)
         deadline = asyncio.get_running_loop().time() + 5
+        # Pause may fail on bridge IPC before reaching its owned task cleanup.
+        for task in (self.worker, self.execution_task):
+            with suppress(TimeoutError):
+                await _cancel_task_until(task, deadline, self.cleanup_tasks)
         with suppress(OSError, TimeoutError, WakeError):
             await _await_until(self.jobs.close(), deadline, self.cleanup_tasks)
         for task in (self.lifecycle_monitor, self.worker_monitor, self.supervisor, self.bootstrap_supervisor):
