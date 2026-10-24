@@ -2494,7 +2494,7 @@ class StoreState:
             if owner_workflow or workflow_id in STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS:
                 _cleanup_store_owner_runs(conn, now=datetime.now(UTC))
             existing = conn.execute(
-                "SELECT * FROM manager_runs WHERE idempotency_key = ? LIMIT 1",
+                "SELECT * FROM manager_runs WHERE idempotency_key = ? AND idempotency_key <> '' LIMIT 1",
                 (idempotency_key,),
             ).fetchone()
             if existing:
