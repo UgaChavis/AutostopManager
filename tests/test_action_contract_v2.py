@@ -262,7 +262,8 @@ def test_completion_act_reset_is_destructive_and_restores_verified_snapshot():
     assert result["compensation"]["strategy"].startswith("restore_completion_act")
 
 
-def test_payment_action_contract_requires_and_reconciles_financial_context():
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_payment_action_contract_requires_and_reconciles_financial_context(dry_run):
     result = prepare_action_contract(
         domain="payment",
         action="record_payment",
@@ -272,11 +273,13 @@ def test_payment_action_contract_requires_and_reconciles_financial_context():
             "card_id": "card-42",
             "payment_method": "card",
             "outstanding_amount": 12_500,
+            **({} if dry_run else {"dry_run_proof": "a" * 64, "dry_run_idempotency_key": "payment-preview"}),
         },
         owner_intent="Проведи оплату 12 500 по заказ-наряду ro-42 в основную кассу",
         expected_revision="ro-42@2026-07-11T10:00:00+07:00",
         idempotency_key="payment-ro-42-12500-v1",
         run_id=7,
+        dry_run=dry_run,
     )
 
     assert result["ok"] is True
@@ -284,6 +287,8 @@ def test_payment_action_contract_requires_and_reconciles_financial_context():
     assert result["execution"]["tool"] == "agent_finance_workflow"
     assert result["execution"]["operation"] == "record_repair_order_payment"
     assert result["execution"]["gateway_arguments"]["payload"]["expected_updated_at"]
+    assert "outstanding_amount" not in result["execution"]["gateway_arguments"]["payload"]
+    assert result["planned_changes"]["outstanding_amount"] == 12_500
     assert result["execution"]["ready"] is True
     assert result["idempotency"]["required"] is True
     assert result["verification"]["requires_readback"] is True
@@ -362,7 +367,7 @@ def test_payment_action_contract_requires_boolean_true_for_overpayment():
     assert "explicit_overpayment" in allowed["warnings"]
 
 
-@pytest.mark.parametrize("outstanding", ["NaN", "Infinity", "-Infinity", True])
+@pytest.mark.parametrize("outstanding", [None, "NaN", "Infinity", "-Infinity", True])
 def test_payment_action_contract_rejects_non_finite_or_boolean_outstanding_amount(outstanding):
     result = prepare_action_contract(
         domain="payment",
