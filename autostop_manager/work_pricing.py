@@ -1249,6 +1249,21 @@ def _ready_price_evidence(
     return supplied_evidence, None
 
 
+def _select_labor_experience(
+    internal_experience_json: Any,
+    supplied_evidence: dict[str, Any] | None,
+    use_internal_experience: bool,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Select the legacy source and track whether ready aggregate errors apply."""
+    if isinstance(internal_experience_json, dict):
+        return internal_experience_json, False
+    if supplied_evidence is not None and isinstance(supplied_evidence.get("provided_aggregate"), dict):
+        return supplied_evidence["provided_aggregate"], True
+    if use_internal_experience and supplied_evidence is None:
+        return _load_labor_experience(), False
+    return None, False
+
+
 def estimate_repair_work_cost(
     *,
     vehicle: str | None = None,
@@ -1321,15 +1336,9 @@ def estimate_repair_work_cost(
 
     normalized_operations, complaint_only = _normalize_operations(raw_work_items, complaint)
     identifiers = _identifier_variants(vin, chassis)
-    experience_snapshot: dict[str, Any] | None
-    if isinstance(internal_experience_json, dict):
-        experience_snapshot = internal_experience_json
-    elif supplied_evidence is not None and isinstance(supplied_evidence.get("provided_aggregate"), dict):
-        experience_snapshot = supplied_evidence["provided_aggregate"]
-    elif use_internal_experience and supplied_evidence is None:
-        experience_snapshot = _load_labor_experience()
-    else:
-        experience_snapshot = None
+    experience_snapshot, ready_aggregate_used = _select_labor_experience(
+        internal_experience_json, supplied_evidence, use_internal_experience
+    )
     research = (
         {
             "quotes": supplied_evidence["observations"],
@@ -1382,11 +1391,16 @@ def estimate_repair_work_cost(
     ):
         _apply_labor_hour_fallback(estimate, labor_analysis)
         estimate["labor_time_analysis"] = labor_analysis
-        _attach_internal_experience(
-            estimate=estimate,
-            operation=operation,
-            experience_snapshot=experience_snapshot,
-        )
+        try:
+            _attach_internal_experience(
+                estimate=estimate,
+                operation=operation,
+                experience_snapshot=experience_snapshot,
+            )
+        except (TypeError, ValueError, OverflowError):
+            if not ready_aggregate_used:
+                raise
+            return {"ok": False, "error": "invalid_ready_price_evidence", "execution": {"network_calls": 0}}
         _finalize_evidence_confidence(estimate, labor_analysis)
 
     for operation in operation_estimates:

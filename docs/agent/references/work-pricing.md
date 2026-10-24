@@ -15,6 +15,12 @@ estimate_repair_work_cost совместим: defaults auto_research=true/use_in
 auto_research=false сам по себе не запрещает legacy experience read; pure helper не делает его вообще.
 Exact signatures/примеры/ошибки — карточки tools; inputSchema — текущая MCP registration.
 
+Готовый provided_aggregate остаётся непрозрачным для collector. Если estimator при
+использовании его распознанных labor_baselines не может преобразовать счётчик,
+ценовой anchor или диапазон, он возвращает прежний invalid_ready_price_evidence
+без скрытого acquisition. Неиспользуемые поля не получают новой строгой схемы;
+явный internal_experience_json по-прежнему имеет приоритет над ready aggregate.
+
 Native MCP выполняет collector, legacy estimate и OEM web verification в ограниченном
 веб-пуле вне общего event loop. У collector исходный `deadline_seconds` включает очередь;
 после неё оставшийся acquisition budget не начинается заново. Его `max_queries`
