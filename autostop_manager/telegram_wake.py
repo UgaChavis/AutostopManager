@@ -313,6 +313,9 @@ class AppServer:
         self.last_disconnect_code: int | None = None
         self.thread_changed = asyncio.Event()
         self.thread_notification_sequence = 0
+        self._thread_status_transition: tuple[int, str, int] | None = None
+        self._idle_reconcile_seen: tuple[int, str, int] | None = None
+        self._idle_reconcile_pending: tuple[int, str] | None = None
         self.resumed_model: str | None = None
         self.lifecycle: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue(MAX_TURN_NOTIFICATIONS)
         self.last_lifecycle: tuple[str, str | None] | None = None
@@ -385,6 +388,7 @@ class AppServer:
     def _clear_events(self) -> None:
         while not self.events.empty():
             self.events.get_nowait()
+        self._idle_reconcile_pending = None
 
     async def _write(self, data: dict[str, Any]) -> None:
         from websockets.exceptions import WebSocketException
@@ -526,8 +530,37 @@ class AppServer:
                 self.block("codex_thread_status_invalid")
                 return
         self._notice_thread_change(params)
+        if self._thread_status_transition is None or self._thread_status_transition[:2] != (self.generation, kind):
+            self._thread_status_transition = (self.generation, kind, self.thread_notification_sequence)
+        self._queue_idle_reconciliation()
         if kind == "systemError":
             self.block("codex_thread_system_error")
+
+    def _queue_idle_reconciliation(self) -> None:
+        """Coalesce one exact-turn reread per idle transition; never make reader RPCs."""
+        transition = self._thread_status_transition
+        if (
+            self.recovery_state != "reconciling"
+            or not self.managed
+            or self.pausing
+            or self.blocked
+            or self.active_turn is None
+            or transition is None
+            or transition[:2] != (self.generation, "idle")
+        ):
+            return
+        signal = (self.generation, self.active_turn, transition[2])
+        if signal == self._idle_reconcile_seen:
+            return
+        self._idle_reconcile_seen = signal
+        key = (self.generation, self.active_turn)
+        if key == self._idle_reconcile_pending:
+            return
+        self._idle_reconcile_pending = key
+        try:
+            self.events.put_nowait({"method": "reconcile_idle", "generation": key[0], "turn_id": key[1]})
+        except asyncio.QueueFull:
+            self.block("codex_turn_notifications_full")
 
     def _notice_turn(self, method: str, params: Any) -> None:
         self._notice_thread_change(params)
@@ -998,6 +1031,20 @@ class AppServer:
                 self.ready_event.clear()
                 self.disconnected.set()
 
+    async def _next_turn_event(self, *, recovered: bool, notification_only: bool) -> dict[str, Any]:
+        while True:
+            if recovered and not self.pausing and not notification_only:
+                message = await asyncio.wait_for(self.events.get(), RECOVERY_POLL_INTERVAL)
+            else:
+                message = await self.events.get()
+            if message["method"] != "reconcile_idle":
+                return message
+            key = (message.get("generation"), message.get("turn_id"))
+            if key == self._idle_reconcile_pending:
+                self._idle_reconcile_pending = None
+            if recovered and key == (self.generation, self.active_turn):
+                return message
+
     async def _wait_turn(self, turn_generation: int, *, notification_only: bool = False) -> None:
         recovered = False
         while True:
@@ -1014,6 +1061,10 @@ class AppServer:
                 await self.ensure_ready()
                 self.recovery_state = "reconciling"
                 turn_generation = self.generation
+                # Include an idle received before the recovery waiter armed.
+                # Consuming its marker before the reread leaves room for a
+                # fresh transition arriving during that metadata snapshot.
+                self._queue_idle_reconciliation()
                 try:
                     status = await self._turn_metadata()
                 except (TransportLost, OSError, TimeoutError):
@@ -1024,11 +1075,10 @@ class AppServer:
                     self._complete_turn(status, recovered=True)
                     return
             try:
-                if recovered and not self.pausing and not notification_only:
-                    message = await asyncio.wait_for(self.events.get(), RECOVERY_POLL_INTERVAL)
-                else:
-                    message = await self.events.get()
+                message = await self._next_turn_event(recovered=recovered, notification_only=notification_only)
             except TimeoutError:
+                continue
+            if message["method"] == "reconcile_idle":
                 continue
             if message["method"] == "recovery_blocked":
                 raise WakeError(self.recovery_error or "codex_recovery_blocked")
