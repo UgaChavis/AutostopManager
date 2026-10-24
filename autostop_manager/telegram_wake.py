@@ -8,15 +8,17 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import pwd
 import signal
 import socket
 import stat
 import struct
+import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import suppress
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +92,98 @@ class FailedTurnContext:
     event_id: str
     turn_id: str
     status: str = "failed"
+
+
+class _StageTimings:
+    """Bounded, process-local observations; returned awaits are not business success."""
+
+    MODES = ("new", "recovery")
+    STAGES = ("peer_prepare", "idle_wait", "turn_lifecycle", "finish_request")
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._since = self._now()
+        self._dropped = 0
+        self._cells = {
+            mode: {
+                stage: {
+                    "count": 0,
+                    "sum_seconds": 0.0,
+                    "max_seconds": 0.0,
+                    "returned": 0,
+                    "raised": 0,
+                    "cancelled": 0,
+                    "in_flight": 0,
+                    **({"unsettled": 0} if stage == "finish_request" else {}),
+                }
+                for stage in self.STAGES
+            }
+            for mode in self.MODES
+        }
+
+    def _now(self) -> float | None:
+        try:
+            value = float(self._clock())
+            return value if math.isfinite(value) else None
+        except Exception:  # noqa: BLE001 - measurement failures never replace execution outcomes.
+            return None
+
+    def _record(
+        self, cell: dict[str, Any], outcome: str, started: float | None, unsettled: Callable[[], bool] | None
+    ) -> None:
+        ended = self._now()
+        if started is None or ended is None:
+            raise ValueError
+        elapsed = ended - started
+        total = cell["sum_seconds"] + elapsed
+        if elapsed < 0 or not math.isfinite(elapsed) or not math.isfinite(total):
+            raise ValueError
+        unfinished = outcome == "returned" and unsettled is not None and unsettled()
+        cell["count"] += 1
+        cell["sum_seconds"] = total
+        cell["max_seconds"] = max(cell["max_seconds"], elapsed)
+        cell[outcome] += 1
+        if unfinished:
+            cell["unsettled"] += 1
+
+    @contextmanager
+    def measure(self, mode: str, stage: str, *, unsettled: Callable[[], bool] | None = None) -> Iterator[None]:
+        cell = self._cells[mode][stage]
+        started = self._now()
+        cell["in_flight"] += 1
+        outcome = "raised"
+        try:
+            yield
+            outcome = "returned"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            cell["in_flight"] -= 1
+            try:
+                self._record(cell, outcome, started, unsettled)
+            except Exception:  # noqa: BLE001 - no exception payload is retained or exported.
+                self._dropped += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        now = self._now()
+        age = None if now is None or self._since is None else now - self._since
+        return {
+            "scope": "process",
+            "observed_seconds": age if age is not None and math.isfinite(age) and age >= 0 else None,
+            "dropped_samples": self._dropped,
+            **{
+                mode: {
+                    stage: {
+                        **cell,
+                        "sum_seconds": cell["sum_seconds"] if cell["count"] else None,
+                        "max_seconds": cell["max_seconds"] if cell["count"] else None,
+                    }
+                    for stage, cell in cells.items()
+                }
+                for mode, cells in self._cells.items()
+            },
+        }
 
 
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
@@ -1679,6 +1773,7 @@ class DurableWakeDispatcher:
         self.stop_proof_verified = False
         self.pause_requested = False
         self.bootstrap_checked = False
+        self._stage_timings = _StageTimings()
 
     @property
     def cleanup_pending(self) -> bool:
@@ -1789,6 +1884,7 @@ class DurableWakeDispatcher:
             "cleanup_pending": cleanup,
             "queue_can_advance": queue_reason is None,
             "queue_block_reason": queue_reason,
+            "stage_timings": self._stage_timings.snapshot(),
         }
 
     def start(self) -> None:
@@ -2151,6 +2247,7 @@ class DurableWakeDispatcher:
                 )
 
     async def _execute(self, job: dict[str, Any], *, recovering: bool = False) -> None:
+        mode = "recovery" if recovering else "new"
         self.current_job = job
         self.active = True
         self.accepted += 1
@@ -2196,18 +2293,23 @@ class DurableWakeDispatcher:
 
         async def execute() -> None:
             if recovering:
-                await self._use_thread(job["thread_id"], verify_settings=False)
+                with self._stage_timings.measure(mode, "peer_prepare"):
+                    await self._use_thread(job["thread_id"], verify_settings=False)
                 self.app.active_turn = job["turn_id"]
                 self.app.active_event_id = job["event_ids"][0]
                 self.app.outcome_unknown = True
                 self.app.last_turn_started = False
-                await self.app._wait_turn(self.app.generation - 1, notification_only=True)
+                with self._stage_timings.measure(mode, "turn_lifecycle"):
+                    await self.app._wait_turn(self.app.generation - 1, notification_only=True)
             else:
-                await self._select_peer(job)
+                with self._stage_timings.measure(mode, "peer_prepare"):
+                    await self._select_peer(job)
                 await self._health("waiting_thread")
-                await self.app.wait_idle()
+                with self._stage_timings.measure(mode, "idle_wait"):
+                    await self.app.wait_idle()
                 await self._health("running")
-                await self.app.run_job_turn(job_instruction(job), before_start, bind_turn)
+                with self._stage_timings.measure(mode, "turn_lifecycle"):
+                    await self.app.run_job_turn(job_instruction(job), before_start, bind_turn)
 
         code = None
         self.execution_task = asyncio.create_task(execute())
@@ -2226,7 +2328,12 @@ class DurableWakeDispatcher:
             self.active = False
             self.terminal_stop_pending = True
         try:
-            await self._finish_request(job, code)
+            with self._stage_timings.measure(
+                mode,
+                "finish_request",
+                unsettled=lambda: not self.stop_proof_verified or self.terminal_stop_pending or self.cleanup_pending,
+            ):
+                await self._finish_request(job, code)
         finally:
             if self.stop_proof_verified:
                 self.current_job = None
