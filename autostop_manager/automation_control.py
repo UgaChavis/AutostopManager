@@ -618,6 +618,11 @@ class AutomationControlServer:
                 raise AutomationError("automation_request_invalid")
             raw_request_id = request.get("request_id")
             request_id = raw_request_id if isinstance(raw_request_id, str) and len(raw_request_id) <= 64 else ""
+            # Keep the reply ID encodable; handle still validates the original request.
+            try:
+                request_id.encode("utf-8")
+            except UnicodeEncodeError:
+                request_id = ""
             if uid not in self.allowed_uids:
                 raise AutomationError("automation_peer_not_allowed")
             raw_actor = request.get("actor")
