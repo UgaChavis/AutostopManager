@@ -22,7 +22,7 @@ class PartIntentRule:
 
 
 def _paired_axle_patterns(front: str, rear: str, part: str) -> tuple[str, ...]:
-    join = r"\s*(?:/|,|&|\+|(?:,?\s*)(?:и\b|а\s+также\b|and\b)(?:\s+(?:также|also)\b)?)\s*"
+    join = r"\s*(?:/|,|&|\+|(?:,\s*)?(?:и\b|а\s+также\b|and\b)(?:\s+(?:также|also)\b)?)\s*"
     end = r"(?=\s*(?:$|[,;.!?]))"
     return tuple(
         pattern
