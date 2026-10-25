@@ -56,6 +56,10 @@ BLOCKING_J1_ADD_QUERIES_TOOLS = frozenset({"j1_research_add_queries"})
 _J1_ADD_QUERIES_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 BLOCKING_J1_CANCEL_TOOLS = frozenset({"j1_research_cancel"})
 _J1_CANCEL_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_START_TOOLS = frozenset({"j1_research_start"})
+_J1_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_RECORD_FACTS_TOOLS = frozenset({"j1_research_record_facts"})
+_J1_RECORD_FACTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
@@ -105,6 +109,29 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
                 "code": "j1_add_queries_executor_unavailable"
                 if tool_name in BLOCKING_J1_ADD_QUERIES_TOOLS
                 else "j1_cancel_executor_unavailable",
+                "reason": reason,
+            },
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_J1_START_TOOLS | BLOCKING_J1_RECORD_FACTS_TOOLS:
+        # The tool name fixes the schema without inspecting state or inputs.
+        # A started start/write may have committed even when its caller failed.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.research.v1"
+            if tool_name in BLOCKING_J1_START_TOOLS
+            else "autostop.j1.vin_research.v1",
+            "error": {
+                "code": "j1_start_executor_unavailable"
+                if tool_name in BLOCKING_J1_START_TOOLS
+                else "j1_record_facts_executor_unavailable",
                 "reason": reason,
             },
             "outcome_uncertain": error.adapter_started,
@@ -191,7 +218,11 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _J1_CANCEL_EXECUTOR
+            _J1_RECORD_FACTS_EXECUTOR
+            if tool_name in BLOCKING_J1_RECORD_FACTS_TOOLS
+            else _J1_START_EXECUTOR
+            if tool_name in BLOCKING_J1_START_TOOLS
+            else _J1_CANCEL_EXECUTOR
             if tool_name in BLOCKING_J1_CANCEL_TOOLS
             else _J1_ADD_QUERIES_EXECUTOR
             if tool_name in BLOCKING_J1_ADD_QUERIES_TOOLS

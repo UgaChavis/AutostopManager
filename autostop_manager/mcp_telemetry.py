@@ -20,8 +20,10 @@ from .mcp_read_executor import (
     BLOCKING_J1_ADD_QUERIES_TOOLS,
     BLOCKING_J1_CANCEL_TOOLS,
     BLOCKING_J1_DOCUMENT_TOOLS,
+    BLOCKING_J1_RECORD_FACTS_TOOLS,
     BLOCKING_J1_REPORT_TOOLS,
     BLOCKING_J1_RESULTS_TOOLS,
+    BLOCKING_J1_START_TOOLS,
     BLOCKING_J1_STATUS_TOOLS,
     BLOCKING_READ_TOOLS,
     BLOCKING_WEB_TOOLS,
@@ -158,7 +160,9 @@ def instrument_manager_tools(server: Any) -> None:
                 tool.is_async = True
             elif (
                 name
-                in BLOCKING_J1_ADD_QUERIES_TOOLS
+                in BLOCKING_J1_START_TOOLS
+                | BLOCKING_J1_RECORD_FACTS_TOOLS
+                | BLOCKING_J1_ADD_QUERIES_TOOLS
                 | BLOCKING_J1_CANCEL_TOOLS
                 | BLOCKING_J1_STATUS_TOOLS
                 | BLOCKING_J1_REPORT_TOOLS
