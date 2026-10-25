@@ -28,7 +28,10 @@ Exact signatures/примеры/ошибки — карточки tools; inputSc
 
 Native MCP выполняет collector, legacy estimate и OEM web verification в ограниченном
 веб-пуле вне общего event loop. У collector исходный `deadline_seconds` включает очередь;
-после неё оставшийся acquisition budget не начинается заново. Его `max_queries`
+после неё оставшийся acquisition budget не начинается заново. Значения `true/false` для
+`deadline_seconds` в native MCP отклоняются как SDK ToolError до очереди и вызова collector;
+прямой helper сохраняет invalid_input. Числа, поддержанные числовые строки и default20
+сохраняют прежнее поведение. `max_queries`
 принимает только JSON integer 1–4; encoded nested JSON сохраняется. При отказе collector
 сохраняет automotive envelope, а legacy estimate — своё плоское семейство ответа.
 Не начавшийся worker имеет известные нулевые reads; после старта при timeout counts
