@@ -18,6 +18,7 @@ from mcp.types import CallToolResult, TextContent
 from .mcp_read_executor import (
     BLOCKING_CONTROL_TOOLS,
     BLOCKING_J1_REPORT_TOOLS,
+    BLOCKING_J1_RESULTS_TOOLS,
     BLOCKING_J1_STATUS_TOOLS,
     BLOCKING_READ_TOOLS,
     BLOCKING_WEB_TOOLS,
@@ -152,8 +153,11 @@ def instrument_manager_tools(server: Any) -> None:
             if name in STORE_BLOCKING_TOOLS and not tool.is_async:
                 function = offload_store(function, str(name), workers=getattr(server, "store_workers", None))
                 tool.is_async = True
-            elif name in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS and not tool.is_async:
-                # Status/report keep effectful hints and use independent pools.
+            elif (
+                name in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS | BLOCKING_J1_RESULTS_TOOLS
+                and not tool.is_async
+            ):
+                # Stateful J1 readers keep effectful hints and independent pools.
                 function = offload_read(function, str(name))
                 tool.is_async = True
             elif name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
