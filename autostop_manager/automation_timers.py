@@ -9,9 +9,11 @@ import re
 import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
@@ -20,6 +22,7 @@ from .automation_registry import AutomationError, AutomationStore, isoformat, pa
 
 
 SYSTEMD_TIMER_PATTERN = re.compile(r"[A-Za-z0-9_.@-]{1,120}\.timer\Z")
+_MAX_STATUS_WORKERS = 5
 
 
 @dataclass(frozen=True)
@@ -215,7 +218,53 @@ class SystemTimerController:
         }
 
     def list_status(self) -> list[dict[str, Any]]:
-        return [self.inspect(timer_id) for timer_id in sorted(self.policies)]
+        timer_ids = sorted(self.policies)
+        # Injected runners may be stateful or bound to the calling thread.
+        if len(timer_ids) < 2 or self.runner is not _systemctl:
+            return [self.inspect(timer_id) for timer_id in timer_ids]
+
+        outcomes: dict[str, dict[str, Any] | BaseException] = {}
+        outcome_lock = Lock()
+
+        def inspect_one(timer_id: str) -> None:
+            outcome: dict[str, Any] | BaseException
+            try:
+                outcome = self.inspect(timer_id)
+            except BaseException as error:  # noqa: BLE001 - re-raised in the caller after all workers join
+                outcome = error
+            # A submit failure can lose its Future after queueing the work.
+            # Retain the outcome independently so fallback never repeats it.
+            with outcome_lock:
+                outcomes[timer_id] = outcome
+
+        pool: ThreadPoolExecutor | None = None
+        submitted_all = False
+        try:
+            pool = ThreadPoolExecutor(
+                max_workers=min(_MAX_STATUS_WORKERS, len(timer_ids)),
+                thread_name_prefix="autostop-timer-status",
+            )
+            for timer_id in timer_ids:
+                pool.submit(inspect_one, timer_id)
+            submitted_all = True
+        except (OSError, RuntimeError):
+            # Resource exhaustion must not discard the remaining diagnostics.
+            # Join running work and cancel queued work before serial fallback.
+            pass
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=not submitted_all)
+
+        rows = []
+        for timer_id in timer_ids:
+            if timer_id not in outcomes:
+                rows.append(self.inspect(timer_id))
+                continue
+            outcome = outcomes[timer_id]
+            if isinstance(outcome, BaseException):
+                raise outcome
+            rows.append(outcome)
+        return rows
 
     def adopt_current(self, timer_id: str) -> dict[str, Any]:
         current = self.inspect(timer_id)
