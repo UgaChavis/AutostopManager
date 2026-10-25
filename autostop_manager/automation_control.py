@@ -10,6 +10,7 @@ import os
 import socket
 import stat
 import struct
+import time
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -589,6 +590,14 @@ class AutomationControlServer:
         self.server: asyncio.AbstractServer | None = None
 
     async def serve_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await self._serve_request(reader, writer)
+        finally:
+            writer.close()
+            with suppress(ConnectionError, OSError):
+                await writer.wait_closed()
+
+    async def _serve_request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         request_id = ""
         try:
             peer_socket = writer.get_extra_info("socket")
@@ -609,6 +618,11 @@ class AutomationControlServer:
                 raise AutomationError("automation_request_invalid")
             raw_request_id = request.get("request_id")
             request_id = raw_request_id if isinstance(raw_request_id, str) and len(raw_request_id) <= 64 else ""
+            # Keep the reply ID encodable; handle still validates the original request.
+            try:
+                request_id.encode("utf-8")
+            except UnicodeEncodeError:
+                request_id = ""
             if uid not in self.allowed_uids:
                 raise AutomationError("automation_peer_not_allowed")
             raw_actor = request.get("actor")
@@ -633,10 +647,6 @@ class AutomationControlServer:
             await writer.drain()
         except (ConnectionError, OSError):
             pass
-        finally:
-            writer.close()
-            with suppress(ConnectionError, OSError):
-                await writer.wait_closed()
 
     async def start(self) -> asyncio.AbstractServer:
         parent = self.socket_path.parent
@@ -713,6 +723,7 @@ class AutomationControlClient:
         idempotency_key: str | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        """Bound the transport exchange without retrying an already sent operation."""
         request_id = str(uuid4())
         request: dict[str, Any] = {
             "protocol": AUTOMATION_CONTROL_PROTOCOL,
@@ -730,16 +741,29 @@ class AutomationControlClient:
             raise AutomationError("automation_request_too_large")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(self.timeout)
+            deadline = time.monotonic() + self.timeout if self.timeout else None
+
+            def set_remaining_timeout() -> None:
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("automation_control_deadline_exceeded")
+                    client.settimeout(remaining)
+
+            set_remaining_timeout()
             client.connect(str(self.socket_path))
+            set_remaining_timeout()
             client.sendall(encoded)
             chunks = bytearray()
             while b"\n" not in chunks:
+                set_remaining_timeout()
                 chunk = client.recv(min(8192, MAX_RESPONSE_BYTES + 1 - len(chunks)))
                 if not chunk:
                     break
                 chunks.extend(chunk)
                 if len(chunks) > MAX_RESPONSE_BYTES:
                     raise AutomationError("automation_response_too_large")
+            set_remaining_timeout()
         line = bytes(chunks).split(b"\n", 1)[0]
         try:
             response = json.loads(line)

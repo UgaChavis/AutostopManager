@@ -237,46 +237,56 @@ def urlopen(
     admission = _ADMISSIONS if admission is None else admission
     if not admission.acquire(blocking=False):
         raise URLError("provider_transport_busy")
-    completed = threading.Event()
-    outcome: list[tuple[bool, Any]] = []
-    error_lock = threading.Lock()
-    error_response: tuple[int, Message] | None = None
+    try:
+        completed = threading.Event()
+        outcome: list[tuple[bool, Any]] = []
+        error_lock = threading.Lock()
+        error_response: tuple[int, Message] | None = None
 
-    def remember_error_headers(status: int, headers: Message) -> None:
-        nonlocal error_response
-        with error_lock:
-            error_response = status, headers
+        def remember_error_headers(status: int, headers: Message) -> None:
+            nonlocal error_response
+            with error_lock:
+                error_response = status, headers
 
-    def incomplete_http_error() -> HTTPError | None:
-        with error_lock:
-            observed = error_response
-        if observed is None:
-            return None
-        status, headers = observed
-        return HTTPError(request.full_url, status, f"HTTP status {status}", headers, io.BytesIO())
+        def incomplete_http_error() -> HTTPError | None:
+            with error_lock:
+                observed = error_response
+            if observed is None:
+                return None
+            status, headers = observed
+            return HTTPError(request.full_url, status, f"HTTP status {status}", headers, io.BytesIO())
 
-    def worker() -> None:
-        try:
-            response = asyncio.run(
-                _fetch(
-                    request,
-                    deadline=deadline,
-                    maximum=maximum,
-                    follow_redirects=follow_redirects,
-                    truncate=truncate,
-                    error_maximum=error_maximum,
-                    on_error_headers=remember_error_headers if preserve_error_status else None,
+        def worker() -> None:
+            try:
+                response = asyncio.run(
+                    _fetch(
+                        request,
+                        deadline=deadline,
+                        maximum=maximum,
+                        follow_redirects=follow_redirects,
+                        truncate=truncate,
+                        error_maximum=error_maximum,
+                        on_error_headers=remember_error_headers if preserve_error_status else None,
+                    )
                 )
-            )
-            outcome.append((True, response))
-        except BaseException as exc:  # noqa: BLE001 - hand the original exception back to the owning caller.
-            outcome.append((False, exc))
-        finally:
-            admission.release()
-            completed.set()
+                outcome.append((True, response))
+            except BaseException as exc:  # noqa: BLE001 - hand the original exception back to the owning caller.
+                outcome.append((False, exc))
+            finally:
+                admission.release()
+                completed.set()
+
+        try:
+            worker_thread = threading.Thread(target=worker, name="autostop-bounded-http", daemon=True)
+        except RuntimeError:
+            raise URLError("provider_transport_unavailable") from None
+    except BaseException:
+        # Setup has not started a worker, so ownership is still with this caller.
+        admission.release()
+        raise
 
     try:
-        threading.Thread(target=worker, name="autostop-bounded-http", daemon=True).start()
+        worker_thread.start()
     except RuntimeError:
         admission.release()
         raise URLError("provider_transport_unavailable") from None

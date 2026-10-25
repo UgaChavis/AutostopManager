@@ -1408,14 +1408,15 @@ class StoreState:
     def connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
         try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         finally:
             conn.close()
 
@@ -2493,7 +2494,7 @@ class StoreState:
             if owner_workflow or workflow_id in STORE_RELEASE_SMOKE_LEDGER_WORKFLOW_IDS:
                 _cleanup_store_owner_runs(conn, now=datetime.now(UTC))
             existing = conn.execute(
-                "SELECT * FROM manager_runs WHERE idempotency_key = ? LIMIT 1",
+                "SELECT * FROM manager_runs WHERE idempotency_key = ? AND idempotency_key <> '' LIMIT 1",
                 (idempotency_key,),
             ).fetchone()
             if existing:

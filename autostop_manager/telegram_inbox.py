@@ -168,6 +168,7 @@ class TelegramInbox:
     def _create_schema(self) -> None:
         # executescript normally commits a pending transaction first. Begin
         # inside the script so defaults, DDL and the version migrate together.
+        # Partial age indexes keep intake pruning from scanning recent history.
         with self._db:
             self._db.executescript(
                 f"""
@@ -190,6 +191,8 @@ class TelegramInbox:
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, outcome TEXT, reason_code TEXT
             );
             CREATE INDEX IF NOT EXISTS jobs_peer_state ON jobs(peer_id, state);
+            CREATE INDEX IF NOT EXISTS jobs_retention_updated_at ON jobs(updated_at)
+                WHERE state IN ('completed','released');
             CREATE TABLE IF NOT EXISTS events (
                 sequence TEXT PRIMARY KEY, peer_id INTEGER NOT NULL REFERENCES peers(peer_id),
                 message_id INTEGER NOT NULL, received_at TEXT NOT NULL, state TEXT NOT NULL,
@@ -198,6 +201,8 @@ class TelegramInbox:
             );
             CREATE INDEX IF NOT EXISTS events_queue ON events(state, received_at);
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
+            CREATE INDEX IF NOT EXISTS events_retention_completed_at ON events(completed_at)
+                WHERE completed_at IS NOT NULL;
             CREATE TABLE IF NOT EXISTS effects (
                 effect_key TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
                 kind TEXT NOT NULL, context_revision INTEGER NOT NULL, effect_slot INTEGER NOT NULL, text_sha256 TEXT,

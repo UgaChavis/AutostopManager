@@ -8,6 +8,11 @@ collect_work_price_evidence принимает выбранные kinds/sources 
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
 policy.version и basis обязательны; hourly_rate либо сопоставимые public observations являются явной основой.
 policy.coefficient/rounding/currency сохраняются. Unknown expense не ноль и оставляет total неизвестным.
+После действующей числовой нормализации произведения, средние и коэффициент рассчитываются
+в десятичной арифметике. Каждая операция округляется до policy.rounding с половиной вверх
+(HALF_UP); итоги и границы суммируют уже округлённые операции. Например, 0.29 часа × ставка50
+и 1 час × ставка14.5 при шаге1 одинаково дают15. Наружу возвращаются прежние конечные
+числовые JSON-значения; непредставимая цена или сумма сохраняет calculation_overflow.
 Included operations не считаются дважды; unresolved overlap исключается с missing adjustment.
 Пример: 2 часа × ставка1000, policy hourly_rate/version=demo-v1 → known_subtotal2000.
 Неизвестная диагностика остаётся unknown/excluded; такой расчёт не обещает полный клиентский итог.
@@ -15,9 +20,18 @@ estimate_repair_work_cost совместим: defaults auto_research=true/use_in
 auto_research=false сам по себе не запрещает legacy experience read; pure helper не делает его вообще.
 Exact signatures/примеры/ошибки — карточки tools; inputSchema — текущая MCP registration.
 
+Готовый provided_aggregate остаётся непрозрачным для collector. Если estimator при
+использовании его распознанных labor_baselines не может преобразовать счётчик,
+ценовой anchor или диапазон, он возвращает прежний invalid_ready_price_evidence
+без скрытого acquisition. Неиспользуемые поля не получают новой строгой схемы;
+явный internal_experience_json по-прежнему имеет приоритет над ready aggregate.
+
 Native MCP выполняет collector, legacy estimate и OEM web verification в ограниченном
 веб-пуле вне общего event loop. У collector исходный `deadline_seconds` включает очередь;
-после неё оставшийся acquisition budget не начинается заново. Его `max_queries`
+после неё оставшийся acquisition budget не начинается заново. Значения `true/false` для
+`deadline_seconds` в native MCP отклоняются как SDK ToolError до очереди и вызова collector;
+прямой helper сохраняет invalid_input. Числа, поддержанные числовые строки и default20
+сохраняют прежнее поведение. `max_queries`
 принимает только JSON integer 1–4; encoded nested JSON сохраняется. При отказе collector
 сохраняет automotive envelope, а legacy estimate — своё плоское семейство ответа.
 Не начавшийся worker имеет известные нулевые reads; после старта при timeout counts

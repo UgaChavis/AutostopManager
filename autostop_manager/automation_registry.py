@@ -345,6 +345,10 @@ SCHEMA_STATEMENTS = (
     ON manager_automation_runs(status, scheduled_for, requested_at)
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_manager_automation_runs_job_status
+    ON manager_automation_runs(job_id, status)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS manager_automation_cursors (
         job_id TEXT NOT NULL,
         cursor_name TEXT NOT NULL,
@@ -379,6 +383,10 @@ SCHEMA_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_manager_automation_outbox_queue
     ON manager_automation_outbox(status, next_attempt_at, lease_until)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_manager_automation_outbox_job_status
+    ON manager_automation_outbox(job_id, status)
     """,
     """
     CREATE TABLE IF NOT EXISTS manager_automation_controller_runtime (
@@ -448,16 +456,17 @@ class AutomationStore:
         ):
             raise AutomationError("automation_db_file_invalid")
         connection = sqlite3.connect(path, timeout=5)
-        os.chmod(path, 0o600, follow_symlinks=False)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
         try:
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
+            os.chmod(path, 0o600, follow_symlinks=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         finally:
             connection.close()
 

@@ -225,29 +225,24 @@ def collect_work_price_evidence(
     )
 
 
-def _price_round(value: float, quantum: float) -> float:
-    if not math.isfinite(value):
-        raise OverflowError("work_price_overflow")
-    amount, step = Decimal(str(value)), Decimal(str(quantum))
-    with localcontext() as context:
-        try:
-            rounded = (amount / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
-        except InvalidOperation:
-            # Keep every previously successful rounding unchanged. Only a
-            # larger integer quotient needs more than the default 28 digits;
-            # finite float inputs bound this precision to a few hundred.
-            integer_digits = max(1, amount.adjusted() - step.adjusted() + 1)
-            context.prec = max(context.prec, integer_digits + len(step.as_tuple().digits) + 2)
-            rounded = (amount / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
-    price = float(rounded)
+def _price_float(value: Decimal) -> float:
+    price = float(value)
     if not math.isfinite(price):
         raise OverflowError("work_price_overflow")
     return price
 
 
-def _price_midpoint(lower: float, upper: float) -> float:
-    combined = lower + upper
-    return combined / 2 if math.isfinite(combined) else lower / 2 + upper / 2
+def _price_round(value: Decimal, coefficient: Decimal, quantum: Decimal) -> Decimal:
+    # Keep the existing finite-price limits before and after applying policy;
+    # the float conversions validate representability without losing digits.
+    _price_float(value)
+    amount = value * coefficient
+    _price_float(amount)
+    return (amount / quantum).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * quantum
+
+
+def _price_midpoint(lower: Decimal, upper: Decimal) -> Decimal:
+    return (lower + upper) / 2
 
 
 def _public_observation_key(
@@ -319,7 +314,7 @@ def _operation_price(
     observations: list[dict[str, Any]],
     basis: str,
     matcher: OperationMatcher,
-) -> tuple[float | None, list[float] | None]:
+) -> tuple[Decimal | None, list[Decimal] | None]:
     if basis == "hourly_rate":
         hours = finite_number(row.get("hours"))
         bounds = row.get("range_hours")
@@ -328,15 +323,20 @@ def _operation_price(
         if isinstance(bounds, list) and len(bounds) == 2:
             lower, upper = finite_number(bounds[0]), finite_number(bounds[1])
             if lower is not None and upper is not None:
-                low, high = lower * rate, upper * rate
-                return (_price_midpoint(low, high), [low, high]) if low <= high else (None, None)
+                low, high = Decimal(str(lower)) * Decimal(str(rate)), Decimal(str(upper)) * Decimal(str(rate))
+                if low > high:
+                    return None, None
+                return _price_midpoint(low, high), [low, high]
         if "range_hours" in row:
             return None, None
-        return (hours * rate, [hours * rate, hours * rate]) if hours is not None else (None, None)
+        if hours is None:
+            return None, None
+        price = Decimal(str(hours)) * Decimal(str(rate))
+        return price, [price, price]
     requested_name = row.get("operation_name")
     if not isinstance(requested_name, str) or not requested_name.strip():
         return None, None
-    prices = sorted(_public_price_sample(observations, requested_name, matcher))
+    prices = sorted(Decimal(str(price)) for price in _public_price_sample(observations, requested_name, matcher))
     if not prices:
         return None, None
     middle = len(prices) // 2
@@ -386,35 +386,43 @@ def calculate_work_price(
     seen: set[str] = set()
     operation_matcher = OperationMatcher()
     included = {str(operation) for row in labor for operation in row.get("included_operations", [])}
-    for index, row in enumerate(labor):
-        key = _operation_key(row, row.get("operation_name") or index)
-        if key in seen or key in included:
-            exclusions.append({"operation_id": key, "reason": "duplicate_or_included_operation"})
-            continue
-        seen.add(key)
-        if row.get("overlaps_with") and not row.get("overlap_resolved"):
-            missing.append(key + ".overlap_adjustment")
-            exclusions.append({"operation_id": key, "reason": "unresolved_overlap"})
-            continue
-        price, bounds = _operation_price(row, rate, sample, str(basis), operation_matcher)
-        if price is None or bounds is None:
-            missing.append(key + ".price_basis")
-            exclusions.append({"operation_id": key, "reason": "unknown_labor_or_price"})
-            continue
-        try:
-            prices.append(
-                {
-                    "operation_id": key,
-                    "operation_name": row.get("operation_name"),
-                    "price": _price_round(price * coefficient, quantum),
-                    "range": [_price_round(value * coefficient, quantum) for value in bounds],
-                }
-            )
-        except (InvalidOperation, OverflowError):
-            return invalid("calculate_work_price", "calculation_overflow")
-    subtotal = sum(row["price"] for row in prices)
-    total_range = [sum(row["range"][index] for row in prices) for index in (0, 1)]
-    if not all(math.isfinite(value) for value in [subtotal, *total_range]):
+    try:
+        with localcontext() as context:
+            # Normalized binary64 inputs span at most 633 decimal places.
+            # Three factors, a midpoint, 500 rows and quantum division fit
+            # within 2048 digits, including a guard against half-step drift.
+            context.prec = max(context.prec, 2048)
+            decimal_coefficient, decimal_quantum = Decimal(str(coefficient)), Decimal(str(quantum))
+            for index, row in enumerate(labor):
+                key = _operation_key(row, row.get("operation_name") or index)
+                if key in seen or key in included:
+                    exclusions.append({"operation_id": key, "reason": "duplicate_or_included_operation"})
+                    continue
+                seen.add(key)
+                if row.get("overlaps_with") and not row.get("overlap_resolved"):
+                    missing.append(key + ".overlap_adjustment")
+                    exclusions.append({"operation_id": key, "reason": "unresolved_overlap"})
+                    continue
+                price, bounds = _operation_price(row, rate, sample, str(basis), operation_matcher)
+                if price is None or bounds is None:
+                    missing.append(key + ".price_basis")
+                    exclusions.append({"operation_id": key, "reason": "unknown_labor_or_price"})
+                    continue
+                prices.append(
+                    {
+                        "operation_id": key,
+                        "operation_name": row.get("operation_name"),
+                        "price": _price_round(price, decimal_coefficient, decimal_quantum),
+                        "range": [_price_round(value, decimal_coefficient, decimal_quantum) for value in bounds],
+                    }
+                )
+            subtotal = _price_float(sum((row["price"] for row in prices), Decimal(0)))
+            total_range = [_price_float(sum((row["range"][index] for row in prices), Decimal(0))) for index in (0, 1)]
+            prices = [
+                {**row, "price": _price_float(row["price"]), "range": [_price_float(value) for value in row["range"]]}
+                for row in prices
+            ]
+    except (InvalidOperation, OverflowError):
         return invalid("calculate_work_price", "calculation_overflow")
     data = {
         "basis": basis,
