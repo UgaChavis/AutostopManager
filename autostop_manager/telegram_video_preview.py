@@ -160,7 +160,11 @@ def _reserve_storyboard(path: Path, *, inbox_dir: Path) -> None:
         )
     except OSError as exc:
         raise VideoPreviewError("storyboard_unavailable") from exc
-    os.close(descriptor)
+    try:
+        os.close(descriptor)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _render_storyboard(video_path: Path, output_path: Path, *, duration: float, frame_count: int) -> None:
