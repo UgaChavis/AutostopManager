@@ -18,6 +18,7 @@ BLOCKING_READ_TOOLS = frozenset(
         "partsapi_catalog_lookup",
         "decode_vin_vpic",
         "decode_wmi_vpic",
+        "benchmark_vin_parts_lookup",
         "vininfo_decode",
         "corgi_decode",
         "public_aftermarket_catalog_lookup",
