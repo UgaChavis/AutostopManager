@@ -2252,6 +2252,18 @@ def _partsapi_identifier(value: Any) -> str:
     return "".join(str(value or "").split()).upper()
 
 
+def _partsapi_vin_decode_identifiers(payload: dict[str, Any]) -> tuple[str, ...]:
+    """Retain incomplete aliases; malformed supplied identifiers reject this response."""
+    identifiers = []
+    for key, value in payload.items():
+        if str(key).casefold() not in {"vin", "frame"} or value in (None, ""):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError("VINdecode returned a malformed identifier alias.")
+        identifiers.append(_partsapi_identifier(value))
+    return tuple(identifiers)
+
+
 def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
     """Retain identifier-only response wrappers without reading unrelated metadata."""
     if depth > 5:
@@ -2260,11 +2272,7 @@ def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str,
         return tuple(value for item in payload for value in _partsapi_wrapped_identifiers(item, depth=depth + 1))
     if not isinstance(payload, dict):
         return ()
-    return tuple(
-        _partsapi_identifier(value)
-        for key, value in payload.items()
-        if str(key).casefold() in {"vin", "frame"} and isinstance(value, (str, int)) and value
-    ) + tuple(
+    return _partsapi_vin_decode_identifiers(payload) + tuple(
         value
         for key, nested in payload.items()
         if str(key).casefold() in {"data", "result", "array", "items"}
@@ -2301,11 +2309,7 @@ def _partsapi_vin_decode_records(
 
             if not all(identity_values_agree(field, aliases[0], value) for value in aliases[1:]):
                 raise ValueError("VINdecode returned conflicting vehicle aliases.")
-    identifiers += tuple(
-        _partsapi_identifier(value)
-        for key, value in payload.items()
-        if str(key).casefold() in {"vin", "frame"} and isinstance(value, (str, int)) and value
-    )
+    identifiers += _partsapi_vin_decode_identifiers(payload)
     records = [
         record
         for key, nested in payload.items()
@@ -2631,6 +2635,7 @@ def extract_partsapi_vehicle_profiles(
                     if any(value != requested for value in full_identifiers + related_identifiers)
                     else True
                     if full_identifiers
+                    and all(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", value) for value in identifiers + descendants)
                     else None
                 )
             profile["identifier_matches_request"] = matches
