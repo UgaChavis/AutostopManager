@@ -60,6 +60,8 @@ BLOCKING_J1_START_TOOLS = frozenset({"j1_research_start"})
 _J1_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 BLOCKING_J1_RECORD_FACTS_TOOLS = frozenset({"j1_research_record_facts"})
 _J1_RECORD_FACTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_VIN_START_TOOLS = frozenset({"j1_research_vin"})
+_J1_VIN_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
@@ -134,6 +136,21 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
                 else "j1_record_facts_executor_unavailable",
                 "reason": reason,
             },
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_J1_VIN_START_TOOLS:
+        # VIN start has a known schema; refusal must not inspect private state.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.vin_research.v1",
+            "error": {"code": "j1_vin_executor_unavailable", "reason": reason},
             "outcome_uncertain": error.adapter_started,
         }
     elif tool_name in BLOCKING_CONTROL_TOOLS:
@@ -218,7 +235,9 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _J1_RECORD_FACTS_EXECUTOR
+            _J1_VIN_START_EXECUTOR
+            if tool_name in BLOCKING_J1_VIN_START_TOOLS
+            else _J1_RECORD_FACTS_EXECUTOR
             if tool_name in BLOCKING_J1_RECORD_FACTS_TOOLS
             else _J1_START_EXECUTOR
             if tool_name in BLOCKING_J1_START_TOOLS
