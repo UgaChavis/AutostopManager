@@ -44,11 +44,30 @@ BLOCKING_WEB_TOOLS = frozenset(
 BLOCKING_CONTROL_TOOLS = frozenset({"manager_automations", "manager_automation_control"})
 _WEB_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=90)
 _CONTROL_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=30)
+BLOCKING_J1_STATUS_TOOLS = frozenset({"j1_research_status"})
+_J1_STATUS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
-    if tool_name in BLOCKING_CONTROL_TOOLS:
-        result: dict[str, Any] = {"ok": False, "error": "automation_control_unavailable"}
+    result: dict[str, Any]
+    if tool_name in BLOCKING_J1_STATUS_TOOLS:
+        # Routing to a general/VIN job itself requires state access. A transport
+        # refusal must not route, echo inputs or claim that housekeeping rolled back.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.research.v1",
+            "error": {"code": "j1_status_executor_unavailable", "reason": reason},
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_CONTROL_TOOLS:
+        result = {"ok": False, "error": "automation_control_unavailable"}
     elif tool_name in {"collect_work_price_evidence", "estimate_repair_work_cost", "verify_oem_candidates_web"}:
         # Once a worker starts, its still-running network/attempt counts are unknown.
         # These failures are constructed before domain validation: no input echo.
@@ -129,7 +148,9 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _CONTROL_EXECUTOR
+            _J1_STATUS_EXECUTOR
+            if tool_name in BLOCKING_J1_STATUS_TOOLS
+            else _CONTROL_EXECUTOR
             if tool_name in BLOCKING_CONTROL_TOOLS
             else _WEB_EXECUTOR
             if tool_name in BLOCKING_WEB_TOOLS

@@ -15,7 +15,13 @@ from uuid import uuid4
 
 from mcp.types import CallToolResult, TextContent
 
-from .mcp_read_executor import BLOCKING_CONTROL_TOOLS, BLOCKING_READ_TOOLS, BLOCKING_WEB_TOOLS, offload_read
+from .mcp_read_executor import (
+    BLOCKING_CONTROL_TOOLS,
+    BLOCKING_J1_STATUS_TOOLS,
+    BLOCKING_READ_TOOLS,
+    BLOCKING_WEB_TOOLS,
+    offload_read,
+)
 from .mcp_store_executor import STORE_BLOCKING_TOOLS, offload_store
 
 
@@ -144,6 +150,10 @@ def instrument_manager_tools(server: Any) -> None:
             function = tool.fn
             if name in STORE_BLOCKING_TOOLS and not tool.is_async:
                 function = offload_store(function, str(name), workers=getattr(server, "store_workers", None))
+                tool.is_async = True
+            elif name in BLOCKING_J1_STATUS_TOOLS and not tool.is_async:
+                # Status includes stateful lifecycle housekeeping, with its own pool.
+                function = offload_read(function, str(name))
                 tool.is_async = True
             elif name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
                 function = offload_read(function, str(name))
