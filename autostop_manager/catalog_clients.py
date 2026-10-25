@@ -2477,6 +2477,90 @@ def _partsapi_us_vehicle_identifiers(payload: Any, *, depth: int = 0) -> tuple[s
     )
 
 
+def _partsapi_us_bound_records(
+    payload: Any, *, depth: int = 0, ancestors: tuple[str, ...] = ()
+) -> list[tuple[str, dict[str, Any]]]:
+    """Read recognized cards bound to one full VIN, including actual parent aliases."""
+    if depth > 5:
+        return []
+    if isinstance(payload, list):
+        return [
+            card for row in payload for card in _partsapi_us_bound_records(row, depth=depth + 1, ancestors=ancestors)
+        ]
+    if not isinstance(payload, dict):
+        return []
+    local_identifiers = _partsapi_us_identifiers(payload, depth=depth)
+    try:
+        record, recognized, identifiers = _partsapi_us_decode_record(payload, depth=depth)
+    except ValueError:
+        record, recognized, identifiers = {}, False, ()
+    values = ancestors + identifiers
+    cards = []
+    if (
+        recognized
+        and _partsapi_us_error_codes(record.get("ErrorCode"))[1]
+        and values
+        and len(set(values)) == 1
+        and re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", values[0])
+    ):
+        cards.append((values[0], record))
+    results = payload.get("Results")
+    result_card = (
+        isinstance(results, list)
+        and bool(results)
+        and (
+            (len(results) == 1 and isinstance(results[0], dict))
+            or all(isinstance(row, dict) and "Variable" in row and "Value" in row for row in results)
+        )
+    )
+    owns_record = result_card or any(
+        key in payload for key in ("Make", "Model", "ErrorCode", "ErrorText", "Error Code", "Error Text")
+    )
+    inherited = ancestors if owns_record else ancestors + local_identifiers
+    for key, nested in payload.items():
+        if str(key).casefold() in {"data", "result", "results", "array", "items"}:
+            cards.extend(_partsapi_us_bound_records(nested, depth=depth + 1, ancestors=inherited))
+    return cards
+
+
+_PARTSAPI_US_FACT_COMPARISON_LIMIT = 4096
+
+
+def _partsapi_us_fact_conflict(payload: Any) -> bool:
+    """Reject contradictory or comparison-budget-exhausted evidence without a merge."""
+    from .vehicle_identity import identity_values_agree
+
+    known: dict[str, dict[str, list[str]]] = {}
+    comparisons = 0
+    aliases = {
+        "make": "Make",
+        "model": "Model",
+        "model_year": "ModelYear",
+        "engine": "EngineModel",
+        "modification": "Trim",
+    }
+    for vin, record in _partsapi_us_bound_records(payload):
+        previous = known.setdefault(vin, {})
+        for field, key in aliases.items():
+            value = record.get(key)
+            if not isinstance(value, str) and not (field == "model_year" and type(value) is int):
+                continue
+            text = " ".join(str(value).split())
+            if not text or text.casefold() in {"not applicable", "null", "unknown"}:
+                continue
+            values = previous.setdefault(field, [])
+            if text in values:
+                continue
+            for other in values:
+                if comparisons >= _PARTSAPI_US_FACT_COMPARISON_LIMIT:
+                    return True
+                comparisons += 1
+                if not identity_values_agree(field, text, other):
+                    return True
+            values.append(text)
+    return False
+
+
 def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | None) -> dict[str, Any]:
     try:
         record, recognized, identifiers = _partsapi_us_decode_record(payload)
@@ -2512,6 +2596,9 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     }
     codes, diagnostics_valid = _partsapi_us_error_codes(record.get("ErrorCode"))
     recognized = recognized and diagnostics_valid
+    facts_conflict = recognized and matches is True and bool(facts) and _partsapi_us_fact_conflict(payload)
+    if facts_conflict:
+        facts = {}
     missing = [field for field in aliases if field not in facts]
     provenance = {
         "provider": "partsapi_ru",
@@ -2537,7 +2624,7 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     outcome = "partial_result" if facts else "empty_result"
     if facts and not missing and not codes and diagnostics_valid and matches is True:
         status, outcome = "complete", "success"
-    if not record:
+    if not record or facts_conflict:
         status, outcome = "unparsed", "unparsed_response"
     if matches is False:
         status, outcome = "identifier_mismatch", "identifier_mismatch"
@@ -2563,7 +2650,7 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
         "failure_class": "provider_identifier_mismatch"
         if matches is False
         else "adapter_unparsed_response"
-        if not record
+        if not record or facts_conflict
         else None,
         "requires_fallback": outcome != "success" or matches is not True,
     }
