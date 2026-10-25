@@ -46,11 +46,13 @@ _WEB_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeo
 _CONTROL_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=30)
 BLOCKING_J1_STATUS_TOOLS = frozenset({"j1_research_status"})
 _J1_STATUS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_REPORT_TOOLS = frozenset({"j1_research_report"})
+_J1_REPORT_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
     result: dict[str, Any]
-    if tool_name in BLOCKING_J1_STATUS_TOOLS:
+    if tool_name in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS:
         # Routing to a general/VIN job itself requires state access. A transport
         # refusal must not route, echo inputs or claim that housekeeping rolled back.
         reason = {
@@ -62,8 +64,13 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
         }.get(error.code, "executor_unavailable")
         result = {
             "ok": False,
-            "schema": "autostop.j1.research.v1",
-            "error": {"code": "j1_status_executor_unavailable", "reason": reason},
+            "schema": "autostop.j1.report.v1" if tool_name in BLOCKING_J1_REPORT_TOOLS else "autostop.j1.research.v1",
+            "error": {
+                "code": "j1_report_executor_unavailable"
+                if tool_name in BLOCKING_J1_REPORT_TOOLS
+                else "j1_status_executor_unavailable",
+                "reason": reason,
+            },
             "outcome_uncertain": error.adapter_started,
         }
     elif tool_name in BLOCKING_CONTROL_TOOLS:
@@ -148,7 +155,9 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _J1_STATUS_EXECUTOR
+            _J1_REPORT_EXECUTOR
+            if tool_name in BLOCKING_J1_REPORT_TOOLS
+            else _J1_STATUS_EXECUTOR
             if tool_name in BLOCKING_J1_STATUS_TOOLS
             else _CONTROL_EXECUTOR
             if tool_name in BLOCKING_CONTROL_TOOLS
