@@ -26,7 +26,7 @@ def atomic_write(path, text):
         raise ValueError("journal_symlink")
     fd, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -104,7 +104,7 @@ def ensure_week(root, week):
 def records(path):
     if path.is_symlink():
         raise ValueError("journal_symlink")
-    return [json.loads(block) for block in RECORD.findall(path.read_text())]
+    return [json.loads(block) for block in RECORD.findall(path.read_text(encoding="utf-8"))]
 
 
 def canonical_record(record):
@@ -148,7 +148,7 @@ def recover(root):
         raise ValueError("journal_symlink")
     if not pending.exists():
         return
-    payload = json.loads(pending.read_text())
+    payload = json.loads(pending.read_text(encoding="utf-8"))
     record = {key: value for key, value in payload.items() if key != "at"}
     validate(record)
     week = week_for(datetime.fromisoformat(payload["at"]))
@@ -165,7 +165,7 @@ def recover(root):
             + json.dumps(payload, ensure_ascii=False, indent=2)
             + "\n```\n"
         )
-        atomic_write(path, path.read_text().rstrip() + "\n" + block)
+        atomic_write(path, path.read_text(encoding="utf-8").rstrip() + "\n" + block)
     atomic_write(root / "current-state.md", "# M2 — текущее состояние\n\n" + record["state"].strip() + "\n")
     publish_pointers(root, week)
     pending.unlink()
@@ -229,7 +229,7 @@ def main():
         parser.error("append requires --record; start has no record")
     if args.expected_state_sha256 is not None and args.operation != "append":
         parser.error("--expected-state-sha256 requires append")
-    record = json.loads(args.record.read_text()) if args.record else None
+    record = json.loads(args.record.read_text(encoding="utf-8")) if args.record else None
     print(json.dumps(run(record=record, expected_state_sha256=args.expected_state_sha256)))
 
 
