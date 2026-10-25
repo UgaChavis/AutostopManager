@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from mcp.types import CallToolResult, TextContent
 
+from .mcp_drom_executor import DROM_BLOCKING_TOOLS, offload_drom
 from .mcp_read_executor import (
     BLOCKING_CONTROL_TOOLS,
     BLOCKING_J1_ADD_QUERIES_TOOLS,
@@ -158,6 +159,9 @@ def instrument_manager_tools(server: Any) -> None:
             function = tool.fn
             if name in STORE_BLOCKING_TOOLS and not tool.is_async:
                 function = offload_store(function, str(name), workers=getattr(server, "store_workers", None))
+                tool.is_async = True
+            elif name in DROM_BLOCKING_TOOLS and not tool.is_async:
+                function = offload_drom(function, str(name))
                 tool.is_async = True
             elif (
                 name
