@@ -60,6 +60,12 @@ Jobs не являются долговременной customer memory. Лок�
 
 ## Runtime и guards
 
+### Native dispatch статуса J1
+
+- Native status dispatch uses a separate bounded pool with lazily started workers: one worker, one waiting call, fixed 30-second caller wait. It shares no automation, provider-read or web-worker capacity. This serializes only status workers with each other, not all J1 operations; routing, SQLite init and VIN lifecycle housekeeping remain unchanged.
+- Executor refusal/failure returns the generic J1 transport envelope `schema=autostop.j1.research.v1`, `ok=false`, `error={code:"j1_status_executor_unavailable",reason:...}`. The finite reasons are `busy`, `wait_timeout`, `execution_failed`, `executor_unavailable`, `executor_draining`; unknown executor reasons map to `executor_unavailable`. No job ID/input is echoed and no routing DB is read to classify an unstarted call. Normal general/VIN responses and domain errors retain their original schemas.
+- `stage`, `adapter_started` and `adapter_may_continue` describe dispatch; `outcome_uncertain=true` for any started failed/timed-out operation, including a completed worker exception that may already have changed housekeeping state. It is false only before dispatch. Caller timeout/cancellation does not stop a worker or roll back its effects; the real admission slot remains occupied until completion, while an abandoned queued call does not start. `retryable=false` and `retry_attempted=false`: no automatic retry after an unknown outcome.
+
 Static search использует loopback `AUTOSTOP_J1_SEARXNG_URL`, может иметь fallback. Fetch HTML/PDF соблюдает robots/rate limits и URL/privacy guards. Static J1 работает без browser. Browser использует Unix socket renderer и отдельный egress proxy; запрещены login/cookies/CAPTCHA. Проверяются Docker networks, DNS/private-address guards, socket и SHA-bound marker `root:root 0600`. Отсутствие prerequisite отключает browser path; marker вручную не создаётся.
 
 Static HTTP ограничивает время отдельного обмена, включая чтение заголовков, тела,
