@@ -26,6 +26,11 @@ MAX_EXCERPT_CHARS = 360
 _CATALOG_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,79}\Z")
 _VIN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Za-hj-npr-z0-9]{17}(?![A-Za-z0-9])")
 _PAGE_MARKER = re.compile(r"\A\f\[PAGE[ \t]+(\d+)\][ \t]*\r?\n?\Z")
+_RG_MATCH_TERMINATOR = "\x1e"
+_VIN_HALO_CHARS = 17
+# Longer than the halo, with no overlapping prefix/suffix: rpartition cannot
+# mistake source characters in the halo for this added wire separator.
+_RG_HALO_SEPARATOR = "\x1f" + _RG_MATCH_TERMINATOR * _VIN_HALO_CHARS
 
 
 def _catalog_root() -> Path | None:
@@ -88,6 +93,21 @@ def _load_entries(root: Path) -> tuple[list[dict[str, Any]], str | None]:
     return entries, None
 
 
+def _redact_match_window(window: str, halo: str) -> str:
+    """Mask complete VINs overlapping the window, without returning halo text."""
+    end = len(window)
+    pieces: list[str] = []
+    cursor = 0
+    for match in _VIN.finditer(window + halo):
+        if match.start() >= end:
+            break
+        pieces.append(window[cursor : match.start()])
+        pieces.append("[VIN REDACTED]")
+        cursor = min(match.end(), end)
+    pieces.append(window[cursor:])
+    return "".join(pieces)
+
+
 def _rg_matches(
     path: Path, query: str, limit: int, deadline: float, *, is_pdf: bool
 ) -> tuple[list[tuple[int, str]], str | None]:
@@ -103,16 +123,26 @@ def _rg_matches(
             )
     except OSError:
         return [], "catalog_read_failed"
+    # Reserve PDF previous context and the maximum expansion when one visible
+    # VIN character becomes a complete redaction label. Halo text is not shown.
+    context_chars = MAX_EXCERPT_CHARS - (103 if is_pdf else 0) - (len("[VIN REDACTED]") - 1)
+    after_chars = context_chars - 100 - len(query)
+    window = rf".{{0,100}}?{literal}.{{0,{after_chars}}}"
+    halo = rf".{{0,{_VIN_HALO_CHARS}}}"
     if is_tsv:
         # A sheet name is repeated on every physical XLSX row. Match only the
-        # article/data fields after the sheet and source-row columns.
-        expression = r"^[^\t]*\t[0-9]+\t.*" + literal
+        # article/data fields, retaining the sheet/row locator separately.
+        expression = r"^([^\t]*\t[0-9]+\t).*?(" + window + ")(" + halo + ")"
+        replacement = "${1}${2}" + _RG_HALO_SEPARATOR + "${3}"
     elif has_synthetic_page_markers:
         # Extracted PDF pages have synthetic [PAGE N] lines. Exclude them in
         # ripgrep itself, before --max-count can hide a real catalog match.
-        expression = r"^(?:[^\x0C].*)?" + literal
+        expression = rf"^(?:({literal}.{{0,{after_chars}}})({halo})|[^\x0C].*?({window})({halo}))"
+        replacement = "${1}${3}" + _RG_HALO_SEPARATOR + "${2}${4}"
     else:
-        expression = query
+        # Legacy fixed-string search could cross invalid UTF-8 before a hit.
+        expression = r"^(?-u:.)*?(" + window + ")(" + halo + ")"
+        replacement = "${1}" + _RG_HALO_SEPARATOR + "${2}"
     command = [
         "rg",
         "--no-config",
@@ -126,9 +156,11 @@ def _rg_matches(
         "--max-columns-preview",
         "--max-count",
         str(limit),
+        # Anchoring gives at most one bounded replacement per physical line.
+        "--only-matching",
+        "--replace",
+        replacement + _RG_MATCH_TERMINATOR,
     ]
-    if not is_tsv and not has_synthetic_page_markers:
-        command.append("--fixed-strings")
     command.extend(["-e", expression, "--", str(path)])
     try:
         result = subprocess.run(
@@ -151,7 +183,17 @@ def _rg_matches(
     for line in result.stdout.split("\n"):
         number, separator, content = line.partition(":")
         if separator and number.isdecimal():
-            matches.append((int(number), content))
+            if not content.endswith(_RG_MATCH_TERMINATOR):
+                return [], "catalog_excerpt_truncated"
+            window, halo_separator, halo = content[:-1].rpartition(_RG_HALO_SEPARATOR)
+            if not halo_separator or len(halo) > _VIN_HALO_CHARS:
+                return [], "catalog_excerpt_truncated"
+            prefix = ""
+            if is_tsv:
+                sheet, tab, rest = window.partition("\t")
+                row, row_tab, window = rest.partition("\t")
+                prefix = sheet + tab + row + row_tab
+            matches.append((int(number), prefix + _redact_match_window(window, halo)))
     return matches, None
 
 
