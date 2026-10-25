@@ -50,11 +50,16 @@ BLOCKING_J1_REPORT_TOOLS = frozenset({"j1_research_report"})
 _J1_REPORT_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 BLOCKING_J1_RESULTS_TOOLS = frozenset({"j1_research_results"})
 _J1_RESULTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_DOCUMENT_TOOLS = frozenset({"j1_research_document"})
+_J1_DOCUMENT_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
     result: dict[str, Any]
-    if tool_name in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS | BLOCKING_J1_RESULTS_TOOLS:
+    if (
+        tool_name
+        in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS | BLOCKING_J1_RESULTS_TOOLS | BLOCKING_J1_DOCUMENT_TOOLS
+    ):
         # Routing to a general/VIN job itself requires state access. A transport
         # refusal must not route, echo inputs or claim that housekeeping rolled back.
         reason = {
@@ -72,6 +77,8 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
                 if tool_name in BLOCKING_J1_REPORT_TOOLS
                 else "j1_results_executor_unavailable"
                 if tool_name in BLOCKING_J1_RESULTS_TOOLS
+                else "j1_document_executor_unavailable"
+                if tool_name in BLOCKING_J1_DOCUMENT_TOOLS
                 else "j1_status_executor_unavailable",
                 "reason": reason,
             },
@@ -159,7 +166,9 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _J1_RESULTS_EXECUTOR
+            _J1_DOCUMENT_EXECUTOR
+            if tool_name in BLOCKING_J1_DOCUMENT_TOOLS
+            else _J1_RESULTS_EXECUTOR
             if tool_name in BLOCKING_J1_RESULTS_TOOLS
             else _J1_REPORT_EXECUTOR
             if tool_name in BLOCKING_J1_REPORT_TOOLS
