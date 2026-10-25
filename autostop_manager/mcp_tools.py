@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal, cast
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import Field, StrictBool, StrictFloat, StrictInt
+from pydantic import BeforeValidator, Field, StrictBool, StrictFloat, StrictInt
 
 from .action_contract import prepare_action_contract
 from .automotive_mcp import register_automotive_tools
@@ -95,6 +95,59 @@ class _OriginalJsonMetadata(FuncMetadata):
             if name in data:
                 parsed[name] = data[name]
         return parsed
+
+
+def _reject_partsapi_boolean_id(value: Any) -> Any:
+    if isinstance(value, bool):
+        raise ValueError("PartsAPI identifiers must not be boolean")
+    return value
+
+
+def _reject_partsapi_boolean_parameter(value: Any) -> Any:
+    if isinstance(value, bool):
+        raise ValueError("PartsAPI provider_parameters values must not be boolean")
+    return value
+
+
+def _guard_partsapi_native_inputs(server: Any) -> None:
+    """Reject bool before SDK coercion while retaining schemas and signatures."""
+    manager = getattr(server, "_tool_manager", None)
+    if manager is None:
+        return
+    tool = manager.get_tool("partsapi_catalog_lookup")
+    if tool is None:
+        return
+    model = tool.fn_metadata.arg_model
+    id_validator = BeforeValidator(_reject_partsapi_boolean_id)
+    validators = dict.fromkeys(
+        (
+            "article_id",
+            "supplier_id",
+            "lang_id",
+            "model_id",
+            "motor_id",
+            "top_category_id",
+            "sub_category_id",
+            "car_id",
+        ),
+        id_validator,
+    )
+    changed = False
+    for name, validator in validators.items():
+        field = model.model_fields[name]
+        if validator not in field.metadata:
+            field.metadata.append(validator)
+            changed = True
+    # Validate each value so SDK errors report that leaf, never sibling data.
+    parameters = model.model_fields["provider_parameters"]
+    parameters_annotation = (
+        dict[str, Annotated[str | int | float, BeforeValidator(_reject_partsapi_boolean_parameter)]] | None
+    )
+    if parameters.annotation != parameters_annotation:
+        parameters.annotation = parameters_annotation
+        changed = True
+    if changed:
+        model.model_rebuild(force=True)
 
 
 def _preserve_original_json_inputs(server: Any) -> None:
@@ -1577,6 +1630,7 @@ def register_manager_tools(  # noqa: C901
     if include_tools is not None:
         server.tool = original_tool
     _preserve_original_json_inputs(server)
+    _guard_partsapi_native_inputs(server)
     instrument_manager_tools(server)
 
 
