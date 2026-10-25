@@ -44,11 +44,52 @@ bridge._load_telegram_events = lambda: SimpleNamespace(NewMessage=lambda **_kw: 
 # This fixture has no owner binding and must not require root-owned /etc paths.
 bridge._owner_peer_id = lambda *_args, **_kwargs: None
 
-async def stubborn():
+selected_stage = {
+    "shield_disconnect": "disconnect", "auth_disconnect": "disconnect",
+    "bind_failure": "disconnect", "normal": "disconnect",
+    "task_cancel": "task_cancel", "runner_cancel": "runner_cancel",
+    "server_exit": "server_exit",
+}.get(mode)
+requested_watchdog = None
+stage_entered = False
+start_watchdog = bridge._start_daemon_cleanup_watchdog
+
+def request_watchdog(watchdog):
+    global requested_watchdog
+    assert requested_watchdog is None or requested_watchdog is watchdog
+    requested_watchdog = watchdog
+    if stage_entered:
+        start_watchdog(watchdog)
+
+def enter_stage(stage, marker):
+    global stage_entered
+    if stage == selected_stage:
+        assert requested_watchdog is not None, "cleanup_watchdog_not_requested_before_stage"
+        if stage_entered:
+            return
+        print(marker, flush=True)
+        stage_entered = True
+        start_watchdog(requested_watchdog)
+    else:
+        print(marker, flush=True)
+
+# Keep the real Timer and process-exit callback, but budget the selected hang
+# after its entry marker rather than after unrelated SQLite cleanup. The
+# slow_effect_close control below keeps the original, ungated production start.
+if selected_stage is not None:
+    bridge._start_daemon_cleanup_watchdog = request_watchdog
+
+reconcile_started = asyncio.Event()
+
+async def stubborn(stage=None, started=None):
+    if started is not None:
+        started.set()
     while True:
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
+            if stage is not None:
+                enter_stage(stage, stage + "_entered=true")
             continue
 
 class Client:
@@ -71,20 +112,23 @@ class Client:
         return mode != "auth_disconnect"
 
     def disconnect(self):
-        print("cleanup_entered=true", flush=True)
+        enter_stage("disconnect", "cleanup_entered=true")
         if mode in {"shield_disconnect", "auth_disconnect", "bind_failure"}:
             return asyncio.shield(asyncio.create_task(stubborn()))
+        runner_started = None
         if mode == "runner_cancel":
-            asyncio.create_task(stubborn())
+            runner_started = asyncio.Event()
+            asyncio.create_task(stubborn("runner_cancel", runner_started))
 
         async def completed():
-            return None
+            if runner_started is not None:
+                await runner_started.wait()
 
         return completed()
 
 async def reconcile(*_args):
     if mode == "task_cancel":
-        await stubborn()
+        await stubborn("task_cancel", reconcile_started)
     else:
         await asyncio.Event().wait()
 
@@ -104,7 +148,7 @@ class HangingServerExit:
 
     async def __aexit__(self, *_args):
         self.server.close()
-        print("server_exit_entered=true", flush=True)
+        enter_stage("server_exit", "server_exit_entered=true")
         await stubborn()
 
     async def serve_forever(self):
@@ -114,12 +158,27 @@ async def local_server(*args, **kwargs):
     if mode == "bind_failure":
         raise OSError("synthetic_listener_failure")
     server = await start_server(*args, **kwargs)
-    asyncio.get_running_loop().call_soon(
-        client.disconnected.set_exception, ConnectionError("synthetic_private_transport_detail")
-    )
+    if mode == "task_cancel":
+        async def fail_after_reconcile_started():
+            await reconcile_started.wait()
+            client.disconnected.set_exception(ConnectionError("synthetic_private_transport_detail"))
+
+        asyncio.create_task(fail_after_reconcile_started())
+    else:
+        asyncio.get_running_loop().call_soon(
+            client.disconnected.set_exception, ConnectionError("synthetic_private_transport_detail")
+        )
     return HangingServerExit(server) if mode == "server_exit" else server
 
 bridge.asyncio.start_unix_server = local_server
+if mode == "slow_effect_close":
+    close_effect_executor = bridge.EffectExecutor.close
+
+    async def delayed_effect_close(self):
+        await asyncio.sleep(0.3)
+        await close_effect_executor(self)
+
+    bridge.EffectExecutor.close = delayed_effect_close
 raise SystemExit(bridge.main(["--account", "work", "daemon", "--monitor-incoming"]))
 """
 
@@ -175,9 +234,38 @@ def test_cli_cleanup_deadline_exits_entire_process_and_preserves_unknown_intent(
     assert result.returncode == 1
     assert time.monotonic() - started < 4
     assert result.stderr == "telegram_bridge_cleanup_timeout=true\n"
-    expected_entry = "server_exit_entered=true" if mode == "server_exit" else "cleanup_entered=true"
-    if mode != "task_cancel":
-        assert expected_entry in result.stdout
+    expected_entry = {
+        "server_exit": "server_exit_entered=true",
+        "task_cancel": "task_cancel_entered=true",
+        "runner_cancel": "runner_cancel_entered=true",
+    }.get(mode, "cleanup_entered=true")
+    assert expected_entry in result.stdout
+    if mode == "runner_cancel":
+        assert "cleanup_entered=true" in result.stdout
+    assert not (tmp_path / "run" / "bridge.sock").exists()
+    assert _durable_rows(tmp_path) == previous
+    assert (tmp_path / "state" / "known-send-ledger.json").read_bytes() == b'{"synthetic_known_sent":true}\n'
+
+
+def test_cli_ungated_cleanup_deadline_includes_pre_disconnect_work(tmp_path):
+    previous = _committed_unknown_state(tmp_path)
+    script = tmp_path / "daemon-child.py"
+    script.write_text(CHILD)
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, str(script), str(tmp_path), "slow_effect_close"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert time.monotonic() - started < 4
+    assert result.stderr == "telegram_bridge_cleanup_timeout=true\n"
+    assert result.stdout == ""
     assert not (tmp_path / "run" / "bridge.sock").exists()
     assert _durable_rows(tmp_path) == previous
     assert (tmp_path / "state" / "known-send-ledger.json").read_bytes() == b'{"synthetic_known_sent":true}\n'

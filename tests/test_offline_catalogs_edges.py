@@ -217,7 +217,10 @@ def test_ripgrep_nonstandard_exit_code_and_malformed_output(
         catalogs.subprocess,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
-            [], 0, stdout="bad\n2:part 12345" + catalogs._RG_HALO_SEPARATOR + "\x1e\n", stderr=""
+            [],
+            0,
+            stdout="bad\n2:" + catalogs._RG_LEFT_HALO_SEPARATOR + "part 12345" + catalogs._RG_HALO_SEPARATOR + "\x1e\n",
+            stderr="",
         ),
     )
     assert catalogs._rg_matches(path, "12345", 2, time.monotonic() + 10, is_pdf=True) == (

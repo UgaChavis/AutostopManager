@@ -213,7 +213,7 @@ def test_long_row_excerpt_keeps_vin_redaction(install_catalog):
 
 def test_right_capture_edge_preserves_existing_full_vin_redaction(install_catalog):
     vin = "A" * 17
-    body = "x" * 21000 + " NEEDLE " + "r" * 133 + " " + vin + " tail"
+    body = "x" * 21000 + " NEEDLE " + "r" * 120 + " " + vin + " tail"
     install_catalog("\f[PAGE 1]\nHeading\n" + body + "\n")
     previous_excerpt = catalogs._excerpt("Heading | " + body, "NEEDLE")
     assert "[VIN REDACTED]" in previous_excerpt
@@ -232,10 +232,10 @@ def test_right_capture_edge_preserves_existing_full_vin_redaction(install_catalo
 @pytest.mark.parametrize(
     "prefix,format,suffix,padding",
     [
-        ("\f[PAGE 1]\nHeading\n", "pdf", ".txt", 135),
-        ("\f[PAGE 1]\nHeading\n", "pdf", ".txt", 120),
-        ("Sheet1\t2\t", "xlsx", ".tsv", 238),
-        ("Sheet1\t2\t", "xlsx", ".tsv", 223),
+        ("\f[PAGE 1]\nHeading\n", "pdf", ".txt", 122),
+        ("\f[PAGE 1]\nHeading\n", "pdf", ".txt", 107),
+        ("Sheet1\t2\t", "xlsx", ".tsv", 225),
+        ("Sheet1\t2\t", "xlsx", ".tsv", 210),
     ],
     ids=["pdf-one-visible", "pdf-sixteen-visible", "tsv-one-visible", "tsv-sixteen-visible"],
 )
@@ -255,7 +255,7 @@ def test_right_boundary_vin_is_masked_before_visible_window_is_returned(
     assert len(excerpt) <= catalogs.MAX_EXCERPT_CHARS
 
 
-@pytest.mark.parametrize("padding", [135, 120], ids=["one-visible", "sixteen-visible"])
+@pytest.mark.parametrize("padding", [122, 107], ids=["one-visible", "sixteen-visible"])
 def test_right_halo_retains_alphanumeric_neighbor_that_disqualifies_vin(install_catalog, padding):
     body = "x" * 21000 + " NEEDLE " + "r" * padding + " " + "A" * 17 + "Z tail\n"
     install_catalog("\f[PAGE 1]\nHeading\n" + body)
@@ -265,10 +265,10 @@ def test_right_halo_retains_alphanumeric_neighbor_that_disqualifies_vin(install_
     excerpt = result["results"][0]["excerpt"]
     assert "NEEDLE" in excerpt
     assert "[VIN REDACTED]" not in excerpt
-    assert excerpt.endswith("A" if padding == 135 else "A" * 16)
+    assert excerpt.endswith("A" if padding == 122 else "A" * 16)
 
 
-@pytest.mark.parametrize("padding", [61, 46], ids=["one-visible", "sixteen-visible"])
+@pytest.mark.parametrize("padding", [48, 33], ids=["one-visible", "sixteen-visible"])
 def test_max_query_pdf_previous_context_and_complete_redaction_share_budget(install_catalog, padding):
     query = "PART-" * 15 + "ABCDE"
     body = "x" * 21000 + " " + query + " " + "r" * padding + " " + "1" * 17 + " tail\n"
@@ -285,7 +285,7 @@ def test_max_query_pdf_previous_context_and_complete_redaction_share_budget(inst
 
 
 def test_halo_only_identifier_is_not_appended_to_the_visible_excerpt(install_catalog):
-    install_catalog("\f[PAGE 1]\nHeading\n" + "x" * 21000 + " NEEDLE " + "r" * 140 + " " + "A" * 17 + " tail\n")
+    install_catalog("\f[PAGE 1]\nHeading\n" + "x" * 21000 + " NEEDLE " + "r" * 127 + " " + "A" * 17 + " tail\n")
 
     result = catalogs.search_offline_parts_catalogs("NEEDLE")
 

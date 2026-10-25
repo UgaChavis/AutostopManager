@@ -31,6 +31,7 @@ _VIN_HALO_CHARS = 17
 # Longer than the halo, with no overlapping prefix/suffix: rpartition cannot
 # mistake source characters in the halo for this added wire separator.
 _RG_HALO_SEPARATOR = "\x1f" + _RG_MATCH_TERMINATOR * _VIN_HALO_CHARS
+_RG_LEFT_HALO_SEPARATOR = "\x1d" + _RG_MATCH_TERMINATOR * _VIN_HALO_CHARS
 
 
 def _catalog_root() -> Path | None:
@@ -93,18 +94,22 @@ def _load_entries(root: Path) -> tuple[list[dict[str, Any]], str | None]:
     return entries, None
 
 
-def _redact_match_window(window: str, halo: str) -> str:
+def _redact_match_window(window: str, left_halo: str, right_halo: str) -> str:
     """Mask complete VINs overlapping the window, without returning halo text."""
-    end = len(window)
+    context = left_halo + window + right_halo
+    start = len(left_halo)
+    end = start + len(window)
     pieces: list[str] = []
-    cursor = 0
-    for match in _VIN.finditer(window + halo):
+    cursor = start
+    for match in _VIN.finditer(context):
+        if match.end() <= start:
+            continue
         if match.start() >= end:
             break
-        pieces.append(window[cursor : match.start()])
+        pieces.append(context[cursor : max(start, match.start())])
         pieces.append("[VIN REDACTED]")
         cursor = min(match.end(), end)
-    pieces.append(window[cursor:])
+    pieces.append(context[cursor:end])
     return "".join(pieces)
 
 
@@ -123,26 +128,35 @@ def _rg_matches(
             )
     except OSError:
         return [], "catalog_read_failed"
-    # Reserve PDF previous context and the maximum expansion when one visible
-    # VIN character becomes a complete redaction label. Halo text is not shown.
-    context_chars = MAX_EXCERPT_CHARS - (103 if is_pdf else 0) - (len("[VIN REDACTED]") - 1)
+    # Reserve PDF previous context and the maximum expansion at both edges when
+    # one visible VIN character becomes a complete label. Halo text is not shown.
+    context_chars = MAX_EXCERPT_CHARS - (103 if is_pdf else 0) - 2 * (len("[VIN REDACTED]") - 1)
     after_chars = context_chars - 100 - len(query)
     window = rf".{{0,100}}?{literal}.{{0,{after_chars}}}"
     halo = rf".{{0,{_VIN_HALO_CHARS}}}"
+    # Lazy left evidence retains the first hit and up to 100 visible characters
+    # before it, including when the hit is less than 117 characters into a line.
+    left_halo = rf".{{0,{_VIN_HALO_CHARS}}}?"
     if is_tsv:
         # A sheet name is repeated on every physical XLSX row. Match only the
         # article/data fields, retaining the sheet/row locator separately.
-        expression = r"^([^\t]*\t[0-9]+\t).*?(" + window + ")(" + halo + ")"
-        replacement = "${1}${2}" + _RG_HALO_SEPARATOR + "${3}"
+        expression = r"^([^\t]*\t[0-9]+\t).*?(" + left_halo + ")(" + window + ")(" + halo + ")"
+        replacement = "${1}${2}" + _RG_LEFT_HALO_SEPARATOR + "${3}" + _RG_HALO_SEPARATOR + "${4}"
     elif has_synthetic_page_markers:
         # Extracted PDF pages have synthetic [PAGE N] lines. Exclude them in
         # ripgrep itself, before --max-count can hide a real catalog match.
-        expression = rf"^(?:({literal}.{{0,{after_chars}}})({halo})|[^\x0C].*?({window})({halo}))"
-        replacement = "${1}${3}" + _RG_HALO_SEPARATOR + "${2}${4}"
+        # Keep a leading character in contiguous evidence when it belongs to
+        # the window or left halo; a discarded distant prefix is never prepended.
+        expression = (
+            rf"^(?:((?:[^\x0C].{{0,99}}?)??{literal}.{{0,{after_chars}}})({halo})"
+            rf"|([^\x0C].{{0,{_VIN_HALO_CHARS - 1}}}?)({window})({halo})"
+            rf"|[^\x0C].*?({left_halo})({window})({halo}))"
+        )
+        replacement = "${3}${6}" + _RG_LEFT_HALO_SEPARATOR + "${1}${4}${7}" + _RG_HALO_SEPARATOR + "${2}${5}${8}"
     else:
         # Legacy fixed-string search could cross invalid UTF-8 before a hit.
-        expression = r"^(?-u:.)*?(" + window + ")(" + halo + ")"
-        replacement = "${1}" + _RG_HALO_SEPARATOR + "${2}"
+        expression = r"^(?-u:.)*?(" + left_halo + ")(" + window + ")(" + halo + ")"
+        replacement = "${1}" + _RG_LEFT_HALO_SEPARATOR + "${2}" + _RG_HALO_SEPARATOR + "${3}"
     command = [
         "rg",
         "--no-config",
@@ -185,15 +199,18 @@ def _rg_matches(
         if separator and number.isdecimal():
             if not content.endswith(_RG_MATCH_TERMINATOR):
                 return [], "catalog_excerpt_truncated"
-            window, halo_separator, halo = content[:-1].rpartition(_RG_HALO_SEPARATOR)
-            if not halo_separator or len(halo) > _VIN_HALO_CHARS:
+            context, halo_separator, right_halo = content[:-1].rpartition(_RG_HALO_SEPARATOR)
+            if not halo_separator or len(right_halo) > _VIN_HALO_CHARS:
                 return [], "catalog_excerpt_truncated"
             prefix = ""
             if is_tsv:
-                sheet, tab, rest = window.partition("\t")
-                row, row_tab, window = rest.partition("\t")
+                sheet, tab, rest = context.partition("\t")
+                row, row_tab, context = rest.partition("\t")
                 prefix = sheet + tab + row + row_tab
-            matches.append((int(number), prefix + _redact_match_window(window, halo)))
+            left_halo, left_separator, window = context.partition(_RG_LEFT_HALO_SEPARATOR)
+            if not left_separator or len(left_halo) > _VIN_HALO_CHARS:
+                return [], "catalog_excerpt_truncated"
+            matches.append((int(number), prefix + _redact_match_window(window, left_halo, right_halo)))
     return matches, None
 
 
