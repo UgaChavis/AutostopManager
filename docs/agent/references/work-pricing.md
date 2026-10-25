@@ -8,6 +8,11 @@ collect_work_price_evidence принимает выбранные kinds/sources 
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
 policy.version и basis обязательны; hourly_rate либо сопоставимые public observations являются явной основой.
 policy.coefficient/rounding/currency сохраняются. Unknown expense не ноль и оставляет total неизвестным.
+После действующей числовой нормализации произведения, средние и коэффициент рассчитываются
+в десятичной арифметике. Каждая операция округляется до policy.rounding с половиной вверх
+(HALF_UP); итоги и границы суммируют уже округлённые операции. Например, 0.29 часа × ставка50
+и 1 час × ставка14.5 при шаге1 одинаково дают15. Наружу возвращаются прежние конечные
+числовые JSON-значения; непредставимая цена или сумма сохраняет calculation_overflow.
 Included operations не считаются дважды; unresolved overlap исключается с missing adjustment.
 Пример: 2 часа × ставка1000, policy hourly_rate/version=demo-v1 → known_subtotal2000.
 Неизвестная диагностика остаётся unknown/excluded; такой расчёт не обещает полный клиентский итог.
