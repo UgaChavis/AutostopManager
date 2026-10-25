@@ -2015,7 +2015,17 @@ def _partsapi_car_aliases_agree(item: dict[str, Any]) -> bool:
         "power_kw_from",
         "power_kw_to",
     }
-    text_fields = {"make", "model", "engine_code", "transmission", "drive_type", "vehicle_type", "modification"}
+    text_fields = {
+        "make",
+        "model",
+        "engine_code",
+        "engine_type",
+        "fuel_type",
+        "transmission",
+        "drive_type",
+        "vehicle_type",
+        "modification",
+    }
     for field in numeric_fields | text_fields:
         aliases = [
             (key, item[key])
