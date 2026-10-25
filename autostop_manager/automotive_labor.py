@@ -323,11 +323,9 @@ def _operation_price(
         if isinstance(bounds, list) and len(bounds) == 2:
             lower, upper = finite_number(bounds[0]), finite_number(bounds[1])
             if lower is not None and upper is not None:
-                # Retain the previous range-validity check, including zero
-                # rates, while carrying decimal amounts into HALF_UP rounding.
-                if lower * rate > upper * rate:
-                    return None, None
                 low, high = Decimal(str(lower)) * Decimal(str(rate)), Decimal(str(upper)) * Decimal(str(rate))
+                if low > high:
+                    return None, None
                 return _price_midpoint(low, high), [low, high]
         if "range_hours" in row:
             return None, None

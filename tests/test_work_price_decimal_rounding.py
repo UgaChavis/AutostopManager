@@ -95,6 +95,29 @@ def test_hourly_range_midpoint_and_bounds_use_the_same_decimal_rule(bounds, quan
 
 
 @pytest.mark.parametrize(
+    "hour_bounds,rate,outcome,subtotal,total_range",
+    [
+        ([1.5000000000000007, 1.5000000000000004], 1.5, "partial", 3, None),
+        ([1.5000000000000004, 1.5000000000000007], 1.5, "success", 8, [7, 8]),
+        ([1.5000000000000007, 1.5000000000000004], 0, "success", 0, [0, 0]),
+    ],
+)
+def test_decimal_bounds_cannot_reverse_after_equal_binary_products(hour_bounds, rate, outcome, subtotal, total_range):
+    response = calculate(
+        [{"operation_id": "range", "hours": 1, "range_hours": hour_bounds}, {"operation_id": "known", "hours": 1}],
+        rate=rate,
+        coefficient=1.9999999999999993,
+    )
+    assert response["outcome"] == outcome
+    assert response["data"]["known_subtotal"] == subtotal
+    assert response["data"]["total"] == (None if outcome == "partial" else subtotal)
+    assert response["data"]["range"] == total_range
+    if outcome == "partial":
+        assert response["missing_fields"] == ["range.price_basis"]
+        assert response["data"]["exclusions"] == [{"operation_id": "range", "reason": "unknown_labor_or_price"}]
+
+
+@pytest.mark.parametrize(
     "sample,quantum,expected,expected_range",
     [([0.29], 1, 15, [15, 15]), ([0, 0.57], 0.5, 14.5, [0, 28.5])],
 )
