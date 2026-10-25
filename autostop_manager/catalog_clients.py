@@ -2392,44 +2392,57 @@ def _partsapi_us_error_codes(value: str | int | None) -> tuple[list[str], bool]:
     return codes, valid
 
 
-def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool]:
-    if depth > 5 or not isinstance(payload, dict):
-        return {}, False
+def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool, tuple[str, ...]]:
+    if not isinstance(payload, dict):
+        return {}, False, ()
+    identifiers = _partsapi_us_identifiers(payload, depth=depth)
     results = payload.get("Results")
     if isinstance(results, list) and results:
         variables = [row for row in results if isinstance(row, dict) and "Variable" in row and "Value" in row]
         if len(variables) == len(results):
+            identifiers += tuple(
+                identifier for row in variables for identifier in _partsapi_us_identifiers(row, depth=depth + 2)
+            )
             record: dict[str, Any] = {}
             for row in variables:
                 key = str(row["Variable"]).replace(" ", "")
                 if key in record and record[key] != row["Value"]:
-                    return {}, False
+                    return {}, False, identifiers
                 record[key] = row["Value"]
             record = _partsapi_us_diagnostic_aliases(record)
-            return record, "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear"))
+            return (
+                record,
+                "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear")),
+                identifiers,
+            )
         if len(results) == 1 and isinstance(results[0], dict):
             record = _partsapi_us_diagnostic_aliases(results[0])
-            return record, "ErrorCode" in record and "ErrorText" in record
+            return (
+                record,
+                "ErrorCode" in record and "ErrorText" in record,
+                identifiers + _partsapi_us_identifiers(record, depth=depth + 2),
+            )
     record = _partsapi_us_diagnostic_aliases(payload)
     if any(key in record for key in ("Make", "Model", "ErrorCode", "ErrorText")):
         marker = " ".join(str(payload.get(key) or "") for key in ("source", "provider", "upstream", "Message"))
         origin = bool(re.search(r"\b(?:NHTSA|vPIC)\b|vpic\.nhtsa\.dot\.gov", marker, re.IGNORECASE))
-        return record, origin and "ErrorCode" in record and "ErrorText" in record
+        return record, origin and "ErrorCode" in record and "ErrorText" in record, identifiers
     for key in ("data", "result"):
         nested = payload.get(key)
+        nested_depth = depth + 1
         if isinstance(nested, list) and len(nested) == 1:
             nested = nested[0]
-        record, recognized = _partsapi_us_decode_record(nested, depth=depth + 1)
+            nested_depth += 1
+        record, recognized, nested_identifiers = _partsapi_us_decode_record(nested, depth=nested_depth)
         if record:
-            return record, recognized
-    return {}, False
+            return record, recognized, identifiers + nested_identifiers
+    return {}, False, ()
 
 
 def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
+    """Read this card/ancestor node only; sibling branches cannot supply binding."""
     if depth > 5:
         raise ValueError("decodeVINus response exceeds parser depth limit.")
-    if isinstance(payload, list):
-        return tuple(vin for row in payload for vin in _partsapi_us_identifiers(row, depth=depth + 1))
     if not isinstance(payload, dict):
         return ()
     identifiers = tuple(
@@ -2437,33 +2450,51 @@ def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]
     )
     if str(payload.get("Variable") or "").replace(" ", "").casefold() == "vin" and payload.get("Value"):
         identifiers += (_partsapi_identifier(payload["Value"]),)
+    return identifiers
+
+
+def _partsapi_us_vehicle_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
+    """Retain foreign-VIN vetoes from recognized cards, never positive sibling binding."""
+    if depth > 5:
+        return ()
+    if isinstance(payload, list):
+        return tuple(vin for row in payload for vin in _partsapi_us_vehicle_identifiers(row, depth=depth + 1))
+    if not isinstance(payload, dict):
+        return ()
+    try:
+        record, recognized, identifiers = _partsapi_us_decode_record(payload, depth=depth)
+    except ValueError:
+        record, recognized, identifiers = {}, False, ()
+    if not recognized or not any(
+        record.get(key) not in (None, "") for key in ("Make", "Model", "ModelYear", "EngineModel", "Trim")
+    ):
+        identifiers = ()
     return identifiers + tuple(
         vin
         for key, nested in payload.items()
         if str(key).casefold() in {"data", "result", "results", "array", "items"}
-        for vin in _partsapi_us_identifiers(nested, depth=depth + 1)
+        for vin in _partsapi_us_vehicle_identifiers(nested, depth=depth + 1)
     )
 
 
 def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | None) -> dict[str, Any]:
     try:
-        record, recognized = _partsapi_us_decode_record(payload)
-    except ValueError:
-        record, recognized = {}, False
-    requested = _partsapi_identifier(requested_identifier)
-    returned = _partsapi_identifier(record.get("VIN"))
-    try:
-        identifiers = _partsapi_us_identifiers(payload)
+        record, recognized, identifiers = _partsapi_us_decode_record(payload)
     except ValueError:
         record, recognized, identifiers = {}, False, ()
+    requested = _partsapi_identifier(requested_identifier)
+    returned = _partsapi_identifier(record.get("VIN"))
     full_vins = [vin for vin in identifiers if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)]
+    vehicle_vins = [
+        vin for vin in _partsapi_us_vehicle_identifiers(payload) if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)
+    ]
     matches = None
-    if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and full_vins:
+    if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and (full_vins or vehicle_vins):
         matches = (
             False
-            if any(vin != requested for vin in full_vins)
+            if any(vin != requested for vin in full_vins + vehicle_vins)
             else True
-            if len(full_vins) == len(identifiers)
+            if full_vins and len(full_vins) == len(identifiers)
             else None
         )
     aliases = {
