@@ -113,6 +113,30 @@ def _redact_match_window(window: str, left_halo: str, right_halo: str) -> str:
     return "".join(pieces)
 
 
+def _redact_bounded_context(value: str, start: int, end: int, limit: int, *, keep_tail: bool = False) -> str:
+    """Mask the original selected interval before discarding either neighbor."""
+    redacted = _redact_match_window(
+        value[start:end], value[max(0, start - _VIN_HALO_CHARS) : start], value[end : end + _VIN_HALO_CHARS]
+    )
+    excess = len(redacted) - limit
+    if excess <= 0:
+        return redacted
+    # Boundary replacements can grow. Drop ordinary context, keeping complete
+    # labels in order; never slice a label or shift the original raw interval.
+    label = "[VIN REDACTED]"
+    parts = redacted.split(label)
+    indices = range(len(parts)) if keep_tail else range(len(parts) - 1, -1, -1)
+    for index in indices:
+        count = min(excess, len(parts[index]))
+        if count:
+            parts[index] = parts[index][count:] if keep_tail else parts[index][:-count]
+            excess -= count
+        if not excess:
+            return label.join(parts)
+    # Literal labels in source text can alone exhaust a very short budget.
+    return label * (limit // len(label))
+
+
 def _rg_matches(
     path: Path, query: str, limit: int, deadline: float, *, is_pdf: bool
 ) -> tuple[list[tuple[int, str]], str | None]:
@@ -233,7 +257,10 @@ def _pdf_locators(path: Path, line_numbers: set[int], deadline: float) -> dict[i
             if line_number in line_numbers:
                 locators[line_number] = (page, previous)
             if compact and not marker:
-                previous = compact[:MAX_EXCERPT_CHARS]  # context from the same page only
+                # Preserve suffix100-of-prefix360 raw offsets, with both VIN
+                # boundaries still available. Stored same-page context is safe.
+                end = min(len(compact), MAX_EXCERPT_CHARS)
+                previous = _redact_bounded_context(compact, max(0, end - 100), end, 100, keep_tail=True)
             if line_number >= last_line:
                 break
     return locators
@@ -272,8 +299,8 @@ def _excerpt(value: str, query: str) -> str:
 
 
 def _metadata_text(entry: dict[str, Any], field: str, limit: int = 240) -> str:
-    compact = " ".join(str(entry.get(field) or "").split())[:limit]
-    return _VIN.sub("[VIN REDACTED]", compact)
+    compact = " ".join(str(entry.get(field) or "").split())
+    return _redact_bounded_context(compact, 0, min(len(compact), limit), limit)
 
 
 def _result(
