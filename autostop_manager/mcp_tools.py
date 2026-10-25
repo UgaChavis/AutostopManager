@@ -150,6 +150,28 @@ def _guard_partsapi_native_inputs(server: Any) -> None:
         model.model_rebuild(force=True)
 
 
+def _reject_elcats_boolean_budget(value: Any) -> Any:
+    if isinstance(value, bool):
+        raise ValueError("Elcats page_budget must not be boolean")
+    return value
+
+
+def _guard_elcats_native_inputs(server: Any) -> None:
+    """Keep the domain's bool rejection before SDK integer coercion."""
+    manager = getattr(server, "_tool_manager", None)
+    if manager is None:
+        return
+    tool = manager.get_tool("elcats_catalog_query")
+    if tool is None:
+        return
+    model = tool.fn_metadata.arg_model
+    field = model.model_fields["page_budget"]
+    validator = BeforeValidator(_reject_elcats_boolean_budget)
+    if validator not in field.metadata:
+        field.metadata.append(validator)
+        model.model_rebuild(force=True)
+
+
 def _preserve_original_json_inputs(server: Any) -> None:
     manager = getattr(server, "_tool_manager", None)
     if manager is None:
@@ -1631,6 +1653,7 @@ def register_manager_tools(  # noqa: C901
         server.tool = original_tool
     _preserve_original_json_inputs(server)
     _guard_partsapi_native_inputs(server)
+    _guard_elcats_native_inputs(server)
     instrument_manager_tools(server)
 
 
