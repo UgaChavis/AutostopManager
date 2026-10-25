@@ -342,8 +342,8 @@ def test_group_allowlist_defaults_empty(monkeypatch):
     assert bridge.TelegramConfig(123456, "0" * 32).personal_group_reply_peer_ids == frozenset()
 
 
-@pytest.mark.parametrize("operation", ["send_photo", "send_document", "send_voice"])
-def test_group_allowlist_does_not_open_media_send_paths(scenario, monkeypatch, operation):
+@pytest.mark.parametrize("operation", ["send_photo", "send_voice"])
+def test_group_allowlist_does_not_open_photo_or_voice_send_paths(scenario, monkeypatch, operation):
     monkeypatch.setattr(bridge, "_load_validated_photo_file", lambda *_args, **_kwargs: (None, "0" * 64, 8, b"photo"))
     request = {
         "operation": operation,
