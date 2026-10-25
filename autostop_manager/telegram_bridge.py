@@ -1162,13 +1162,15 @@ def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str
     return peer, photo, caption, mode, idempotency_key
 
 
-def validate_document_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+def validate_document_request(
+    request: dict[str, Any], *, group_reply_peer_ids: frozenset[int] = frozenset()
+) -> tuple[str, Path, str, str, str]:
     peer = str(request.get("peer") or "").strip()
     document = Path(str(request.get("document") or ""))
     caption = str(request.get("caption") or "")
     mode = str(request.get("mode") or "dry_run")
     idempotency_key = str(request.get("idempotency_key") or "").strip()
-    if not peer.isdigit() or int(peer) <= 0:
+    if not (peer.isdigit() and int(peer) > 0) and peer not in map(str, group_reply_peer_ids):
         raise BridgeError("exact_private_peer_required")
     if not caption or len(caption) > MAX_CAPTION_CHARS:
         raise BridgeError("caption_length_invalid")
@@ -2182,20 +2184,73 @@ def _outgoing_message_matches(message: Any, *, peer_id: int, message_id: int) ->
 
 
 def _require_personal_group_reply(
-    config: TelegramConfig, request: dict[str, Any], target: dict[str, Any], reply_to_message_id: int
+    config: TelegramConfig,
+    request: dict[str, Any],
+    target: dict[str, Any],
+    reply_to_message_id: int,
+    *,
+    operation: str = "send",
 ) -> None:
     if (
         config.account != "personal"
         or target.get("kind") != "supergroup"
         or type(target.get("id")) is not int
         or target["id"] not in config.personal_group_reply_peer_ids
-        or request.get("operation") != "send"
+        or operation not in {"send", "send_document"}
+        or request.get("operation") != operation
     ):
         raise BridgeError("private_peer_required")
     if str(request.get("peer") or "") != str(target["id"]):
         raise BridgeError("exact_supergroup_peer_required")
     if reply_to_message_id <= 0:
         raise BridgeError("group_reply_required")
+
+
+def _personal_group_document_reply(
+    config: TelegramConfig,
+    request: dict[str, Any],
+    target: dict[str, Any],
+    inbound_monitor: InboundMonitor | None,
+) -> int:
+    allowed_fields = {
+        "operation",
+        "peer",
+        "document",
+        "caption",
+        "mode",
+        "contract_token",
+        "idempotency_key",
+        "reply_to_message_id",
+    }
+    if (
+        inbound_monitor is not None
+        or config.owner_config_path is not None
+        or config.socket_path == WORK_SOCKET_PATH
+        or request.keys() - allowed_fields
+    ):
+        raise BridgeError("private_peer_required")
+    reply_to = request.get("reply_to_message_id", 0)
+    if type(reply_to) is not int:
+        raise BridgeError("reply_to_message_id_invalid")
+    _require_personal_group_reply(config, request, target, reply_to, operation="send_document")
+    return reply_to
+
+
+def _outgoing_group_document_matches(message: Any, *, peer_id: int, message_id: int, reply_to: int) -> bool:
+    return (
+        message is not None
+        and type(getattr(message, "id", None)) is int
+        and message.id == message_id
+        and type(getattr(message, "chat_id", None)) is int
+        and message.chat_id == peer_id
+        and getattr(message, "is_private", None) is False
+        and getattr(message, "is_group", None) is True
+        and getattr(message, "out", None) is True
+        and getattr(message, "action", None) is None
+        and getattr(message, "document", None) is not None
+        and getattr(message, "photo", None) is None
+        and _message_reply_to_id(message) == reply_to
+    )
 
 
 def _outgoing_group_text_matches(message: Any, *, peer_id: int, message_id: int) -> bool:
@@ -2410,18 +2465,26 @@ async def _verify_document_readback(
 async def _handle_send_document(
     client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
 ) -> dict[str, Any]:
-    peer, document, caption, mode, idempotency_key = validate_document_request(request)
+    peer, document, caption, mode, idempotency_key = validate_document_request(
+        request,
+        group_reply_peer_ids=config.personal_group_reply_peer_ids if config.account == "personal" else frozenset(),
+    )
     document_path, document_sha256, document_bytes, document_content = _load_validated_document_file(
         document,
         outbox_dir=config.socket_path.parent / "outbox",
     )
     entity, target = await _resolve_peer(client, peer)
-    if target["kind"] != "private":
-        raise BridgeError("private_peer_required")
-    effect, idempotency_key, reply_to = await _prepare_job_media(
-        client, entity, inbound_monitor, request, target, caption, document_sha256, mode, idempotency_key
+    group_reply = target["kind"] != "private" or peer.startswith("-")
+    if group_reply:
+        reply_to = _personal_group_document_reply(config, request, target, inbound_monitor)
+        effect = None
+    else:
+        effect, idempotency_key, reply_to = await _prepare_job_media(
+            client, entity, inbound_monitor, request, target, caption, document_sha256, mode, idempotency_key
+        )
+    reply_source = await _load_reply_source(
+        client, entity, reply_to, supergroup_peer_id=target["id"] if group_reply else None
     )
-    reply_source = await _load_reply_source(client, entity, reply_to)
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
@@ -2440,6 +2503,7 @@ async def _handle_send_document(
             "document_name": document_path.name,
             "document_sha256": document_sha256,
             "last_message_id": last_message_id,
+            **({"reply_source": reply_source} if group_reply else {}),
             "contract_token": issue_document_contract(
                 contract_key,
                 peer_id=target["id"],
@@ -2495,6 +2559,8 @@ async def _handle_send_document(
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        if group_reply:
+            _personal_group_document_reply(config, request, target, inbound_monitor)
         _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_document",
@@ -2528,7 +2594,12 @@ async def _handle_send_document(
         idempotency = _persist_delivery(idempotency_path, idempotency_key, entry, message_id=int(sent.id))
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
-    if not _outgoing_message_matches(readback, peer_id=target["id"], message_id=message_id):
+    matches_target = (
+        _outgoing_group_document_matches(readback, peer_id=target["id"], message_id=message_id, reply_to=reply_to)
+        if group_reply
+        else _outgoing_message_matches(readback, peer_id=target["id"], message_id=message_id)
+    )
+    if not matches_target:
         raise BridgeError("send_document_readback_failed")
     await _verify_document_readback(
         client,
@@ -2553,6 +2624,7 @@ async def _handle_send_document(
         "document_bytes": document_bytes,
         "document_sha256": document_sha256,
         "verified": True,
+        **({"reply_to_message_id": reply_to, "reply_verified": True} if group_reply else {}),
     }
     return _job_send_response(response, request, effect, idempotency_key)
 
@@ -5790,6 +5862,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
+            elif args.command == "send-document" and args.reply_to_message_id:
+                request["reply_to_message_id"] = args.reply_to_message_id
             payload = send_local_request(_socket_from_args(args), request)
     except BridgeError as exc:
         payload = {"ok": False, "error": exc.code}
