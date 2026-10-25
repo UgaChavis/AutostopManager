@@ -83,6 +83,7 @@ OWNER_NOTIFICATION_KINDS = ("help", "approval", "error", "completion")
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 WORK_DURABLE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX"
+PERSONAL_GROUP_REPLY_ENVIRONMENT = "AUTOSTOP_PERSONAL_TELEGRAM_REPLY_GROUP_IDS"
 MAX_RECONCILE_DIALOGS = 1000
 MAX_RECONCILE_MESSAGES = 10000
 MAX_HISTORY_TRANSPORT_RETRIES = 2
@@ -237,6 +238,8 @@ class TelegramConfig:
     state_dir: Path = DEFAULT_STATE_DIR
     socket_path: Path = DEFAULT_SOCKET_PATH
     owner_config_path: Path | None = None
+    account: str | None = None
+    personal_group_reply_peer_ids: frozenset[int] = frozenset()
 
     @classmethod
     def load(
@@ -247,6 +250,8 @@ class TelegramConfig:
         state_dir: Path = DEFAULT_STATE_DIR,
         socket_path: Path = DEFAULT_SOCKET_PATH,
         owner_config_path: Path | None = None,
+        account: str | None = None,
+        personal_group_reply_peer_ids: frozenset[int] = frozenset(),
     ) -> TelegramConfig:
         reject_obsolete_runtime_config()
         runtime_paths = (credentials_path, session_path, state_dir, socket_path)
@@ -294,6 +299,8 @@ class TelegramConfig:
             state_dir=state_dir,
             socket_path=socket_path,
             owner_config_path=owner_config_path,
+            account=account,
+            personal_group_reply_peer_ids=personal_group_reply_peer_ids,
         )
 
 
@@ -659,6 +666,29 @@ class DurableInboundMonitor(InboundMonitor):
         raise BridgeError("job_result_required")
 
 
+def _personal_group_reply_peers(account: str) -> frozenset[int]:
+    """Only the personal daemon's environment can grant exact supergroup peers."""
+
+    if account != "personal":
+        return frozenset()
+    raw = os.environ.get(PERSONAL_GROUP_REPLY_ENVIRONMENT, "").strip()
+    if not raw:
+        return frozenset()
+    values = raw.split(",")
+    if len(values) > 100:
+        raise BridgeError("personal_group_reply_config_invalid")
+    peers: set[int] = set()
+    for value in values:
+        peer = value.strip()
+        if not re.fullmatch(r"-[1-9][0-9]{12,18}", peer):
+            raise BridgeError("personal_group_reply_config_invalid")
+        peer_id = int(peer)
+        if not -(2**63) <= peer_id < -(10**12):
+            raise BridgeError("personal_group_reply_config_invalid")
+        peers.add(peer_id)
+    return frozenset(peers)
+
+
 def _config_for_account(account: str) -> TelegramConfig:
     reject_obsolete_runtime_config()
     paths = _account_paths(account)
@@ -668,6 +698,8 @@ def _config_for_account(account: str) -> TelegramConfig:
         state_dir=paths.state_dir,
         socket_path=paths.socket_path,
         owner_config_path=WORK_OWNER_CONFIG_PATH if account == "work" else None,
+        account=account,
+        personal_group_reply_peer_ids=_personal_group_reply_peers(account),
     )
 
 
@@ -2149,11 +2181,55 @@ def _outgoing_message_matches(message: Any, *, peer_id: int, message_id: int) ->
     )
 
 
-async def _load_reply_source(client: Any, entity: Any, message_id: int) -> dict[str, Any] | None:
+def _require_personal_group_reply(
+    config: TelegramConfig, request: dict[str, Any], target: dict[str, Any], reply_to_message_id: int
+) -> None:
+    if (
+        config.account != "personal"
+        or target.get("kind") != "supergroup"
+        or type(target.get("id")) is not int
+        or target["id"] not in config.personal_group_reply_peer_ids
+        or request.get("operation") != "send"
+    ):
+        raise BridgeError("private_peer_required")
+    if str(request.get("peer") or "") != str(target["id"]):
+        raise BridgeError("exact_supergroup_peer_required")
+    if reply_to_message_id <= 0:
+        raise BridgeError("group_reply_required")
+
+
+def _outgoing_group_text_matches(message: Any, *, peer_id: int, message_id: int) -> bool:
+    return (
+        message is not None
+        and type(getattr(message, "id", None)) is int
+        and message.id == message_id
+        and type(getattr(message, "chat_id", None)) is int
+        and message.chat_id == peer_id
+        and getattr(message, "is_private", None) is False
+        and getattr(message, "is_group", None) is True
+        and getattr(message, "out", None) is True
+        and getattr(message, "media", None) is None
+        and getattr(message, "action", None) is None
+    )
+
+
+async def _load_reply_source(
+    client: Any, entity: Any, message_id: int, *, supergroup_peer_id: int | None = None
+) -> dict[str, Any] | None:
     if message_id == 0:
         return None
     message = await client.get_messages(entity, ids=message_id)
     if message is None or int(getattr(message, "id", 0) or 0) != message_id:
+        raise BridgeError("reply_source_not_found")
+    if supergroup_peer_id is not None and (
+        type(getattr(message, "id", None)) is not int
+        or type(getattr(message, "chat_id", None)) is not int
+        or message.chat_id != supergroup_peer_id
+        or getattr(message, "is_private", None) is not False
+        or getattr(message, "is_group", None) is not True
+        or getattr(message, "action", None) is not None
+        or not isinstance(getattr(message, "message", None), str)
+    ):
         raise BridgeError("reply_source_not_found")
     raw_text = str(getattr(message, "message", None) or "")
     return {
@@ -2725,8 +2801,17 @@ async def _handle_send_text_to_entity(
     owner_notification: bool = False,
     bound_effect: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if target["kind"] != "private":
-        raise BridgeError("private_peer_required")
+    group_reply = target["kind"] != "private"
+    if group_reply:
+        if (
+            idempotency_operation != "send_text"
+            or owner_notification
+            or contract_target_role is not None
+            or inbound_monitor is not None
+            or bound_effect is not None
+        ):
+            raise BridgeError("private_peer_required")
+        _require_personal_group_reply(config, request, target, reply_to_message_id)
     job_effect, idempotency_key = await _prepare_job_send(
         client,
         entity,
@@ -2741,7 +2826,9 @@ async def _handle_send_text_to_entity(
     )
     if bound_effect is not None:
         job_effect = bound_effect
-    reply_source = await _load_reply_source(client, entity, reply_to_message_id)
+    reply_source = await _load_reply_source(
+        client, entity, reply_to_message_id, supergroup_peer_id=target["id"] if group_reply else None
+    )
     reply_message_sha256 = reply_source["text_sha256"] if reply_source is not None else ""
     reply_source_media = reply_source["reply_source_media"] if reply_source is not None else None
     last_message_id = await _last_message_id(client, entity)
@@ -2819,6 +2906,8 @@ async def _handle_send_text_to_entity(
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        if group_reply:
+            _require_personal_group_reply(config, request, target, reply_to_message_id)
         _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
@@ -2834,14 +2923,19 @@ async def _handle_send_text_to_entity(
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
         sent = await client.send_message(
-            entity, text, parse_mode=None, **({"reply_to": reply_to_message_id} if reply_to_message_id else {})
+            entity,
+            text,
+            parse_mode=None,
+            **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
+            **({"link_preview": False} if group_reply else {}),
         )
         entry["message_id"] = int(sent.id)
         idempotency = _persist_delivery(idempotency_path, idempotency_key, entry, message_id=int(sent.id))
     message_id = int(idempotency[idempotency_key]["message_id"])
     readback = await client.get_messages(entity, ids=message_id)
+    matches_target = _outgoing_group_text_matches if group_reply else _outgoing_message_matches
     if (
-        not _outgoing_message_matches(readback, peer_id=int(target["id"]), message_id=message_id)
+        not matches_target(readback, peer_id=int(target["id"]), message_id=message_id)
         or str(readback.message or "") != text
         or _message_reply_to_id(readback) != reply_to_message_id
     ):
