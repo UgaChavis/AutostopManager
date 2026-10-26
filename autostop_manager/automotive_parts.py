@@ -22,7 +22,7 @@ from .automotive_contracts import (
     source_metadata_errors,
     valid_binding,
 )
-from .parts_intent import _ITEM_QUANTITY, _QUANTITY_LABEL, normalize_part_intent
+from .parts_intent import _ITEM_QUANTITY, _QUANTITY_LABEL, _split_part_conjunctions, normalize_part_intent
 from .vehicle_identity import (
     _identity_tokens,
     _normalized_identity_value,
@@ -54,27 +54,28 @@ def _quantity_only_clause(raw: str) -> bool:
 
 def _split_request(text: str) -> list[str]:
     rows = []
-    for section in re.split(r"[;\n]+", text):
-        # Only a comma between digits belongs to a decimal number.
-        fragments = re.split(r"(?<!\d),|,(?!\d)", section)
-        row = fragments[0]
-        for fragment in fragments[1:]:
-            if (
-                row.strip()
-                and _quantity_only_clause(fragment)
-                and not _REQUEST_QUANTITY.search(row)
-                and not _ITEM_QUANTITY.search(row)
-            ):
-                row += "," + fragment
-            else:
-                rows.append(row)
-                row = fragment
-        rows.append(row)
-    output = []
-    for row in rows:
-        profile = normalize_part_intent(row)
-        output.extend(re.split(r"\s+и\s+", row) if profile.get("intent_id") == "multiple_parts" else [row])
-    return [row.strip() for row in output if row.strip()]
+    for hard_section in re.split(r"[;\n]+", text):
+        profile = normalize_part_intent(hard_section)
+        sections = (
+            _split_part_conjunctions(hard_section) if profile.get("intent_id") == "multiple_parts" else [hard_section]
+        )
+        for section in sections:
+            # Only a comma between digits belongs to a decimal number.
+            fragments = re.split(r"(?<!\d),|,(?!\d)", section)
+            row = fragments[0]
+            for fragment in fragments[1:]:
+                if (
+                    row.strip()
+                    and _quantity_only_clause(fragment)
+                    and not _REQUEST_QUANTITY.search(row)
+                    and not _ITEM_QUANTITY.search(row)
+                ):
+                    row += "," + fragment
+                else:
+                    rows.append(row)
+                    row = fragment
+            rows.append(row)
+    return [row.strip() for row in rows if row.strip()]
 
 
 def _quantity(raw: str) -> tuple[float | None, str | None]:
