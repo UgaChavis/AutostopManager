@@ -7,6 +7,8 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
+from email.parser import HeaderParser
+from email.policy import HTTP
 import html
 from html.parser import HTMLParser
 import http.client
@@ -43,7 +45,8 @@ _VIN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
 )
-_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w.-])", re.I)
+# Trailing dots may be punctuation; a continuing domain label must match in full.
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w-]|\.+[\w-])", re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+7|8|7(?=9\d{2}))[\s().-]*\d{3}(?:[\s().-]*\d){7}(?!\d)")
 _SECRET = re.compile(
     r"(?i)(?:bearer\s+[a-z0-9._~+/-]{12,}|(?:api[_-]?key|token|password|secret)['\"]?\s*[:=]\s*[^\s&]{8,})"
@@ -462,8 +465,8 @@ class _PageText(HTMLParser):
 
 
 def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
-    charset_match = re.search(r"charset=([\w-]+)", headers.get("content-type", ""), re.I)
-    charset = charset_match.group(1) if charset_match else "utf-8"
+    content_type = HeaderParser(policy=HTTP).parsestr(f"Content-Type: {headers.get('content-type', '')}\n\n")
+    charset = content_type.get_content_charset() or "utf-8"
     try:
         decoded = body.decode(charset, "replace")
     except LookupError:

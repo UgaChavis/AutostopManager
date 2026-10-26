@@ -129,7 +129,8 @@ _VIN_LIKE_TOKEN = re.compile(
     r")(?![A-HJ-NPR-Z0-9])",
     re.I,
 )
-_PRIVATE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w.-])", re.I)
+# Trailing dots may be punctuation; a continuing domain label must match in full.
+_PRIVATE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w-]|\.+[\w-])", re.I)
 _PRIVATE_PHONE = re.compile(r"(?<!\w)(?:\+7|8|7(?=9\d{2}))[\s().-]*\d{3}(?:[\s().-]*\d){7}(?!\d)")
 _SOURCE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _SOURCE_TYPES = frozenset({"oem_catalog", "price_catalog"})
