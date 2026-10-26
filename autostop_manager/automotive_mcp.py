@@ -32,21 +32,21 @@ def _reject_boolean_hourly_rate(value: Any) -> Any:
     return value
 
 
-def _reject_boolean_collector_deadline(value: Any) -> Any:
+def _reject_boolean_deadline(value: Any) -> Any:
     if isinstance(value, bool):
         raise ValueError("deadline_seconds must be numeric")
     return value
 
 
-def _guard_work_price_deadline(server: Any) -> None:
+def _guard_deadline(server: Any, tool_name: str) -> None:
     if not hasattr(server, "_tool_manager"):
         return
-    tool = server._tool_manager.get_tool("collect_work_price_evidence")
+    tool = server._tool_manager.get_tool(tool_name)
     if tool is None:
         return
     model = tool.fn_metadata.arg_model
     field = model.model_fields["deadline_seconds"]
-    validator = BeforeValidator(_reject_boolean_collector_deadline)
+    validator = BeforeValidator(_reject_boolean_deadline)
     if validator not in field.metadata:
         field.metadata.append(validator)
         model.model_rebuild(force=True)
@@ -159,7 +159,7 @@ def register_automotive_tools(server: Any) -> None:
         )(function)
 
     _guard_work_price_hourly_rate(server)
-    _guard_work_price_deadline(server)
+    _guard_deadline(server, "collect_work_price_evidence")
 
     @server.tool(
         name="decode_vehicle_batch",
@@ -172,3 +172,5 @@ def register_automotive_tools(server: Any) -> None:
         from .vehicle_identity_request import run_identity_request
 
         return await run_identity_request(decode_vehicle_batch_async(items, decoder, deadline_seconds), ctx)
+
+    _guard_deadline(server, "decode_vehicle_batch")
