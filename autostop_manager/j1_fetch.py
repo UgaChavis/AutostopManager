@@ -7,6 +7,8 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
+from email.parser import HeaderParser
+from email.policy import HTTP
 import html
 from html.parser import HTMLParser
 import http.client
@@ -462,8 +464,8 @@ class _PageText(HTMLParser):
 
 
 def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
-    charset_match = re.search(r"charset=([\w-]+)", headers.get("content-type", ""), re.I)
-    charset = charset_match.group(1) if charset_match else "utf-8"
+    content_type = HeaderParser(policy=HTTP).parsestr(f"Content-Type: {headers.get('content-type', '')}\n\n")
+    charset = content_type.get_content_charset() or "utf-8"
     try:
         decoded = body.decode(charset, "replace")
     except LookupError:
