@@ -1264,15 +1264,17 @@ def _exist_search_suggestions(payload: Any, *, base_url: str | None = None) -> l
 
 
 def _exist_brand_key(value: Any) -> str:
-    return re.sub(r"[^0-9a-zа-яё]+", "", str(value or "").strip().lower())
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
 
 
 def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | None) -> dict[str, Any] | None:
     if not candidates:
         return None
-    if not brand:
+    if not str(brand or "").strip():
         return candidates[0] if len(candidates) == 1 else None
     requested = _exist_brand_key(brand)
+    if not requested:
+        return None
     for candidate in candidates:
         if _exist_brand_key(candidate.get("brand")) == requested:
             return candidate
@@ -1287,7 +1289,7 @@ def _exist_price_identity(item: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(item.get("pid") or "").strip(),
         re.sub(r"[\s-]+", "", str(item.get("part_number") or "")).casefold(),
-        "".join(character for character in str(item.get("brand") or "").casefold() if character.isalnum()),
+        _exist_brand_key(item.get("brand")),
     )
 
 
