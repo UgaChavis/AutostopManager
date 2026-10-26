@@ -1283,6 +1283,59 @@ def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | No
     return None
 
 
+def _exist_price_identity(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("pid") or "").strip(),
+        re.sub(r"[\s-]+", "", str(item.get("part_number") or "")).casefold(),
+        "".join(character for character in str(item.get("brand") or "").casefold() if character.isalnum()),
+    )
+
+
+def _select_exist_price_item(items: list[dict[str, Any]], *, expected: dict[str, Any]) -> dict[str, Any] | None:
+    expected_identity = _exist_price_identity(expected)
+    selected: dict[str, Any] | None = None
+    known_values: list[set[str]] = [set(), set(), set()]
+    common_anchors: set[tuple[str, ...]] | None = None
+    explicit_identity = bool(expected_identity[0] or (expected_identity[1] and expected_identity[2]))
+    multiple_rows = False
+    unanchored_row = False
+    linked_anchors = False
+    for item in items:
+        identity = _exist_price_identity(item)
+        if any(
+            wanted and actual and wanted != actual for wanted, actual in zip(expected_identity, identity, strict=True)
+        ):
+            continue
+        pid_matches = bool(expected_identity[0] and expected_identity[0] == identity[0])
+        part_matches = bool(expected_identity[1] and expected_identity[1] == identity[1])
+        brand_matches = bool(expected_identity[2] and expected_identity[2] == identity[2])
+        # Missing fields are unknown; brand alone cannot bind a product.
+        matches_explicit = pid_matches or (part_matches and brand_matches)
+        if not (matches_explicit if explicit_identity else part_matches):
+            continue
+        anchors: set[tuple[str, ...]] = set()
+        if identity[0]:
+            anchors.add(("pid", identity[0]))
+        if identity[1] and identity[2]:
+            anchors.add(("part_brand", identity[1], identity[2]))
+        common_anchors = anchors if common_anchors is None else common_anchors & anchors
+        unanchored_row = unanchored_row or not anchors
+        linked_anchors = linked_anchors or len(anchors) == 2
+        if selected is None:
+            selected = item
+        else:
+            multiple_rows = True
+        for values, actual in zip(known_values, identity, strict=True):
+            if actual:
+                values.add(actual)
+        if any(len(values) > 1 for values in known_values):
+            return None
+    # A row with both anchors can link partial duplicates without filling their fields.
+    if not explicit_identity and multiple_rows and (unanchored_row or not (common_anchors or linked_anchors)):
+        return None
+    return selected
+
+
 def _exist_more_offers(
     *,
     request_plan: dict[str, Any],
@@ -1402,13 +1455,13 @@ def exist_price_lookup(
                 parsed_pcode = parse_exist_price_page(
                     pcode_html, base_url=request_plan["base_url"], max_offers=max_offers_value
                 )
-                selected_item = parsed_pcode["items"][0] if parsed_pcode.get("items") else None
+                selected_item = _select_exist_price_item(parsed_pcode.get("items", []), expected=request_plan["params"])
                 return {
                     **base,
                     "ok": parsed_pcode["ok"],
                     "search_suggestions": suggestions,
                     "candidates": [],
-                    "needs_disambiguation": False,
+                    "needs_disambiguation": bool(parsed_pcode.get("items")) and selected_item is None,
                     "selected_item": selected_item,
                     "items": parsed_pcode.get("items", []),
                     "total_offers": parsed_pcode.get("total_offers"),
@@ -1419,7 +1472,10 @@ def exist_price_lookup(
         parsed_price = parse_exist_price_page(
             price_html, base_url=request_plan["base_url"], max_offers=max_offers_value
         )
-        selected_item = parsed_price["items"][0] if parsed_price.get("items") else None
+        selected_item = _select_exist_price_item(
+            parsed_price.get("items", []),
+            expected=selected_candidate or {"pid": request_plan["params"]["pid"]},
+        )
         if selected_item and selected_candidate:
             selected_item["catalog_candidate"] = selected_candidate
         if selected_item and include_more_offers and selected_item.get("pid"):
@@ -1442,7 +1498,7 @@ def exist_price_lookup(
             "ok": parsed_price["ok"],
             "search_suggestions": suggestions,
             "candidates": candidates,
-            "needs_disambiguation": False,
+            "needs_disambiguation": bool(parsed_price.get("items")) and selected_item is None,
             "selected_item": selected_item,
             "items": parsed_price.get("items", []),
             "total_offers": parsed_price.get("total_offers"),
