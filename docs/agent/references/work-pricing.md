@@ -3,6 +3,10 @@
 [E12](../modules/E12.md) получает исходные AUTONORMS rows; [E13](../modules/E13.md) отделяет acquisition от calculation.
 normalize_labor_time(rows, unit, source) сохраняет raw workName/workTime/unit, normalized hours,
 operation scope/source, included_operations и overlaps_with. Неизвестная единица — unknown, не часы по умолчанию.
+Время берётся из первого присутствующего `workTime`, `raw_time`, `time`, `hours`, `labor_hours`,
+`norm_hours`, включая `null` и ноль. Неявные часы задаёт только выбранное `hours/labor_hours/norm_hours`;
+младший игнорируемый ключ не определяет единицу для `workTime/raw_time/time`. Явные единицы строки
+и общий `unit` сохраняют прежний приоритет, включая `unit:null` строки.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.

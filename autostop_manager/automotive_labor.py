@@ -59,12 +59,13 @@ def _operation_key(row: dict[str, Any], fallback: str | int) -> str:
 
 
 def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | None, index: int) -> dict[str, Any]:
-    raw_time = next(
-        (row[key] for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
+    time_field = next(
+        (key for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
     )
+    raw_time = row[time_field] if time_field is not None else None
     operation = next((row[key] for key in ("workName", "operation_name", "operation", "name") if key in row), None)
     raw_unit = row.get("unit", unit)
-    if raw_unit is None and any(key in row for key in ("hours", "labor_hours", "norm_hours")):
+    if raw_unit is None and time_field in ("hours", "labor_hours", "norm_hours"):
         raw_unit = "hours"
     factor = UNITS.get(str(raw_unit).casefold())
     number = finite_number(raw_time)
