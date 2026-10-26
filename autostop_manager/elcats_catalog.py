@@ -58,7 +58,7 @@ def elcats_catalog_entries() -> list[dict[str, Any]]:
 
 def elcats_catalog_status() -> dict[str, Any]:
     document = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
-    entries = elcats_catalog_entries()
+    entries = [dict(entry) for entry in document["entries"]]
     counts: dict[str, int] = {}
     for entry in entries:
         state = str(entry.get("readiness", "not_commissioned"))

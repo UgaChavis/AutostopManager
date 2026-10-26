@@ -554,6 +554,10 @@ def _j1_arguments(name, job_id):
     return {"job_id": job_id}
 
 
+def _j1_native_call(tools, name, **arguments):
+    return asyncio.run(tools[name].run(arguments))
+
+
 def _j1_stub(job_id):
     with j1_research._db(readonly=True) as connection:
         return dict(connection.execute("SELECT status,error,updated_at FROM jobs WHERE id=?", (job_id,)).fetchone())
@@ -566,7 +570,7 @@ def test_j1_reader_native_missing_job_initializes_storage_and_cannot_advertise_r
     tools, _root, _clock = j1_native_tools
     database = j1_research._db_path()
     assert not database.exists()
-    result = tools[name].fn(job_id="0" * 32)
+    result = _j1_native_call(tools, name, job_id="0" * 32)
     assert not result["ok"] and result["error"]["code"] == "job_not_found"
     assert database.is_file() and database.stat().st_size > 0
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
@@ -581,7 +585,7 @@ def test_j1_reader_native_missing_job_initializes_storage_and_cannot_advertise_r
 @pytest.mark.parametrize("scenario", ["expiry", "failed_worker_reconciliation"])
 def test_j1_native_lifecycle_effects_are_covered_by_whole_tool_hints(name, scenario, j1_native_tools, isolated_http):
     tools, root, clock = j1_native_tools
-    start = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))
+    start = _j1_native_call(tools, "j1_research_vin", **_j1_arguments("j1_research_vin", ""))
     assert start["ok"]
     job_id = start["job_id"]
     private_database = root / job_id / "research.sqlite3"
@@ -597,7 +601,7 @@ def test_j1_native_lifecycle_effects_are_covered_by_whole_tool_hints(name, scena
     if scenario == "expiry":
         clock[0] += j1_vin_store.RETENTION_SECONDS + 2
     arguments = _j1_arguments(name, job_id)
-    result = tools[name].fn(**arguments)
+    result = _j1_native_call(tools, name, **arguments)
     if scenario == "expiry":
         assert not (root / job_id).exists(), "actual facade must delete this expired temporary corpus"
         first_stub = _j1_stub(job_id)
@@ -608,7 +612,7 @@ def test_j1_native_lifecycle_effects_are_covered_by_whole_tool_hints(name, scena
         else:
             assert not result["ok"] and result["error"]["code"] == "vin_ephemeral_state_lost"
             clock[0] += 2
-            assert not tools[name].fn(**arguments)["ok"]
+            assert not _j1_native_call(tools, name, **arguments)["ok"]
             assert _j1_stub(job_id) != first_stub, "identical repeat must demonstrate the extra timestamp write"
     else:
         assert private_database.read_bytes() != before_private
@@ -628,10 +632,10 @@ def test_j1_native_lifecycle_effects_are_covered_by_whole_tool_hints(name, scena
 @pytest.mark.parametrize("name", ["j1_research_vin", "j1_research_record_facts"])
 def test_j1_disabled_native_writes_still_clean_expired_private_state(name, j1_native_tools, monkeypatch, isolated_http):
     tools, root, clock = j1_native_tools
-    job_id = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))["job_id"]
+    job_id = _j1_native_call(tools, "j1_research_vin", **_j1_arguments("j1_research_vin", ""))["job_id"]
     clock[0] += j1_vin_store.RETENTION_SECONDS + 2
     monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "0")
-    result = tools[name].fn(**_j1_arguments(name, job_id))
+    result = _j1_native_call(tools, name, **_j1_arguments(name, job_id))
     expected_error = "vin_research_disabled" if name == "j1_research_vin" else "vin_ephemeral_state_lost"
     assert not result["ok"] and result["error"]["code"] == expected_error
     assert not (root / job_id).exists()
@@ -642,14 +646,14 @@ def test_j1_disabled_native_writes_still_clean_expired_private_state(name, j1_na
 @pytest.mark.parametrize("name", ["j1_research_vin", "j1_research_record_facts"])
 def test_j1_scoped_receipts_still_deduplicate_live_domain_operations(name, j1_native_tools, isolated_http):
     tools, _root, _clock = j1_native_tools
-    job_id = tools["j1_research_vin"].fn(**_j1_arguments("j1_research_vin", ""))["job_id"]
+    job_id = _j1_native_call(tools, "j1_research_vin", **_j1_arguments("j1_research_vin", ""))["job_id"]
     arguments = _j1_arguments(name, job_id)
-    first = tools[name].fn(**arguments)
+    first = _j1_native_call(tools, name, **arguments)
     assert first["ok"]
     with j1_vin_store.connect(job_id) as connection:
         before = tuple(connection.iterdump())
     stub_before = _j1_stub(job_id)
-    second = tools[name].fn(**arguments)
+    second = _j1_native_call(tools, name, **arguments)
     assert {k: v for k, v in first.items() if k != "tool_execution"} == {
         k: v for k, v in second.items() if k != "tool_execution"
     }

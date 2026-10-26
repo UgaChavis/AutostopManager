@@ -26,6 +26,12 @@ MAX_EXCERPT_CHARS = 360
 _CATALOG_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,79}\Z")
 _VIN = re.compile(r"(?<![A-Za-z0-9])[A-HJ-NPR-Za-hj-npr-z0-9]{17}(?![A-Za-z0-9])")
 _PAGE_MARKER = re.compile(r"\A\f\[PAGE[ \t]+(\d+)\][ \t]*\r?\n?\Z")
+_RG_MATCH_TERMINATOR = "\x1e"
+_VIN_HALO_CHARS = 17
+# Longer than the halo, with no overlapping prefix/suffix: rpartition cannot
+# mistake source characters in the halo for this added wire separator.
+_RG_HALO_SEPARATOR = "\x1f" + _RG_MATCH_TERMINATOR * _VIN_HALO_CHARS
+_RG_LEFT_HALO_SEPARATOR = "\x1d" + _RG_MATCH_TERMINATOR * _VIN_HALO_CHARS
 
 
 def _catalog_root() -> Path | None:
@@ -88,6 +94,49 @@ def _load_entries(root: Path) -> tuple[list[dict[str, Any]], str | None]:
     return entries, None
 
 
+def _redact_match_window(window: str, left_halo: str, right_halo: str) -> str:
+    """Mask complete VINs overlapping the window, without returning halo text."""
+    context = left_halo + window + right_halo
+    start = len(left_halo)
+    end = start + len(window)
+    pieces: list[str] = []
+    cursor = start
+    for match in _VIN.finditer(context):
+        if match.end() <= start:
+            continue
+        if match.start() >= end:
+            break
+        pieces.append(context[cursor : max(start, match.start())])
+        pieces.append("[VIN REDACTED]")
+        cursor = min(match.end(), end)
+    pieces.append(context[cursor:end])
+    return "".join(pieces)
+
+
+def _redact_bounded_context(value: str, start: int, end: int, limit: int, *, keep_tail: bool = False) -> str:
+    """Mask the original selected interval before discarding either neighbor."""
+    redacted = _redact_match_window(
+        value[start:end], value[max(0, start - _VIN_HALO_CHARS) : start], value[end : end + _VIN_HALO_CHARS]
+    )
+    excess = len(redacted) - limit
+    if excess <= 0:
+        return redacted
+    # Boundary replacements can grow. Drop ordinary context, keeping complete
+    # labels in order; never slice a label or shift the original raw interval.
+    label = "[VIN REDACTED]"
+    parts = redacted.split(label)
+    indices = range(len(parts)) if keep_tail else range(len(parts) - 1, -1, -1)
+    for index in indices:
+        count = min(excess, len(parts[index]))
+        if count:
+            parts[index] = parts[index][count:] if keep_tail else parts[index][:-count]
+            excess -= count
+        if not excess:
+            return label.join(parts)
+    # Literal labels in source text can alone exhaust a very short budget.
+    return label * (limit // len(label))
+
+
 def _rg_matches(
     path: Path, query: str, limit: int, deadline: float, *, is_pdf: bool
 ) -> tuple[list[tuple[int, str]], str | None]:
@@ -103,16 +152,35 @@ def _rg_matches(
             )
     except OSError:
         return [], "catalog_read_failed"
+    # Reserve PDF previous context and the maximum expansion at both edges when
+    # one visible VIN character becomes a complete label. Halo text is not shown.
+    context_chars = MAX_EXCERPT_CHARS - (103 if is_pdf else 0) - 2 * (len("[VIN REDACTED]") - 1)
+    after_chars = context_chars - 100 - len(query)
+    window = rf".{{0,100}}?{literal}.{{0,{after_chars}}}"
+    halo = rf".{{0,{_VIN_HALO_CHARS}}}"
+    # Lazy left evidence retains the first hit and up to 100 visible characters
+    # before it, including when the hit is less than 117 characters into a line.
+    left_halo = rf".{{0,{_VIN_HALO_CHARS}}}?"
     if is_tsv:
         # A sheet name is repeated on every physical XLSX row. Match only the
-        # article/data fields after the sheet and source-row columns.
-        expression = r"^[^\t]*\t[0-9]+\t.*" + literal
+        # article/data fields, retaining the sheet/row locator separately.
+        expression = r"^([^\t]*\t[0-9]+\t).*?(" + left_halo + ")(" + window + ")(" + halo + ")"
+        replacement = "${1}${2}" + _RG_LEFT_HALO_SEPARATOR + "${3}" + _RG_HALO_SEPARATOR + "${4}"
     elif has_synthetic_page_markers:
         # Extracted PDF pages have synthetic [PAGE N] lines. Exclude them in
         # ripgrep itself, before --max-count can hide a real catalog match.
-        expression = r"^(?:[^\x0C].*)?" + literal
+        # Keep a leading character in contiguous evidence when it belongs to
+        # the window or left halo; a discarded distant prefix is never prepended.
+        expression = (
+            rf"^(?:((?:[^\x0C].{{0,99}}?)??{literal}.{{0,{after_chars}}})({halo})"
+            rf"|([^\x0C].{{0,{_VIN_HALO_CHARS - 1}}}?)({window})({halo})"
+            rf"|[^\x0C].*?({left_halo})({window})({halo}))"
+        )
+        replacement = "${3}${6}" + _RG_LEFT_HALO_SEPARATOR + "${1}${4}${7}" + _RG_HALO_SEPARATOR + "${2}${5}${8}"
     else:
-        expression = query
+        # Legacy fixed-string search could cross invalid UTF-8 before a hit.
+        expression = r"^(?-u:.)*?(" + left_halo + ")(" + window + ")(" + halo + ")"
+        replacement = "${1}" + _RG_LEFT_HALO_SEPARATOR + "${2}" + _RG_HALO_SEPARATOR + "${3}"
     command = [
         "rg",
         "--no-config",
@@ -126,9 +194,11 @@ def _rg_matches(
         "--max-columns-preview",
         "--max-count",
         str(limit),
+        # Anchoring gives at most one bounded replacement per physical line.
+        "--only-matching",
+        "--replace",
+        replacement + _RG_MATCH_TERMINATOR,
     ]
-    if not is_tsv and not has_synthetic_page_markers:
-        command.append("--fixed-strings")
     command.extend(["-e", expression, "--", str(path)])
     try:
         result = subprocess.run(
@@ -151,7 +221,20 @@ def _rg_matches(
     for line in result.stdout.split("\n"):
         number, separator, content = line.partition(":")
         if separator and number.isdecimal():
-            matches.append((int(number), content))
+            if not content.endswith(_RG_MATCH_TERMINATOR):
+                return [], "catalog_excerpt_truncated"
+            context, halo_separator, right_halo = content[:-1].rpartition(_RG_HALO_SEPARATOR)
+            if not halo_separator or len(right_halo) > _VIN_HALO_CHARS:
+                return [], "catalog_excerpt_truncated"
+            prefix = ""
+            if is_tsv:
+                sheet, tab, rest = context.partition("\t")
+                row, row_tab, context = rest.partition("\t")
+                prefix = sheet + tab + row + row_tab
+            left_halo, left_separator, window = context.partition(_RG_LEFT_HALO_SEPARATOR)
+            if not left_separator or len(left_halo) > _VIN_HALO_CHARS:
+                return [], "catalog_excerpt_truncated"
+            matches.append((int(number), prefix + _redact_match_window(window, left_halo, right_halo)))
     return matches, None
 
 
@@ -174,7 +257,10 @@ def _pdf_locators(path: Path, line_numbers: set[int], deadline: float) -> dict[i
             if line_number in line_numbers:
                 locators[line_number] = (page, previous)
             if compact and not marker:
-                previous = compact[:MAX_EXCERPT_CHARS]  # context from the same page only
+                # Preserve suffix100-of-prefix360 raw offsets, with both VIN
+                # boundaries still available. Stored same-page context is safe.
+                end = min(len(compact), MAX_EXCERPT_CHARS)
+                previous = _redact_bounded_context(compact, max(0, end - 100), end, 100, keep_tail=True)
             if line_number >= last_line:
                 break
     return locators
@@ -213,8 +299,8 @@ def _excerpt(value: str, query: str) -> str:
 
 
 def _metadata_text(entry: dict[str, Any], field: str, limit: int = 240) -> str:
-    compact = " ".join(str(entry.get(field) or "").split())[:limit]
-    return _VIN.sub("[VIN REDACTED]", compact)
+    compact = " ".join(str(entry.get(field) or "").split())
+    return _redact_bounded_context(compact, 0, min(len(compact), limit), limit)
 
 
 def _result(

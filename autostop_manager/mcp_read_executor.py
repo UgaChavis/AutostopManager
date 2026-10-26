@@ -18,6 +18,7 @@ BLOCKING_READ_TOOLS = frozenset(
         "partsapi_catalog_lookup",
         "decode_vin_vpic",
         "decode_wmi_vpic",
+        "benchmark_vin_parts_lookup",
         "vininfo_decode",
         "corgi_decode",
         "public_aftermarket_catalog_lookup",
@@ -43,11 +44,117 @@ BLOCKING_WEB_TOOLS = frozenset(
 BLOCKING_CONTROL_TOOLS = frozenset({"manager_automations", "manager_automation_control"})
 _WEB_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=90)
 _CONTROL_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=30)
+BLOCKING_J1_STATUS_TOOLS = frozenset({"j1_research_status"})
+_J1_STATUS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_REPORT_TOOLS = frozenset({"j1_research_report"})
+_J1_REPORT_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_RESULTS_TOOLS = frozenset({"j1_research_results"})
+_J1_RESULTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_DOCUMENT_TOOLS = frozenset({"j1_research_document"})
+_J1_DOCUMENT_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_ADD_QUERIES_TOOLS = frozenset({"j1_research_add_queries"})
+_J1_ADD_QUERIES_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_CANCEL_TOOLS = frozenset({"j1_research_cancel"})
+_J1_CANCEL_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_START_TOOLS = frozenset({"j1_research_start"})
+_J1_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_RECORD_FACTS_TOOLS = frozenset({"j1_research_record_facts"})
+_J1_RECORD_FACTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
+BLOCKING_J1_VIN_START_TOOLS = frozenset({"j1_research_vin"})
+_J1_VIN_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
-    if tool_name in BLOCKING_CONTROL_TOOLS:
-        result: dict[str, Any] = {"ok": False, "error": "automation_control_unavailable"}
+    result: dict[str, Any]
+    if (
+        tool_name
+        in BLOCKING_J1_STATUS_TOOLS | BLOCKING_J1_REPORT_TOOLS | BLOCKING_J1_RESULTS_TOOLS | BLOCKING_J1_DOCUMENT_TOOLS
+    ):
+        # Routing to a general/VIN job itself requires state access. A transport
+        # refusal must not route, echo inputs or claim that housekeeping rolled back.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.report.v1" if tool_name in BLOCKING_J1_REPORT_TOOLS else "autostop.j1.research.v1",
+            "error": {
+                "code": "j1_report_executor_unavailable"
+                if tool_name in BLOCKING_J1_REPORT_TOOLS
+                else "j1_results_executor_unavailable"
+                if tool_name in BLOCKING_J1_RESULTS_TOOLS
+                else "j1_document_executor_unavailable"
+                if tool_name in BLOCKING_J1_DOCUMENT_TOOLS
+                else "j1_status_executor_unavailable",
+                "reason": reason,
+            },
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_J1_ADD_QUERIES_TOOLS | BLOCKING_J1_CANCEL_TOOLS:
+        # These mutations must not borrow each other's admission capacity. A
+        # refusal cannot route state or infer that a started write rolled back.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.research.v1",
+            "error": {
+                "code": "j1_add_queries_executor_unavailable"
+                if tool_name in BLOCKING_J1_ADD_QUERIES_TOOLS
+                else "j1_cancel_executor_unavailable",
+                "reason": reason,
+            },
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_J1_START_TOOLS | BLOCKING_J1_RECORD_FACTS_TOOLS:
+        # The tool name fixes the schema without inspecting state or inputs.
+        # A started start/write may have committed even when its caller failed.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.research.v1"
+            if tool_name in BLOCKING_J1_START_TOOLS
+            else "autostop.j1.vin_research.v1",
+            "error": {
+                "code": "j1_start_executor_unavailable"
+                if tool_name in BLOCKING_J1_START_TOOLS
+                else "j1_record_facts_executor_unavailable",
+                "reason": reason,
+            },
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_J1_VIN_START_TOOLS:
+        # VIN start has a known schema; refusal must not inspect private state.
+        reason = {
+            "provider_busy": "busy",
+            "provider_wait_timeout": "wait_timeout",
+            "provider_execution_failed": "execution_failed",
+            "provider_executor_unavailable": "executor_unavailable",
+            "provider_executor_draining": "executor_draining",
+        }.get(error.code, "executor_unavailable")
+        result = {
+            "ok": False,
+            "schema": "autostop.j1.vin_research.v1",
+            "error": {"code": "j1_vin_executor_unavailable", "reason": reason},
+            "outcome_uncertain": error.adapter_started,
+        }
+    elif tool_name in BLOCKING_CONTROL_TOOLS:
+        result = {"ok": False, "error": "automation_control_unavailable"}
     elif tool_name in {"collect_work_price_evidence", "estimate_repair_work_cost", "verify_oem_candidates_web"}:
         # Once a worker starts, its still-running network/attempt counts are unknown.
         # These failures are constructed before domain validation: no input echo.
@@ -128,7 +235,25 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
                 deadline_token = read_execution_deadline.set(time.monotonic() + budget)
         context = copy_context()
         pool = (
-            _CONTROL_EXECUTOR
+            _J1_VIN_START_EXECUTOR
+            if tool_name in BLOCKING_J1_VIN_START_TOOLS
+            else _J1_RECORD_FACTS_EXECUTOR
+            if tool_name in BLOCKING_J1_RECORD_FACTS_TOOLS
+            else _J1_START_EXECUTOR
+            if tool_name in BLOCKING_J1_START_TOOLS
+            else _J1_CANCEL_EXECUTOR
+            if tool_name in BLOCKING_J1_CANCEL_TOOLS
+            else _J1_ADD_QUERIES_EXECUTOR
+            if tool_name in BLOCKING_J1_ADD_QUERIES_TOOLS
+            else _J1_DOCUMENT_EXECUTOR
+            if tool_name in BLOCKING_J1_DOCUMENT_TOOLS
+            else _J1_RESULTS_EXECUTOR
+            if tool_name in BLOCKING_J1_RESULTS_TOOLS
+            else _J1_REPORT_EXECUTOR
+            if tool_name in BLOCKING_J1_REPORT_TOOLS
+            else _J1_STATUS_EXECUTOR
+            if tool_name in BLOCKING_J1_STATUS_TOOLS
+            else _CONTROL_EXECUTOR
             if tool_name in BLOCKING_CONTROL_TOOLS
             else _WEB_EXECUTOR
             if tool_name in BLOCKING_WEB_TOOLS

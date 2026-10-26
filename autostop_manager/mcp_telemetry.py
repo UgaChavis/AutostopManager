@@ -15,7 +15,22 @@ from uuid import uuid4
 
 from mcp.types import CallToolResult, TextContent
 
-from .mcp_read_executor import BLOCKING_CONTROL_TOOLS, BLOCKING_READ_TOOLS, BLOCKING_WEB_TOOLS, offload_read
+from .mcp_drom_executor import DROM_BLOCKING_TOOLS, offload_drom
+from .mcp_read_executor import (
+    BLOCKING_CONTROL_TOOLS,
+    BLOCKING_J1_ADD_QUERIES_TOOLS,
+    BLOCKING_J1_CANCEL_TOOLS,
+    BLOCKING_J1_DOCUMENT_TOOLS,
+    BLOCKING_J1_RECORD_FACTS_TOOLS,
+    BLOCKING_J1_REPORT_TOOLS,
+    BLOCKING_J1_RESULTS_TOOLS,
+    BLOCKING_J1_START_TOOLS,
+    BLOCKING_J1_STATUS_TOOLS,
+    BLOCKING_J1_VIN_START_TOOLS,
+    BLOCKING_READ_TOOLS,
+    BLOCKING_WEB_TOOLS,
+    offload_read,
+)
 from .mcp_store_executor import STORE_BLOCKING_TOOLS, offload_store
 
 
@@ -144,6 +159,25 @@ def instrument_manager_tools(server: Any) -> None:
             function = tool.fn
             if name in STORE_BLOCKING_TOOLS and not tool.is_async:
                 function = offload_store(function, str(name), workers=getattr(server, "store_workers", None))
+                tool.is_async = True
+            elif name in DROM_BLOCKING_TOOLS and not tool.is_async:
+                function = offload_drom(function, str(name))
+                tool.is_async = True
+            elif (
+                name
+                in BLOCKING_J1_VIN_START_TOOLS
+                | BLOCKING_J1_START_TOOLS
+                | BLOCKING_J1_RECORD_FACTS_TOOLS
+                | BLOCKING_J1_ADD_QUERIES_TOOLS
+                | BLOCKING_J1_CANCEL_TOOLS
+                | BLOCKING_J1_STATUS_TOOLS
+                | BLOCKING_J1_REPORT_TOOLS
+                | BLOCKING_J1_RESULTS_TOOLS
+                | BLOCKING_J1_DOCUMENT_TOOLS
+                and not tool.is_async
+            ):
+                # Stateful J1 callbacks keep effectful hints and independent pools.
+                function = offload_read(function, str(name))
                 tool.is_async = True
             elif name in BLOCKING_READ_TOOLS | BLOCKING_WEB_TOOLS | BLOCKING_CONTROL_TOOLS and not tool.is_async:
                 function = offload_read(function, str(name))
