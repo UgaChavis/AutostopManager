@@ -3,6 +3,11 @@
 [E12](../modules/E12.md) получает исходные AUTONORMS rows; [E13](../modules/E13.md) отделяет acquisition от calculation.
 normalize_labor_time(rows, unit, source) сохраняет raw workName/workTime/unit, normalized hours,
 operation scope/source, included_operations и overlaps_with. Неизвестная единица — unknown, не часы по умолчанию.
+Имя операции выбирается из первого присутствующего поля в порядке `workName`, `operation_name`,
+`operation`, `name`, с сохранением исходной строки. Отсутствующее поле, `null`, пустая строка или
+строка только из Unicode-пробелов дают `partial` с `rows[i].operation_name`; поиск другого имени
+в младших полях не выполняется. Выбранные числа, boolean, массивы и объекты отклоняются с
+`invalid_input` / `rows.structure`; значения игнорируемых младших полей не меняют выбор.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
