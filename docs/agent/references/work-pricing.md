@@ -8,6 +8,10 @@ operation scope/source, included_operations и overlaps_with. Неизвестн
 строка только из Unicode-пробелов дают `partial` с `rows[i].operation_name`; поиск другого имени
 в младших полях не выполняется. Выбранные числа, boolean, массивы и объекты отклоняются с
 `invalid_input` / `rows.structure`; значения игнорируемых младших полей не меняют выбор.
+Время берётся из первого присутствующего `workTime`, `raw_time`, `time`, `hours`, `labor_hours`,
+`norm_hours`, включая `null` и ноль. Неявные часы задаёт только выбранное `hours/labor_hours/norm_hours`;
+младший игнорируемый ключ не определяет единицу для `workTime/raw_time/time`. Явные единицы строки
+и общий `unit` сохраняют прежний приоритет, включая `unit:null` строки.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
