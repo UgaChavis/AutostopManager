@@ -229,12 +229,14 @@ async def async_probe_manager_mcp(
     provider_failure_check: bool = False,
     store_check: bool = False,
     browser_check: bool = False,
+    metadata_only: bool = False,
 ) -> dict[str, Any]:
     """Probe native MCP with synthetic requests and an optional bounded Store read.
 
     Results are deliberately summarized: endpoint shape, tool names, hashes,
     statuses and failure classes are retained; input identifiers, response
     bodies, provider URLs, credentials and exception strings are not.
+    Metadata-only mode stops after handshake, schema and annotation checks.
     """
 
     safe_url = _safe_url(url)
@@ -250,14 +252,18 @@ async def async_probe_manager_mcp(
             "raw_provider_response_retained": False,
             "store_order_read_attempted": False,
         },
+        **({"mode": "metadata_only"} if metadata_only else {}),
     }
+    if metadata_only and (provider_failure_check or store_check or browser_check):
+        return {**report, "diagnostic": "invalid_probe_options"}
     if not (0 < timeout <= 90):
         return {**report, "diagnostic": "invalid_timeout"}
 
     transport_timeout = max(timeout, BROWSER_CHECK_TIMEOUT_SECONDS) if browser_check else timeout
+    transport_options = {"terminate_on_close": False} if metadata_only else {}
     try:
         async with httpx.AsyncClient(timeout=transport_timeout, follow_redirects=False) as http_client:
-            async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with streamable_http_client(url, http_client=http_client, **transport_options) as (read, write, _):
                 async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout)) as session:
                     async with asyncio.timeout(timeout):
                         initialized = await session.initialize()
@@ -312,6 +318,9 @@ async def async_probe_manager_mcp(
                     if not contract.get("ok"):
                         report["diagnostic"] = str(contract.get("diagnostic") or "tool_not_registered")
                         return report
+                    if metadata_only:
+                        # Keep the original report failed until context cleanup succeeds.
+                        return {**report, "ok": True, "diagnostic": "ok"}
 
                     status_error, status = await _call(
                         session, "catalog_provider_status", {"stage": "catalog_cross"}, timeout=timeout
@@ -476,6 +485,7 @@ def probe_manager_mcp(
     provider_failure_check: bool = False,
     store_check: bool = False,
     browser_check: bool = False,
+    metadata_only: bool = False,
 ) -> dict[str, Any]:
     """Synchronous CLI entry point for the safe native endpoint probe."""
 
@@ -486,5 +496,6 @@ def probe_manager_mcp(
             provider_failure_check=provider_failure_check,
             store_check=store_check,
             browser_check=browser_check,
+            metadata_only=metadata_only,
         )
     )
