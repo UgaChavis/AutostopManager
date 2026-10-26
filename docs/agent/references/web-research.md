@@ -30,6 +30,13 @@ Excerpt сообщает известный HTTP-статус, content type, с�
 static J1 reader без browser или большой research job. На404 этот путь не запускается.
 Текст live HTML/PDF, ранее извлечённый текст и поисковый snippet — разные свидетельства;
 snippet и шаблон динамического OE-раздела не подтверждают прочитанный оригинальный номер.
+Обычный HTML `template` и его вложенные шаблоны исключаются из static text/title:
+инертный login-dialog не превращает публичную страницу в `requires_human`. Прежнее извлечение
+для `shadowrootmode="open|closed"` сохраняется, включая отказ при видимом login; внешний
+инертный шаблон скрывает и вложенный DSR. Регистр mode учитывается по HTML, пробелы и неизвестные
+значения означают обычный template. В text/html `<template/>` остаётся открытым до `</template>`/EOF;
+для `application/xhtml+xml` самозакрывающийся template сохраняет прежнее закрытие по `/>`.
+Это локальный учёт контекста, без полной проверки HTML DOM/DSR hosts или CSS; семантика — [HTML Standard](https://html.spec.whatwg.org/multipage/scripting.html#the-template-element).
 
 Общий веб-фасад и прямой J1 reader проверяют URL до передачи адаптеру: приватные адреса,
 нестандартные порты, контакты и секреты запрещены. Поисковый запрос с контактом,
