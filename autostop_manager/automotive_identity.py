@@ -654,9 +654,27 @@ def compare_vehicle_modifications(context: dict[str, Any], candidates: list[dict
     if any(not isinstance(row, dict) for row in candidates):
         return invalid("compare_vehicle_modifications", "candidates")
     values = {field: [context[field]] if context.get(field) not in (None, "") else [] for field in _FIELDS}
-    comparisons: list[dict[str, Any]] = [
-        {"candidate": row, "conflicts": _profile_conflicts(row, values)} for row in candidates
-    ]
+    known_year = _validated_profile({"production_year": context.get("production_year")})[0].get("production_year")
+    comparisons: list[dict[str, Any]] = []
+    for row in candidates:
+        conflicts = _profile_conflicts(row, values)
+        if known_year is not None:
+            candidate_year = _validated_profile({"production_year": row.get("production_year")})[0].get(
+                "production_year"
+            )
+            if (
+                candidate_year is not None
+                and candidate_year != known_year
+                and not any(item.get("field") == "production_year" for item in conflicts)
+            ):
+                conflicts.append(
+                    {
+                        "field": "production_year",
+                        "identity": context["production_year"],
+                        "catalogue": row["production_year"],
+                    }
+                )
+        comparisons.append({"candidate": row, "conflicts": conflicts})
     alternatives = [row["candidate"] for row in comparisons if not row["conflicts"]]
     missing = _missing_discriminators(alternatives, values) if len(alternatives) > 1 else []
     return result(
