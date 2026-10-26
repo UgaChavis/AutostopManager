@@ -1264,15 +1264,17 @@ def _exist_search_suggestions(payload: Any, *, base_url: str | None = None) -> l
 
 
 def _exist_brand_key(value: Any) -> str:
-    return re.sub(r"[^0-9a-zа-яё]+", "", str(value or "").strip().lower())
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
 
 
 def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | None) -> dict[str, Any] | None:
     if not candidates:
         return None
-    if not brand:
+    if not str(brand or "").strip():
         return candidates[0] if len(candidates) == 1 else None
     requested = _exist_brand_key(brand)
+    if not requested:
+        return None
     for candidate in candidates:
         if _exist_brand_key(candidate.get("brand")) == requested:
             return candidate
@@ -1281,6 +1283,59 @@ def _select_exist_candidate(candidates: list[dict[str, Any]], *, brand: str | No
         if requested and candidate_key and (requested in candidate_key or candidate_key in requested):
             return candidate
     return None
+
+
+def _exist_price_identity(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("pid") or "").strip(),
+        re.sub(r"[\s-]+", "", str(item.get("part_number") or "")).casefold(),
+        _exist_brand_key(item.get("brand")),
+    )
+
+
+def _select_exist_price_item(items: list[dict[str, Any]], *, expected: dict[str, Any]) -> dict[str, Any] | None:
+    expected_identity = _exist_price_identity(expected)
+    selected: dict[str, Any] | None = None
+    known_values: list[set[str]] = [set(), set(), set()]
+    common_anchors: set[tuple[str, ...]] | None = None
+    explicit_identity = bool(expected_identity[0] or (expected_identity[1] and expected_identity[2]))
+    multiple_rows = False
+    unanchored_row = False
+    linked_anchors = False
+    for item in items:
+        identity = _exist_price_identity(item)
+        if any(
+            wanted and actual and wanted != actual for wanted, actual in zip(expected_identity, identity, strict=True)
+        ):
+            continue
+        pid_matches = bool(expected_identity[0] and expected_identity[0] == identity[0])
+        part_matches = bool(expected_identity[1] and expected_identity[1] == identity[1])
+        brand_matches = bool(expected_identity[2] and expected_identity[2] == identity[2])
+        # Missing fields are unknown; brand alone cannot bind a product.
+        matches_explicit = pid_matches or (part_matches and brand_matches)
+        if not (matches_explicit if explicit_identity else part_matches):
+            continue
+        anchors: set[tuple[str, ...]] = set()
+        if identity[0]:
+            anchors.add(("pid", identity[0]))
+        if identity[1] and identity[2]:
+            anchors.add(("part_brand", identity[1], identity[2]))
+        common_anchors = anchors if common_anchors is None else common_anchors & anchors
+        unanchored_row = unanchored_row or not anchors
+        linked_anchors = linked_anchors or len(anchors) == 2
+        if selected is None:
+            selected = item
+        else:
+            multiple_rows = True
+        for values, actual in zip(known_values, identity, strict=True):
+            if actual:
+                values.add(actual)
+        if any(len(values) > 1 for values in known_values):
+            return None
+    # A row with both anchors can link partial duplicates without filling their fields.
+    if not explicit_identity and multiple_rows and (unanchored_row or not (common_anchors or linked_anchors)):
+        return None
+    return selected
 
 
 def _exist_more_offers(
@@ -1402,13 +1457,13 @@ def exist_price_lookup(
                 parsed_pcode = parse_exist_price_page(
                     pcode_html, base_url=request_plan["base_url"], max_offers=max_offers_value
                 )
-                selected_item = parsed_pcode["items"][0] if parsed_pcode.get("items") else None
+                selected_item = _select_exist_price_item(parsed_pcode.get("items", []), expected=request_plan["params"])
                 return {
                     **base,
                     "ok": parsed_pcode["ok"],
                     "search_suggestions": suggestions,
                     "candidates": [],
-                    "needs_disambiguation": False,
+                    "needs_disambiguation": bool(parsed_pcode.get("items")) and selected_item is None,
                     "selected_item": selected_item,
                     "items": parsed_pcode.get("items", []),
                     "total_offers": parsed_pcode.get("total_offers"),
@@ -1419,7 +1474,10 @@ def exist_price_lookup(
         parsed_price = parse_exist_price_page(
             price_html, base_url=request_plan["base_url"], max_offers=max_offers_value
         )
-        selected_item = parsed_price["items"][0] if parsed_price.get("items") else None
+        selected_item = _select_exist_price_item(
+            parsed_price.get("items", []),
+            expected=selected_candidate or {"pid": request_plan["params"]["pid"]},
+        )
         if selected_item and selected_candidate:
             selected_item["catalog_candidate"] = selected_candidate
         if selected_item and include_more_offers and selected_item.get("pid"):
@@ -1442,7 +1500,7 @@ def exist_price_lookup(
             "ok": parsed_price["ok"],
             "search_suggestions": suggestions,
             "candidates": candidates,
-            "needs_disambiguation": False,
+            "needs_disambiguation": bool(parsed_price.get("items")) and selected_item is None,
             "selected_item": selected_item,
             "items": parsed_price.get("items", []),
             "total_offers": parsed_price.get("total_offers"),
@@ -2015,7 +2073,17 @@ def _partsapi_car_aliases_agree(item: dict[str, Any]) -> bool:
         "power_kw_from",
         "power_kw_to",
     }
-    text_fields = {"make", "model", "engine_code", "transmission", "drive_type", "vehicle_type", "modification"}
+    text_fields = {
+        "make",
+        "model",
+        "engine_code",
+        "engine_type",
+        "fuel_type",
+        "transmission",
+        "drive_type",
+        "vehicle_type",
+        "modification",
+    }
     for field in numeric_fields | text_fields:
         aliases = [
             (key, item[key])
@@ -2252,6 +2320,18 @@ def _partsapi_identifier(value: Any) -> str:
     return "".join(str(value or "").split()).upper()
 
 
+def _partsapi_vin_decode_identifiers(payload: dict[str, Any]) -> tuple[str, ...]:
+    """Retain incomplete aliases; malformed supplied identifiers reject this response."""
+    identifiers = []
+    for key, value in payload.items():
+        if str(key).casefold() not in {"vin", "frame"} or value in (None, ""):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError("VINdecode returned a malformed identifier alias.")
+        identifiers.append(_partsapi_identifier(value))
+    return tuple(identifiers)
+
+
 def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
     """Retain identifier-only response wrappers without reading unrelated metadata."""
     if depth > 5:
@@ -2260,11 +2340,7 @@ def _partsapi_wrapped_identifiers(payload: Any, *, depth: int = 0) -> tuple[str,
         return tuple(value for item in payload for value in _partsapi_wrapped_identifiers(item, depth=depth + 1))
     if not isinstance(payload, dict):
         return ()
-    return tuple(
-        _partsapi_identifier(value)
-        for key, value in payload.items()
-        if str(key).casefold() in {"vin", "frame"} and isinstance(value, (str, int)) and value
-    ) + tuple(
+    return _partsapi_vin_decode_identifiers(payload) + tuple(
         value
         for key, nested in payload.items()
         if str(key).casefold() in {"data", "result", "array", "items"}
@@ -2301,11 +2377,7 @@ def _partsapi_vin_decode_records(
 
             if not all(identity_values_agree(field, aliases[0], value) for value in aliases[1:]):
                 raise ValueError("VINdecode returned conflicting vehicle aliases.")
-    identifiers += tuple(
-        _partsapi_identifier(value)
-        for key, value in payload.items()
-        if str(key).casefold() in {"vin", "frame"} and isinstance(value, (str, int)) and value
-    )
+    identifiers += _partsapi_vin_decode_identifiers(payload)
     records = [
         record
         for key, nested in payload.items()
@@ -2388,44 +2460,57 @@ def _partsapi_us_error_codes(value: str | int | None) -> tuple[list[str], bool]:
     return codes, valid
 
 
-def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool]:
-    if depth > 5 or not isinstance(payload, dict):
-        return {}, False
+def _partsapi_us_decode_record(payload: Any, *, depth: int = 0) -> tuple[dict[str, Any], bool, tuple[str, ...]]:
+    if not isinstance(payload, dict):
+        return {}, False, ()
+    identifiers = _partsapi_us_identifiers(payload, depth=depth)
     results = payload.get("Results")
     if isinstance(results, list) and results:
         variables = [row for row in results if isinstance(row, dict) and "Variable" in row and "Value" in row]
         if len(variables) == len(results):
+            identifiers += tuple(
+                identifier for row in variables for identifier in _partsapi_us_identifiers(row, depth=depth + 2)
+            )
             record: dict[str, Any] = {}
             for row in variables:
                 key = str(row["Variable"]).replace(" ", "")
                 if key in record and record[key] != row["Value"]:
-                    return {}, False
+                    return {}, False, identifiers
                 record[key] = row["Value"]
             record = _partsapi_us_diagnostic_aliases(record)
-            return record, "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear"))
+            return (
+                record,
+                "ErrorCode" in record and any(key in record for key in ("Make", "Model", "ModelYear")),
+                identifiers,
+            )
         if len(results) == 1 and isinstance(results[0], dict):
             record = _partsapi_us_diagnostic_aliases(results[0])
-            return record, "ErrorCode" in record and "ErrorText" in record
+            return (
+                record,
+                "ErrorCode" in record and "ErrorText" in record,
+                identifiers + _partsapi_us_identifiers(record, depth=depth + 2),
+            )
     record = _partsapi_us_diagnostic_aliases(payload)
     if any(key in record for key in ("Make", "Model", "ErrorCode", "ErrorText")):
         marker = " ".join(str(payload.get(key) or "") for key in ("source", "provider", "upstream", "Message"))
         origin = bool(re.search(r"\b(?:NHTSA|vPIC)\b|vpic\.nhtsa\.dot\.gov", marker, re.IGNORECASE))
-        return record, origin and "ErrorCode" in record and "ErrorText" in record
+        return record, origin and "ErrorCode" in record and "ErrorText" in record, identifiers
     for key in ("data", "result"):
         nested = payload.get(key)
+        nested_depth = depth + 1
         if isinstance(nested, list) and len(nested) == 1:
             nested = nested[0]
-        record, recognized = _partsapi_us_decode_record(nested, depth=depth + 1)
+            nested_depth += 1
+        record, recognized, nested_identifiers = _partsapi_us_decode_record(nested, depth=nested_depth)
         if record:
-            return record, recognized
-    return {}, False
+            return record, recognized, identifiers + nested_identifiers
+    return {}, False, ()
 
 
 def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
+    """Read this card/ancestor node only; sibling branches cannot supply binding."""
     if depth > 5:
         raise ValueError("decodeVINus response exceeds parser depth limit.")
-    if isinstance(payload, list):
-        return tuple(vin for row in payload for vin in _partsapi_us_identifiers(row, depth=depth + 1))
     if not isinstance(payload, dict):
         return ()
     identifiers = tuple(
@@ -2433,33 +2518,135 @@ def _partsapi_us_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]
     )
     if str(payload.get("Variable") or "").replace(" ", "").casefold() == "vin" and payload.get("Value"):
         identifiers += (_partsapi_identifier(payload["Value"]),)
+    return identifiers
+
+
+def _partsapi_us_vehicle_identifiers(payload: Any, *, depth: int = 0) -> tuple[str, ...]:
+    """Retain foreign-VIN vetoes from recognized cards, never positive sibling binding."""
+    if depth > 5:
+        return ()
+    if isinstance(payload, list):
+        return tuple(vin for row in payload for vin in _partsapi_us_vehicle_identifiers(row, depth=depth + 1))
+    if not isinstance(payload, dict):
+        return ()
+    try:
+        record, recognized, identifiers = _partsapi_us_decode_record(payload, depth=depth)
+    except ValueError:
+        record, recognized, identifiers = {}, False, ()
+    if not recognized or not any(
+        record.get(key) not in (None, "") for key in ("Make", "Model", "ModelYear", "EngineModel", "Trim")
+    ):
+        identifiers = ()
     return identifiers + tuple(
         vin
         for key, nested in payload.items()
         if str(key).casefold() in {"data", "result", "results", "array", "items"}
-        for vin in _partsapi_us_identifiers(nested, depth=depth + 1)
+        for vin in _partsapi_us_vehicle_identifiers(nested, depth=depth + 1)
     )
+
+
+def _partsapi_us_bound_records(
+    payload: Any, *, depth: int = 0, ancestors: tuple[str, ...] = ()
+) -> list[tuple[str, dict[str, Any]]]:
+    """Read recognized cards bound to one full VIN, including actual parent aliases."""
+    if depth > 5:
+        return []
+    if isinstance(payload, list):
+        return [
+            card for row in payload for card in _partsapi_us_bound_records(row, depth=depth + 1, ancestors=ancestors)
+        ]
+    if not isinstance(payload, dict):
+        return []
+    local_identifiers = _partsapi_us_identifiers(payload, depth=depth)
+    try:
+        record, recognized, identifiers = _partsapi_us_decode_record(payload, depth=depth)
+    except ValueError:
+        record, recognized, identifiers = {}, False, ()
+    values = ancestors + identifiers
+    cards = []
+    if (
+        recognized
+        and _partsapi_us_error_codes(record.get("ErrorCode"))[1]
+        and values
+        and len(set(values)) == 1
+        and re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", values[0])
+    ):
+        cards.append((values[0], record))
+    results = payload.get("Results")
+    result_card = (
+        isinstance(results, list)
+        and bool(results)
+        and (
+            (len(results) == 1 and isinstance(results[0], dict))
+            or all(isinstance(row, dict) and "Variable" in row and "Value" in row for row in results)
+        )
+    )
+    owns_record = result_card or any(
+        key in payload for key in ("Make", "Model", "ErrorCode", "ErrorText", "Error Code", "Error Text")
+    )
+    inherited = ancestors if owns_record else ancestors + local_identifiers
+    for key, nested in payload.items():
+        if str(key).casefold() in {"data", "result", "results", "array", "items"}:
+            cards.extend(_partsapi_us_bound_records(nested, depth=depth + 1, ancestors=inherited))
+    return cards
+
+
+_PARTSAPI_US_FACT_COMPARISON_LIMIT = 4096
+
+
+def _partsapi_us_fact_conflict(payload: Any) -> bool:
+    """Reject contradictory or comparison-budget-exhausted evidence without a merge."""
+    from .vehicle_identity import identity_values_agree
+
+    known: dict[str, dict[str, list[str]]] = {}
+    comparisons = 0
+    aliases = {
+        "make": "Make",
+        "model": "Model",
+        "model_year": "ModelYear",
+        "engine": "EngineModel",
+        "modification": "Trim",
+    }
+    for vin, record in _partsapi_us_bound_records(payload):
+        previous = known.setdefault(vin, {})
+        for field, key in aliases.items():
+            value = record.get(key)
+            if not isinstance(value, str) and not (field == "model_year" and type(value) is int):
+                continue
+            text = " ".join(str(value).split())
+            if not text or text.casefold() in {"not applicable", "null", "unknown"}:
+                continue
+            values = previous.setdefault(field, [])
+            if text in values:
+                continue
+            for other in values:
+                if comparisons >= _PARTSAPI_US_FACT_COMPARISON_LIMIT:
+                    return True
+                comparisons += 1
+                if not identity_values_agree(field, text, other):
+                    return True
+            values.append(text)
+    return False
 
 
 def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | None) -> dict[str, Any]:
     try:
-        record, recognized = _partsapi_us_decode_record(payload)
-    except ValueError:
-        record, recognized = {}, False
-    requested = _partsapi_identifier(requested_identifier)
-    returned = _partsapi_identifier(record.get("VIN"))
-    try:
-        identifiers = _partsapi_us_identifiers(payload)
+        record, recognized, identifiers = _partsapi_us_decode_record(payload)
     except ValueError:
         record, recognized, identifiers = {}, False, ()
+    requested = _partsapi_identifier(requested_identifier)
+    returned = _partsapi_identifier(record.get("VIN"))
     full_vins = [vin for vin in identifiers if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)]
+    vehicle_vins = [
+        vin for vin in _partsapi_us_vehicle_identifiers(payload) if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin)
+    ]
     matches = None
-    if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and full_vins:
+    if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", requested) and (full_vins or vehicle_vins):
         matches = (
             False
-            if any(vin != requested for vin in full_vins)
+            if any(vin != requested for vin in full_vins + vehicle_vins)
             else True
-            if len(full_vins) == len(identifiers)
+            if full_vins and len(full_vins) == len(identifiers)
             else None
         )
     aliases = {
@@ -2477,6 +2664,9 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     }
     codes, diagnostics_valid = _partsapi_us_error_codes(record.get("ErrorCode"))
     recognized = recognized and diagnostics_valid
+    facts_conflict = recognized and matches is True and bool(facts) and _partsapi_us_fact_conflict(payload)
+    if facts_conflict:
+        facts = {}
     missing = [field for field in aliases if field not in facts]
     provenance = {
         "provider": "partsapi_ru",
@@ -2502,7 +2692,7 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
     outcome = "partial_result" if facts else "empty_result"
     if facts and not missing and not codes and diagnostics_valid and matches is True:
         status, outcome = "complete", "success"
-    if not record:
+    if not record or facts_conflict:
         status, outcome = "unparsed", "unparsed_response"
     if matches is False:
         status, outcome = "identifier_mismatch", "identifier_mismatch"
@@ -2528,7 +2718,7 @@ def _partsapi_decode_vin_us_semantics(payload: Any, requested_identifier: str | 
         "failure_class": "provider_identifier_mismatch"
         if matches is False
         else "adapter_unparsed_response"
-        if not record
+        if not record or facts_conflict
         else None,
         "requires_fallback": outcome != "success" or matches is not True,
     }
@@ -2631,6 +2821,7 @@ def extract_partsapi_vehicle_profiles(
                     if any(value != requested for value in full_identifiers + related_identifiers)
                     else True
                     if full_identifiers
+                    and all(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", value) for value in identifiers + descendants)
                     else None
                 )
             profile["identifier_matches_request"] = matches

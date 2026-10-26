@@ -22,7 +22,7 @@ class PartIntentRule:
 
 
 def _paired_axle_patterns(front: str, rear: str, part: str) -> tuple[str, ...]:
-    join = r"\s*(?:/|,|&|\+|(?:,?\s*)(?:и\b|а\s+также\b|and\b)(?:\s+(?:также|also)\b)?)\s*"
+    join = r"\s*(?:/|,|&|\+|(?:,\s*)?(?:и\b|а\s+также\b|and\b)(?:\s+(?:также|also)\b)?)\s*"
     end = r"(?=\s*(?:$|[,;.!?]))"
     return tuple(
         pattern
@@ -618,18 +618,13 @@ _ASSEMBLY_ATTACHMENT = re.compile(
 )
 
 
-def _has_explicit_part_list(text: str) -> bool:
-    """Catch item lists even when rules are missing or repeat the same intent.
-
-    Unknown clauses need a part-name or an explicit unit quantity. Conjunctions
-    in known names and unquantified assembly attachments remain one request.
-    This is a bounded guard, not a general language or quantity parser.
-    """
-
+def _part_list_boundaries(text: str) -> list[tuple[int, int]]:
+    """Return recognized item boundaries in casefolded text coordinates."""
     normalized = text.casefold()
     spans = _match_part_spans(normalized)
-    clauses: list[str] = []
+    clauses: list[tuple[str, tuple[int, int] | None]] = []
     start = 0
+    before: tuple[int, int] | None = None
     for separator in _ITEM_SEPARATOR.finditer(normalized):
         if any(left <= separator.start() and separator.end() <= right for left, right, _ in spans):
             continue
@@ -638,14 +633,16 @@ def _has_explicit_part_list(text: str) -> bool:
             and normalized[separator.start() - 1 : separator.end() + 1].replace(",", "").isdigit()
         ):
             continue
-        clauses.append(normalized[start : separator.start()].strip())
+        clauses.append((normalized[start : separator.start()].strip(), before))
+        before = (separator.start(), separator.end())
         start = separator.end()
-    clauses.append(normalized[start:].strip())
+    clauses.append((normalized[start:].strip(), before))
     if len(clauses) < 2:
-        return False
-    item_count = 0
+        return []
+    boundaries: list[tuple[int, int]] = []
+    seen_item = False
     assembly_attachments = False
-    for clause in clauses:
+    for clause, before in clauses:
         known = bool(_match_parts(clause))
         quantity = bool(_ITEM_QUANTITY.search(clause))
         # A comma before the item's quantity does not start another item.
@@ -656,10 +653,42 @@ def _has_explicit_part_list(text: str) -> bool:
             continue
         if not known and not quantity and assembly_attachments:
             continue
-        item_count += 1
+        if seen_item and before is not None:
+            boundaries.append(before)
+        seen_item = True
         # Keep attachment scope across a list, until a new named/quantified item.
         assembly_attachments = bool(known and _ASSEMBLY_ATTACHMENT.search(clause))
-    return item_count > 1
+    return boundaries
+
+
+def _has_explicit_part_list(text: str) -> bool:
+    """Catch lists while preserving known names and unquantified attachments."""
+    return bool(_part_list_boundaries(text))
+
+
+def _split_part_conjunctions(text: str) -> list[str]:
+    """Split recognized conjunction boundaries without changing the raw text."""
+    normalized = text.casefold()
+    boundaries = [
+        (left, right) for left, right in _part_list_boundaries(text) if normalized[left:right] not in {",", ";", "\n"}
+    ]
+    if not boundaries:
+        return [text]
+    # A casefold can expand a character. Only slice at original character edges.
+    raw_boundaries = {0: 0}
+    folded_offset = 0
+    for raw_index, character in enumerate(text):
+        folded_offset += len(character.casefold())
+        raw_boundaries[folded_offset] = raw_index + 1
+    output = []
+    start = 0
+    for left, right in boundaries:
+        if left not in raw_boundaries or right not in raw_boundaries:
+            return [text]
+        output.append(text[start : raw_boundaries[left]])
+        start = raw_boundaries[right]
+    output.append(text[start:])
+    return output
 
 
 def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str | None]:

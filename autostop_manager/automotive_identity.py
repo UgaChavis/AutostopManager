@@ -23,7 +23,12 @@ from .automotive_contracts import (
     primary_lineage,
     result,
 )
-from .vehicle_identity import _checked_vpic_diagnostics, _vpic_has_clean_diagnostics, identity_values_agree
+from .vehicle_identity import (
+    _checked_vpic_diagnostics,
+    _normalized_identity_value,
+    _vpic_has_clean_diagnostics,
+    identity_values_agree,
+)
 from .vehicle_identity_inputs import CONTEXT_FIELDS, validate_identity_input
 from .vehicle_identity_policy import build_parts_lookup_readiness
 from .vehicle_identity_transport import wmi_for_vin
@@ -581,10 +586,16 @@ def reconcile_vehicle_identity(
     for field, observations in values.items():
         if not observations:
             continue
+        # Equal nonempty keys are the comparator's first success branch. Keep
+        # every raw pair for fallback: its model-family relation is not transitive.
+        normalized = [_normalized_identity_value(field, row["value"]) for row in observations]
         if any(
-            not identity_values_agree(field, left["value"], right["value"])
+            not (
+                (normalized[index] and normalized[index] == normalized[right_index])
+                or identity_values_agree(field, left["value"], observations[right_index]["value"])
+            )
             for index, left in enumerate(observations)
-            for right in observations[index + 1 :]
+            for right_index in range(index + 1, len(observations))
         ):
             conflicts.append({"field": field, "code": "conflicting_vehicle_fields", "alternatives": observations})
             statuses[field] = "disputed"
