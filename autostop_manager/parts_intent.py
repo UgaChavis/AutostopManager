@@ -604,7 +604,10 @@ def _match_parts(text: str) -> list[PartIntentRule]:
 
 
 _ITEM_SEPARATOR = re.compile(r"[,;\n+]|\s+(?:и|а\s+также|and|also|[&/])\s+", re.IGNORECASE)
-_ITEM_QUANTITY = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:шт\w*|компл\w*|пар\w*|pcs?\b|pieces?\b|sets?\b)", re.IGNORECASE)
+_ITEM_QUANTITY = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*(?:шт\w*|компл\w*|пар\w*|л(?:итр(?:а|ов)?)?(?!\w)|pcs?\b|pieces?\b|sets?\b)",
+    re.IGNORECASE,
+)
 _QUANTITY_LABEL = re.compile(r"^\s*(?:количество|кол-во|quantity|qty\.?|count)\b\s*[:=]?\s*", re.IGNORECASE)
 _UNMAPPED_PART_NAME = re.compile(
     r"\b(?:проклад\w*|сальник\w*|уплотнен\w*|кольц\w*|пыльник\w*|втулк\w*|патруб\w*|"
