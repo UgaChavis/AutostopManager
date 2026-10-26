@@ -686,14 +686,8 @@ def assess_part_fitment(
         vehicle.get("catalog_ref"), vehicle_profile=profile
     ):
         missing.append("vehicle_catalog_context")
-    number = normalize_part_number(
-        str(
-            part.get("number")
-            or part.get("part_number")
-            or part.get("normalized_number")
-            or part.get("raw_number")
-            or ""
-        )
+    number = _source_part_number(
+        part.get("number") or part.get("part_number") or part.get("normalized_number") or part.get("raw_number") or ""
     )
     brand = str(part.get("brand") or "").casefold()
     primary, condition_sources, source_gaps = _fitment_sources(evidence, number, brand, vehicle, profile, scope)
