@@ -387,12 +387,17 @@ def compare_part_relations(relations: list[dict[str, Any]]) -> dict[str, Any]:
         for row in normalized
         if row["type"] == "supersession"
     ]
+    replacement_index: dict[tuple[str, str], list[tuple[tuple[str, str], dict[str, Any]]]] = {}
     for origin, replacement in replacements:
+        replacement_index.setdefault(_relation_endpoint_key(origin), []).append(
+            (_relation_endpoint_key(replacement), replacement)
+        )
+    for origin, replacement in replacements:
+        replacement_key = _relation_endpoint_key(replacement)
         alternatives = [
             other_replacement
-            for other_origin, other_replacement in replacements
-            if _relation_endpoint_key(other_origin) == _relation_endpoint_key(origin)
-            and _relation_endpoint_key(other_replacement) != _relation_endpoint_key(replacement)
+            for other_key, other_replacement in replacement_index[_relation_endpoint_key(origin)]
+            if other_key != replacement_key
         ]
         if alternatives:
             conflicts.append(
