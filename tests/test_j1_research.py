@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 from threading import Event, current_thread
@@ -17,7 +19,7 @@ from autostop_manager import j1_browser, j1_fetch, j1_research as j1
 
 
 @pytest.fixture(autouse=True)
-def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv("AUTOSTOP_J1_VIN_CACHE_DIR", str(tmp_path / "private-vin"))
     monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "0")
@@ -25,6 +27,12 @@ def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(j1, "_STOP", False)
     j1_fetch._ROBOTS.clear()
     j1_fetch._HOST_NEXT.clear()
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def test_ordinary_worker_housekeeping_stays_in_disposable_cache(monkeypatch, tmp_path):

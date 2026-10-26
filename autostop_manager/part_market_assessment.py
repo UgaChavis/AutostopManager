@@ -69,6 +69,10 @@ _CONDITION_MODIFIER = re.compile(
     r"действительно|really|quite|entirely|totally|как|like|as))*[\s\-‐‑‒–—−\"'«»()\[\]:]+\Z",
     re.IGNORECASE,
 )
+_CONDITION_CLAUSE = re.compile(r"[^;|!?]+")
+_PACKAGING_SUBJECT = r"(?:упаковк|коробк)(?:а|и|е|у|ой|ою|ам|ами|ах)|packaging|packages?|box(?:es)?"
+_PACKAGING_BEFORE = re.compile(rf"(?<!\w)(?:{_PACKAGING_SUBJECT})(?!\w)[\s:–—-]*\Z", re.IGNORECASE)
+_PACKAGING_AFTER = re.compile(rf"\A[\s:–—-]*(?:{_PACKAGING_SUBJECT})(?!\w)", re.IGNORECASE)
 _REGION_COUNTRY = r"(?:россия|российская федерация|рф|russia)"
 _REGION_COUNTRY_MARKER = re.compile(rf"(?<!\w){_REGION_COUNTRY}(?!\w)")
 _REGION_EXCLUSION = re.compile(
@@ -282,7 +286,52 @@ def _condition(value: Any) -> str:
     return _CONDITION_ALIASES.get(_compact(value, limit=30).casefold(), "")
 
 
-def _condition_supported(excerpt: str, condition: str, *, articles: set[str], brands: tuple[Any, ...]) -> bool:
+def _condition_foreign_spans(excerpt: str, articles: set[str], brands: tuple[Any, ...]) -> list[tuple[int, int]]:
+    tokens = list(_ARTICLE_TOKEN.finditer(excerpt))
+    known_spans = [token.span() for token in tokens if _normalize_article(token[0]) in articles]
+    for brand in brands:
+        if pattern := _brand_pattern(brand):
+            known_spans.extend(match.span() for match in re.finditer(pattern, excerpt, re.IGNORECASE))
+    money_spans = [match.span() for match in _PRICE_IN_RUB.finditer(excerpt)]
+    foreign = [
+        token.span()
+        for token in tokens
+        if _normalize_article(token[0]) not in articles
+        and not any(start <= token.start() and token.end() <= end for start, end in known_spans)
+        and _sku_like_token(token[0])
+        and not any(start <= token.start() and token.end() <= end for start, end in money_spans)
+    ]
+    for label in _EXPLICIT_ARTICLE_LABEL.finditer(excerpt):
+        if any(start <= label.start() < end for start, end in known_spans):
+            continue
+        token = _ARTICLE_TOKEN.match(excerpt, label.end())
+        if token and (normalized := _normalize_article(token[0])) and normalized not in articles:
+            foreign.append(token.span())
+    return foreign
+
+
+def _condition_scope_text(excerpt: str, *, article: str, articles: set[str], brands: tuple[Any, ...]) -> str:
+    foreign_spans = _condition_foreign_spans(excerpt, articles, brands)
+    scoped = list(excerpt)
+    target_scope = False
+    for clause in _CONDITION_CLAUSE.finditer(excerpt):
+        if any(clause.start() <= start < clause.end() for start, _end in foreign_spans):
+            target_scope = False
+        elif _contains_article(clause[0], article):
+            target_scope = True
+        elif any(_contains_article(clause[0], reference) for reference in articles):
+            target_scope = False
+        # A clause without another product inherits the preceding product;
+        # a foreign or ambiguous product keeps that scope until the offer's
+        # article is stated again. Cross references alone cannot start it.
+        if not target_scope:
+            scoped[clause.start() : clause.end()] = "\0" * len(clause[0])
+    return "".join(scoped)
+
+
+def _condition_supported(
+    excerpt: str, condition: str, *, article: str, articles: set[str], brands: tuple[Any, ...]
+) -> bool:
     if condition == "unknown":
         return True
     # Mask known identity spans using a non-whitespace separator, so a SKU or
@@ -292,7 +341,7 @@ def _condition_supported(excerpt: str, condition: str, *, articles: set[str], br
         brand_pattern = _brand_pattern(raw_brand)
         if brand_pattern:
             spans.extend(marker.span() for marker in re.finditer(brand_pattern, excerpt, re.IGNORECASE))
-    condition_text = list(excerpt)
+    condition_text = list(_condition_scope_text(excerpt, article=article, articles=articles, brands=brands))
     for start, end in spans:
         condition_text[start:end] = "\0" * (end - start)
     evidence_text = "".join(condition_text)
@@ -300,6 +349,8 @@ def _condition_supported(excerpt: str, condition: str, *, articles: set[str], br
     denied: set[str] = set()
     for candidate, pattern in _CONDITION_MARKERS.items():
         for marker in pattern.finditer(evidence_text):
+            if _PACKAGING_BEFORE.search(excerpt[: marker.start()]) or _PACKAGING_AFTER.match(excerpt[marker.end() :]):
+                continue
             modifier = _CONDITION_MODIFIER.search(excerpt[: marker.start()])
             operator = modifier["operator"].casefold() if modifier is not None else ""
             if not operator or (candidate == "used" and operator in {"как", "as"}):
@@ -398,6 +449,7 @@ def _validated_observation(
     if not _condition_supported(
         excerpt,
         condition,
+        article=article,
         articles={article, target_article},
         brands=(row.get("brand"), target_brand_name),
     ):

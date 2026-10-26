@@ -182,7 +182,12 @@ class SystemTimerController:
                 except ValueError:
                     parsed_last = None
             if parsed_last is not None:
-                next_run = isoformat(parsed_last + timedelta(minutes=period_minutes))
+                try:
+                    next_run = isoformat(parsed_last + timedelta(minutes=period_minutes))
+                except OverflowError:
+                    # The read period remains valid even when its inferred date
+                    # cannot be represented by Python's datetime/timedelta.
+                    next_run = None
         unit_file_state = one("UnitFileState", "unknown")
         active_state = one("ActiveState", "unknown")
         result_state = one("Result", "unknown")
