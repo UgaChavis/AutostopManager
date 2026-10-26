@@ -431,15 +431,28 @@ def _rate_limit(origin: str, delay: float) -> None:
 
 
 class _PageText(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, *, xhtml: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title_parts: list[str] = []
         self.links: list[str] = []
         self._hidden = 0
         self._title = False
+        self._templates: list[bool] = []
+        self._inert_templates = 0
+        self._xhtml = xhtml
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template":
+            # Recognized declarative shadow roots keep their existing extraction;
+            # ordinary templates remain inert, including nested shadow markup.
+            mode = next((value for name, value in attrs if name == "shadowrootmode"), None)
+            inert = (mode or "").lower() not in {"open", "closed"}
+            self._templates.append(inert)
+            self._inert_templates += inert
+            return
+        if self._inert_templates:
+            return
         if tag in {"script", "style", "svg", "noscript", "nav", "footer"}:
             self._hidden += 1
         if tag == "title":
@@ -451,13 +464,28 @@ class _PageText(HTMLParser):
         if tag in {"p", "br", "div", "li", "tr", "h1", "h2", "h3"}:
             self.parts.append("\n")
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template" and not self._xhtml:
+            # A non-void HTML element's slash does not close its contents.
+            self.handle_starttag(tag, attrs)
+        else:
+            super().handle_startendtag(tag, attrs)
+
     def handle_endtag(self, tag: str) -> None:
+        if tag == "template":
+            if self._templates:
+                self._inert_templates -= self._templates.pop()
+            return
+        if self._inert_templates:
+            return
         if tag in {"script", "style", "svg", "noscript", "nav", "footer"} and self._hidden:
             self._hidden -= 1
         if tag == "title":
             self._title = False
 
     def handle_data(self, data: str) -> None:
+        if self._inert_templates:
+            return
         if self._title:
             self.title_parts.append(data)
         if not self._hidden:
@@ -471,7 +499,8 @@ def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
         decoded = body.decode(charset, "replace")
     except LookupError:
         decoded = body.decode("utf-8", "replace")
-    parser = _PageText()
+    media_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+    parser = _PageText(xhtml=media_type == "application/xhtml+xml")
     parser.feed(decoded)
     title = " ".join(" ".join(parser.title_parts).split())[:200]
     text = re.sub(r"[ \t]+", " ", "".join(parser.parts))

@@ -134,6 +134,11 @@ def normalize_parts_request(text: str = "", items: list[dict[str, Any] | str] | 
     source = items if items is not None else _split_request(text)
     if not source or len(source) > MAX_ROWS or any(not isinstance(row, (dict, str)) for row in source):
         return invalid("normalize_parts_request", "items")
+    for index, row in enumerate(source):
+        if isinstance(row, dict):
+            for field in ("axle", "side", "position"):
+                if row.get(field) is not None and not isinstance(row[field], str):
+                    return invalid("normalize_parts_request", f"items[{index}].{field}")
     normalized = [_request_item(row, index) for index, row in enumerate(source)]
     ids = [row["item_id"] for row in normalized]
     if len(ids) != len(set(ids)):
