@@ -22,7 +22,7 @@ from .automotive_contracts import (
     source_metadata_errors,
     valid_binding,
 )
-from .parts_intent import normalize_part_intent
+from .parts_intent import _ITEM_QUANTITY, _QUANTITY_LABEL, normalize_part_intent
 from .vehicle_identity import (
     _identity_tokens,
     _normalized_identity_value,
@@ -32,8 +32,44 @@ from .vehicle_identity import (
 from .vin_lookup import normalize_part_number
 
 
+_REQUEST_QUANTITY = re.compile(
+    r"(?<![\w-])(\d+(?:[.,]\d+)?)\s*(шт(?:ук[аи]?)?\.?|комплект(?:а|ов)?|компл\.?|пар[аы]?|л(?:итр(?:а|ов)?)?)(?!\w)",
+    re.I,
+)
+
+
+def _quantity_only_clause(raw: str) -> bool:
+    clause = _QUANTITY_LABEL.sub("", raw).strip()
+    # The intent guard's broad RU unit prefixes can also name parts (штуцер).
+    # EN annotations retain their raw/unknown fields without adding conversion.
+    unit_word = "".join(character for character in clause if character.isalpha()).casefold()
+    return bool(
+        _REQUEST_QUANTITY.fullmatch(clause)
+        or (
+            unit_word in {"pc", "pcs", "piece", "pieces", "set", "sets"}
+            and _ITEM_QUANTITY.fullmatch(clause.removesuffix("."))
+        )
+    )
+
+
 def _split_request(text: str) -> list[str]:
-    rows = re.split(r"[;\n]+|,(?!\d)", text)
+    rows = []
+    for section in re.split(r"[;\n]+", text):
+        # Only a comma between digits belongs to a decimal number.
+        fragments = re.split(r"(?<!\d),|,(?!\d)", section)
+        row = fragments[0]
+        for fragment in fragments[1:]:
+            if (
+                row.strip()
+                and _quantity_only_clause(fragment)
+                and not _REQUEST_QUANTITY.search(row)
+                and not _ITEM_QUANTITY.search(row)
+            ):
+                row += "," + fragment
+            else:
+                rows.append(row)
+                row = fragment
+        rows.append(row)
     output = []
     for row in rows:
         profile = normalize_part_intent(row)
@@ -42,11 +78,7 @@ def _split_request(text: str) -> list[str]:
 
 
 def _quantity(raw: str) -> tuple[float | None, str | None]:
-    match = re.search(
-        r"(?<![\w-])(\d+(?:[.,]\d+)?)\s*(шт(?:ук[аи]?)?\.?|комплект(?:а|ов)?|компл\.?|пар[аы]?|л(?:итр(?:а|ов)?)?)(?!\w)",
-        raw,
-        re.I,
-    )
+    match = _REQUEST_QUANTITY.search(raw)
     if not match:
         return None, None
     unit = match[2].casefold().rstrip(".")
