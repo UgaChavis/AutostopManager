@@ -289,12 +289,13 @@ def _number_text_pattern(text: str, legacy_pattern: str) -> str | None:
     exponent_markers = list(re.finditer(r"(?<=[\d.])[eE]", text))
     if not exponent_markers:
         return legacy_pattern
+    exponent_pattern = re.compile(r"[+-]?\d+")
     for marker in exponent_markers:
-        exponent = re.match(r"[+-]?\d+", text[marker.end() :])
+        exponent = exponent_pattern.match(text, marker.end())
         if exponent is None:
             return None
-        end = marker.end() + exponent.end()
-        if end < len(text) and text[end] in ".eE":
+        end = exponent.end()
+        if end < len(text) and text[end] in ".eE_":
             return None
     # Exponents belong to the numeric atom. Boundaries prevent backtracking
     # into its mantissa or restarting at an exponent's digits.

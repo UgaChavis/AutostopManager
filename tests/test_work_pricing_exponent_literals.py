@@ -110,7 +110,9 @@ def estimate(request, native_tool):
 
 
 @pytest.mark.parametrize("kind", ["hours", "price"])
-@pytest.mark.parametrize("value", ["1e309", "1e-999", "-1e1", "−1e1", "1e+", "1e++3", "1e--3", "1e3.5", "1ee3"])
+@pytest.mark.parametrize(
+    "value", ["1e309", "1e-999", "-1e1", "−1e1", "1e+", "1e++3", "1e--3", "1e3.5", "1ee3", "1e1_0", "1e3_5", "1e1_"]
+)
 def test_invalid_exponent_cannot_create_positive_price_or_hours(estimate, kind, value):
     result = estimate(kind, value)
     operation = result["operation_estimates"][0]
