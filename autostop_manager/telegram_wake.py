@@ -35,6 +35,7 @@ CONFIG_PATH = Path("/etc/autostop-work-telegram/wake.json")
 SOCKET_PATH = Path("/run/autostop-codex-wake/wake.sock")
 PROJECT_DIR = str(Path("/opt/AutostopManager"))
 APP_SOCKET = str(Path("/root/.codex/app-server-control/app-server-control.sock"))
+VISUALIZATION_ROOT = Path("/root/.codex/visualizations")
 TASK_NAME = "Рабочий Telegram AutoStop"
 WORKER_TASK_NAME = "Рабочий Telegram AutoStop — обработка"
 INSTRUCTION_RELEASE_ROOTS = (Path("/opt/autostop-manager-releases"), Path("/opt/autostop-work-telegram-releases"))
@@ -85,6 +86,50 @@ class RPCRejected(WakeError):
 
 class KnownTurnFailed(WakeError):
     """The exact Codex turn is terminally failed and must not be replayed."""
+
+
+def _owned_visualization_root(value: Any, *, thread_id: str, session_id: Any) -> bool:
+    """Recognize only this persisted thread's protected Codex artifact directory."""
+    if not isinstance(value, str) or session_id != thread_id:
+        return False
+    path = Path(value)
+    try:
+        relative = path.relative_to(VISUALIZATION_ROOT)
+        parts = relative.parts
+        if len(parts) != 4 or str(path) != value or ".." in parts:
+            return False
+        if parts[-1] != thread_id or str(UUID(parts[-1])) != thread_id:
+            return False
+        year, month, day = map(int, parts[:3])
+        datetime(year, month, day, tzinfo=UTC)
+        if parts[:3] != (f"{year:04d}", f"{month:02d}", f"{day:02d}"):
+            return False
+        if not VISUALIZATION_ROOT.is_absolute() or VISUALIZATION_ROOT.resolve(strict=True) != VISUALIZATION_ROOT:
+            return False
+        directories = [VISUALIZATION_ROOT]
+        for part in parts:
+            directories.append(directories[-1] / part)
+        for directory in directories:
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                return False
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _execution_workspace_roots(value: Any, *, thread_id: str, session_id: Any) -> Any:
+    """Keep all execution roots; a single thread-owned artifact root is contextual."""
+    if not isinstance(value, list):
+        return value
+    owned = [
+        index
+        for index, root in enumerate(value)
+        if _owned_visualization_root(root, thread_id=thread_id, session_id=session_id)
+    ]
+    if len(owned) != 1:
+        return value
+    return [root for index, root in enumerate(value) if index != owned[0]]
 
 
 @dataclass(frozen=True)
@@ -796,6 +841,11 @@ class AppServer:
                 "collaborationMode",
             )
         }
+        self.resumed_settings["runtimeWorkspaceRoots"] = _execution_workspace_roots(
+            self.resumed_settings["runtimeWorkspaceRoots"],
+            thread_id=self.config.thread_id,
+            session_id=thread.get("sessionId"),
+        )
         if self.expected_resume_settings is not None and any(
             self.resumed_settings.get(key) != value
             for key, value in self.expected_resume_settings.items()
