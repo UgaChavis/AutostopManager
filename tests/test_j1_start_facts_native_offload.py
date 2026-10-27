@@ -576,7 +576,7 @@ def test_finite_failure_codes_without_routing_or_input_echo(
     assert result["stage"] == ("worker_wait" if started else "admission") and "A" * 17 not in repr(result)
 
 
-def test_all70_schemas_annotations_signatures_and_old_six_J1_sets_unchanged(monkeypatch, inert_registration):
+def test_all_native_schemas_annotations_signatures_and_old_six_J1_sets_unchanged(monkeypatch, inert_registration):
     monkeypatch.setattr(mcp_tools, "instrument_manager_tools", lambda server: None)
     server = _native(monkeypatch, inert_registration, START, lambda **kwargs: {"ok": True}, all_tools=True)
     tools = server._tool_manager._tools
@@ -590,7 +590,7 @@ def test_all70_schemas_annotations_signatures_and_old_six_J1_sets_unchanged(monk
 
     before = snapshot()
     manifest = json.loads((Path(__file__).resolve().parents[1] / "docs/agent/manager_mcp_catalog.json").read_text())
-    assert len(before) == 70 and set(before) == set(manifest["expected_tool_names"])
+    assert len(before) == manifest["expected_tool_count"] and set(before) == set(manifest["expected_tool_names"])
     assert (
         mcp_schema_fingerprint({name: row["inputSchema"] for name, row in before.items()})
         == manifest["schema_fingerprint"]

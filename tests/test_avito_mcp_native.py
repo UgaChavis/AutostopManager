@@ -186,6 +186,10 @@ def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_t
             {"expected_revision": "null", "payload": "{}"},
             {"expected_revision": "null", "payload": {}},
         ),
+        "manager_role_action": (
+            {"expected_revision": "null", "payload": "{}"},
+            {"expected_revision": "null", "payload": {}},
+        ),
         "decode_vehicle_identity": (
             {"model_year": "null", "options": "[]"},
             {"model_year": "null", "options": []},
@@ -312,3 +316,57 @@ def test_native_cancelled_waiter_does_not_free_a_worker_and_dry_run_remains_prom
     finally:
         release.set()
         executor.close()
+
+
+@pytest.mark.parametrize("revision", [True, False, 1.0, "1", "null"])
+def test_role_action_revision_keeps_original_wire_type_before_control(native_server, monkeypatch, revision):
+    calls = []
+    monkeypatch.setattr(
+        mcp_tools.AutomationControlClient, "request", lambda _self, *args, **kwargs: calls.append((args, kwargs))
+    )
+    server = build_server()
+    result = asyncio.run(
+        _call(
+            server,
+            "manager_role_action",
+            {
+                "operation": "start",
+                "role": "M1",
+                "actor": "owner",
+                "idempotency_key": "synthetic-role-start",
+                "expected_revision": revision,
+            },
+        )
+    )
+    assert result.isError is True
+    assert calls == []
+
+
+def test_role_action_integer_revision_reaches_control_exactly_once(native_server, monkeypatch):
+    calls = []
+
+    def control(_self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True, "data": {}}
+
+    monkeypatch.setattr(mcp_tools.AutomationControlClient, "request", control)
+    result = asyncio.run(
+        _call(
+            build_server(),
+            "manager_role_action",
+            {
+                "operation": "start",
+                "role": "M1",
+                "actor": "owner",
+                "idempotency_key": "synthetic-role-start",
+                "expected_revision": 2,
+                "payload": {},
+            },
+        )
+    )
+    assert result.isError is False
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == ("role_action", {"operation": "start", "role": "M1", "actor": "owner", "payload": {}})
+    assert type(kwargs["expected_revision"]) is int
+    assert kwargs["expected_revision"] == 2

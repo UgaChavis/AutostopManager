@@ -289,7 +289,7 @@ def test_benchmark_offload_preserves_all_native_schemas_annotations_and_signatur
 
     before = snapshot()
     manifest = json.loads((Path(__file__).resolve().parents[1] / "docs/agent/manager_mcp_catalog.json").read_text())
-    assert len(before) == 70 and set(before) == set(manifest["expected_tool_names"])
+    assert len(before) == manifest["expected_tool_count"] and set(before) == set(manifest["expected_tool_names"])
     assert (
         mcp_schema_fingerprint({name: row["inputSchema"] for name, row in before.items()})
         == manifest["schema_fingerprint"]
