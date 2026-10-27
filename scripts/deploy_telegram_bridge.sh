@@ -382,7 +382,7 @@ restore_media_wrapper() {
 durable_inbox_compatible() {
   local candidate="${1}"
   [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 ]] && return 0
-  /usr/bin/python3 - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
+  /usr/bin/python3 -I - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
 import ast
 from pathlib import Path
 import sqlite3

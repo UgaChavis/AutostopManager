@@ -127,6 +127,43 @@ def test_rollback_refuses_ram_only_release_before_stopping_current_bridge(tmp_pa
     assert "unexpected_service_mutation" not in result.stdout
 
 
+def test_durable_compatibility_ignores_cwd_and_pythonpath(tmp_path):
+    source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
+    helper = re.search(r"(?ms)^durable_inbox_compatible\(\) \{\n.*?^\}", source)
+    assert helper is not None
+    database = tmp_path / "inbound.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        connection.execute("INSERT INTO metadata VALUES ('schema_version','2')")
+    package = tmp_path / "candidate/autostop_manager"
+    package.mkdir(parents=True)
+    module = package / "telegram_inbox.py"
+    hostile = tmp_path / "cwd"
+    hostile.mkdir()
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    marker = tmp_path / "unsafe-import"
+    (hostile / "ast.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise SystemExit(0)\n")
+    shell = helper[0].replace("/var/lib/autostop-work-telegram/inbound.sqlite3", str(database))
+    for cwd, pythonpath in ((hostile, ""), (clean, str(hostile))):
+        env = {**os.environ, "PYTHONPATH": pythonpath}
+        env.pop("PYTHONSAFEPATH", None)
+        for versions, expected in (((1, 2), 0), ((1,), 1)):
+            module.write_text(f"SUPPORTED_INBOX_SCHEMA_VERSIONS = {versions!r}\n")
+            result = subprocess.run(
+                ["bash", "-c", shell + '\ndurable_inbox_compatible "$1"\n', "test", str(package.parent)],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == expected, result.stderr
+            assert not marker.exists()
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "2"
+
+
 def test_rollback_checks_registry_version_before_mutating_a_durable_pair(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
     helper = re.search(r"(?ms)^durable_inbox_compatible\(\) \{\n.*?^\}", source)
