@@ -54,6 +54,8 @@ Work CLI: пользователь `autostop-work-telegram`, физически�
 | `job-read`, `job-refresh`, `job-result`, `job-handoff`, `job-effect-readback` | Прочитать/обновить контекст, завершить задание, передать владельцу или сверить старую отправку без повтора; job/lease/revision не публикуются клиенту. |
 | `job-claim`, `job-start-intent`, `job-turn-bound`, `job-subscribe` | Контракт исполнителя версии 2: получение, durable запуск, привязка и уведомления. |
 | `job-peer-thread-prepare`, `job-peer-thread-read`, `job-peer-thread-bind`, `job-peer-thread-unknown` | Root-only подготовка, точная сверка и сохранение постоянной беседы клиента; неизвестное создание не повторяется. |
+| `job-peer-thread-read-peer` | Root-only чтение привязки по точному числовому peer без создания задания; сохраняй старую связь в приватный receipt перед очисткой. |
+| `job-peer-thread-forget-missing` | Root-only очистка подтверждённо отсутствующей ready-беседы по точному CAS при паузе и пустой очереди; события, задания и эффекты сохраняются. |
 | `job-execution-slot`, `job-execution-proof` | Глобальный слот и положительное доказательство завершения точного исполнения; status не заменяет proof. |
 | `job-status`, `job-active`, `job-health` | Состояние заданий и публикация здоровья. |
 | `job-owner-control` | Совместимый read-only вызов: после прежних проверок lease/revision/claimed возвращает `handled=false`, не читает сообщение и не исполняет управляющее действие. |
