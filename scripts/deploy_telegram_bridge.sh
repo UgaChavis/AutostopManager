@@ -346,7 +346,7 @@ bridge_ready() {
     return
   fi
   status="$(
-    sudo -u "${service_user}" env PYTHONPATH="${current_link}" \
+    sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${current_link}" \
       "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
   )" || return 1
   grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
@@ -382,7 +382,7 @@ restore_media_wrapper() {
 durable_inbox_compatible() {
   local candidate="${1}"
   [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 ]] && return 0
-  /usr/bin/python3 - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
+  /usr/bin/python3 -I - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
 import ast
 from pathlib import Path
 import sqlite3

@@ -34,7 +34,9 @@ case "${account}" in
     ;;
 esac
 
+python_safety_env=()
 if [[ "${account}" == "work" ]]; then
+  python_safety_env=(PYTHONSAFEPATH=1)
   control_lock="/run/autostop-work-telegram-control.lock"
   exec 9>"${control_lock}"
   flock -x 9
@@ -67,7 +69,7 @@ if systemctl is-enabled --quiet "${service_unit}"; then
 fi
 bridge_authorized() {
   systemctl is-active --quiet "${service_unit}" \
-    && sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
+    && sudo -u "${service_user}" env "${python_safety_env[@]}" PYTHONPATH="${release_link}" \
       "${venv_python}" -m autostop_manager.telegram_bridge --account "${account}" probe \
       | grep -Eq '"authorized": true'
 }
@@ -172,7 +174,7 @@ login_output=""
 login_status=0
 login_output="$(
   sudo -u "${service_user}" sh -c 'umask 077; exec "$@"' sh \
-    env PYTHONPATH="${release_link}" \
+    env "${python_safety_env[@]}" PYTHONPATH="${release_link}" \
     "${venv_python}" -m autostop_manager.telegram_bridge --account "${account}" code-login
 )" || login_status="$?"
 

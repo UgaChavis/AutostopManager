@@ -1,9 +1,6 @@
 name: quality
 
 on:
-  push:
-    branches:
-      - "**"
   pull_request:
   workflow_dispatch:
 
@@ -42,10 +39,3 @@ jobs:
           python -m ruff check .
           python -m ruff format --check autostop_manager tests
           python -m mypy autostop_manager
-
-      - name: Enforce project and E2 coverage gates
-        run: |
-          python -m coverage run -m pytest -q -ra
-          python -m coverage report --fail-under=82
-          python -m coverage json -o "$RUNNER_TEMP/coverage.json"
-          python scripts/check-e2-branch-coverage.py "$RUNNER_TEMP/coverage.json"

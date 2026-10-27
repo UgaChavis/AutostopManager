@@ -459,10 +459,10 @@ class InboundMonitor:
             return None
         return handle, stage
 
-    def reserve_voice_stage(self, event: InboundMonitorEvent) -> None:
+    def reserve_voice_stage(self, event: InboundMonitorEvent, *, allow_routed: bool = False) -> None:
         """Claim an open event before an awaited Telegram media download."""
 
-        if self._state(event) != INBOUND_EVENT_OPEN:
+        if self._state(event) not in ({INBOUND_EVENT_OPEN, "routed"} if allow_routed else {INBOUND_EVENT_OPEN}):
             raise BridgeError("inbound_event_not_open")
         if self.voice_stage_for(event) is not None or event.sequence in self._voice_stage_reservations:
             raise BridgeError("inbound_voice_stage_active")
@@ -481,6 +481,7 @@ class InboundMonitor:
         *,
         duration_seconds: int,
         suffix: str,
+        allow_routed: bool = False,
     ) -> InboundVoiceStage:
         """Keep an opaque handle for one transient voice file, never its source IDs."""
 
@@ -491,7 +492,7 @@ class InboundMonitor:
             or suffix not in {".m4a", ".mp3", ".ogg", ".opus"}
         ):
             raise BridgeError("inbound_voice_stage_invalid")
-        if self._state(event) != INBOUND_EVENT_OPEN:
+        if self._state(event) not in ({INBOUND_EVENT_OPEN, "routed"} if allow_routed else {INBOUND_EVENT_OPEN}):
             self.release_voice_stage_reservation(event)
             raise BridgeError("inbound_event_not_open")
         if self.voice_stage_for(event) is not None:
@@ -1074,7 +1075,7 @@ def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str, 
     mode = str(request.get("mode") or "dry_run")
     idempotency_key = str(request.get("idempotency_key") or "").strip()
     raw_reply_to_message_id = request.get("reply_to_message_id", 0)
-    if isinstance(raw_reply_to_message_id, bool):
+    if isinstance(raw_reply_to_message_id, bool) or not isinstance(raw_reply_to_message_id, (int, str, type(None))):
         raise BridgeError("reply_to_message_id_invalid")
     try:
         reply_to_message_id = int(raw_reply_to_message_id or 0)
@@ -1148,7 +1149,14 @@ def validate_owner_notification_idempotency_readback_request(
     return idempotency_key, expected_text_sha256
 
 
+def _validate_media_reply_id(request: dict[str, Any]) -> None:
+    reply_id = request.get("reply_to_message_id", 0)
+    if isinstance(reply_id, bool) or not isinstance(reply_id, (int, str, type(None))):
+        raise BridgeError("reply_to_message_id_invalid")
+
+
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+    _validate_media_reply_id(request)
     peer = str(request.get("peer") or "").strip()
     photo = Path(str(request.get("photo") or ""))
     caption = str(request.get("caption") or "")
@@ -1165,6 +1173,7 @@ def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str
 def validate_document_request(
     request: dict[str, Any], *, group_reply_peer_ids: frozenset[int] = frozenset()
 ) -> tuple[str, Path, str, str, str]:
+    _validate_media_reply_id(request)
     peer = str(request.get("peer") or "").strip()
     document = Path(str(request.get("document") or ""))
     caption = str(request.get("caption") or "")
@@ -3467,7 +3476,12 @@ async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: s
     }
 
 
-async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
+async def _handle_monitor_target(
+    client: Any,
+    config: TelegramConfig,
+    monitor: InboundMonitor,
+    event_id: str,
+) -> dict[str, Any]:
     """Resolve an explicit live event for guarded read/send, never infer a recipient."""
 
     event = monitor.require_open(event_id)
@@ -3480,8 +3494,33 @@ async def _handle_monitor_target(client: Any, monitor: InboundMonitor, event_id:
         "ok": True,
         "event_id": event_id,
         "target": {"id": target["id"], "kind": target["kind"]},
-        "role": "client",
+        "role": "owner" if event.peer_id == _owner_peer_id(config) else "client",
         "reply_to_message_id": event.message_id,
+    }
+
+
+async def _handle_owner_event_read(
+    client: Any,
+    config: TelegramConfig,
+    monitor: InboundMonitor | None,
+    event_id: str,
+) -> dict[str, Any]:
+    """Read one exact owner source after durable routing; never revive a client job."""
+    if not isinstance(monitor, DurableInboundMonitor):
+        raise BridgeError("durable_inbox_disabled")
+    monitor.inbox.require_owner_source(event_id, cast(int, _owner_peer_id(config, required=True)))
+    event = monitor.resolve(event_id)
+    message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
+    monitor.inbox.require_owner_source(event_id, cast(int, _owner_peer_id(config, required=True)))
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "role": "owner",
+        "target": {"id": event.peer_id, "kind": "private"},
+        "source_message_id": event.message_id,
+        "reply_to_message_id": int(getattr(message, "reply_to_msg_id", 0) or 0),
+        "message": _monitor_context_payload(message),
+        "routing_receipt": monitor.inbox.owner_route_receipt(event_id),
     }
 
 
@@ -3633,9 +3672,18 @@ async def _handle_monitor_voice_stage(
     monitor: InboundMonitor,
     *,
     event_id: str,
+    owner_source: bool = False,
 ) -> dict[str, Any]:
-    event = monitor.require_open(event_id)
-    monitor.reserve_voice_stage(event)
+    def source() -> InboundMonitorEvent:
+        if owner_source:
+            if not isinstance(monitor, DurableInboundMonitor):
+                raise BridgeError("durable_inbox_disabled")
+            monitor.inbox.require_owner_source(event_id, cast(int, _owner_peer_id(config, required=True)))
+            return monitor.resolve(event_id)
+        return monitor.require_open(event_id)
+
+    event = source()
+    monitor.reserve_voice_stage(event, allow_routed=owner_source)
     path: Path | None = None
     try:
         async with asyncio.timeout(MONITOR_VOICE_STAGE_TIMEOUT_SECONDS):
@@ -3651,7 +3699,7 @@ async def _handle_monitor_voice_stage(
             raise BridgeError("download_size_mismatch")
         _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
         handle = secrets.token_urlsafe(24)
-        monitor.require_open(event_id)
+        source()
         path = _save_monitor_voice_stage(
             content,
             handle=handle,
@@ -3664,6 +3712,7 @@ async def _handle_monitor_voice_stage(
             path,
             duration_seconds=metadata["duration_seconds"],
             suffix=metadata["suffix"],
+            allow_routed=owner_source,
         )
     except TimeoutError as exc:
         monitor.release_voice_stage_reservation(event)
@@ -3735,7 +3784,7 @@ async def _handle_monitor_operation(
             }
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
     if operation == "monitor_target":
-        return await _handle_monitor_target(client, inbound_monitor, str(request.get("event_id") or ""))
+        return await _handle_monitor_target(client, config, inbound_monitor, str(request.get("event_id") or ""))
     if operation == "monitor_mark":
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
@@ -3831,6 +3880,18 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
     if operation == "owner_target":
         _entity, target = await _resolve_owner_target(client, config)
         return {"ok": True, "target": target}
+    if operation == "owner_event_read":
+        return await _handle_owner_event_read(client, config, inbound_monitor, str(request.get("event_id") or ""))
+    if operation == "owner_event_voice_stage":
+        if not isinstance(inbound_monitor, DurableInboundMonitor):
+            raise BridgeError("durable_inbox_disabled")
+        return await _handle_monitor_voice_stage(
+            client,
+            config,
+            inbound_monitor,
+            event_id=str(request.get("event_id") or ""),
+            owner_source=True,
+        )
     if operation == "notify_owner":
         return await _handle_notify_owner(client, config, request)
 
@@ -4037,6 +4098,7 @@ async def _handle_job_operation(
         job = inbox.claim(
             instruction_root=str(request.get("instruction_root") or ""),
             instruction_revision=str(request.get("instruction_revision") or ""),
+            exclude_peer_id=_owner_peer_id(config),
         )
     elif operation == "job_start_intent":
         job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
@@ -4311,6 +4373,67 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
     return None
 
 
+def _handle_owner_routing_control(
+    config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any] | None:
+    operation = str(request["operation"])
+    inbox = monitor.inbox
+    if operation == "job_status":
+        owner_peer_id = _owner_peer_id(config)
+        owner_pending = len(inbox.owner_pending(owner_peer_id, limit=100)) if owner_peer_id else 0
+        return {
+            "ok": True,
+            "status": inbox.status()
+            | {
+                "health": inbox.health(),
+                "owner_pending": owner_pending,
+                "owner_routes_unfinished": len(inbox.owner_routes_unfinished(limit=100)),
+            },
+        }
+    if operation == "job_owner_pending":
+        owner_peer_id = _owner_peer_id(config)
+        return {"ok": True, "events": inbox.owner_pending(owner_peer_id) if owner_peer_id else []}
+    if operation == "job_owner_unfinished":
+        return {"ok": True, "events": inbox.owner_routes_unfinished()}
+    if operation == "job_owner_completed":
+        receipt = request.get("receipt")
+        event_id = str(request.get("event_id") or "")
+        if (
+            not isinstance(receipt, dict)
+            or not isinstance(receipt.get("receipt_id"), str)
+            or receipt.get("event_id") != event_id
+            or receipt.get("event_ids") != [event_id]
+            or receipt.get("role") != "M1"
+            or receipt.get("status") != "completed"
+        ):
+            raise BridgeError("owner_routing_receipt_invalid")
+        completed = inbox.complete_owner_route(event_id, receipt["receipt_id"])
+        monitor.changed()
+        return {"ok": True, "receipt": completed}
+    if operation == "job_owner_routed":
+        receipt = request.get("receipt")
+        event_id = str(request.get("event_id") or "")
+        if (
+            not isinstance(receipt, dict)
+            or not isinstance(receipt.get("receipt_id"), str)
+            or receipt.get("event_id") != event_id
+            or receipt.get("event_ids") != [event_id]
+            or receipt.get("role") != "M1"
+            or receipt.get("status") not in {"queued", "running", "completed", "failed", "unknown"}
+        ):
+            raise BridgeError("owner_routing_receipt_invalid")
+        routed = inbox.route_owner_event(
+            event_id=event_id,
+            owner_peer_id=cast(int, _owner_peer_id(config, required=True)),
+            receipt_id=receipt["receipt_id"],
+            instruction_root=str(request.get("instruction_root") or ""),
+            instruction_revision=str(request.get("instruction_revision") or ""),
+        )
+        monitor.changed()
+        return {"ok": True, "receipt": routed}
+    return None
+
+
 async def _handle_job_control(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any] | None:
@@ -4319,8 +4442,9 @@ async def _handle_job_control(
     execution = _job_execution_control(request, monitor)
     if execution is not None:
         return execution
-    if operation == "job_status":
-        return {"ok": True, "status": inbox.status() | {"health": inbox.health()}}
+    owner_routing = _handle_owner_routing_control(config, request, monitor)
+    if owner_routing is not None:
+        return owner_routing
     if operation == "job_active":
         return {
             "ok": True,
@@ -4532,7 +4656,7 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     """Admission to the serial network-effect lane, never the local state lock."""
     operation = request.get("operation")
     return (
-        operation in {"job_handoff", "monitor_voice_stage"}
+        operation in {"job_handoff", "monitor_voice_stage", "owner_event_voice_stage"}
         or (
             operation
             in {
@@ -4615,6 +4739,7 @@ async def _serve_client_request(
             raise BridgeError("request_invalid")
         if (
             str(request.get("operation") or "").startswith("job_")
+            or request.get("operation") in {"owner_event_read", "owner_event_voice_stage"}
             or request.get("operation") == "duty_set"
             or request.get("operation") == "monitor_voice_cleanup"
             or request.get("job_id")
@@ -4905,6 +5030,7 @@ async def run_daemon(
     try:
         if inbox is not None:
             _configure_durable_instructions(inbox)
+            inbox.configure_owner_route(_owner_peer_id(config))
             inbox.duty_set(enabled=monitor_incoming)
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
         else:
@@ -5173,7 +5299,9 @@ async def _reconcile_peer_history(
                 raise BridgeError("history_peer_invalid")
             try:
                 monitor.inbox.record(peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second")
-            except InboxError:
+            except InboxError as exc:
+                if str(exc) != "inbound_monitor_full":
+                    raise
                 complete = False
                 capacity_blocked = True
                 break
@@ -5446,6 +5574,8 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_read.add_argument("--event-id", required=True)
     monitor_target = subparsers.add_parser("monitor-target")
     monitor_target.add_argument("--event-id", required=True)
+    owner_event = subparsers.add_parser("owner-event-read")
+    owner_event.add_argument("--event-id", required=True)
     monitor_context = subparsers.add_parser("monitor-context")
     monitor_context.add_argument("--event-id", required=True)
     monitor_context.add_argument("--limit", type=int, default=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
@@ -5782,6 +5912,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
             elif args.command == "monitor-target":
                 request.update({"operation": "monitor_target", "event_id": args.event_id})
+            elif args.command == "owner-event-read":
+                request.update({"operation": "owner_event_read", "event_id": args.event_id})
             elif args.command == "monitor-context":
                 request.update({"operation": "monitor_context", "event_id": args.event_id, "limit": args.limit})
             elif args.command == "monitor-mark":

@@ -161,7 +161,7 @@ def collect_work_price_evidence(
         or len(work_items) > 20
         or any(not isinstance(row, str) or len(row) > 500 or not _public_safe(row) for row in work_items)
         or not isinstance(chosen, list)
-        or not set(chosen).issubset({"public_web", "provided_aggregate"})
+        or any(not isinstance(source, str) or source not in ("public_web", "provided_aggregate") for source in chosen)
         or not isinstance(max_queries, int)
         or isinstance(max_queries, bool)
         or not 1 <= max_queries <= 4

@@ -1296,6 +1296,81 @@ def test_capacity_keeps_checkpoint_before_missing_message(tmp_path):
     monitor.inbox.close()
 
 
+def test_history_storage_failure_is_not_reported_as_capacity(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    client = Client([_message(100), _message(101)])
+    monitor.inbox._db.execute(
+        "CREATE TRIGGER fail_history_insert BEFORE INSERT ON events WHEN NEW.message_id=101 "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END"
+    )
+    monitor.inbox._db.commit()
+
+    async def no_notifications(*_args):
+        return None
+
+    monkeypatch.setattr(bridge, "_deliver_incident_notifications", no_notifications)
+
+    async def scenario():
+        monitor.request_reconciliation()
+        task = asyncio.create_task(bridge._reconcile_incoming_loop(client, config, monitor))
+        try:
+            await asyncio.sleep(0)
+            assert monitor.inbox.health()["intake"] == {
+                "state": "held",
+                "error_code": "history_reconciliation_failed",
+            }
+            assert monitor.inbox.checkpoint(42) == 0
+            assert [monitor.resolve(event["event_id"]).message_id for event in monitor.inbox.events()] == [100]
+            assert not monitor.reconcile_requested.is_set()
+            assert monitor.reconciliation_transport_retries == 0
+
+            monitor.inbox._db.execute("DROP TRIGGER fail_history_insert")
+            monitor.inbox._db.commit()
+            monitor.request_reconciliation()
+            await asyncio.sleep(0)
+            assert monitor.inbox.health()["intake"] == {"state": "ready", "error_code": None}
+            assert monitor.inbox.checkpoint(42) == 101
+            assert [monitor.resolve(event["event_id"]).message_id for event in monitor.inbox.events()] == [100, 101]
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
+def test_history_health_write_failure_terminates_recovery_task(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path)
+    client = Client([_message(100)])
+    monitor.inbox._db.execute(
+        "CREATE TRIGGER fail_history_insert BEFORE INSERT ON events "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END"
+    )
+    monitor.inbox._db.commit()
+
+    def fail_health(**_kwargs):
+        raise InboxError("inbox_storage_failed")
+
+    monkeypatch.setattr(monitor.inbox, "set_health", fail_health)
+
+    async def scenario():
+        monitor.request_reconciliation()
+        task = asyncio.create_task(bridge._reconcile_incoming_loop(client, config, monitor))
+        with pytest.raises(bridge.BridgeError, match="telegram_transport_disconnected") as error:
+            await bridge._await_daemon_task(task)
+        assert isinstance(error.value.__cause__, InboxError)
+        assert monitor.inbox.checkpoint(42) == 0
+        assert monitor.inbox.events() == []
+        assert not monitor.reconcile_requested.is_set()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
 def test_history_duty_opening_second_is_held_without_replay(tmp_path):
     at = datetime.now(UTC).replace(microsecond=700000)
     inbox = TelegramInbox(tmp_path / "state" / "inbound.sqlite3")

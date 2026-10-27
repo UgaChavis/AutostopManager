@@ -162,7 +162,7 @@ validate_target_layout() {
 }
 
 validate_target_runtime() {
-  sudo -u "${target_user}" env HF_HUB_OFFLINE=1 \
+  sudo -u "${target_user}" env PYTHONSAFEPATH=1 HF_HUB_OFFLINE=1 \
     "${target_venv}" -c \
     "from faster_whisper import WhisperModel; WhisperModel('${target_model}', device='cpu', compute_type='int8', cpu_threads=1, num_workers=1, local_files_only=True)"
 }

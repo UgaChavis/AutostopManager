@@ -30,6 +30,7 @@ fi
 account="$2"
 requested_revision="$4"
 release_revision=""
+python_safety_env=()
 
 case "${account}" in
   personal)
@@ -39,6 +40,8 @@ case "${account}" in
     venv_root="/opt/autostop-telegram-venv"
     ;;
   work)
+    python_safety_env=(PYTHONSAFEPATH=1)
+    export PYTHONSAFEPATH=1
     service_unit="autostop-work-telegram.service"
     service_user="autostop-work-telegram"
     state_dir="/var/lib/autostop-work-telegram"
@@ -241,7 +244,7 @@ build_pyaes_wheelhouse() {
   cp --no-dereference -- "${pyaes_source_lock}" "${staged_source_lock}"
   chown "${service_user}:${service_user}" "${staged_source_lock}"
   chmod 0600 "${staged_source_lock}"
-  sudo -u "${service_user}" env PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 SOURCE_DATE_EPOCH=0 \
+  sudo -u "${service_user}" env "${python_safety_env[@]}" PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 SOURCE_DATE_EPOCH=0 \
     "${venv_root}/bin/python" -m pip wheel --require-hashes --no-deps --no-build-isolation \
     --wheel-dir "${wheel_staging_dir}/out" -r "${staged_source_lock}"
   staged_wheel="${wheel_staging_dir}/out/${pyaes_wheel_name}"
@@ -337,6 +340,17 @@ if [[ -f "${config_dir}/credentials" ]] \
   && [[ "$(stat -c '%U:%G:%a' "${config_dir}/credentials")" != "${service_user}:${service_user}:600" ]]; then
   echo "credentials_permissions_invalid=true" >&2
   exit 1
+fi
+
+if [[ "${account}" == "work" ]]; then
+  installer_python="python3"
+  if [[ -x "${venv_root}/bin/python" ]]; then
+    installer_python="${venv_root}/bin/python"
+  fi
+  if ! "${installer_python}" -I -S -c 'import platform, sys; sys.exit(not (sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 12) and sys.platform == "linux" and platform.machine() == "x86_64"))'; then
+    echo "telegram_dependency_platform_unsupported=true" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then

@@ -19,6 +19,7 @@ venv_python="$(bash "${release_dir}/scripts/work-telegram-python.sh" bridge)" ||
 
 exec /usr/bin/env \
   PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONSAFEPATH=1 \
   "PYTHONPATH=${release_dir}" \
   "${venv_python}" \
   -m autostop_manager.telegram_monitor_voice "$@"

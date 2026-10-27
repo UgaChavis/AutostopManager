@@ -46,7 +46,7 @@ from .instruction_inventory import InstructionInventory
 AUTOMATION_CONTROL_PROTOCOL = "autostop.manager.automation-control.v1"
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 256 * 1024
-READ_OPERATIONS = frozenset({"status", "templates", "readiness", "preview"})
+READ_OPERATIONS = frozenset({"status", "templates", "readiness", "preview", "role_read"})
 WRITE_OPERATIONS = frozenset(
     {
         "create_from_template",
@@ -56,6 +56,8 @@ WRITE_OPERATIONS = frozenset(
         "test_notification",
         "archive",
         "set_global_hold",
+        "role_action",
+        "role_owner_submit",
     }
 )
 OPERATIONS = READ_OPERATIONS | WRITE_OPERATIONS
@@ -309,10 +311,13 @@ class AutomationControlService:
         return self._readiness_from_status(data)
 
     def _status(self, *, job_id: str | None, include_archived: bool, can_manage: bool) -> dict[str, Any]:
+        from .role_coordination import RoleStore
+
         data = self.store.status(job_id=job_id, include_archived=include_archived)
         data["system_timers"] = self._timer_statuses(data["system_timers"])
         data["can_manage"] = can_manage
         data["readiness"] = self._readiness_from_status(data)
+        data["roles"] = RoleStore(self.store.path).read()["roles"]
         return data
 
     def _preview(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -395,10 +400,27 @@ class AutomationControlService:
         if operation in WRITE_OPERATIONS and not _can_manage(actor):
             raise AutomationError("automation_permission_denied")
         if (
-            operation == "set_global_hold"
+            operation in {"set_global_hold", "role_owner_submit"}
             or (operation == "preview" and payload.get("target_operation") == "set_global_hold")
         ) and actor["kind"] != "system":
             raise AutomationError("automation_permission_denied")
+        if operation.startswith("role_"):
+            from .role_coordination import RoleError, RoleStore
+
+            roles = RoleStore(self.store.path)
+            try:
+                if operation == "role_read":
+                    return roles.read(**dict(payload))
+                if operation == "role_owner_submit":
+                    return roles.submit_owner_event(**dict(payload))
+                return roles.action(
+                    **dict(payload),
+                    idempotency_key=str(request.get("idempotency_key") or ""),
+                    expected_revision=expected_revision,
+                )
+            except (RoleError, TypeError, ValueError) as exc:
+                code = str(exc) if isinstance(exc, RoleError) else "role_request_invalid"
+                raise AutomationError(code) from None
         if operation == "status":
             job_id = payload.get("job_id")
             if job_id is not None and not isinstance(job_id, str):
@@ -496,6 +518,10 @@ class AutomationControlService:
                 updated["name"] = policy.display_name
                 return {"changed": True, "system_timer": updated}
             job_id = _required_text(payload, "job_id", maximum=64)
+            from .automation_registry import ROLE_TEMPLATES
+
+            if self.store._require_job(connection, job_id)["template_id"] in ROLE_TEMPLATES:
+                raise AutomationError("automation_role_control_required")
             if operation == "set_enabled":
                 if payload.get("enabled") is True and self.readiness_provider is not None:
                     readiness = self._provided_readiness()

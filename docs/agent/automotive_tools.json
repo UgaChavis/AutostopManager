@@ -7080,6 +7080,106 @@
         "tool_name": "elcats_catalog_query",
         "operation": "lookup_candidates"
       }
+    },
+    {
+      "tool_id": "manager.manager_roles",
+      "primary_module": "outside",
+      "also_used_in": [],
+      "classification": "outside",
+      "title": "manager_roles",
+      "purpose": "Состояние кабинетов M1/M2, задачи, согласования и рабочие знания",
+      "provider_id": "manager",
+      "primary_data_source": "Manager role tables in the existing scheduler registry; exact source references",
+      "execution_kind": "composed",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/references/manager-manager_roles.md",
+      "input_fields": [
+        "operation",
+        "role",
+        "reference_id",
+        "limit"
+      ],
+      "defaults": {
+        "operation": "status",
+        "role": "M1",
+        "reference_id": "",
+        "limit": 30
+      },
+      "outputs": [
+        "ok and roles/items/receipt for reads; ok and role/item for an accepted action"
+      ],
+      "errors": [
+        "role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable"
+      ],
+      "limitations": [
+        "Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.",
+        "Рабочие знания и наблюдения не расширяют полномочия.",
+        "Обе роли после установки OFF; чтение не запускает дежурство."
+      ],
+      "example": {},
+      "invalid_example": {
+        "operation": "__invalid__"
+      },
+      "reference": "docs/agent/references/manager-roles.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "manager_roles"
+      }
+    },
+    {
+      "tool_id": "manager.manager_role_action",
+      "primary_module": "outside",
+      "also_used_in": [],
+      "classification": "outside",
+      "title": "manager_role_action",
+      "purpose": "Управление дежурствами, поручениями M1/M2 и конкретными согласованиями владельца",
+      "provider_id": "manager",
+      "primary_data_source": "Manager role tables in the existing scheduler registry; exact source references",
+      "execution_kind": "composed",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/references/manager-manager_role_action.md",
+      "input_fields": [
+        "operation",
+        "role",
+        "actor",
+        "idempotency_key",
+        "payload",
+        "expected_revision"
+      ],
+      "defaults": {
+        "payload": null,
+        "expected_revision": null
+      },
+      "outputs": [
+        "ok and roles/items/receipt for reads; ok and role/item for an accepted action"
+      ],
+      "errors": [
+        "role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable"
+      ],
+      "limitations": [
+        "Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.",
+        "Рабочие знания и наблюдения не расширяют полномочия.",
+        "Обе роли после установки OFF; чтение не запускает дежурство."
+      ],
+      "example": {
+        "operation": "note",
+        "role": "M1",
+        "actor": "M1",
+        "idempotency_key": "synthetic-note-1",
+        "payload": {
+          "kind": "idea",
+          "text": "Synthetic operational idea",
+          "source_ref": "test:1"
+        }
+      },
+      "invalid_example": {
+        "operation": "__invalid__"
+      },
+      "reference": "docs/agent/references/manager-roles.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "manager_role_action"
+      }
     }
   ],
   "native_inventory": [
@@ -7438,6 +7538,22 @@
         "manager.manager_automations"
       ],
       "reference": "docs/agent/references/manager-runtime.md"
+    },
+    {
+      "tool_name": "manager_role_action",
+      "classification": "outside",
+      "tool_ids": [
+        "manager.manager_role_action"
+      ],
+      "reference": "docs/agent/references/manager-roles.md"
+    },
+    {
+      "tool_name": "manager_roles",
+      "classification": "outside",
+      "tool_ids": [
+        "manager.manager_roles"
+      ],
+      "reference": "docs/agent/references/manager-roles.md"
     },
     {
       "tool_name": "normalize_labor_time",

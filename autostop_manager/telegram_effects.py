@@ -11,7 +11,7 @@ from typing import Any
 
 def server_budget(request: dict[str, Any]) -> float:
     operation = str(request.get("operation") or "")
-    if operation == "monitor_voice_stage":
+    if operation in {"monitor_voice_stage", "owner_event_voice_stage"}:
         return 120.0
     if operation in {"send_photo", "send_document", "send_voice", "download", "job_effect_readback"}:
         return 20.0 if request.get("mode") == "dry_run" else 150.0
@@ -27,6 +27,7 @@ def server_budget(request: dict[str, Any]) -> float:
         "monitor_context",
         "monitor_target",
         "owner_target",
+        "owner_event_read",
         "owner_notification_readback",
         "owner_notification_idempotency_readback",
     }:
