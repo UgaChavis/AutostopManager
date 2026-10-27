@@ -14,6 +14,53 @@ from telegram_duty_fakes import duty_fixture
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_work_bridge_ready_uses_release_not_cwd_after_sudo_environment_reset(tmp_path):
+    source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
+    match = re.search(r"(?ms)^bridge_ready\(\) \{\n.*?^\}", source)
+    assert match is not None
+    release = tmp_path / "release"
+    package = release / "autostop_manager"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "telegram_bridge.py").write_text(
+        'print(\'{"authorized":true,"transport_ready":true,"inbound_enabled":true}\')\n'
+    )
+    hostile = tmp_path / "cwd"
+    shadow = hostile / "autostop_manager"
+    shadow.mkdir(parents=True)
+    (shadow / "__init__.py").write_text("")
+    marker = tmp_path / "unsafe-import"
+    (shadow / "telegram_bridge.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise SystemExit(1)\n"
+    )
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    venv_python.chmod(0o755)
+    shell = (
+        "systemctl() { return 0; };\n"
+        'sudo() { shift 2; /usr/bin/env -i PATH="$PATH" "$@"; };\n' + match[0] + "\nbridge_ready\n"
+    )
+    result = subprocess.run(
+        ["bash", "-c", shell],
+        cwd=hostile,
+        env={
+            **os.environ,
+            "account": "work",
+            "service_unit": "fake.service",
+            "service_user": "fake-user",
+            "current_link": str(release),
+            "venv_root": str(venv_python.parents[1]),
+            "work_inbound_expected": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
 def test_durable_enable_keeps_intake_when_execution_is_held(tmp_path):
     script, env, _, _, log = duty_fixture(
         tmp_path,

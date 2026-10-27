@@ -346,7 +346,7 @@ bridge_ready() {
     return
   fi
   status="$(
-    sudo -u "${service_user}" env PYTHONPATH="${current_link}" \
+    sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${current_link}" \
       "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
   )" || return 1
   grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
