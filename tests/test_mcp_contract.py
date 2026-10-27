@@ -110,3 +110,19 @@ def test_contract_rejects_original_manifest_names_and_count_types(tmp_path, name
     assert report["ok"] is False
     assert report["diagnostic"] == "manifest_invalid"
     assert report["warnings"]
+
+
+def test_role_tools_have_explicit_read_and_control_contracts():
+    tools = build_server()._tool_manager._tools
+    reader = tools["manager_roles"]
+    controller = tools["manager_role_action"]
+    assert reader.annotations.readOnlyHint is True
+    assert reader.annotations.destructiveHint is False
+    assert reader.annotations.idempotentHint is True
+    assert controller.annotations.readOnlyHint is False
+    assert controller.annotations.destructiveHint is True
+    assert controller.annotations.idempotentHint is False
+    assert {"operation", "role", "actor", "idempotency_key"} <= set(controller.parameters["required"])
+    assert {"start", "stop", "stop_all", "task_return", "approval_consume"} <= set(
+        controller.parameters["properties"]["operation"]["enum"]
+    )

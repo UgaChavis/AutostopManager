@@ -204,7 +204,7 @@ def test_all_native_schemas_and_elcats_annotations_keep_public_contract(native):
     schemas = {tool.name: tool.inputSchema for tool in tools}
     manifest = json.loads((Path(__file__).resolve().parents[1] / "docs/agent/manager_mcp_catalog.json").read_text())
 
-    assert len(tools) == manifest["expected_tool_count"] == 70
+    assert len(tools) == manifest["expected_tool_count"]
     assert set(schemas) == set(manifest["expected_tool_names"])
     assert mcp_schema_fingerprint(schemas) == manifest["schema_fingerprint"]
     elcats = next(tool for tool in tools if tool.name == "elcats_catalog_query")

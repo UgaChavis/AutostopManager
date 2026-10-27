@@ -548,7 +548,7 @@ def test_finite_failure_codes_without_routing_or_input_echo(
     assert "A" * 17 not in repr(result)
 
 
-def test_all70_metadata_and_only_Drom_native_instrumentation(monkeypatch, inert_registration):
+def test_all_native_metadata_and_only_Drom_native_instrumentation(monkeypatch, inert_registration):
     monkeypatch.setattr(mcp_tools, "instrument_manager_tools", lambda server: None)
     server = _native(monkeypatch, inert_registration, START, lambda **kwargs: {"ok": True}, all_tools=True)
     tools = server._tool_manager._tools
@@ -562,7 +562,7 @@ def test_all70_metadata_and_only_Drom_native_instrumentation(monkeypatch, inert_
 
     before = snapshot()
     manifest = json.loads((Path(__file__).resolve().parents[1] / "docs/agent/manager_mcp_catalog.json").read_text())
-    assert len(before) == 70 and set(before) == set(manifest["expected_tool_names"])
+    assert len(before) == manifest["expected_tool_count"] and set(before) == set(manifest["expected_tool_names"])
     assert (
         mcp_schema_fingerprint({name: row["inputSchema"] for name, row in before.items()})
         == manifest["schema_fingerprint"]

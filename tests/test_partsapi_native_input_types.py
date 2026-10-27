@@ -224,7 +224,7 @@ def test_all_native_input_schemas_and_partsapi_annotations_keep_public_contract(
     schemas = {tool.name: tool.inputSchema for tool in tools}
     root = Path(__file__).resolve().parents[1]
     catalog = json.loads((root / "docs/agent/manager_mcp_catalog.json").read_text(encoding="utf-8"))
-    assert len(tools) == catalog["expected_tool_count"] == 70
+    assert len(tools) == catalog["expected_tool_count"]
     assert set(schemas) == set(catalog["expected_tool_names"])
     assert mcp_schema_fingerprint(schemas) == catalog["schema_fingerprint"]
     partsapi = next(tool for tool in tools if tool.name == "partsapi_catalog_lookup")

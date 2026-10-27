@@ -153,11 +153,14 @@ def test_metadata_only_lists_all_pages_without_tool_calls(peer):
     assert report["diagnostic"] == "ok"
     assert report["mode"] == "metadata_only"
     assert set(report["checks"]) == {"native_ping", "tools_list"}
-    assert report["checks"]["tools_list"]["tool_count"] == 70
+    expected_names = {tool.name for tool in peer.tools}
+    assert {"manager_roles", "manager_role_action"} <= expected_names
+    assert report["checks"]["tools_list"]["tool_count"] == len(expected_names)
     assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 14
     assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
-    assert len(peer.schemas_checked[0]) == 70
-    assert peer.requests == ["initialize", "notifications/initialized", "ping"] + ["tools/list"] * 4
+    assert set(peer.schemas_checked[0]) == expected_names
+    expected_pages = (len(expected_names) + 22) // 23
+    assert peer.requests == ["initialize", "notifications/initialized", "ping"] + ["tools/list"] * expected_pages
     assert peer.tool_calls == []
     assert peer.transport_kwargs[0]["terminate_on_close"] is False
     assert report["privacy"]["store_order_read_attempted"] is False
