@@ -1074,7 +1074,7 @@ def validate_send_request(request: dict[str, Any]) -> tuple[str, str, str, str, 
     mode = str(request.get("mode") or "dry_run")
     idempotency_key = str(request.get("idempotency_key") or "").strip()
     raw_reply_to_message_id = request.get("reply_to_message_id", 0)
-    if isinstance(raw_reply_to_message_id, bool):
+    if isinstance(raw_reply_to_message_id, bool) or not isinstance(raw_reply_to_message_id, (int, str, type(None))):
         raise BridgeError("reply_to_message_id_invalid")
     try:
         reply_to_message_id = int(raw_reply_to_message_id or 0)
@@ -1148,7 +1148,14 @@ def validate_owner_notification_idempotency_readback_request(
     return idempotency_key, expected_text_sha256
 
 
+def _validate_media_reply_id(request: dict[str, Any]) -> None:
+    reply_id = request.get("reply_to_message_id", 0)
+    if isinstance(reply_id, bool) or not isinstance(reply_id, (int, str, type(None))):
+        raise BridgeError("reply_to_message_id_invalid")
+
+
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
+    _validate_media_reply_id(request)
     peer = str(request.get("peer") or "").strip()
     photo = Path(str(request.get("photo") or ""))
     caption = str(request.get("caption") or "")
@@ -1165,6 +1172,7 @@ def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str
 def validate_document_request(
     request: dict[str, Any], *, group_reply_peer_ids: frozenset[int] = frozenset()
 ) -> tuple[str, Path, str, str, str]:
+    _validate_media_reply_id(request)
     peer = str(request.get("peer") or "").strip()
     document = Path(str(request.get("document") or ""))
     caption = str(request.get("caption") or "")

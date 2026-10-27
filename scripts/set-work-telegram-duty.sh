@@ -75,7 +75,7 @@ wake_control() {
 
 bridge_status() {
   load_bridge_python || return 1
-  sudo -u "${service_user}" env PYTHONPATH="${release_link}" \
+  sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${release_link}" \
     "${venv_python}" -m autostop_manager.telegram_bridge --account work status
 }
 
@@ -182,7 +182,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   # Type=simple becomes active before the bridge connects and opens its socket.
   for _attempt in {1..15}; do
     if systemctl is-active --quiet "${service_unit}" \
-      && monitor_status="$(sudo -u "${service_user}" env PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" \
+      && monitor_status="$(sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work monitor-status)" \
       && grep -Eq '"enabled": true' <<<"${monitor_status}" \
       && grep -Eq '"retention":[[:space:]]*"(memory_only|durable_refs)"' <<<"${monitor_status}"; then
       if durable_release; then

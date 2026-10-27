@@ -107,6 +107,50 @@ def test_duty_status_uses_active_runtime_without_the_old_venv(runtime):
     assert json.loads(result.stdout)["transport_ready"] is True
 
 
+@pytest.mark.parametrize("operation", ["--status", "--enable"])
+def test_duty_bridge_import_ignores_unsafe_working_directory(runtime, operation):
+    scripts, env, _, tmp_path = runtime
+    fake_bin = tmp_path / "bin"
+    # Simulate sudo's normal environment reset; only arguments to env survive.
+    shell(fake_bin / "sudo", 'shift 2\nexec /usr/bin/env -i PATH="$PATH" "$@"\n')
+    shell(
+        fake_bin / "systemctl",
+        'case "$*" in\n'
+        '  *ExecStart*) printf "{ path=%s ; argv[]=python -m autostop_manager.telegram_bridge daemon ; }\\n" "$ACTIVE_PYTHON";;\n'
+        "  is-active*|enable*|restart*) exit 0;;\n"
+        "  *) exit 9;;\n"
+        "esac\n",
+    )
+    shell(fake_bin / "chown", "exit 0\n")
+    shell(fake_bin / "sleep", "exit 0\n")
+    package = scripts.parent / "autostop_manager"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "telegram_bridge.py").write_text(
+        'print(\'{"ok":true,"transport_ready":true,"inbound_enabled":true,'
+        '"enabled": true,"retention":"memory_only"}\')\n'
+    )
+    hostile = tmp_path / "working-directory"
+    (hostile / "autostop_manager").mkdir(parents=True)
+    (hostile / "autostop_manager" / "__init__.py").write_text("")
+    marker = tmp_path / "unsafe-import"
+    (hostile / "autostop_manager" / "telegram_bridge.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\nraise SystemExit(1)\n"
+    )
+    result = subprocess.run(
+        ["bash", str(scripts / "set-work-telegram-duty.sh"), operation],
+        cwd=hostile,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    if operation == "--status":
+        assert json.loads(result.stdout)["transport_ready"] is True
+
+
 def test_media_keeps_its_sandbox_and_uses_active_python(runtime):
     scripts, env, python, tmp_path = runtime
     result = subprocess.run(
