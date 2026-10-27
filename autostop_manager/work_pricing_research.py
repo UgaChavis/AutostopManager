@@ -54,6 +54,15 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _source_identity(value: Any, *, normalize_whitespace: bool = False) -> str:
+    """Preserve URI labels and retain the caller's ordinary-label whitespace policy."""
+    source = str(value)
+    stripped = source.strip()
+    if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", stripped):
+        return stripped
+    return re.sub(r"\s+", " ", source.casefold()).strip() if normalize_whitespace else source.casefold()
+
+
 def _parse_bool(value: Any) -> bool | None:
     if value is None:
         return None
@@ -888,7 +897,10 @@ def _dedupe_rows(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> list[di
     seen: set[tuple[str, ...]] = set()
     result: list[dict[str, Any]] = []
     for row in rows:
-        key = tuple(str(row.get(field, "")).casefold() for field in fields)
+        key = tuple(
+            _source_identity(row.get(field, "")) if field == "source" else str(row.get(field, "")).casefold()
+            for field in fields
+        )
         key += _observation_location(row)
         if key in seen:
             continue
@@ -907,7 +919,10 @@ def _dedupe_quote_rows(
         for field in ("includes_parts", "labor_only"):
             if field in row:
                 row[field] = _parse_bool(row[field])
-        key = tuple(str(identity.get(field, "")).casefold() for field in fields)
+        key = tuple(
+            _source_identity(identity.get(field, "")) if field == "source" else str(identity.get(field, "")).casefold()
+            for field in fields
+        )
         key += _observation_location(row)
         existing = by_key.get(key)
         if existing is None:
