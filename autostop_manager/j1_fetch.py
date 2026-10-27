@@ -1026,6 +1026,7 @@ class _DDGLinks(HTMLParser):
         self._title: list[str] = []
         self._snippet_tag = ""
         self._snippet: list[str] = []
+        self._snippet_owner: dict[str, str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = dict(attrs)
@@ -1033,6 +1034,7 @@ class _DDGLinks(HTMLParser):
             self._snippet_tag = tag
             self._snippet = []
         if tag == "a" and "result__a" in str(attrs_map.get("class") or ""):
+            self._snippet_owner = None
             self._href = str(attrs_map.get("href") or "")
             self._title = []
 
@@ -1052,10 +1054,13 @@ class _DDGLinks(HTMLParser):
                         "source": "duckduckgo",
                     }
                 )
+                self._snippet_owner = self.rows[-1]
             self._href = ""
         if self._snippet_tag and tag == self._snippet_tag:
-            if self.rows:
-                self.rows[-1]["snippet"] = _clean_search_text(" ".join(self._snippet), limit=MAX_SEARCH_SNIPPET_CHARS)
+            if self._snippet_owner is not None:
+                self._snippet_owner["snippet"] = _clean_search_text(
+                    " ".join(self._snippet), limit=MAX_SEARCH_SNIPPET_CHARS
+                )
             self._snippet_tag = ""
             self._snippet = []
 
