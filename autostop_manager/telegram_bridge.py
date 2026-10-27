@@ -4251,14 +4251,14 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
     operation = request["operation"]
     inbox = monitor.inbox
     if operation == "job_peer_thread_read_peer":
-        return {"ok": True, "peer_thread": inbox.read_peer_thread_by_peer(request.get("peer_id"))}
+        return {"ok": True, "peer_thread": inbox.read_peer_thread_by_peer(cast(int, request.get("peer_id")))}
     if operation == "job_peer_thread_forget_missing":
         forgotten = inbox.forget_missing_peer_thread(
-            peer_id=request.get("peer_id"),
-            expected_thread_id=request.get("expected_thread_id"),
-            expected_creation_key=request.get("expected_creation_key"),
-            expected_peer_thread_revision=request.get("expected_peer_thread_revision"),
-            expected_execution_revision=request.get("expected_execution_revision"),
+            peer_id=cast(int, request.get("peer_id")),
+            expected_thread_id=cast(str, request.get("expected_thread_id")),
+            expected_creation_key=cast(str, request.get("expected_creation_key")),
+            expected_peer_thread_revision=cast(int, request.get("expected_peer_thread_revision")),
+            expected_execution_revision=cast(int, request.get("expected_execution_revision")),
             missing_thread_reviewed=request.get("missing_thread_reviewed") is True,
             effects_reviewed=request.get("effects_reviewed") is True,
         )
