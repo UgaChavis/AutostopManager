@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -94,8 +95,50 @@ def test_installer_creates_venv_after_work_preflight(tmp_path: Path, account: st
         assert calls[0].startswith("unset|-m venv ")
 
 
+@pytest.mark.parametrize("supported", [False, True])
+def test_reused_work_runtime_checks_platform_before_import(tmp_path: Path, supported: bool) -> None:
+    result, calls = version_preflight(tmp_path, account="work", existing=True, supported=supported, reused=True)
+    assert len(calls) == (2 if supported else 1)
+    assert calls[0].startswith("1|-I -S -c ")
+    assert "platform.machine()" in calls[0]
+    if supported:
+        assert result.returncode == 0, result.stderr
+        assert "runtime_candidate=reused" in result.stdout
+        assert calls[1] == "bridge-import"
+    else:
+        assert result.returncode == 1
+        assert "telegram_dependency_platform_unsupported=true" in result.stderr
+        assert "runtime_candidate=reused" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "version,machine,system,implementation,expected",
+    [
+        ((3, 12), "x86_64", "linux", "cpython", 0),
+        ((3, 11), "x86_64", "linux", "cpython", 1),
+        ((3, 12), "aarch64", "linux", "cpython", 1),
+        ((3, 12), "x86_64", "win32", "cpython", 1),
+        ((3, 12), "x86_64", "linux", "pypy", 1),
+    ],
+)
+def test_work_platform_preflight_predicate(
+    version: tuple[int, int], machine: str, system: str, implementation: str, expected: int
+) -> None:
+    source = (ROOT / "scripts/install-telegram-bridge.sh").read_text(encoding="utf-8")
+    match = re.search(r"\"\$\{installer_python\}\" -I -S -c '([^']+)'", source)
+    assert match is not None
+    command = (
+        "import platform, sys; "
+        f"sys.version_info = {version!r}; platform.machine = lambda: {machine!r}; "
+        f"sys.platform = {system!r}; sys.implementation.name = {implementation!r}; "
+        f"exec({match.group(1)!r})"
+    )
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", command], capture_output=True, text=True, timeout=15)
+    assert result.returncode == expected, result.stderr
+
+
 def version_preflight(
-    tmp_path: Path, *, account: str, existing: bool, supported: bool
+    tmp_path: Path, *, account: str, existing: bool, supported: bool, reused: bool = False
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     source = (ROOT / "scripts/install-telegram-bridge.sh").read_text(encoding="utf-8")
     case_start = source.index('case "${account}" in')
@@ -126,7 +169,9 @@ def version_preflight(
         "set -eu\npython_safety_env=()\n"
         + f"account={account}\n"
         + source[case_start:case_end]
-        + '\nvenv_root="$TEST_VENV"\n'
+        + f"\nwork_candidate_reused={int(reused)}\n"
+        + 'venv_root="$TEST_VENV"\nconfig_dir="$TEST_CONFIG"\n'
+        + 'validate_bridge_imports() { echo bridge-import >> "$TEST_LOG"; }\n'
         + source[preflight_start:end]
         + "\n"
     )
@@ -134,6 +179,7 @@ def version_preflight(
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "TEST_VENV": str(venv),
+        "TEST_CONFIG": str(tmp_path / "config"),
         "TEST_LOG": str(log),
         "TEST_VERSION_STATUS": "0" if supported else "1",
     }

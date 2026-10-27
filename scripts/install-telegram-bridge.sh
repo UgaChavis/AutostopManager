@@ -342,6 +342,17 @@ if [[ -f "${config_dir}/credentials" ]] \
   exit 1
 fi
 
+if [[ "${account}" == "work" ]]; then
+  installer_python="python3"
+  if [[ -x "${venv_root}/bin/python" ]]; then
+    installer_python="${venv_root}/bin/python"
+  fi
+  if ! "${installer_python}" -I -S -c 'import platform, sys; sys.exit(not (sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 12) and sys.platform == "linux" and platform.machine() == "x86_64"))'; then
+    echo "telegram_dependency_platform_unsupported=true" >&2
+    exit 1
+  fi
+fi
+
 if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then
   if ! validate_bridge_imports; then
     echo "telegram_enabled_lane_import_failed=true" >&2
@@ -352,17 +363,6 @@ if [[ "${account}" == "work" && "${work_candidate_reused}" -eq 1 ]]; then
   echo "runtime_candidate=reused"
   echo "credentials_present=$([[ -f "${config_dir}/credentials" ]] && echo true || echo false)"
   exit 0
-fi
-
-if [[ "${account}" == "work" ]]; then
-  installer_python="python3"
-  if [[ -x "${venv_root}/bin/python" ]]; then
-    installer_python="${venv_root}/bin/python"
-  fi
-  if ! "${installer_python}" -I -S -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))'; then
-    echo "telegram_dependency_platform_unsupported=true" >&2
-    exit 1
-  fi
 fi
 
 if [[ ! -x "${venv_root}/bin/python" ]]; then
