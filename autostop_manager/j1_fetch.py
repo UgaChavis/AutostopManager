@@ -962,6 +962,7 @@ def _discovery_url_key(url: str) -> str:
         if not (name.casefold().startswith("utm_") or name.casefold() in _SEARCH_TRACKING_PARAMETERS)
     ]
     host = (parsed.hostname or "").casefold().rstrip(".")
+    host = f"[{host}]" if ":" in host else host
     if parsed.port and not (
         (parsed.scheme == "http" and parsed.port == 80) or (parsed.scheme == "https" and parsed.port == 443)
     ):
