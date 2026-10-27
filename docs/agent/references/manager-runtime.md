@@ -8,6 +8,10 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `manager_automations`, `manager_automation_control`, `j1_research_start`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_status`, `j1_research_results`, `j1_research_document`, `j1_research_report`, `j1_research_add_queries`, `j1_research_cancel`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
 
+Для проверки только metadata используй `mcp-probe --metadata-only` или `metadata_only=True` в sync/async API probe. Режим выполняет initialize/ping и полный paginated tools/list с той же проверкой schemas/annotations, без project tools/call и DELETE при закрытии SDK transport. Успех помечен `mode="metadata_only"`, checks содержит только `native_ping` и `tools_list`; это доступность и соответствие metadata, не функциональная приёмка. Обычный режим по умолчанию сохранён.
+
+`--metadata-only` несовместим с `--provider-failure-check`, `--store-check` и `--browser-check`: сочетание отклоняется до создания HTTP client с `ok=false`, `diagnostic="invalid_probe_options"` и CLI exit 1. Metadata success даёт exit 0, ошибки schemas/annotations/transport — exit 1; transport/cleanup failure сохраняет штатный `checks.transport`.
+
 Перед live-операцией разреши `readlink -f /opt/autostop-manager-releases/current`, прочитай `REVISION` и используй документы/manifest этого физического snapshot. Для разработки зафиксируй путь checkout/worktree, `git rev-parse HEAD` и `git status --short`; используй проверенную development venv, не создавая её копию только ради чистого worktree. При смешанной задаче укажи оба корня и ревизии; выбирать инструкции можно абсолютными путями без смены cwd и runtime-копий. Для imports production probe запускается из `/tmp` с `PYTHONSAFEPATH=1` и `PYTHONPATH`, равным выбранному физическому snapshot: cwd не должен подменять installed imports. Сверяй фактический manifest, не историческое число tools.
 
 После обслуживания 2026-10-21 installed source — `/opt/autostop-manager-releases/20261020T195623Z-b467f8c7`, `REVISION=b467f8c7d76db2aa68ef52e667b093cd84aa78ef`. Шесть native служб используют сохранённый Python `/opt/autostop-manager-cold-releases/51752bdb2048e0012e23b10bc770ff59f781874a/venv/bin/python3.12`; его историческое имя не задаёт ревизию приложения. Source выбирается новым cwd/PYTHONPATH, а CRM получает тот же source через read-only mount. Этот Python и его base runtime удалять нельзя. Перед очередной операцией перепроверь effective `ExecStart`, `/proc/<PID>/cwd`, окружение и импорт `autostop_manager.__file__`; датированная запись не заменяет текущую проверку.
@@ -301,6 +305,11 @@ Units в `deploy/systemd/`: Manager MCP, scheduler, J1 static/browser, work/pers
 
 Входной JSON, pending-запись, журналы Markdown, текущее состояние, индекс и сводки
 читаются и записываются в UTF-8 независимо от локали процесса.
+
+`validate(record)` проверяет UTF-8 для всех шести текстовых полей. Одиночные суррогатные
+кодовые точки из escaped JSON отклоняются с `journal_record_text` до создания каталога,
+lock, недельных или pending-файлов. Корректный Unicode сохраняется без дополнительной
+нормализации; ограничения длины по-прежнему считаются в символах.
 
 Для совместной работы передавай `append --record PRIVATE_JSON --expected-state-sha256 TOKEN`. Вычисли SHA-256 из тех же точных байтов свежего снимка `current-state.md`, по которому готовишь полный `state`, включая заголовок и переводы строк. `TOKEN` — ровно 64 lowercase hex; для отсутствующего файла используй `absent`. Отсутствие файла отличается от существующего пустого файла. Флаг необязателен и доступен только для `append`; девять полей записи не меняются.
 

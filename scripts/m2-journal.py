@@ -51,6 +51,10 @@ def validate(record):
             raise ValueError("journal_record_text")
         if "\x00" in text or "```m2-record" in text:
             raise ValueError("journal_record_text")
+        try:
+            text.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as error:
+            raise ValueError("journal_record_text") from error
     sha = record["git_sha"]
     if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)):
         raise ValueError("journal_record_sha")
