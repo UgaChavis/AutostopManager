@@ -3,6 +3,9 @@
 [E12](../modules/E12.md) получает исходные AUTONORMS rows; [E13](../modules/E13.md) отделяет acquisition от calculation.
 normalize_labor_time(rows, unit, source) сохраняет raw workName/workTime/unit, normalized hours,
 operation scope/source, included_operations и overlaps_with. Неизвестная единица — unknown, не часы по умолчанию.
+Переданный boolean `overlap_resolved` сохраняется в `data.labor` с исходным значением;
+отсутствующий ключ остаётся отсутствующим. Эти метаданные передаются в `calculate_work_price`
+с прежними правилами исключения unresolved overlap.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.

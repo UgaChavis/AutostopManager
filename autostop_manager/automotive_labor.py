@@ -89,6 +89,7 @@ def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | N
         "conditions": row.get("conditions") or {},
         "included_operations": row.get("included_operations") or [],
         "overlaps_with": row.get("overlaps_with") or [],
+        **({"overlap_resolved": row["overlap_resolved"]} if "overlap_resolved" in row else {}),
         "missing_fields": missing,
     }
 
