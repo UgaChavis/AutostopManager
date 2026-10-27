@@ -5181,7 +5181,9 @@ async def _reconcile_peer_history(
                 raise BridgeError("history_peer_invalid")
             try:
                 monitor.inbox.record(peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second")
-            except InboxError:
+            except InboxError as exc:
+                if str(exc) != "inbound_monitor_full":
+                    raise
                 complete = False
                 capacity_blocked = True
                 break
