@@ -4250,6 +4250,20 @@ async def _handle_job_effect_readback(
 def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any] | None:
     operation = request["operation"]
     inbox = monitor.inbox
+    if operation == "job_peer_thread_read_peer":
+        return {"ok": True, "peer_thread": inbox.read_peer_thread_by_peer(request.get("peer_id"))}
+    if operation == "job_peer_thread_forget_missing":
+        forgotten = inbox.forget_missing_peer_thread(
+            peer_id=request.get("peer_id"),
+            expected_thread_id=request.get("expected_thread_id"),
+            expected_creation_key=request.get("expected_creation_key"),
+            expected_peer_thread_revision=request.get("expected_peer_thread_revision"),
+            expected_execution_revision=request.get("expected_execution_revision"),
+            missing_thread_reviewed=request.get("missing_thread_reviewed") is True,
+            effects_reviewed=request.get("effects_reviewed") is True,
+        )
+        monitor.changed()
+        return {"ok": True, "forgotten": forgotten}
     if operation == "job_peer_thread_replace_missing":
         mapping = inbox.replace_missing_peer_thread(
             **_job_arguments(request),
@@ -5456,6 +5470,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("job-execution-slot")
     peer_read = subparsers.add_parser("job-peer-thread-read")
     peer_read.add_argument("--job-id", required=True)
+    peer_read_by_peer = subparsers.add_parser("job-peer-thread-read-peer")
+    peer_read_by_peer.add_argument("--peer-id", type=int, required=True)
+    peer_forget = subparsers.add_parser("job-peer-thread-forget-missing")
+    peer_forget.add_argument("--peer-id", type=int, required=True)
+    peer_forget.add_argument("--expected-thread-id", required=True)
+    peer_forget.add_argument("--expected-creation-key", required=True)
+    peer_forget.add_argument("--expected-peer-thread-revision", type=int, required=True)
+    peer_forget.add_argument("--expected-execution-revision", type=int, required=True)
+    peer_forget.add_argument("--missing-thread-reviewed", action="store_true", required=True)
+    peer_forget.add_argument("--effects-reviewed", action="store_true", required=True)
     legacy = subparsers.add_parser("job-import-legacy")
     legacy.add_argument("--file", type=Path, required=True)
     legacy.add_argument("--instruction-root", required=True)
@@ -5649,8 +5673,11 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
     request = {"operation": args.command.replace("-", "_")}
     for name in (
         "job_id",
+        "peer_id",
         "worker_protocol",
         "creation_key",
+        "expected_creation_key",
+        "expected_execution_revision",
         "proof_kind",
         "terminal_status",
         "local_tasks_done",

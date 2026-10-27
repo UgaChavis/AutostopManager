@@ -871,6 +871,62 @@ class TelegramInbox:
         row = self._db.execute("SELECT * FROM peer_threads WHERE peer_id=?", (job["peer_id"],)).fetchone()
         return dict(row) if row is not None else None
 
+    def read_peer_thread_by_peer(self, peer_id: int) -> dict[str, Any] | None:
+        _positive(peer_id, "inbound_peer_invalid")
+        row = self._db.execute("SELECT * FROM peer_threads WHERE peer_id=?", (peer_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def forget_missing_peer_thread(
+        self,
+        *,
+        peer_id: int,
+        expected_thread_id: str,
+        expected_creation_key: str,
+        expected_peer_thread_revision: int,
+        expected_execution_revision: int,
+        missing_thread_reviewed: bool = False,
+        effects_reviewed: bool = False,
+    ) -> bool:
+        """Forget one reviewed old binding only while the entire queue is idle."""
+        _positive(peer_id, "inbound_peer_invalid")
+        _token(expected_thread_id, "inbox_thread_invalid")
+        _token(expected_creation_key, "inbox_peer_thread_key_invalid")
+        _positive(expected_peer_thread_revision, "inbox_revision_invalid")
+        _positive(expected_execution_revision, "inbox_revision_invalid")
+        if missing_thread_reviewed is not True or effects_reviewed is not True:
+            raise InboxError("inbox_peer_thread_forget_review_required")
+        with self._write():
+            if self._meta("execution_paused") != "1":
+                raise InboxError("inbox_peer_thread_forget_held")
+            if int(self._meta("execution_revision")) != expected_execution_revision:
+                raise InboxError("inbox_execution_conflict")
+            if (
+                self._db.execute("SELECT 1 FROM global_slot LIMIT 1").fetchone()
+                or self._db.execute("SELECT 1 FROM events WHERE state='open' LIMIT 1").fetchone()
+                or self._db.execute(
+                    "SELECT 1 FROM jobs WHERE state IN ('claimed','start_intent','running','needs_review') LIMIT 1"
+                ).fetchone()
+                or self._db.execute("SELECT 1 FROM effects WHERE attempted=1 AND verified=0 LIMIT 1").fetchone()
+            ):
+                raise InboxError("inbox_peer_thread_forget_held")
+            mapping = self.read_peer_thread_by_peer(peer_id)
+            if (
+                mapping is None
+                or mapping["state"] != "ready"
+                or mapping["thread_id"] != expected_thread_id
+                or mapping["revision"] != expected_peer_thread_revision
+                or not hmac.compare_digest(mapping["creation_key"], expected_creation_key)
+            ):
+                raise InboxError("inbox_peer_thread_conflict")
+            removed = self._db.execute(
+                "DELETE FROM peer_threads WHERE peer_id=? AND state='ready' AND thread_id=? "
+                "AND revision=? AND creation_key=?",
+                (peer_id, expected_thread_id, expected_peer_thread_revision, expected_creation_key),
+            )
+            if removed.rowcount != 1:
+                raise InboxError("inbox_peer_thread_conflict")
+        return True
+
     def prepare_peer_thread(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] != "claimed" or job["context_mode"] != "peer_v1":
