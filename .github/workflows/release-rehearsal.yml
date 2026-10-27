@@ -7,11 +7,6 @@ on:
         description: Exact approved Manager commit (40 lowercase hex characters)
         required: true
         type: string
-  # Bootstrap the runner before this workflow reaches the default branch.
-  # Push runs check this exact branch revision, including its gate script.
-  push:
-    branches:
-      - "codex/manager-release-rehearsal-*"
 
 permissions:
   contents: read

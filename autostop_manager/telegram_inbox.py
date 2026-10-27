@@ -249,6 +249,15 @@ class TelegramInbox:
                 job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id), lease TEXT NOT NULL,
                 phase TEXT NOT NULL CHECK(phase IN ('claimed','start_intent','running','manual'))
             );
+            CREATE TABLE IF NOT EXISTS owner_routes (
+                sequence TEXT PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
+                receipt_id TEXT NOT NULL UNIQUE,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                accepted_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS owner_role_epochs (
+                peer_id INTEGER PRIMARY KEY, started_at TEXT NOT NULL
+            );
                 """
             )
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
@@ -334,6 +343,144 @@ class TelegramInbox:
             raise InboxError("inbound_event_not_open")
         return event
 
+    def configure_owner_route(self, peer_id: int | None) -> None:
+        """Startup cutover: old client test refs never acquire owner authority."""
+        if peer_id is None:
+            return
+        _positive(peer_id, "inbound_peer_invalid")
+        if self._db.execute("SELECT 1 FROM owner_role_epochs WHERE peer_id=?", (peer_id,)).fetchone():
+            return
+        if self._instruction_pair is None:
+            raise InboxError("inbox_instruction_invalid")
+        with self._write():
+            self._db.execute("INSERT INTO owner_role_epochs VALUES (?,?)", (peer_id, self._now()))
+            sequences = [
+                row[0]
+                for row in self._db.execute(
+                    "SELECT sequence FROM events WHERE peer_id=? AND state='open' AND job_id IS NULL", (peer_id,)
+                )
+            ]
+            if sequences:
+                self._hold_refs(
+                    sequences, peer_id, *self._instruction_pair, reason_code="owner_role_transition_review_required"
+                )
+                self._db.executemany("DELETE FROM boundary_holds WHERE sequence=?", [(item,) for item in sequences])
+
+    def owner_pending(self, peer_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Exact unclaimed owner locators, independent of the client execution slot."""
+        _positive(peer_id, "inbound_peer_invalid")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise InboxError("inbox_page_limit_invalid")
+        return [
+            {"event_id": f"inbound-{row['sequence']}", "received_at": row["received_at"]}
+            for row in self._db.execute(
+                "SELECT events.sequence,events.received_at FROM events JOIN owner_role_epochs USING(peer_id) "
+                "WHERE peer_id=? AND state='open' AND job_id IS NULL AND received_at>=started_at "
+                "AND NOT EXISTS (SELECT 1 FROM boundary_holds WHERE boundary_holds.sequence=events.sequence) "
+                "ORDER BY received_at,events.rowid LIMIT ?",
+                (peer_id, limit),
+            )
+        ]
+
+    def require_owner_source(self, event_id: str, owner_peer_id: int) -> InboundReference:
+        event = self._event_row(event_id)
+        if event["peer_id"] != owner_peer_id:
+            raise InboxError("inbox_owner_target_mismatch")
+        epoch = self._db.execute(
+            "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (owner_peer_id,)
+        ).fetchone()
+        if event["state"] == "routed" and self.owner_route_receipt(event_id) is not None:
+            return self.resolve(event_id)
+        if (
+            epoch is None
+            or event["received_at"] < epoch[0]
+            or event["state"] != "open"
+            or event["job_id"] is not None
+            or self._db.execute("SELECT 1 FROM boundary_holds WHERE sequence=?", (event["sequence"],)).fetchone()
+        ):
+            raise InboxError("inbox_owner_event_not_pending")
+        return self.resolve(event_id)
+
+    def owner_route_receipt(self, event_id: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT receipt_id,job_id,accepted_at FROM owner_routes WHERE sequence=?",
+            (self._event_sequence(event_id),),
+        ).fetchone()
+        return None if row is None else {"event_id": event_id, **dict(row), "outcome": "routed", "role": "M1"}
+
+    def owner_routes_unfinished(self, *, limit: int = 50) -> list[dict[str, str]]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise InboxError("inbox_page_limit_invalid")
+        return [
+            {"event_id": f"inbound-{row['sequence']}", "receipt_id": row["receipt_id"]}
+            for row in self._db.execute(
+                "SELECT owner_routes.sequence,receipt_id FROM owner_routes JOIN events USING(sequence) "
+                "WHERE events.completed_at IS NULL ORDER BY accepted_at,events.rowid LIMIT ?",
+                (limit,),
+            )
+        ]
+
+    def complete_owner_route(self, event_id: str, receipt_id: str) -> dict[str, Any]:
+        receipt = self.owner_route_receipt(event_id)
+        if receipt is None or receipt["receipt_id"] != receipt_id:
+            raise InboxError("inbox_owner_receipt_conflict")
+        if self._event_row(event_id)["completed_at"] is None:
+            with self._write():
+                self._db.execute(
+                    "UPDATE events SET completed_at=? WHERE sequence=?", (self._now(), self._event_sequence(event_id))
+                )
+        return receipt
+
+    def route_owner_event(
+        self,
+        *,
+        event_id: str,
+        owner_peer_id: int,
+        receipt_id: str,
+        instruction_root: str,
+        instruction_revision: str,
+    ) -> dict[str, Any]:
+        """Commit a verified local delivery receipt without starting a client turn.
+
+        Only the authenticated root router supplies receipts after independently
+        reading the role inbox. This terminal outcome is not a client reply.
+        """
+        self._instruction(instruction_root, instruction_revision)
+        _positive(owner_peer_id, "inbound_peer_invalid")
+        _token(receipt_id, "inbox_owner_receipt_invalid")
+        event = self._event_row(event_id)
+        if event["peer_id"] != owner_peer_id:
+            raise InboxError("inbox_owner_target_mismatch")
+        existing = self.owner_route_receipt(event_id)
+        if existing is not None:
+            if existing["receipt_id"] != receipt_id:
+                raise InboxError("inbox_owner_receipt_conflict")
+            return existing
+        self.require_owner_source(event_id, owner_peer_id)
+        now = self._now()
+        job_id = "job-" + secrets.token_hex(16)
+        with self._write():
+            self._db.execute(
+                "INSERT INTO jobs(job_id,peer_id,state,revision,lease,context_revision,instruction_root,"
+                "instruction_revision,created_at,updated_at,outcome,execution_proof,proof_at,context_mode) "
+                "VALUES (?,?,'completed',1,?,?,?,?,?,?,'routed','not_started',?,'owner_m1')",
+                (
+                    job_id,
+                    owner_peer_id,
+                    secrets.token_urlsafe(32),
+                    event["context_revision"],
+                    instruction_root,
+                    instruction_revision,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            # Keep the exact reference while M1 may still need to read it.
+            self._db.execute("UPDATE events SET state='routed',job_id=? WHERE sequence=?", (job_id, event["sequence"]))
+            self._db.execute("INSERT INTO owner_routes VALUES (?,?,?,?)", (event["sequence"], receipt_id, job_id, now))
+        return self.owner_route_receipt(event_id) or {}
+
     def record(
         self,
         peer_id: int,
@@ -376,13 +523,21 @@ class TelegramInbox:
                     "VALUES (?,?,?,?,'open',?)",
                     (sequence, peer_id, message_id, timestamp, context),
                 )
-                if classification == "ambiguous":
+                owner_epoch = self._db.execute(
+                    "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (peer_id,)
+                ).fetchone()
+                hold_reason = (
+                    "owner_role_transition_review_required"
+                    if owner_epoch and timestamp < owner_epoch[0]
+                    else "duty_boundary_ambiguous"
+                    if classification == "ambiguous"
+                    else None
+                )
+                if hold_reason:
                     if self._instruction_pair is not None:
-                        self._hold_refs(
-                            [sequence], peer_id, *self._instruction_pair, reason_code="duty_boundary_ambiguous"
-                        )
+                        self._hold_refs([sequence], peer_id, *self._instruction_pair, reason_code=hold_reason)
                     else:
-                        self._db.execute("INSERT INTO boundary_holds VALUES (?,'duty_boundary_ambiguous')", (sequence,))
+                        self._db.execute("INSERT INTO boundary_holds VALUES (?,?)", (sequence, hold_reason))
                         self._gap(peer_id, message_id, timestamp, "boundary_instruction_unavailable")
         if rejected:
             raise InboxError("inbound_monitor_full")
@@ -564,6 +719,7 @@ class TelegramInbox:
             "open_events": counts.get("open", 0),
             "retained_events": sum(counts.values()),
             "reply_verified_events": counts.get("reply_verified", 0),
+            "routed_events": counts.get("routed", 0),
             "no_reply_needed_events": counts.get("no_reply_needed", 0),
             "dropped_events": 0,
             "dropped_open_events": 0,
@@ -653,7 +809,7 @@ class TelegramInbox:
     def _promote_boundary_holds(self, instruction_root: str, instruction_revision: str) -> None:
         rows = list(
             self._db.execute(
-                "SELECT events.sequence,events.peer_id FROM events JOIN boundary_holds USING(sequence) "
+                "SELECT events.sequence,events.peer_id,boundary_holds.reason_code FROM events JOIN boundary_holds USING(sequence) "
                 "WHERE events.state='open' AND events.job_id IS NULL ORDER BY events.received_at,events.rowid"
             )
         )
@@ -666,7 +822,7 @@ class TelegramInbox:
                     row["peer_id"],
                     instruction_root,
                     instruction_revision,
-                    reason_code="duty_boundary_ambiguous",
+                    reason_code=row["reason_code"],
                 )
                 self._db.execute("DELETE FROM boundary_holds WHERE sequence=?", (row["sequence"],))
 
@@ -684,8 +840,16 @@ class TelegramInbox:
         ):
             raise InboxError("inbox_instruction_invalid")
 
-    def claim(self, *, instruction_root: str, instruction_revision: str) -> dict[str, Any] | None:
+    def claim(
+        self,
+        *,
+        instruction_root: str,
+        instruction_revision: str,
+        exclude_peer_id: int | None = None,
+    ) -> dict[str, Any] | None:
         self._instruction(instruction_root, instruction_revision)
+        if exclude_peer_id is not None:
+            _positive(exclude_peer_id, "inbound_peer_invalid")
         if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
             return None
         self._promote_boundary_holds(instruction_root, instruction_revision)
@@ -693,10 +857,12 @@ class TelegramInbox:
             return None
         first = self._db.execute(
             "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
+            "AND (? IS NULL OR events.peer_id<>?) "
             "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.peer_id=events.peer_id "
             "AND jobs.state IN ('claimed','start_intent','running','needs_review')) "
             "AND NOT EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=events.peer_id "
-            "AND peer_threads.state<>'ready') ORDER BY received_at,events.rowid LIMIT 1"
+            "AND peer_threads.state<>'ready') ORDER BY received_at,events.rowid LIMIT 1",
+            (exclude_peer_id, exclude_peer_id),
         ).fetchone()
         if first is None:
             return None

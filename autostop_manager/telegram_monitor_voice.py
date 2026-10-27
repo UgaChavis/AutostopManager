@@ -50,7 +50,7 @@ def _require_root() -> None:
 def _request(payload: dict[str, Any]) -> dict[str, Any]:
     timeout_seconds = (
         _MONITOR_VOICE_STAGE_RPC_TIMEOUT_SECONDS
-        if payload.get("operation") == "monitor_voice_stage"
+        if payload.get("operation") in {"monitor_voice_stage", "owner_event_voice_stage"}
         else DEFAULT_LOCAL_REQUEST_TIMEOUT_SECONDS
     )
     try:
@@ -129,7 +129,7 @@ def self_check() -> dict[str, Any]:
     return {"ok": True, "check": "media_runner_ready"}
 
 
-def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[str, Any]:
+def transcribe_monitored_voice(event_id: str, *, language: str = "ru", owner_source: bool = False) -> dict[str, Any]:
     _require_root()
     if INBOUND_EVENT_ID_PATTERN.fullmatch(event_id) is None:
         raise MonitorVoiceError("inbound_event_invalid")
@@ -142,7 +142,7 @@ def transcribe_monitored_voice(event_id: str, *, language: str = "ru") -> dict[s
     try:
         staged = _request(
             {
-                "operation": "monitor_voice_stage",
+                "operation": "owner_event_voice_stage" if owner_source else "monitor_voice_stage",
                 "event_id": event_id,
             }
         )
@@ -208,6 +208,9 @@ def build_parser() -> argparse.ArgumentParser:
     request.add_argument("--recover-event")
     request.add_argument("--self-check", action="store_true")
     parser.add_argument("--language", default="ru")
+    parser.add_argument(
+        "--owner", action="store_true", help="Read an exact trusted owner event after durable M1 routing"
+    )
     return parser
 
 
@@ -219,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.recover_event:
             payload = recover_monitored_voice(args.recover_event)
         else:
-            payload = transcribe_monitored_voice(args.event_id, language=args.language)
+            payload = transcribe_monitored_voice(args.event_id, language=args.language, owner_source=args.owner)
     except MonitorVoiceError as exc:
         payload = {"ok": False, "error": exc.code, "cleanup_verified": exc.cleanup_verified}
     print(json.dumps(payload, ensure_ascii=False, indent=2))

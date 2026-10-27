@@ -27,6 +27,8 @@ from .config import reject_obsolete_runtime_config
 from .automation_registry import AutomationStore
 from .automation_timers import SystemTimerController
 from .config import get_automation_crm_connection_config, get_work_telegram_socket_path, load_runtime_env
+from .role_coordination import RoleStore
+from .role_executor import RoleExecutor
 
 
 Executor = Callable[[Mapping[str, Any]], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
@@ -85,6 +87,7 @@ class AutomationDaemon:
         readiness_provider: Callable[[], Mapping[str, Any]] | None = None,
         tick_seconds: float = 1,
         lease_seconds: int = 60,
+        role_executor: RoleExecutor | None = None,
     ) -> None:
         self.store = store or AutomationStore()
         self.executors = dict(executors or {})
@@ -102,6 +105,11 @@ class AutomationDaemon:
         self.lease_seconds = lease_seconds
         self.owner = f"automation-daemon-{uuid4().hex}"
         self.stopping = asyncio.Event()
+        self.role_executor = role_executor
+        if role_executor is not None:
+            for template_id in ("m1_duty_v1", "m2_duty_v1"):
+                self.executors[template_id] = role_executor.request_reconcile
+        self.role_task: asyncio.Task[None] | None = None
 
     @classmethod
     def production(cls, *, store: AutomationStore | None = None) -> AutomationDaemon:
@@ -134,7 +142,13 @@ class AutomationDaemon:
             }
             return {"ready": all(value == "ready" for value in checks.values()), "checks": checks}
 
-        return cls(store=state, executors=executors, notifier=notifier, readiness_provider=readiness)
+        return cls(
+            store=state,
+            executors=executors,
+            notifier=notifier,
+            readiness_provider=readiness,
+            role_executor=RoleExecutor(RoleStore(state.path)),
+        )
 
     async def _execute_claim(self, claim: Mapping[str, Any]) -> None:
         executor = self.executors.get(str(claim["template_id"]))
@@ -391,6 +405,8 @@ class AutomationDaemon:
                         self.store.controller_heartbeat(owner=self.owner, state="stopping")
                 finally:
                     # A failed notification must not abandon the owned worker.
+                    if self.role_task is not None:
+                        await asyncio.shield(self.role_task)
                     if scheduler is not None:
                         await asyncio.shield(scheduler)
                     with suppress(Exception):
@@ -417,6 +433,8 @@ class AutomationDaemon:
         reject_obsolete_runtime_config()
         self.store.initialize()
         self.store.seed_defaults()
+        if self.role_executor is not None:
+            self.role_executor.store.initialize()
         await asyncio.to_thread(self.timer_controller.adopt_all_current)
         self.store.controller_heartbeat(owner=self.owner, started=True)
         await self.control_server.start()
@@ -427,6 +445,8 @@ class AutomationDaemon:
                 with suppress(NotImplementedError):
                     loop.add_signal_handler(sig, self.stopping.set)
             scheduler = asyncio.create_task(self.scheduler_loop())
+            if self.role_executor is not None:
+                self.role_task = asyncio.create_task(self.role_loop())
             notify_systemd("READY=1")
             await self.stopping.wait()
         finally:
@@ -434,6 +454,18 @@ class AutomationDaemon:
             # Cancelling a to_thread await does not stop its worker. Drain the
             # current claim and its durable result before reporting stopped.
             await self._finish_shutdown(scheduler)
+
+    async def role_loop(self) -> None:
+        """Dispatch/reconcile without monopolizing periodic jobs or the owner outbox."""
+        while not self.stopping.is_set():
+            if self.role_executor is not None:
+                await self.role_executor.tick()
+            with suppress(TimeoutError):
+                if self.role_executor is not None:
+                    await asyncio.wait_for(self.role_executor.wake_event.wait(), timeout=5)
+                    self.role_executor.wake_event.clear()
+                else:
+                    await asyncio.wait_for(self.stopping.wait(), timeout=5)
 
 
 def main(argv: list[str] | None = None) -> int:

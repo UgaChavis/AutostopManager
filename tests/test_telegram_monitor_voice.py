@@ -30,7 +30,8 @@ def test_monitored_voice_stage_uses_a_timeout_longer_than_the_server_deadline(mo
     assert timeouts[0] > telegram_monitor_voice.MONITOR_VOICE_STAGE_TIMEOUT_SECONDS
 
 
-def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("owner_source", [False, True])
+def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path, owner_source) -> None:
     handle = "b" * 32
     requests: list[dict[str, object]] = []
     seen: dict[str, object] = {}
@@ -40,7 +41,7 @@ def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
     def request(payload):
         requests.append(payload)
         operation = payload["operation"]
-        if operation == "monitor_voice_stage":
+        if operation == ("owner_event_voice_stage" if owner_source else "monitor_voice_stage"):
             return {
                 "ok": True,
                 "event_id": "inbound-1",
@@ -62,7 +63,7 @@ def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
         ),
     )
 
-    result = telegram_monitor_voice.transcribe_monitored_voice("inbound-1")
+    result = telegram_monitor_voice.transcribe_monitored_voice("inbound-1", owner_source=owner_source)
 
     assert result == {
         "ok": True,
@@ -74,7 +75,7 @@ def test_monitored_voice_hides_handle_and_path(monkeypatch, tmp_path) -> None:
     }
     assert seen == {"path": expected_path, "language": "ru"}
     assert requests == [
-        {"operation": "monitor_voice_stage", "event_id": "inbound-1"},
+        {"operation": "owner_event_voice_stage" if owner_source else "monitor_voice_stage", "event_id": "inbound-1"},
         {"operation": "monitor_voice_discard", "media_handle": handle, "runner_cleanup_verified": True},
     ]
     serialized = str(result)
