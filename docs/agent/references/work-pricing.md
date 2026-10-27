@@ -12,6 +12,9 @@ operation scope/source, included_operations и overlaps_with. Неизвестн
 `norm_hours`, включая `null` и ноль. Неявные часы задаёт только выбранное `hours/labor_hours/norm_hours`;
 младший игнорируемый ключ не определяет единицу для `workTime/raw_time/time`. Явные единицы строки
 и общий `unit` сохраняют прежний приоритет, включая `unit:null` строки.
+Переданный boolean `overlap_resolved` сохраняется в `data.labor` с исходным значением;
+отсутствующий ключ остаётся отсутствующим. Эти метаданные передаются в `calculate_work_price`
+с прежними правилами исключения unresolved overlap.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
@@ -69,6 +72,13 @@ snippet содержит только подпись цены/времени, г
 сумму, источник/lineage, locator и город. Противоречивые labor-only/includes-parts признаки
 объединяются консервативно после нормализации boolean aliases. Разные страницы, города,
 суммы и работы остаются отдельными наблюдениями.
+
+Legacy estimate сохраняет URI в `source`/`primary_lineage` с явным `scheme://` как
+точную метку источника после удаления внешних пробелов. Регистр scheme, host, path,
+query и fragment сохраняется. Равные цены или часы не объединяют разные URI и не
+переносят между ними labor/parts veto. Для обычных меток research dedup сохраняет
+casefold без свёртки пробелов; pricing labor sample и source_count сохраняют casefold
+со свёрткой пробелов. Исходное происхождение в строках не переписывается.
 
 Pure calculate_work_price с public_observations также считает идентифицированный повтор один раз.
 Identity сохраняет строгую работу, неокруглённую сумму, конкретный source/primary_lineage,

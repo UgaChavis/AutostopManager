@@ -14,6 +14,7 @@ from .work_pricing_research import (
     _dedupe_quote_rows,
     _observation_location,
     _parse_bool,
+    _source_identity,
     collect_public_work_pricing_research,
     legacy_work_evidence_row,
 )
@@ -78,7 +79,7 @@ def _source_count(rows: list[dict[str, Any]]) -> int:
     for row in rows:
         source = str(row.get("source") or "").strip()
         if source:
-            sources.add(source if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", source) else _clean_text(source))
+            sources.add(_source_identity(source, normalize_whitespace=True))
     return len(sources)
 
 
@@ -514,7 +515,7 @@ def _normalize_labor_time_sample(rows: list[dict[str, Any]]) -> list[dict[str, A
         identity = _normalize_labor_time_row(row)
         if identity["valid_input"]:
             key = (
-                _clean_text(identity["source"]),
+                _source_identity(identity["source"], normalize_whitespace=True),
                 _clean_text(identity["operation_name"]),
                 identity["hours"],
                 tuple(identity["range_hours"]),
