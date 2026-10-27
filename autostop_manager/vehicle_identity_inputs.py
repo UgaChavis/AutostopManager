@@ -290,7 +290,7 @@ def validate_identity_item(item: Any) -> dict[str, Any]:
         (
             item[key]
             for key in ("identifier", "vin", "frame", "chassis_number", "body_number")
-            if key in item and item[key] not in (None, "")
+            if key in item and not (item[key] is None or (isinstance(item[key], str) and not item[key].strip()))
         ),
         flattened.get("vin") or flattened.get("frame") or "",
     )

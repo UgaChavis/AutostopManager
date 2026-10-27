@@ -51,6 +51,10 @@ def validate(record):
             raise ValueError("journal_record_text")
         if "\x00" in text or "```m2-record" in text:
             raise ValueError("journal_record_text")
+        try:
+            text.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as error:
+            raise ValueError("journal_record_text") from error
     sha = record["git_sha"]
     if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)):
         raise ValueError("journal_record_sha")
@@ -86,6 +90,16 @@ def week_for(at):
         raise ValueError("journal_utc_required")
     year, week, _day = at.astimezone(UTC).isocalendar()
     return f"{year}-W{week:02d}"
+
+
+def week_paths(root):
+    """List numeric week filenames in numeric year/week order, preserving each path."""
+    paths = []
+    for path in (root / "journal").glob("*.md"):
+        match = re.fullmatch(r"([0-9]{1,4})-W([0-9]{2})\.md", path.name)
+        if match:
+            paths.append((int(match[1]), int(match[2]), path.name, path))
+    return [path for _year, _week, _name, path in sorted(paths)]
 
 
 def ensure_week(root, week):
@@ -130,8 +144,9 @@ def publish_pointers(root, week):
         f"{release_records} записей с отметкой о необходимости выпуска.\n\nПоследние {SUMMARY_LIMIT} результатов; полные записи — "
         f"[в журнале](../journal/{week}.md).\n\n{results}\n",
     )
-    history = "\n".join(f"- [{p.stem}]({p.name})" for p in sorted((root / "journal").glob("????-W??.md")))
-    completed = [p.stem for p in sorted((root / "journal").glob("????-W??.md")) if records(p)]
+    paths = week_paths(root)
+    history = "\n".join(f"- [{p.stem}]({p.name})" for p in paths)
+    completed = [p.stem for p in paths if records(p)]
     latest = completed[-1] if completed else week
     atomic_write(
         root / "journal/INDEX.md",
@@ -192,7 +207,7 @@ def run(root=ROOT, record=None, at=None, *, expected_state_sha256=None):
             normalized = canonical_record(record)
             existing = [
                 entry
-                for path in (root / "journal").glob("????-W??.md")
+                for path in week_paths(root)
                 for entry in records(path)
                 if str(UUID(entry["id"])) == normalized["id"]
             ]

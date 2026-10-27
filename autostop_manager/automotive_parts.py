@@ -33,7 +33,7 @@ from .vin_lookup import normalize_part_number
 
 
 _REQUEST_QUANTITY = re.compile(
-    r"(?<![\w-])(\d+(?:[.,]\d+)?)\s*(шт(?:ук[аи]?)?\.?|комплект(?:а|ов)?|компл\.?|пар[аы]?|л(?:итр(?:а|ов)?)?)(?!\w)",
+    r"(?<![\w−-])(?<![\d−-][.,])(\d+(?:[.,]\d+)?)\s*(шт(?:ук[аи]?)?\.?|комплект(?:а|ов)?|компл\.?|пар[аы]?|л(?:итр(?:а|ов)?)?)(?!\w)",
     re.I,
 )
 
@@ -134,6 +134,11 @@ def normalize_parts_request(text: str = "", items: list[dict[str, Any] | str] | 
     source = items if items is not None else _split_request(text)
     if not source or len(source) > MAX_ROWS or any(not isinstance(row, (dict, str)) for row in source):
         return invalid("normalize_parts_request", "items")
+    for index, row in enumerate(source):
+        if isinstance(row, dict):
+            for field in ("axle", "side", "position"):
+                if row.get(field) is not None and not isinstance(row[field], str):
+                    return invalid("normalize_parts_request", f"items[{index}].{field}")
     normalized = [_request_item(row, index) for index, row in enumerate(source)]
     ids = [row["item_id"] for row in normalized]
     if len(ids) != len(set(ids)):
@@ -331,8 +336,7 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             and all(
                 isinstance(item.get(key), dict)
                 and bool(normalize_part_number(row[key]["number"]))
-                and normalize_part_number(str(item[key].get("number") or ""))
-                == normalize_part_number(row[key]["number"])
+                and _source_part_number(item[key].get("number")) == normalize_part_number(row[key]["number"])
                 and bool(row[key].get("brand"))
                 and str(item[key].get("brand") or "").casefold() == str(row[key]["brand"]).casefold()
                 for key in ("from", "to")
@@ -682,14 +686,8 @@ def assess_part_fitment(
         vehicle.get("catalog_ref"), vehicle_profile=profile
     ):
         missing.append("vehicle_catalog_context")
-    number = normalize_part_number(
-        str(
-            part.get("number")
-            or part.get("part_number")
-            or part.get("normalized_number")
-            or part.get("raw_number")
-            or ""
-        )
+    number = _source_part_number(
+        part.get("number") or part.get("part_number") or part.get("normalized_number") or part.get("raw_number") or ""
     )
     brand = str(part.get("brand") or "").casefold()
     primary, condition_sources, source_gaps = _fitment_sources(evidence, number, brand, vehicle, profile, scope)

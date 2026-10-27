@@ -58,13 +58,19 @@ def _operation_key(row: dict[str, Any], fallback: str | int) -> str:
     return str(fallback if value is None or value == "" else value)
 
 
+def _labor_operation_name(row: dict[str, Any]) -> Any:
+    return next((row[key] for key in ("workName", "operation_name", "operation", "name") if key in row), None)
+
+
 def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | None, index: int) -> dict[str, Any]:
-    raw_time = next(
-        (row[key] for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
+    time_field = next(
+        (key for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
     )
-    operation = next((row[key] for key in ("workName", "operation_name", "operation", "name") if key in row), None)
+    raw_time = row[time_field] if time_field is not None else None
+    operation = _labor_operation_name(row)
+    operation_presence = operation.strip() if isinstance(operation, str) else operation
     raw_unit = row.get("unit", unit)
-    if raw_unit is None and any(key in row for key in ("hours", "labor_hours", "norm_hours")):
+    if raw_unit is None and time_field in ("hours", "labor_hours", "norm_hours"):
         raw_unit = "hours"
     factor = UNITS.get(str(raw_unit).casefold())
     number = finite_number(raw_time)
@@ -72,7 +78,12 @@ def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | N
     provenance = row.get("source", source)
     missing = [
         field
-        for field, value in (("operation_name", operation), ("unit", factor), ("time", number), ("source", provenance))
+        for field, value in (
+            ("operation_name", operation_presence),
+            ("unit", factor),
+            ("time", number),
+            ("source", provenance),
+        )
         if value is None or value == ""
     ]
     if not _has_labor_source(provenance) and "source" not in missing:
@@ -89,6 +100,7 @@ def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | N
         "conditions": row.get("conditions") or {},
         "included_operations": row.get("included_operations") or [],
         "overlaps_with": row.get("overlaps_with") or [],
+        **({"overlap_resolved": row["overlap_resolved"]} if "overlap_resolved" in row else {}),
         "missing_fields": missing,
     }
 
@@ -100,8 +112,10 @@ def normalize_labor_time(
         return invalid("normalize_labor_time", "rows")
     if source is not None and not isinstance(source, dict):
         return invalid("normalize_labor_time", "source")
-    if any(not _labor_structure_valid(row) for row in rows):
-        return invalid("normalize_labor_time", "rows.structure")
+    for row in rows:
+        operation = _labor_operation_name(row)
+        if not _labor_structure_valid(row) or (operation is not None and not isinstance(operation, str)):
+            return invalid("normalize_labor_time", "rows.structure")
     normalized = [_labor_row(row, unit, source, index) for index, row in enumerate(rows)]
     missing = [f"rows[{index}].{field}" for index, row in enumerate(normalized) for field in row["missing_fields"]]
     overlaps = [

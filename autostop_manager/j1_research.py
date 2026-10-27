@@ -187,7 +187,7 @@ def _canonical_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not host:
         return ""
     hostname = host.casefold().rstrip(".")
-    netloc = hostname
+    netloc = f"[{hostname}]" if ":" in hostname else hostname
     if port is not None and not (
         (parsed.scheme == "http" and port == 80) or (parsed.scheme == "https" and port == 443)
     ):

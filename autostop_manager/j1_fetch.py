@@ -7,6 +7,8 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
+from email.parser import HeaderParser
+from email.policy import HTTP
 import html
 from html.parser import HTMLParser
 import http.client
@@ -43,7 +45,8 @@ _VIN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
 )
-_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w.-])", re.I)
+# Trailing dots may be punctuation; a continuing domain label must match in full.
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Z]{2,}(?![\w-]|\.+[\w-])", re.I)
 _PHONE = re.compile(r"(?<!\w)(?:\+7|8|7(?=9\d{2}))[\s().-]*\d{3}(?:[\s().-]*\d){7}(?!\d)")
 _SECRET = re.compile(
     r"(?i)(?:bearer\s+[a-z0-9._~+/-]{12,}|(?:api[_-]?key|token|password|secret)['\"]?\s*[:=]\s*[^\s&]{8,})"
@@ -428,15 +431,28 @@ def _rate_limit(origin: str, delay: float) -> None:
 
 
 class _PageText(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, *, xhtml: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title_parts: list[str] = []
         self.links: list[str] = []
         self._hidden = 0
         self._title = False
+        self._templates: list[bool] = []
+        self._inert_templates = 0
+        self._xhtml = xhtml
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template":
+            # Recognized declarative shadow roots keep their existing extraction;
+            # ordinary templates remain inert, including nested shadow markup.
+            mode = next((value for name, value in attrs if name == "shadowrootmode"), None)
+            inert = (mode or "").lower() not in {"open", "closed"}
+            self._templates.append(inert)
+            self._inert_templates += inert
+            return
+        if self._inert_templates:
+            return
         if tag in {"script", "style", "svg", "noscript", "nav", "footer"}:
             self._hidden += 1
         if tag == "title":
@@ -448,13 +464,28 @@ class _PageText(HTMLParser):
         if tag in {"p", "br", "div", "li", "tr", "h1", "h2", "h3"}:
             self.parts.append("\n")
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "template" and not self._xhtml:
+            # A non-void HTML element's slash does not close its contents.
+            self.handle_starttag(tag, attrs)
+        else:
+            super().handle_startendtag(tag, attrs)
+
     def handle_endtag(self, tag: str) -> None:
+        if tag == "template":
+            if self._templates:
+                self._inert_templates -= self._templates.pop()
+            return
+        if self._inert_templates:
+            return
         if tag in {"script", "style", "svg", "noscript", "nav", "footer"} and self._hidden:
             self._hidden -= 1
         if tag == "title":
             self._title = False
 
     def handle_data(self, data: str) -> None:
+        if self._inert_templates:
+            return
         if self._title:
             self.title_parts.append(data)
         if not self._hidden:
@@ -462,13 +493,14 @@ class _PageText(HTMLParser):
 
 
 def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
-    charset_match = re.search(r"charset=([\w-]+)", headers.get("content-type", ""), re.I)
-    charset = charset_match.group(1) if charset_match else "utf-8"
+    content_type = HeaderParser(policy=HTTP).parsestr(f"Content-Type: {headers.get('content-type', '')}\n\n")
+    charset = content_type.get_content_charset() or "utf-8"
     try:
         decoded = body.decode(charset, "replace")
     except LookupError:
         decoded = body.decode("utf-8", "replace")
-    parser = _PageText()
+    media_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+    parser = _PageText(xhtml=media_type == "application/xhtml+xml")
     parser.feed(decoded)
     title = " ".join(" ".join(parser.title_parts).split())[:200]
     text = re.sub(r"[ \t]+", " ", "".join(parser.parts))
@@ -930,6 +962,7 @@ def _discovery_url_key(url: str) -> str:
         if not (name.casefold().startswith("utm_") or name.casefold() in _SEARCH_TRACKING_PARAMETERS)
     ]
     host = (parsed.hostname or "").casefold().rstrip(".")
+    host = f"[{host}]" if ":" in host else host
     if parsed.port and not (
         (parsed.scheme == "http" and parsed.port == 80) or (parsed.scheme == "https" and parsed.port == 443)
     ):
@@ -1026,6 +1059,7 @@ class _DDGLinks(HTMLParser):
         self._title: list[str] = []
         self._snippet_tag = ""
         self._snippet: list[str] = []
+        self._snippet_owner: dict[str, str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = dict(attrs)
@@ -1033,6 +1067,7 @@ class _DDGLinks(HTMLParser):
             self._snippet_tag = tag
             self._snippet = []
         if tag == "a" and "result__a" in str(attrs_map.get("class") or ""):
+            self._snippet_owner = None
             self._href = str(attrs_map.get("href") or "")
             self._title = []
 
@@ -1052,10 +1087,13 @@ class _DDGLinks(HTMLParser):
                         "source": "duckduckgo",
                     }
                 )
+                self._snippet_owner = self.rows[-1]
             self._href = ""
         if self._snippet_tag and tag == self._snippet_tag:
-            if self.rows:
-                self.rows[-1]["snippet"] = _clean_search_text(" ".join(self._snippet), limit=MAX_SEARCH_SNIPPET_CHARS)
+            if self._snippet_owner is not None:
+                self._snippet_owner["snippet"] = _clean_search_text(
+                    " ".join(self._snippet), limit=MAX_SEARCH_SNIPPET_CHARS
+                )
             self._snippet_tag = ""
             self._snippet = []
 

@@ -14,6 +14,7 @@ from .work_pricing_research import (
     _dedupe_quote_rows,
     _observation_location,
     _parse_bool,
+    _source_identity,
     collect_public_work_pricing_research,
     legacy_work_evidence_row,
 )
@@ -78,7 +79,7 @@ def _source_count(rows: list[dict[str, Any]]) -> int:
     for row in rows:
         source = str(row.get("source") or "").strip()
         if source:
-            sources.add(source if re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", source) else _clean_text(source))
+            sources.add(_source_identity(source, normalize_whitespace=True))
     return len(sources)
 
 
@@ -285,6 +286,23 @@ def _find_labor_experience(
     return [row for _, row in matches[: max(0, limit)]]
 
 
+def _number_text_pattern(text: str, legacy_pattern: str) -> str | None:
+    exponent_markers = list(re.finditer(r"(?<=[\d.])[eE]", text))
+    if not exponent_markers:
+        return legacy_pattern
+    exponent_pattern = re.compile(r"[+-]?\d+")
+    for marker in exponent_markers:
+        exponent = exponent_pattern.match(text, marker.end())
+        if exponent is None:
+            return None
+        end = exponent.end()
+        if end < len(text) and text[end] in ".eE_":
+            return None
+    # Exponents belong to the numeric atom. Boundaries prevent backtracking
+    # into its mantissa or restarting at an exponent's digits.
+    return rf"(?<![\d.eE])(?:{legacy_pattern})(?:[eE][+-]?\d+)?(?![\d.eE])"
+
+
 def _coerce_price(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -294,8 +312,11 @@ def _coerce_price(value: Any) -> int | None:
             return None
         price = round(number)
         return price if price > 0 else None
-    text = str(value).replace(",", ".")
-    match = re.search(r"(?:[-+−]\s*)?\d+(?:[ .]\d{3})*(?:\.\d+)?|(?:[-+−]\s*)?\d+(?:\.\d+)?", text)
+    text = str(value).replace(",", ".").replace("−", "-")
+    pattern = _number_text_pattern(text, r"(?:[-+−]\s*)?\d+(?:[ .]\d{3})*(?:\.\d+)?|(?:[-+−]\s*)?\d+(?:\.\d+)?")
+    if pattern is None:
+        return None
+    match = re.search(pattern, text)
     if not match:
         return None
     number = finite_number(match.group(0).replace(" ", "").replace("−", "-"))
@@ -410,7 +431,9 @@ def _coerce_hours(value: Any) -> tuple[float | None, list[float] | None]:
         return None, None
 
     text = str(value).replace(",", ".").replace("−", "-")
-    number_pattern = r"(?<![\d.])(?:[-+]\s*)?\d+(?:\.\d+)?(?![\d.])"
+    number_pattern = _number_text_pattern(text, r"(?<![\d.])(?:[-+]\s*)?\d+(?:\.\d+)?(?![\d.])")
+    if number_pattern is None:
+        return None, None
     range_match = re.search(rf"({number_pattern})\s*[-–]\s*({number_pattern})", text)
     if range_match:
         low, high = (finite_number(re.sub(r"\s+", "", group)) for group in range_match.groups())
@@ -492,7 +515,7 @@ def _normalize_labor_time_sample(rows: list[dict[str, Any]]) -> list[dict[str, A
         identity = _normalize_labor_time_row(row)
         if identity["valid_input"]:
             key = (
-                _clean_text(identity["source"]),
+                _source_identity(identity["source"], normalize_whitespace=True),
                 _clean_text(identity["operation_name"]),
                 identity["hours"],
                 tuple(identity["range_hours"]),

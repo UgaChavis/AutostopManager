@@ -72,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     probe = sub.add_parser("mcp-probe", help="Synthetic read-only native MCP transport check")
     probe.add_argument("--url", default=DEFAULT_MANAGER_MCP_URL)
     probe.add_argument("--timeout", type=float, default=10)
+    probe.add_argument(
+        "--metadata-only", action="store_true", help="Only check native handshake and tool schemas/annotations"
+    )
     probe.add_argument("--provider-failure-check", action="store_true")
     probe.add_argument("--store-check", action="store_true", help="Also verify the direct Manager-to-Store connection")
     probe.add_argument(
@@ -101,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             provider_failure_check=args.provider_failure_check,
             store_check=args.store_check,
             browser_check=args.browser_check,
+            metadata_only=args.metadata_only,
         )
     else:
         store = StoreState()
