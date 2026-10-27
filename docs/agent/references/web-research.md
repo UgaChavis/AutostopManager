@@ -39,6 +39,13 @@ snippet и шаблон динамического OE-раздела не под
 
 Automotive context: `make`, `model`, `year`, `engine`, `system`, `symptom`, `dtc`, `part_number`; полный VIN, контакты и секреты не передаются. Automotive profile — до 12 запросов/60 страниц; общий — 30/300. Лимиты: 50 000 символов документа, cache 250 МБ/семь дней. `canonical_url` удаляет только tracking; дубли не индексируются. Sources: A — OEM/регулятор/TSB, B — component manufacturer, C — catalog, D — форум/контекст. D не доказательство; частота оценивается лишь по измеримой совокупности A/B, иначе `not_measured`. Отчёт различает `exact/analog/general`, доступ, confidence и gaps.
 
+Ключи canonical/discovery сохраняют квадратные скобки IPv6 authority по
+[RFC 3986 §3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2), чтобы
+порт одного адреса не сливался с последним сегментом другого. Прежнее удаление
+default-порта (HTTP80, HTTPS443), tracking и fragment сохраняется; недефолтный
+допустимый порт и значимые query-параметры, включая пустое значение, остаются.
+Это форматирование ключа; допуск URL, DLP и сетевые правила не меняются.
+
 Название неизвестного PDF может помочь поиску, но не подтверждает авторитет источника:
 обычный отчёт оставляет такой heuristic в D с `unverified_technical_pdf`. Проверенные
 источники A/B сохраняют свой уровень. Независимость источников учитывает canonical URL
