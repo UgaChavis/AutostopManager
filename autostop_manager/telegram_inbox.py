@@ -937,6 +937,57 @@ class TelegramInbox:
             )
         return self.read_peer_thread(job_id) or {}
 
+    def replace_missing_peer_thread(
+        self,
+        *,
+        job_id: str,
+        lease: str,
+        expected_revision: int,
+        expected_thread_id: str,
+        expected_peer_thread_revision: int,
+        thread_id: str,
+        missing_thread_reviewed: bool = False,
+        effects_reviewed: bool = False,
+    ) -> dict[str, Any]:
+        """Replace only an explicitly reviewed missing, never-started peer binding."""
+        job = self._lease(job_id, lease, expected_revision)
+        _token(expected_thread_id, "inbox_thread_invalid")
+        _token(thread_id, "inbox_thread_invalid")
+        _positive(expected_peer_thread_revision, "inbox_revision_invalid")
+        if missing_thread_reviewed is not True or effects_reviewed is not True:
+            raise InboxError("inbox_peer_thread_recovery_review_required")
+        if (
+            self._meta("execution_paused") != "1"
+            or job["context_mode"] != "peer_v1"
+            or job["state"] != "needs_review"
+            or job["execution_proof"] != "not_started"
+            or job["thread_id"] is not None
+            or job["turn_id"] is not None
+            or self.execution_slot() is not None
+            or self._db.execute("SELECT 1 FROM effects WHERE job_id=? LIMIT 1", (job_id,)).fetchone()
+        ):
+            raise InboxError("inbox_peer_thread_recovery_required")
+        if (
+            thread_id == expected_thread_id
+            or self._db.execute("SELECT 1 FROM peer_threads WHERE thread_id=?", (thread_id,)).fetchone()
+        ):
+            raise InboxError("inbox_peer_thread_conflict")
+        with self._write():
+            changed = self._db.execute(
+                "UPDATE peer_threads SET thread_id=?,creation_key=?,revision=revision+1 "
+                "WHERE peer_id=? AND state='ready' AND thread_id=? AND revision=?",
+                (
+                    thread_id,
+                    secrets.token_urlsafe(32),
+                    job["peer_id"],
+                    expected_thread_id,
+                    expected_peer_thread_revision,
+                ),
+            )
+            if changed.rowcount != 1:
+                raise InboxError("inbox_peer_thread_conflict")
+        return self.read_peer_thread(job_id) or {}
+
     def mark_peer_thread_unknown(
         self, *, job_id: str, lease: str, expected_revision: int, creation_key: str
     ) -> dict[str, Any]:

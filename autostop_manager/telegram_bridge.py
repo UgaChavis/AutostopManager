@@ -4250,6 +4250,17 @@ async def _handle_job_effect_readback(
 def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any] | None:
     operation = request["operation"]
     inbox = monitor.inbox
+    if operation == "job_peer_thread_replace_missing":
+        mapping = inbox.replace_missing_peer_thread(
+            **_job_arguments(request),
+            expected_thread_id=str(request.get("expected_thread_id") or ""),
+            expected_peer_thread_revision=_job_revision(request.get("expected_peer_thread_revision")),
+            thread_id=str(request.get("thread_id") or ""),
+            missing_thread_reviewed=request.get("missing_thread_reviewed") is True,
+            effects_reviewed=request.get("effects_reviewed") is True,
+        )
+        monitor.changed()
+        return {"ok": True, "peer_thread": mapping}
     if operation in {"job_peer_thread_prepare", "job_peer_thread_bind", "job_peer_thread_unknown"}:
         arguments = _job_arguments(request)
         if operation == "job_peer_thread_prepare":
@@ -5468,6 +5479,7 @@ def build_parser() -> argparse.ArgumentParser:
         "job-effect-readback",
         "job-peer-thread-prepare",
         "job-peer-thread-bind",
+        "job-peer-thread-replace-missing",
         "job-peer-thread-unknown",
         "job-execution-proof",
     ):
@@ -5475,7 +5487,13 @@ def build_parser() -> argparse.ArgumentParser:
         job_command.add_argument("--job-id", required=True)
         job_command.add_argument("--lease", required=True)
         job_command.add_argument("--expected-revision", type=int, required=True)
-        if command in {"job-peer-thread-bind", "job-peer-thread-unknown"}:
+        if command == "job-peer-thread-replace-missing":
+            job_command.add_argument("--expected-thread-id", required=True)
+            job_command.add_argument("--expected-peer-thread-revision", type=int, required=True)
+            job_command.add_argument("--thread-id", required=True)
+            job_command.add_argument("--missing-thread-reviewed", action="store_true", required=True)
+            job_command.add_argument("--effects-reviewed", action="store_true", required=True)
+        elif command in {"job-peer-thread-bind", "job-peer-thread-unknown"}:
             job_command.add_argument("--creation-key", required=True)
             if command == "job-peer-thread-bind":
                 job_command.add_argument("--thread-id", required=True)
@@ -5638,6 +5656,9 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "local_tasks_done",
         "lease",
         "expected_revision",
+        "expected_thread_id",
+        "expected_peer_thread_revision",
+        "missing_thread_reviewed",
         "instruction_root",
         "instruction_revision",
         "thread_id",
