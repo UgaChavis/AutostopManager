@@ -10,20 +10,11 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from .vehicle_identity import identity_values_agree
+from .vehicle_identity_inputs import canonical_identity_field
 
 MAX_MATCHED_MODELS = 8
 MAX_ENGINE_LOOKUPS = 8
 _CONTEXT_PROFILES = ("vehicle_profile", "vehicle_profile_compact", "crm_vehicle_profile")
-_ALIASES = {
-    "make_display": "make",
-    "model_display": "model",
-    "engine_model": "engine",
-    "gearbox_model": "transmission",
-    "engine_code": "engine",
-    "engine_displacement_cc": "displacement_cc",
-    "horsepower": "power_hp",
-    "engine_power_kw": "power_kw",
-}
 _FIELDS = (
     "make",
     "model",
@@ -130,7 +121,8 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
         if not isinstance(row, dict):
             continue
         source = str(row.get("source") or "")
-        trust = row.get("trust") if isinstance(row.get("trust"), dict) else {}
+        trust_value = row.get("trust")
+        trust = trust_value if isinstance(trust_value, dict) else {}
         # CRM includes supplied client/photo facts. Local VIN patterns and the
         # catalogue being queried cannot establish characteristics of this car.
         trusted = (source.startswith("CRM") and trust.get("state") != "caller_supplied_unverified") or (
@@ -141,7 +133,7 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
             and row.get("identifier_binding") not in {"mismatch", "unverified", "identifier_mismatch"}
             and not row.get("depends_on")
         )
-        field = _ALIASES.get(str(row.get("field")), row.get("field"))
+        field = canonical_identity_field(row.get("field"))
         value = row.get("value")
         if trusted and isinstance(field, str) and field in values and _present(value) and value not in values[field]:
             values[field].append(value)
@@ -160,7 +152,7 @@ def _constraint_values(identity: dict[str, Any], context: dict[str, Any] | None)
     ]
     evidence.extend(context_field_evidence(context or {}))
     for row in evidence:
-        field = _ALIASES.get(str(row.get("field")), row.get("field"))
+        field = canonical_identity_field(row.get("field"))
         value = row.get("value")
         if isinstance(field, str) and field in values and _present(value) and value not in values[field]:
             values[field].append(value)
@@ -171,7 +163,7 @@ def _invalid_context_numbers(context: dict[str, Any] | None) -> list[str]:
     invalid = set()
     for row in _context_rows(context or {}):
         for key, value in row.items():
-            field = _ALIASES.get(key, key)
+            field = canonical_identity_field(key)
             if field in _NUMBERS and value is not None and value != "" and _number(value) is None:
                 invalid.add(field)
     return sorted(invalid)

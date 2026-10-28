@@ -15,7 +15,7 @@ from autostop_manager.automotive_parts import assess_part_fitment
 from autostop_manager.catalog_adapters import build_oem_parts_provider_plan
 from autostop_manager.mcp_tools import register_manager_tools
 from autostop_manager.storage import StoreState
-from autostop_manager.tecdoc_vehicle_selection import _independent_values
+from autostop_manager.tecdoc_vehicle_selection import _independent_values, resolve_tecdoc_vehicle
 from autostop_manager.vin_lookup import lookup_original_parts
 from autostop_manager.vin_oem_resolver import _identity_with_partsapi_agreement, resolve_vin_oem_parts
 from tests.test_e2_partsapi_group_resolver import _group_call
@@ -176,6 +176,141 @@ def test_untrusted_nested_trust_and_fitment_claims_cannot_survive():
     assert family["state"] == "candidate"
 
 
+@pytest.mark.parametrize(
+    ("alias", "canonical", "value"),
+    [("make_display", "make", "BMW"), ("model_display", "model", "DEMO"), ("engine_model", "engine", "E1")],
+)
+def test_aliased_field_evidence_cannot_become_vpic_provider_evidence(alias, canonical, value):
+    supplied = _forged_ready()
+    supplied["field_evidence"] = [{"field": alias, "value": value, "source": "NHTSA vPIC"}]
+    supplied.pop("provenance")
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    row = accepted["field_evidence"][0]
+    assert row["field"] == alias
+    assert row["source_kind"] == "caller"
+    assert row["independent"] is False and row["bound"] is False
+    assert _independent_values(accepted, {})[canonical] == []
+
+
+def test_aliased_caller_evidence_cannot_drive_catalog_selection_alone():
+    supplied = _forged_ready()
+    supplied["field_evidence"] = [
+        {"field": "make_display", "value": "BMW", "source": "NHTSA vPIC"},
+        {"field": "model_display", "value": "DEMO", "source": "NHTSA vPIC"},
+        {"field": "engine_model", "value": "E1", "source": "NHTSA vPIC"},
+    ]
+    supplied.pop("provenance")
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    calls = []
+    result = resolve_tecdoc_vehicle(accepted, vehicle_type="PC", call=lambda *args, **kwargs: calls.append(args))
+    assert result["status"] == "needs_vehicle_context"
+    assert result["selected_profile"] is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("location", ["evidence", "source_evidence"])
+@pytest.mark.parametrize("field", ["engine", "engine_model"])
+@pytest.mark.parametrize("placement", ["flat", "inner", "outer"])
+def test_all_public_evidence_containers_detect_profile_conflict(location, field, placement):
+    supplied = _forged_ready()
+    evidence = [{"field": field, "value": "E2", "source": "NHTSA vPIC"}]
+    if placement == "inner":
+        supplied[location] = evidence
+        supplied = {"data": supplied}
+    elif placement == "outer":
+        supplied = {"data": supplied, location: evidence}
+    else:
+        supplied[location] = evidence
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert accepted is None
+    assert any(row["field"] == "engine" and row["code"] == "ready_identity_evidence_conflict" for row in errors)
+    merged = reconcile_vehicle_identity(_identifier(), [supplied])
+    assert merged["data"]["field_statuses"]["engine"] == "disputed"
+    assert "engine" not in merged["data"]["vehicle_profile"]
+
+
+def test_aliased_disputed_field_does_not_become_a_supported_canonical_field():
+    supplied = _forged_ready()
+    supplied["field_statuses"] = {"engine_model": {"status": "disputed"}}
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert accepted is None
+    assert {row["field"] for row in errors if row["code"] == "disputed_ready_identity"} == {"engine"}
+    merged = reconcile_vehicle_identity(_identifier(), [supplied])
+    assert merged["data"]["field_statuses"]["engine"] == "disputed"
+    assert "engine" not in merged["data"]["vehicle_profile"]
+
+
+def test_alternate_variant_evidence_is_not_misclassified_as_root_vehicle_fact():
+    supplied = _forged_ready()
+    supplied["source_evidence"] = [{"field": "engine", "value": "E2", "source": "NHTSA vPIC"}]
+    supplied["variants"] = [
+        {
+            "profile": {"engine": "E2"},
+            "field_evidence_refs": [{"path": "data.source_evidence", "index": 0}],
+        }
+    ]
+    supplied["family_candidate_refs"] = [0]
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    assert accepted["vehicle_profile"]["engine"] == "E1"
+    merged = reconcile_vehicle_identity(_identifier(), [supplied])
+    assert merged["data"]["vehicle_profile"]["engine"] == "E1"
+    assert any(row.get("profile", {}).get("engine") == "E2" for row in merged["data"]["variants"])
+
+
+def test_conflicting_evidence_inside_one_variant_remains_a_conflict():
+    supplied = _forged_ready()
+    supplied["variants"] = [{"profile": {"engine": "E2"}, "field_evidence": [{"field": "engine_model", "value": "E3"}]}]
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert accepted is None
+    assert any(row["field"] == "engine" and row["code"] == "ready_identity_evidence_conflict" for row in errors)
+
+
+def test_engine_description_and_exact_code_remain_incomparable_not_a_false_conflict():
+    supplied = _forged_ready()
+    supplied["vehicle_profile"].update(engine="3.0 TDI", engine_code="CRCA")
+    supplied.pop("field_evidence")
+    supplied.pop("provenance")
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    assert accepted["vehicle_profile"]["engine"] == "3.0 TDI"
+    assert accepted["vehicle_profile"]["engine_code"] == "CRCA"
+
+
+def test_conflicting_exact_engine_code_aliases_remain_a_conflict():
+    supplied = _forged_ready()
+    supplied["vehicle_profile"].update(engine="CRCA", engine_code="WRONG")
+    supplied.pop("field_evidence")
+    supplied.pop("provenance")
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert accepted is None
+    assert any(row["field"] == "engine" and row["code"] == "ready_identity_evidence_conflict" for row in errors)
+
+
+def test_source_label_on_unknown_field_is_still_caller_supplied():
+    supplied = _forged_ready()
+    supplied["field_evidence"].append({"field": "future_field", "value": "claim", "source": "NHTSA vPIC"})
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    claim = accepted["field_evidence"][-1]
+    assert claim["source_kind"] == "caller"
+    assert claim["independent"] is False and claim["bound"] is False
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["exact_vehicle_confirmed", "epc_confirmed", "oem_number_confirmed", "anything_verified", "custom_authenticated"],
+)
+def test_any_claimed_confirmation_flag_on_caller_evidence_is_false(flag):
+    supplied = _forged_ready()
+    supplied["field_evidence"][0][flag] = True
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    assert accepted["field_evidence"][0][flag] is False
+
+
 def test_spoofed_ready_values_do_not_survive_resolver_as_ready_or_writeable():
     result = resolve_vin_oem_parts(
         identifier=_identifier(),
@@ -313,6 +448,66 @@ def test_public_planner_cannot_promote_supplied_ready_or_grant_writeback(tmp_pat
     assert plan["lookup_scope"] == "family"
     assert plan["live_capability"]["identity_ready_for_vehicle_lookup"] is False
     assert plan["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "foreign_binding",
+        "outer_foreign_binding",
+        "evidence_conflict",
+        "agreement_conflict",
+        "profile_list",
+        "profile_string",
+        "profile_number",
+    ],
+)
+def test_public_planner_rejects_invalid_identity_before_provider_status(tmp_path, monkeypatch, problem):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("invalid identity must not reach provider planning")
+
+    monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("invalid-caller-ready-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    supplied = _forged_ready()
+    if problem == "foreign_binding":
+        supplied["input_binding"] = binding("WBA" + "1" * 14)
+    elif problem == "outer_foreign_binding":
+        supplied["input_binding"] = None
+        supplied = {"data": supplied, "input_binding": binding("WBA" + "1" * 14)}
+    elif problem == "evidence_conflict":
+        supplied["evidence"] = [{"field": "engine_model", "value": "E2", "source": "NHTSA vPIC"}]
+    elif problem == "agreement_conflict":
+        supplied["parts_lookup_readiness"]["cross_source_agreement"] = {"status": "conflict"}
+    else:
+        supplied["vehicle_profile"] = {"profile_list": [], "profile_string": "bad", "profile_number": 7}[problem]
+    tool = server._tool_manager.get_tool("plan_oem_parts_providers")
+    plan = asyncio.run(
+        tool.run({"identifier": _identifier(), "requested_part": "масляный фильтр", "vehicle_identity": supplied})
+    )
+    assert plan["ok"] is False
+    assert plan["lookup_scope"] == "blocked"
+    assert plan["identity_errors"]
+    expected = {
+        "foreign_binding": "ready_identity_binding_mismatch",
+        "outer_foreign_binding": "ready_identity_binding_mismatch",
+        "evidence_conflict": "ready_identity_evidence_conflict",
+        "agreement_conflict": "unresolved_identity_agreement",
+        "profile_list": "invalid_vehicle_profile",
+        "profile_string": "invalid_vehicle_profile",
+        "profile_number": "invalid_vehicle_profile",
+    }
+    assert expected[problem] in {row["code"] for row in plan["identity_errors"]}
+    assert plan["live_capability"]["identity_ready_for_vehicle_lookup"] is False
+    assert plan["live_capability"]["identity_ready_for_crm_writeback"] is False
+    assert plan["manual_public_search_queries"] == []
+    assert plan["execution"]["network_calls"] == 0
+    assert all(value is False for value in plan["live_capability"].values())
 
 
 def test_internal_planner_never_converts_input_readiness_to_write_permission(monkeypatch):

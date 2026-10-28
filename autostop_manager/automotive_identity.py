@@ -540,12 +540,14 @@ def reconcile_vehicle_identity(
     evidence: list[dict[str, Any]] = []
     year_candidates: list[Any] = []
     for index, row in enumerate(results):
+        original = row
         try:
             row = _expand_reconciliation_summary(row)
         except (ValueError, AttributeError):
             return invalid("reconcile_vehicle_identity", "results.summary_references")
         data: dict[str, Any] = row["data"] if isinstance(row.get("data"), dict) else row
-        upstream_errors = identity_errors(row, data)
+        original_data = original["data"] if isinstance(original.get("data"), dict) else original
+        upstream_errors = identity_errors(original, original_data)
         if upstream_errors:
             conflicts.extend({**item, "result_index": index} for item in upstream_errors)
             disputed_fields.update(
@@ -566,9 +568,10 @@ def reconcile_vehicle_identity(
         if data.get("input_binding") != expected and not wmi_matches:
             conflicts.append({"field": "identifier", "code": "result_binding_mismatch", "result_index": index})
             continue
-        row = _caller_supplied_result(row)
-        if row is None:
+        cleaned_row = _caller_supplied_result(row)
+        if cleaned_row is None:
             return invalid("reconcile_vehicle_identity", "results.caller_claims_too_deep")
+        row = cleaned_row
         data = row["data"] if isinstance(row.get("data"), dict) else row
         supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
         if not isinstance(supplied_evidence, list) or any(not isinstance(item, dict) for item in supplied_evidence):

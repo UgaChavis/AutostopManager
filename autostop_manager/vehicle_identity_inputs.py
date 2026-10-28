@@ -20,6 +20,13 @@ ALIASES = {
     "body_number": "frame",
     "display_name": "vehicle",
 }
+EVIDENCE_FIELD_ALIASES = {
+    **ALIASES,
+    "engine_code": "engine",
+    "engine_displacement_cc": "displacement_cc",
+    "horsepower": "power_hp",
+    "engine_power_kw": "power_kw",
+}
 STRING_FIELDS = {
     "vehicle",
     "make",
@@ -51,6 +58,11 @@ CONTEXT_FIELDS = (
         "options",
     }
 )
+
+
+def canonical_identity_field(field: Any) -> str | None:
+    """Resolve the same aliases for caller context and supplied identity evidence."""
+    return EVIDENCE_FIELD_ALIASES.get(field, field) if isinstance(field, str) else None
 
 
 def _issue(code: str, field: str) -> dict[str, str]:

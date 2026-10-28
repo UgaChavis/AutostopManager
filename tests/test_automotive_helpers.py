@@ -623,7 +623,15 @@ def test_reconciliation_summary_keeps_reusable_origins_years_and_compact_variant
     assert summary["data"]["family_candidate_refs"] == list(range(len(summary["data"]["variants"])))
     assert "field_evidence" not in summary["data"]["variants"][0]
     assert "provenance" not in summary["data"]["variants"][0]
-    assert summary["data"]["source_evidence"] == [ready["data"]["variants"][0]["field_evidence"][0]]
+    assert summary["data"]["source_evidence"] == [
+        {
+            **ready["data"]["variants"][0]["field_evidence"][0],
+            "source_kind": "caller",
+            "independent": False,
+            "bound": False,
+            "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
+        }
+    ]
     prepared, errors = ready_identity(summary, VIN)
     assert errors == [] and prepared["provenance"] == full["data"]["provenance"]
     reused = identity.reconcile_vehicle_identity(VIN, [summary])

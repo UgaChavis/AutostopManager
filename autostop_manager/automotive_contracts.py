@@ -7,7 +7,6 @@ import json
 import math
 import re
 from datetime import datetime
-from functools import lru_cache
 from typing import Any
 
 from .vin_lookup import classify_identifier
@@ -110,15 +109,6 @@ _CALLER_FALSE_FLAGS = {
 }
 
 
-@lru_cache(maxsize=1)
-def _vehicle_claim_fields() -> frozenset[str]:
-    from .automotive_identity import FIELDS
-    from .tecdoc_vehicle_selection import _FIELDS
-    from .vehicle_identity import IDENTITY_FIELDS
-
-    return frozenset((*IDENTITY_FIELDS, *_FIELDS, *FIELDS))
-
-
 def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
     """Copy public JSON as unverified claims; a request digest is not authentication."""
     if depth > 32:
@@ -133,7 +123,11 @@ def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
             # Keep the caller's reported status for context, but do not reuse it
             # as an authenticated provider binding.
             clean["reported_identifier_binding"] = {"status": item.get("status"), "verified": False}
-        elif isinstance(key, str) and (key.startswith("ready_for_") or key in _CALLER_FALSE_FLAGS):
+        elif isinstance(key, str) and (
+            key.startswith("ready_for_")
+            or key.endswith(("_confirmed", "_verified", "_authenticated"))
+            or key in _CALLER_FALSE_FLAGS
+        ):
             clean[key] = False
         elif key == "source_kind":
             clean[key] = "caller"
@@ -160,10 +154,7 @@ def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
             clean[key] = agreement
         else:
             clean[key] = caller_supplied_claims(item, depth=depth + 1)
-    field = value.get("field")
-    source_claim = any(key in value for key in ("source", "provider", "primary_lineage")) and (
-        field is None or (isinstance(field, str) and field in _vehicle_claim_fields())
-    )
+    source_claim = any(key in value for key in ("source", "provider", "primary_lineage"))
     if source_claim:
         clean.update(source_kind="caller", independent=False, bound=False)
         if "strength" in value:
@@ -181,7 +172,7 @@ def ready_identity(
 
     if not isinstance(identity, dict):
         return None, [{"field": "vehicle_identity", "code": "invalid_ready_identity"}]
-    row: dict[str, Any] = dict(identity["data"] if isinstance(identity.get("data"), dict) else identity)
+    row: dict[str, Any] = dict(identity["data"]) if isinstance(identity.get("data"), dict) else identity
     errors = identity_errors(identity, row)
     if errors:
         return None, errors
@@ -215,37 +206,133 @@ def ready_identity(
     return row, []
 
 
-def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
+def _claim_matches_profile(profile: dict[str, Any], field: str, claimed: Any) -> bool:
     from .vehicle_identity import identity_values_agree
+    from .vehicle_identity_inputs import canonical_identity_field
+    from .tecdoc_vehicle_selection import _agrees
+
+    values = [
+        value for name, value in profile.items() if canonical_identity_field(name) == field and value not in (None, "")
+    ]
+    return bool(values) and all(
+        (type(value) is type(claimed) and value == claimed)
+        or (_agrees(field, value, claimed) if field == "engine" else identity_values_agree(field, value, claimed))
+        for value in values
+    )
+
+
+def _variant_only_evidence_refs(envelope: dict[str, Any], data: dict[str, Any]) -> set[tuple[str, int]]:
+    """Keep a variant's referenced evidence with that variant, not the root profile."""
+    from .vehicle_identity_inputs import canonical_identity_field
+
+    root_profile = data.get("vehicle_profile")
+    if not isinstance(root_profile, dict):
+        return set()
+    excluded: set[tuple[str, int]] = set()
+    variants = data.get("variants")
+    for variant in variants if isinstance(variants, list) else []:
+        if not isinstance(variant, dict) or not isinstance(variant.get("profile"), dict):
+            continue
+        refs: list[Any] = []
+        for key in ("field_evidence_refs", "evidence_refs"):
+            if isinstance(variant.get(key), list):
+                refs.extend(variant[key])
+        provenance_refs = variant.get("provenance_refs")
+        if isinstance(provenance_refs, dict):
+            refs.extend(ref for values in provenance_refs.values() if isinstance(values, list) for ref in values)
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            path, index = ref.get("path"), ref.get("index")
+            if (
+                not isinstance(path, str)
+                or not isinstance(index, int)
+                or isinstance(index, bool)
+                or path not in ("data.source_evidence", "evidence")
+            ):
+                continue
+            records = (
+                data.get("source_evidence")
+                if path == "data.source_evidence"
+                else envelope.get("evidence")
+                if path == "evidence"
+                else None
+            )
+            if not isinstance(records, list) or not 0 <= index < len(records) or not isinstance(records[index], dict):
+                continue
+            claim = records[index]
+            field, value = canonical_identity_field(claim.get("field")), claim.get("value")
+            if (
+                field
+                and value not in (None, "")
+                and _claim_matches_profile(variant["profile"], field, value)
+                and not _claim_matches_profile(root_profile, field, value)
+            ):
+                excluded.add((path, index))
+    return excluded
+
+
+def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
+    from .vehicle_identity_inputs import canonical_identity_field
 
     profile = data.get("vehicle_profile")
     if not isinstance(profile, dict):
         return []
+    excluded = _variant_only_evidence_refs(envelope, data)
     claims: list[tuple[Any, Any]] = []
     for row in (envelope,) if data is envelope else (envelope, data):
-        evidence = row.get("field_evidence")
-        if isinstance(evidence, list):
-            claims.extend((item.get("field"), item.get("value")) for item in evidence if isinstance(item, dict))
+        for key in ("field_evidence", "evidence", "source_evidence"):
+            evidence = row.get(key)
+            if not isinstance(evidence, list):
+                continue
+            path = (
+                "data.source_evidence"
+                if row is data and key == "source_evidence"
+                else "evidence"
+                if row is envelope and key == "evidence"
+                else ""
+            )
+            claims.extend(
+                (item.get("field"), item.get("value"))
+                for index, item in enumerate(evidence)
+                if isinstance(item, dict) and (path, index) not in excluded
+            )
         provenance = row.get("provenance")
         if isinstance(provenance, dict):
             for field, entries in provenance.items():
                 if isinstance(entries, list):
                     claims.extend((field, item.get("value")) for item in entries if isinstance(item, dict))
     conflicts: list[dict[str, Any]] = []
-    for field, claimed in claims:
-        if not isinstance(field, str) or profile.get(field) in (None, "") or claimed in (None, ""):
+    claims.extend((field, value) for field, value in profile.items())
+    for raw_field, claimed in claims:
+        field = canonical_identity_field(raw_field)
+        if field is None or claimed in (None, ""):
             continue
-        if type(profile[field]) is type(claimed) and profile[field] == claimed:
-            continue
-        if not identity_values_agree(field, profile[field], claimed):
+        present = any(
+            canonical_identity_field(name) == field and value not in (None, "") for name, value in profile.items()
+        )
+        if present and not _claim_matches_profile(profile, field, claimed):
             conflict = {"field": field, "code": "ready_identity_evidence_conflict"}
             if conflict not in conflicts:
                 conflicts.append(conflict)
+    variants = data.get("variants")
+    for variant in variants if isinstance(variants, list) else []:
+        if not isinstance(variant, dict) or not isinstance(variant.get("profile"), dict):
+            continue
+        nested = {
+            key: variant[key]
+            for key in ("field_evidence", "evidence", "source_evidence", "provenance")
+            if key in variant
+        }
+        nested["vehicle_profile"] = variant["profile"]
+        conflicts.extend(item for item in _reported_identity_field_conflicts(nested, nested) if item not in conflicts)
     return conflicts
 
 
 def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
     """A request digest never overrides provider failure or disputed identity."""
+    from .vehicle_identity_inputs import canonical_identity_field
+
     errors: list[dict[str, Any]] = []
     for row in (envelope,) if data is envelope else (envelope, data):
         if row.get("ok") is False or row.get("outcome") not in (None, "success", "partial"):
@@ -259,7 +346,9 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
         if isinstance(statuses, dict):
             for field, status in statuses.items():
                 if (status.get("status") if isinstance(status, dict) else status) == "disputed":
-                    errors.append({"field": field, "code": "disputed_ready_identity"})
+                    errors.append(
+                        {"field": canonical_identity_field(field) or field, "code": "disputed_ready_identity"}
+                    )
         readiness = row.get("parts_lookup_readiness")
         agreements = [row.get("cross_source_agreement")]
         if isinstance(readiness, dict):
@@ -295,23 +384,31 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
 def field_origins(envelope: dict[str, Any], field: str, value: Any) -> list[dict[str, Any]]:
     """Prefer evidence for this value over a result's unrelated source summary."""
     from .vehicle_identity import identity_values_agree
+    from .vehicle_identity_inputs import canonical_identity_field
 
+    canonical_field = canonical_identity_field(field) or field
     data = envelope["data"] if isinstance(envelope.get("data"), dict) else envelope
     origins: list[dict[str, Any]] = []
     for row in (envelope,) if data is envelope else (envelope, data):
-        for key in ("field_evidence", "evidence"):
+        for key in ("field_evidence", "evidence", "source_evidence"):
             supplied = row.get(key)
             if isinstance(supplied, list):
-                origins.extend(item for item in supplied if isinstance(item, dict) and item.get("field") == field)
-    matched = [item for item in origins if identity_values_agree(field, item.get("value"), value)]
+                origins.extend(
+                    item
+                    for item in supplied
+                    if isinstance(item, dict) and canonical_identity_field(item.get("field")) == canonical_field
+                )
+    matched = [item for item in origins if identity_values_agree(canonical_field, item.get("value"), value)]
     if matched:
         return matched
     provenance = data.get("provenance")
-    if isinstance(provenance, dict) and isinstance(provenance.get(field), list):
+    if isinstance(provenance, dict):
         matched = [
             item
-            for item in provenance[field]
-            if isinstance(item, dict) and identity_values_agree(field, item.get("value"), value)
+            for name, records in provenance.items()
+            if canonical_identity_field(name) == canonical_field and isinstance(records, list)
+            for item in records
+            if isinstance(item, dict) and identity_values_agree(canonical_field, item.get("value"), value)
         ]
         if matched:
             return matched

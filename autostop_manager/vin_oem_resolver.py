@@ -19,7 +19,7 @@ from .tecdoc_vehicle_selection import (
     resolve_tecdoc_vehicle,
 )
 from .vehicle_identity import decode_vehicle_identity, identity_values_agree, invalid_identity_result
-from .vehicle_identity_inputs import validate_identity_input
+from .vehicle_identity_inputs import canonical_identity_field, validate_identity_input
 from .vehicle_identity_policy import identity_allows_lookup, identity_has_blocking_conflicts
 from .vin_lookup import classify_identifier
 
@@ -417,10 +417,15 @@ def _assess_partsapi_identity_agreement(
     year: int | None = None
     production_year: int | None = None
     independent_conflict = False
-    identity_trust = identity.get("trust") if isinstance(identity.get("trust"), dict) else {}
+    identity_trust_value = identity.get("trust")
+    identity_trust = identity_trust_value if isinstance(identity_trust_value, dict) else {}
     caller_claims_only = identity_trust.get("state") == "caller_supplied_unverified"
     for field, (profile_value, right) in compare_fields.items():
-        field_evidence = [item for item in identity.get("field_evidence") or [] if item.get("field") == field]
+        field_evidence = [
+            item
+            for item in identity.get("field_evidence") or []
+            if isinstance(item, dict) and canonical_identity_field(item.get("field")) == field
+        ]
         sources = {"CRM context"} if field == "market" else {"CRM context", "NHTSA vPIC"}
         # A caller's claimed origin may not establish a provider match, but
         # the supplied value must still be checked for contradictions.

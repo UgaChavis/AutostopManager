@@ -76,6 +76,65 @@ from .work_pricing import estimate_repair_work_cost
 from .web_research_gateway import fetch_page_browser, fetch_page_excerpt, search_web_multi
 
 
+def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
+    codes = (
+        "invalid_ready_identity",
+        "invalid_vehicle_profile",
+        "ready_identity_binding_mismatch",
+        "ready_identity_binding_conflict",
+        "provider_identifier_unverified",
+        "disputed_ready_identity",
+        "ready_identity_evidence_conflict",
+        "unresolved_identity_agreement",
+        "invalid_identity_conflicts",
+        "caller_claims_too_deep",
+    )
+    fields = (
+        "identifier",
+        "make",
+        "model",
+        "engine",
+        "model_year",
+        "market",
+        "transmission",
+        "fuel_type",
+        "displacement_cc",
+        "power_hp",
+        "power_kw",
+        "production_date",
+        "vehicle_profile",
+    )
+    safe_errors = [
+        {
+            "field": item.get("field") if item.get("field") in fields else "vehicle_identity",
+            "code": item.get("code") if item.get("code") in codes else "upstream_identity_conflict",
+        }
+        for item in problems
+    ]
+    return {
+        "ok": False,
+        "error": "invalid_vehicle_identity",
+        "identity_errors": safe_errors,
+        "lookup_scope": "blocked",
+        "live_capability": {
+            "identity_ready_for_family_lookup": False,
+            "identity_ready_for_vehicle_lookup": False,
+            "identity_ready_for_parts": False,
+            "identity_ready_for_oem_candidate_lookup": False,
+            "identity_ready_for_crm_writeback": False,
+            "live_oem_catalog_available": False,
+            "live_oem_candidate_lookup_available": False,
+            "live_oem_applicability_available": False,
+            "live_tecdoc_article_lookup_available": False,
+            "can_complete_full_auto_lookup_now": False,
+        },
+        "manual_public_search_queries": [],
+        "blockers": [{"stage": "vehicle_identity", "reason": "invalid_or_conflicting_identity", "errors": safe_errors}],
+        "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
+        "execution": {"network_calls": 0},
+    }
+
+
 class _OriginalJsonMetadata(FuncMetadata):
     """Validate strict arguments as originally received on the JSON wire.
 
@@ -1199,19 +1258,38 @@ def register_manager_tools(  # noqa: C901
         vehicle_identity: dict[str, Any] | None = None,
         city: str = "Красноярск",
     ) -> dict[str, Any]:
-        from .automotive_contracts import caller_supplied_claims
+        from .automotive_contracts import binding, caller_supplied_claims, identity_errors
 
         if vehicle_identity is None:
             return build_oem_parts_provider_plan(identifier=identifier, requested_part=requested_part, city=city)
+        data = vehicle_identity.get("data")
+        problems = []
+        if data is not None and not isinstance(data, dict):
+            problems.append({"field": "vehicle_identity", "code": "invalid_ready_identity"})
+        data = data if isinstance(data, dict) else vehicle_identity
+        if data.get("vehicle_profile") is not None and not isinstance(data.get("vehicle_profile"), dict):
+            problems.append({"field": "vehicle_profile", "code": "invalid_vehicle_profile"})
+        problems.extend(identity_errors(vehicle_identity, data))
+        supplied_bindings = (vehicle_identity.get("input_binding"), data.get("input_binding"))
+        identity_identifier = data.get("identifier")
+        kind = identity_identifier.get("kind") if isinstance(identity_identifier, dict) else None
+        identifier_type = kind if kind in ("vin", "vin_partial", "frame_number", "market_code") else "auto"
+        if any(
+            supplied is not None and (not identifier or supplied != binding(identifier, identifier_type))
+            for supplied in supplied_bindings
+        ):
+            problems.append({"field": "identifier", "code": "ready_identity_binding_mismatch"})
+        if problems:
+            return _invalid_planner_identity(problems)
         try:
-            identity = caller_supplied_claims(vehicle_identity)
+            identity = caller_supplied_claims(data)
         except ValueError:
-            identity = {"ok": False, "errors": [{"code": "caller_claims_too_deep"}], "vehicle_profile": {}}
+            return _invalid_planner_identity([{"field": "vehicle_identity", "code": "caller_claims_too_deep"}])
         profile = identity.get("vehicle_profile") if isinstance(identity.get("vehicle_profile"), dict) else {}
         readiness = identity.get("parts_lookup_readiness")
         if not isinstance(readiness, dict):
             readiness = {}
-        supplied_readiness = vehicle_identity.get("parts_lookup_readiness")
+        supplied_readiness = data.get("parts_lookup_readiness")
         supplied_family = (
             supplied_readiness.get("ready_for_family_lookup") if isinstance(supplied_readiness, dict) else None
         )
