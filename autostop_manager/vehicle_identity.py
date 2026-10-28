@@ -135,6 +135,7 @@ def _clean_context(context: dict[str, Any] | None) -> dict[str, Any]:
         "vehicle",
         "make",
         "model",
+        "generation",
         "model_year",
         "production_year",
         "production_date",
@@ -149,6 +150,9 @@ def _clean_context(context: dict[str, Any] | None) -> dict[str, Any]:
         "transmission",
         "gearbox_model",
         "drivetrain",
+        "transfer_case",
+        "front_differential",
+        "rear_differential",
         "market",
         "source_summary",
         "source_confidence",
@@ -535,6 +539,7 @@ def _merge_crm_context_fields(
     for field in (
         "make",
         "model",
+        "generation",
         "model_year",
         "production_year",
         "production_date",
@@ -543,6 +548,9 @@ def _merge_crm_context_fields(
         "transmission_speeds",
         "transmission_code",
         "drivetrain",
+        "transfer_case",
+        "front_differential",
+        "rear_differential",
         "market",
         "modification",
         "trim",
@@ -1170,6 +1178,12 @@ def _field_status_and_provenance(
             "evidence_ids": [row["evidence_id"] for row in rows],
             "alternatives": alternatives,
         }
+        if status == "supported":
+            supported = next(row["value"] for row in rows if row.get("strength") == "supported")
+            if not identity_values_agree(field, profile.get(field), supported):
+                # A WMI hint was inserted before the provider response. Keep
+                # it as an alternative rather than the canonical supported fact.
+                profile[field] = supported
         provenance[field] = [
             {
                 key: row[key]

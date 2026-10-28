@@ -31,9 +31,14 @@ STRING_FIELDS = {
     "vehicle",
     "make",
     "model",
+    "generation",
     "engine",
     "transmission",
+    "transmission_code",
     "drivetrain",
+    "transfer_case",
+    "front_differential",
+    "rear_differential",
     "market",
     "production_date",
     "modification",
@@ -75,7 +80,7 @@ def _mapping(value: Any, field: str, errors: list[dict[str, str]]) -> dict[str, 
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             errors.append(_issue("invalid_profile_json", field))
             return {}
     if not isinstance(value, dict):

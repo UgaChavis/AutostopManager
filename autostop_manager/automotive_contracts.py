@@ -109,6 +109,17 @@ _CALLER_FALSE_FLAGS = {
 }
 
 
+def _reported_identity_hint(value: dict[str, Any]) -> bool:
+    """A weak alternative is context, not an assertion against the root profile."""
+    from .vehicle_identity import _is_conflict_evidence
+
+    if value.get("reported_conflict_role") == "hint":
+        return True
+    if value.get("source_kind") == "local_hint" or value.get("strength") == "candidate":
+        return not _is_conflict_evidence({**value, "confidence": finite_number(value.get("confidence")) or 0})
+    return False
+
+
 def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
     """Copy public JSON as unverified claims; a request digest is not authentication."""
     if depth > 32:
@@ -156,6 +167,10 @@ def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
             clean[key] = caller_supplied_claims(item, depth=depth + 1)
     source_claim = any(key in value for key in ("source", "provider", "primary_lineage"))
     if source_claim:
+        if _reported_identity_hint(value):
+            # Preserve only the nonblocking role on repeated reuse. This does
+            # not authenticate the claim or restore any provider privileges.
+            clean["reported_conflict_role"] = "hint"
         clean.update(source_kind="caller", independent=False, bound=False)
         if "strength" in value:
             clean["strength"] = "candidate"
@@ -279,6 +294,23 @@ def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str,
     if not isinstance(profile, dict):
         return []
     excluded = _variant_only_evidence_refs(envelope, data)
+    # Provenance may omit strength/confidence while retaining the evidence ID.
+    # Use its original metadata so reuse applies the decoder's conflict policy.
+    origins: dict[str, dict[str, Any]] = {}
+    for row in (envelope, data):
+        evidence = row.get("field_evidence")
+        if isinstance(evidence, list):
+            origins.update(
+                (item["evidence_id"], item)
+                for item in evidence
+                if isinstance(item, dict) and isinstance(item.get("evidence_id"), str)
+            )
+
+    def constraint(item: dict[str, Any]) -> bool:
+        ref = item.get("evidence_id")
+        origin = {**(origins.get(ref, {}) if isinstance(ref, str) else {}), **item}
+        return not _reported_identity_hint(origin)
+
     claims: list[tuple[Any, Any]] = []
     for row in (envelope,) if data is envelope else (envelope, data):
         for key in ("field_evidence", "evidence", "source_evidence"):
@@ -295,13 +327,15 @@ def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str,
             claims.extend(
                 (item.get("field"), item.get("value"))
                 for index, item in enumerate(evidence)
-                if isinstance(item, dict) and (path, index) not in excluded
+                if isinstance(item, dict) and (path, index) not in excluded and constraint(item)
             )
         provenance = row.get("provenance")
         if isinstance(provenance, dict):
             for field, entries in provenance.items():
                 if isinstance(entries, list):
-                    claims.extend((field, item.get("value")) for item in entries if isinstance(item, dict))
+                    claims.extend(
+                        (field, item.get("value")) for item in entries if isinstance(item, dict) and constraint(item)
+                    )
     conflicts: list[dict[str, Any]] = []
     claims.extend((field, value) for field, value in profile.items())
     for raw_field, claimed in claims:

@@ -538,6 +538,7 @@ def test_reconciliation_preserves_composite_candidate_levels_origins_years_and_c
         assert origin == {
             **next(row for row in origins if row["field"] == field),
             "primary_lineage": "autostop_local_vehicle_rules",
+            "reported_conflict_role": "hint",
             "source_kind": "caller",
             "independent": False,
             "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},

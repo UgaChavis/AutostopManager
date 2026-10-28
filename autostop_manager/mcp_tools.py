@@ -95,10 +95,15 @@ def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
         "identifier",
         "make",
         "model",
+        "generation",
         "engine",
         "model_year",
         "market",
         "transmission",
+        "transmission_code",
+        "transfer_case",
+        "front_differential",
+        "rear_differential",
         "fuel_type",
         "displacement_cc",
         "power_hp",
@@ -160,6 +165,7 @@ def _planner_nested_conflicts(
     comparable = {
         "make",
         "model",
+        "generation",
         "model_family",
         "platform",
         "model_year",
@@ -167,6 +173,10 @@ def _planner_nested_conflicts(
         "production_date",
         "engine",
         "transmission",
+        "transmission_code",
+        "transfer_case",
+        "front_differential",
+        "rear_differential",
         "transmission_speeds",
         "drivetrain",
         "market",
@@ -220,7 +230,7 @@ def _validated_planner_profile(
         if isinstance(nested, str):
             try:
                 nested = json.loads(nested)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 nested = None
         if not isinstance(nested, dict):
             problems.append({"field": "vehicle_profile", "code": "invalid_vehicle_profile_field"})
