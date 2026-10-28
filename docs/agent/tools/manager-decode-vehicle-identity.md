@@ -6,8 +6,8 @@
 
 Вызов: native Manager MCP `decode_vehicle_identity`.
 
-Входы: `identifier`, `vehicle`, `make`, `model`, `model_year`, `engine`, `transmission`, `drivetrain`, `market`, `source_confidence`, `live_vpic`, `live_wmi`, `production_year`, `production_date`, `modification`, `trim`, `series`, `options`, `transmission_speeds`, `identifier_type`, `detail`.
-Defaults: `{"detail":"full","drivetrain":null,"engine":null,"identifier_type":"auto","live_vpic":true,"live_wmi":true,"make":null,"market":null,"model":null,"model_year":null,"modification":null,"options":null,"production_date":null,"production_year":null,"series":null,"source_confidence":null,"transmission":null,"transmission_speeds":null,"trim":null,"vehicle":null}`.
+Входы: `identifier`, `vehicle`, `make`, `model`, `generation`, `model_year`, `engine`, `transmission`, `transmission_code`, `drivetrain`, `transfer_case`, `front_differential`, `rear_differential`, `market`, `source_confidence`, `live_vpic`, `live_wmi`, `production_year`, `production_date`, `modification`, `trim`, `series`, `options`, `transmission_speeds`, `identifier_type`, `detail`.
+Defaults: `{"detail":"full","drivetrain":null,"engine":null,"front_differential":null,"generation":null,"identifier_type":"auto","live_vpic":true,"live_wmi":true,"make":null,"market":null,"model":null,"model_year":null,"modification":null,"options":null,"production_date":null,"production_year":null,"rear_differential":null,"series":null,"source_confidence":null,"transfer_case":null,"transmission":null,"transmission_code":null,"transmission_speeds":null,"trim":null,"vehicle":null}`.
 Обязательные facade поля: `identifier`.
 Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
