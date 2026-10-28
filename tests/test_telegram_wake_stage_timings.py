@@ -289,8 +289,15 @@ def test_known_recovery_measures_only_observed_remainder_and_preserves_terminal_
                 assert all(cell["count"] == 0 for cell in observed["new"].values())
                 stored = inbox.read_job(job["job_id"])
                 assert stored["deadline_at"] == original_deadline and stored["execution_proof"] == terminal
-                assert stored["state"] == ("completed" if terminal == "completed" else "needs_review")
-                if terminal != "completed":
+                assert (
+                    stored["state"]
+                    == {"completed": "completed", "failed": "failed_waiting_input", "interrupted": "needs_review"}[
+                        terminal
+                    ]
+                )
+                if terminal == "failed":
+                    assert stored["reason_code"] == "retry_on_new_client_input"
+                elif terminal != "completed":
                     assert stored["reason_code"] == "codex_turn_failed"
                 assert inbox.execution_slot() is None and dispatcher.stop_proof_verified
                 assert not dispatcher.deadline_exceeded and server.counter == 0 and server.metadata_calls == 3

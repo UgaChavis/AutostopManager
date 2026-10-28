@@ -277,7 +277,9 @@ def test_owner_route_failure_does_not_block_client_loop(runtime, monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("operation", ["owner_event_read", "owner_event_voice_stage", "job_owner_pending"])
+@pytest.mark.parametrize(
+    "operation", ["owner_event_read", "owner_event_voice_stage", "job_owner_pending", "job_client_control"]
+)
 def test_owner_read_and_route_rpc_require_root_before_source_access(runtime, monkeypatch, operation):
     _, monitor, config, _ = runtime
     access = []
@@ -312,6 +314,41 @@ def test_owner_read_and_route_rpc_require_root_before_source_access(runtime, mon
     asyncio.run(bridge._serve_client_request(object(), config, Reader(), writer, inbound_monitor=monitor))
     assert access == ["root-check"]
     assert b"root_required" in writer.body
+
+
+def test_client_only_cutover_preserves_old_owner_receipts_and_routes_new_as_clients(runtime, monkeypatch):
+    inbox, monitor, config, clock = runtime
+    routed = inbox.record(OWNER, 1)
+    receipt = inbox.route_owner_event(
+        event_id=routed,
+        owner_peer_id=OWNER,
+        receipt_id="historical-owner",
+        instruction_root=ROOT,
+        instruction_revision=REVISION,
+    )
+    pending = inbox.record(OWNER, 2)
+    inbox.configure_client_only(OWNER)
+    assert inbox.owner_route_receipt(routed) == receipt
+    assert inbox.require_owner_source(routed, OWNER).message_id == 1
+    assert inbox.owner_pending(OWNER) == []
+    assert inbox.event_state(pending) == "retired"
+    clock[0] += timedelta(seconds=1)
+    fresh = inbox.record(OWNER, 3)
+
+    async def resolve(_client, peer):
+        return int(peer), {"id": int(peer), "kind": "private"}
+
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+
+    async def load(_client, _events):
+        return [SimpleNamespace(id=3, chat_id=OWNER, out=False, is_private=True)]
+
+    monkeypatch.setattr(bridge, "_load_inbound_monitor_context_messages", load)
+    target = asyncio.run(bridge._handle_monitor_target(object(), config, monitor, fresh))
+    assert target["role"] == "client" and target["target"]["id"] == OWNER
+    with pytest.raises(InboxError, match="inbox_owner_route_retired"):
+        inbox.require_owner_source(fresh, OWNER)
+    assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION)["event_ids"] == [fresh]
 
 
 def test_routed_owner_voice_uses_exact_source_and_cleanup_without_client_lease(runtime, monkeypatch):

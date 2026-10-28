@@ -133,6 +133,7 @@ class FakeJobs:
             "job_turn_bound": self.inbox.bind_turn,
             "job_needs_review": self.inbox.needs_review,
             "job_release": self.inbox.release_job,
+            "job_defer_failed": self.inbox.defer_failed_request,
             "job_execution_proof": self.inbox.finish_execution,
         }
         try:
@@ -272,6 +273,45 @@ def test_model_completed_without_result_holds_durable_event(tmp_path, bundle):
                 jobs.changed.set()
                 await until(lambda: server.counter == 2 and inbox.status()["needs_review_jobs"] == 2)
                 assert inbox.execution_slot() is None
+            finally:
+                await stop_dispatcher(dispatcher)
+                inbox.close()
+
+    asyncio.run(scenario())
+
+
+def test_explicit_start_rejection_does_not_lock_next_real_client_request(tmp_path, bundle):
+    async def scenario():
+        inbox, event_id = new_inbox(tmp_path)
+        server = MockServer(peer_threads=True)
+        server.reject_method = "turn/start"
+        jobs = FakeJobs(inbox, finish=True)
+        path = str(tmp_path / "app.sock")
+        async with unix_serve(server.handle, path, compression=None):
+            app = wake.AppServer(
+                wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
+            dispatcher.start()
+            try:
+                await until(
+                    lambda: any(name == "job_defer_failed" for name, _ in jobs.calls) and dispatcher.status()["ready"]
+                )
+                failed_id = next(args["job_id"] for name, args in jobs.calls if name == "job_defer_failed")
+                assert inbox.read_job(failed_id)["state"] == "failed_waiting_input"
+                assert inbox.read_job(failed_id)["execution_proof"] == "not_started"
+                assert inbox.execution_slot() is None and not inbox.active_jobs()
+                starts = sum(call.get("method") == "turn/start" for call in server.calls)
+                assert inbox.record(123, 1) == event_id
+                jobs.changed.set()
+                await asyncio.sleep(0)
+                assert sum(call.get("method") == "turn/start" for call in server.calls) == starts
+                server.reject_method = None
+                assert inbox.record(123, 2) is not None
+                jobs.changed.set()
+                await until(lambda: dispatcher.completed == 1)
+                assert inbox.status()["open_events"] == 0
+                assert not dispatcher.app.blocked
             finally:
                 await stop_dispatcher(dispatcher)
                 inbox.close()

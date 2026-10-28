@@ -59,7 +59,7 @@ def intake_work(path, retained, *, reopen):
             inbox._db.set_progress_handler(None, 0)
         assert inbox.require_open(event_id).message_id == 1
         assert inbox.generation == generation + 1
-        assert inbox._meta("schema_version") == "3"
+        assert inbox._meta("schema_version") == "4"
         assert inbox._db.execute("SELECT COUNT(*) FROM events WHERE peer_id=1").fetchone()[0] == retained
         assert inbox._db.execute("SELECT COUNT(*) FROM jobs WHERE state='completed'").fetchone()[0] == retained
         assert inbox.checkpoint(1) == retained

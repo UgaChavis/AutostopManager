@@ -22,8 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 3
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3)
+INBOX_SCHEMA_VERSION = 4
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4)
 WORKER_PROTOCOL_VERSION = 2
 REQUEST_DEADLINE_SECONDS = 1200
 
@@ -34,7 +34,18 @@ SHA256_PATTERN = re.compile(r"[a-f0-9]{64}")
 REVISION_PATTERN = re.compile(r"[a-f0-9]{40}")
 CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,95}")
 OUTCOMES = frozenset({"answered", "awaiting_client", "handoff", "no_reply_needed"})
-NO_REPLY_REASONS = frozenset({"duplicate", "spam", "reaction_only", "already_answered", "not_actionable"})
+NO_REPLY_REASONS = frozenset(
+    {
+        "duplicate",
+        "spam",
+        "reaction_only",
+        "already_answered",
+        "not_actionable",
+        "human_answered",
+        "paused",
+        "human_takeover",
+    }
+)
 EFFECT_KINDS = frozenset({"ack", "result", "clarification", "handoff", "mutation"})
 ACTIVE_STATES = frozenset({"claimed", "start_intent", "running", "needs_review"})
 
@@ -258,6 +269,17 @@ class TelegramInbox:
             CREATE TABLE IF NOT EXISTS owner_role_epochs (
                 peer_id INTEGER PRIMARY KEY, started_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS outgoing_observations (
+                peer_id INTEGER NOT NULL REFERENCES peers(peer_id), message_id INTEGER NOT NULL,
+                observed_at TEXT NOT NULL, origin TEXT NOT NULL,
+                PRIMARY KEY(peer_id,message_id)
+            );
+            CREATE TABLE IF NOT EXISTS client_controls (
+                peer_id INTEGER PRIMARY KEY REFERENCES peers(peer_id), state TEXT NOT NULL,
+                revision INTEGER NOT NULL, guidance_pending INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS effects_peer_message ON effects(peer_id,sent_message_id);
+            CREATE INDEX IF NOT EXISTS effects_peer_unknown ON effects(peer_id) WHERE attempted=1 AND verified=0;
                 """
             )
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
@@ -371,6 +393,8 @@ class TelegramInbox:
         _positive(peer_id, "inbound_peer_invalid")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise InboxError("inbox_page_limit_invalid")
+        if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
+            return []
         return [
             {"event_id": f"inbound-{row['sequence']}", "received_at": row["received_at"]}
             for row in self._db.execute(
@@ -382,6 +406,41 @@ class TelegramInbox:
             )
         ]
 
+    def configure_client_only(self, previous_owner_peer_id: int | None) -> None:
+        """Cut over once; do not replay old management messages as new clients."""
+        if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
+            return
+        with self._write():
+            if previous_owner_peer_id is not None and self._instruction_pair is not None:
+                sequences = [
+                    row[0]
+                    for row in self._db.execute(
+                        "SELECT sequence FROM events WHERE peer_id=? AND state='open' AND job_id IS NULL",
+                        (previous_owner_peer_id,),
+                    )
+                ]
+                if sequences:
+                    self._hold_refs(
+                        sequences, previous_owner_peer_id, *self._instruction_pair, reason_code="retired_owner_route"
+                    )
+                # Old management locators must neither replay as clients nor
+                # permanently hold future genuine client messages. Archive only
+                # proven unstarted, effect-free routing-boundary records.
+                self._db.execute(
+                    "UPDATE jobs SET state='retired',revision=revision+1,updated_at=? WHERE peer_id=? "
+                    "AND reason_code IN ('retired_owner_route','owner_role_transition_review_required') "
+                    "AND execution_proof='not_started' AND NOT EXISTS "
+                    "(SELECT 1 FROM effects WHERE effects.job_id=jobs.job_id AND (attempted=1 OR verified=1)) "
+                    "AND NOT EXISTS (SELECT 1 FROM global_slot WHERE global_slot.job_id=jobs.job_id)",
+                    (self._now(), previous_owner_peer_id),
+                )
+                self._db.execute(
+                    "UPDATE events SET state='retired',completed_at=? WHERE job_id IN "
+                    "(SELECT job_id FROM jobs WHERE peer_id=? AND state='retired')",
+                    (self._now(), previous_owner_peer_id),
+                )
+            self._db.execute("INSERT INTO metadata VALUES ('work_client_only','1')")
+
     def require_owner_source(self, event_id: str, owner_peer_id: int) -> InboundReference:
         event = self._event_row(event_id)
         if event["peer_id"] != owner_peer_id:
@@ -391,6 +450,8 @@ class TelegramInbox:
         ).fetchone()
         if event["state"] == "routed" and self.owner_route_receipt(event_id) is not None:
             return self.resolve(event_id)
+        if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
+            raise InboxError("inbox_owner_route_retired")
         if (
             epoch is None
             or event["received_at"] < epoch[0]
@@ -516,6 +577,13 @@ class TelegramInbox:
                 rejected = True
             else:
                 self._db.execute("INSERT OR IGNORE INTO peers(peer_id) VALUES (?)", (peer_id,))
+                # A proven, effect-free failed turn is retried only on genuinely
+                # new client input. A repeated update never replays that turn.
+                self._db.execute(
+                    "UPDATE events SET job_id=NULL WHERE peer_id=? AND state='open' AND job_id IN "
+                    "(SELECT job_id FROM jobs WHERE peer_id=? AND state='failed_waiting_input')",
+                    (peer_id, peer_id),
+                )
                 self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
                 context = self._peer_revision(peer_id)
                 self._db.execute(
@@ -526,6 +594,8 @@ class TelegramInbox:
                 owner_epoch = self._db.execute(
                     "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (peer_id,)
                 ).fetchone()
+                if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
+                    owner_epoch = None
                 hold_reason = (
                     "owner_role_transition_review_required"
                     if owner_epoch and timestamp < owner_epoch[0]
@@ -858,6 +928,8 @@ class TelegramInbox:
         first = self._db.execute(
             "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
             "AND (? IS NULL OR events.peer_id<>?) "
+            "AND NOT EXISTS (SELECT 1 FROM client_controls WHERE client_controls.peer_id=events.peer_id "
+            "AND state<>'active') "
             "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.peer_id=events.peer_id "
             "AND jobs.state IN ('claimed','start_intent','running','needs_review')) "
             "AND NOT EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=events.peer_id "
@@ -915,7 +987,103 @@ class TelegramInbox:
             dict(row)
             for row in self._db.execute("SELECT * FROM effects WHERE job_id=? ORDER BY created_at,rowid", (job_id,))
         ]
+        result["outgoing_context"] = self.outgoing_context(result["peer_id"])
+        result["client_control"] = self.client_control(result["peer_id"])
+        result["prior_acknowledgements"] = [
+            dict(row)
+            for row in self._db.execute(
+                "SELECT effect_key,job_id,receipt_key,sent_message_id,reply_to_message_id FROM effects "
+                "WHERE peer_id=? AND kind='ack' AND verified=1 AND job_id<>? AND reply_to_message_id IN "
+                "(SELECT message_id FROM events WHERE job_id=?) ORDER BY created_at",
+                (result["peer_id"], job_id, job_id),
+            )
+        ]
         return result
+
+    def outgoing_context(self, peer_id: int) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in self._db.execute(
+                "SELECT message_id,origin FROM outgoing_observations WHERE peer_id=? ORDER BY message_id DESC LIMIT 100",
+                (peer_id,),
+            )
+        ]
+
+    def observe_outgoing(self, peer_id: int, message_id: int, *, native_origin: str | None = None) -> str:
+        """Transport-authenticated self messages are context, never inbound work.
+
+        An unresolved agent effect prevents attributing an unmatched message to
+        a person. Exact verification later reconciles it without fake receipts.
+        """
+        _positive(peer_id, "inbound_peer_invalid")
+        _positive(message_id, "inbound_message_invalid")
+        existing = self._db.execute(
+            "SELECT origin FROM outgoing_observations WHERE peer_id=? AND message_id=?", (peer_id, message_id)
+        ).fetchone()
+        if native_origin not in {None, "agent", "unresolved"}:
+            raise InboxError("inbox_outgoing_origin_invalid")
+        if existing is not None and existing[0] == "agent":
+            return "agent"
+        agent = self._db.execute(
+            "SELECT 1 FROM effects WHERE peer_id=? AND sent_message_id=? AND verified=1 AND kind<>'handoff'",
+            (peer_id, message_id),
+        ).fetchone()
+        unknown = self._db.execute(
+            "SELECT 1 FROM effects WHERE peer_id=? AND attempted=1 AND verified=0 AND kind<>'handoff'", (peer_id,)
+        ).fetchone()
+        origin = (
+            "agent"
+            if agent or native_origin == "agent"
+            else "unresolved"
+            if unknown or native_origin == "unresolved"
+            else "human"
+        )
+        if existing is not None:
+            # A new pending send cannot change an already known human message.
+            if existing[0] == origin or (existing[0] == "human" and origin != "agent"):
+                return str(existing[0])
+            with self._write():
+                self._db.execute(
+                    "UPDATE outgoing_observations SET origin=? WHERE peer_id=? AND message_id=?",
+                    (origin, peer_id, message_id),
+                )
+                if origin == "human":
+                    self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+            return origin
+        with self._write():
+            self._db.execute("INSERT OR IGNORE INTO peers(peer_id) VALUES (?)", (peer_id,))
+            self._db.execute(
+                "INSERT INTO outgoing_observations VALUES (?,?,?,?)", (peer_id, message_id, self._now(), origin)
+            )
+            if origin == "human":
+                self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+        return origin
+
+    def client_control(self, peer_id: int) -> dict[str, Any]:
+        row = self._db.execute(
+            "SELECT state,revision,guidance_pending FROM client_controls WHERE peer_id=?", (peer_id,)
+        ).fetchone()
+        return dict(row) if row else {"state": "active", "revision": 0, "guidance_pending": 0}
+
+    def set_client_control(self, peer_id: int, *, action: str, expected_revision: int) -> dict[str, Any]:
+        """Called only by the explicit trusted Codex control endpoint."""
+        _positive(peer_id, "inbound_peer_invalid")
+        if action not in {"check_variant", "context", "reconsider", "pause", "takeover", "resume"}:
+            raise InboxError("inbox_client_control_invalid")
+        if self._db.execute("SELECT 1 FROM peers WHERE peer_id=?", (peer_id,)).fetchone() is None:
+            raise InboxError("inbox_client_unknown")
+        old = self.client_control(peer_id)
+        if type(expected_revision) is not int or old["revision"] != expected_revision:
+            raise InboxError("inbox_revision_conflict")
+        state = {"pause": "paused", "takeover": "human_takeover", "resume": "active"}.get(action, old["state"])
+        with self._write():
+            self._db.execute(
+                "INSERT INTO client_controls VALUES (?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET "
+                "state=excluded.state,revision=excluded.revision,guidance_pending=excluded.guidance_pending",
+                (peer_id, state, old["revision"] + 1, int(action in {"check_variant", "context", "reconsider"})),
+            )
+            self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+        return self.client_control(peer_id)
 
     def _job_event_ids(self, job_id: str) -> list[str]:
         return [
@@ -1006,6 +1174,9 @@ class TelegramInbox:
         if job["state"] != "running":
             raise InboxError("inbox_effect_state_invalid")
         self._require_execution(job)
+        control = self.client_control(job["peer_id"])
+        if control["state"] != "active":
+            raise InboxError("inbox_client_" + control["state"])
         return {
             "job_id": job_id,
             "lease": lease,
@@ -1015,6 +1186,8 @@ class TelegramInbox:
             "thread_id": job["thread_id"],
             "turn_id": job["turn_id"],
             "manual_recovery": bool(job["manual_recovery"]),
+            "peer_context_revision": self._peer_revision(job["peer_id"]),
+            "client_control_revision": control["revision"],
             "duty_window_id": self._db.execute(
                 "SELECT MAX(window_id) FROM duty_windows WHERE closed_at IS NULL"
             ).fetchone()[0],
@@ -1029,6 +1202,8 @@ class TelegramInbox:
             )
         except (KeyError, TypeError) as exc:
             raise InboxError("inbox_execution_stale") from exc
+        if snapshot.get("peer_context_revision") != current["peer_context_revision"]:
+            raise InboxError("inbox_context_stale")
         if snapshot != current:
             raise InboxError("inbox_execution_stale")
 
@@ -1245,7 +1420,18 @@ class TelegramInbox:
             raise InboxError("inbox_lease_mismatch")
         if local_tasks_done is not True:
             raise InboxError("inbox_execution_proof_invalid")
-        if proof_kind == "not_started":
+        if proof_kind == "start_rejected":
+            if (
+                job["state"] not in {"start_intent", "needs_review"}
+                or job["turn_id"] is not None
+                or thread_id != job["thread_id"]
+                or not thread_id
+                or turn_id is not None
+                or terminal_status is not None
+            ):
+                raise InboxError("inbox_execution_proof_invalid")
+            proof = "not_started"
+        elif proof_kind == "not_started":
             if any(value is not None for value in (thread_id, turn_id, terminal_status)):
                 raise InboxError("inbox_execution_proof_invalid")
             if job["thread_id"] is not None or job["turn_id"] is not None:
@@ -1383,6 +1569,31 @@ class TelegramInbox:
 
     mark_needs_review = needs_review
 
+    def defer_failed_request(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
+        """Allow the next new input after a proven failure with at most an ACK.
+
+        This does not retry old events, finish a client request, or clear an
+        unknown start/send. Such cases retain their original review boundary.
+        Verified acknowledgements remain attached to their original job.
+        """
+        job = self._lease(job_id, lease, expected_revision)
+        if (
+            job["state"] != "needs_review"
+            or job["execution_proof"] not in {"failed", "not_started"}
+            or self.execution_slot() is not None
+        ):
+            raise InboxError("inbox_failure_recovery_unsafe")
+        if self._db.execute(
+            "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND (verified=0 OR kind<>'ack')", (job_id,)
+        ).fetchone():
+            raise InboxError("inbox_failure_recovery_unsafe")
+        mapping = self.read_peer_thread(job_id)
+        if mapping is not None and mapping["state"] != "ready":
+            raise InboxError("inbox_failure_recovery_unsafe")
+        with self._write():
+            self._transition(job_id, "failed_waiting_input", reason_code="retry_on_new_client_input")
+        return self.read_job(job_id)
+
     def recover_on_startup(self) -> None:
         """Return unstarted claims; retain every potentially started/effectful job."""
 
@@ -1486,7 +1697,7 @@ class TelegramInbox:
         targets = {self.resolve(event_id).message_id for event_id in self.read_job(job_id)["event_ids"]}
         if reply_to_message_id not in targets:
             raise InboxError("inbox_effect_target_invalid")
-        if kind != "ack" and job["context_revision"] != self._peer_revision(peer_id):
+        if job["context_revision"] != self._peer_revision(peer_id):
             raise InboxError("inbox_context_stale")
         old = self._db.execute(
             "SELECT * FROM effects WHERE job_id=? AND kind=? AND context_revision=? AND effect_slot=?",
@@ -1536,6 +1747,8 @@ class TelegramInbox:
             return effect
         job = self._job_row(effect["job_id"])
         self.execution_authority(job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"])
+        if effect["context_revision"] != self._peer_revision(effect["peer_id"]):
+            raise InboxError("inbox_context_stale")
         with self._write():
             self._db.execute("UPDATE effects SET attempted=1 WHERE effect_key=?", (effect_key,))
         return self.read_effect(effect_key)
@@ -1569,6 +1782,11 @@ class TelegramInbox:
                 "UPDATE effects SET verified=1,attempted=1,receipt_key=?,sent_message_id=?,verified_at=? WHERE effect_key=?",
                 (receipt_key, message_id, self._now(), effect_key),
             )
+            if effect["kind"] != "handoff":
+                self._db.execute(
+                    "UPDATE outgoing_observations SET origin='agent' WHERE peer_id=? AND message_id=?",
+                    (effect["peer_id"], message_id),
+                )
         return self.read_effect(effect_key)
 
     def result(
@@ -1581,6 +1799,7 @@ class TelegramInbox:
         event_ids: list[str],
         receipt_keys: list[str],
         reason_code: str | None = None,
+        human_message_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] not in {"running", "needs_review"}:
@@ -1613,12 +1832,33 @@ class TelegramInbox:
         if outcome == "no_reply_needed":
             if not isinstance(reason_code, str) or reason_code not in NO_REPLY_REASONS:
                 raise InboxError("inbox_no_reply_reason_invalid")
+            if reason_code == "human_answered":
+                if (
+                    not isinstance(human_message_ids, list)
+                    or not human_message_ids
+                    or any(type(value) is not int for value in human_message_ids)
+                    or len(human_message_ids) != len(set(human_message_ids))
+                ):
+                    raise InboxError("inbox_human_evidence_required")
+                latest = max(self.resolve(event).message_id for event in event_ids)
+                known = {row["message_id"] for row in self.outgoing_context(job["peer_id"]) if row["origin"] == "human"}
+                if not set(human_message_ids).issubset(known) or min(human_message_ids) <= latest:
+                    raise InboxError("inbox_human_evidence_required")
+            elif human_message_ids:
+                raise InboxError("inbox_human_evidence_invalid")
+            if (
+                reason_code in {"paused", "human_takeover"}
+                and self.client_control(job["peer_id"])["state"] != reason_code
+            ):
+                raise InboxError("inbox_client_control_invalid")
         else:
             if reason_code is not None:
                 raise InboxError("inbox_reason_invalid")
             if expected[outcome] not in kinds:
                 raise InboxError("inbox_result_receipt_required")
-        if outcome != "no_reply_needed" and job["context_revision"] != self._peer_revision(job["peer_id"]):
+        if (outcome != "no_reply_needed" or reason_code == "human_answered") and job[
+            "context_revision"
+        ] != self._peer_revision(job["peer_id"]):
             raise InboxError("inbox_context_stale")
         with self._write():
             self._transition(job_id, "completed", reason_code=reason_code)
@@ -2015,13 +2255,19 @@ class TelegramInbox:
             (cutoff,),
         ).rowcount
         self._db.execute(
-            "DELETE FROM jobs WHERE state IN ('completed','released') AND updated_at<? "
+            "DELETE FROM jobs WHERE state IN ('completed','released','retired','failed_waiting_input') AND updated_at<? "
             "AND NOT EXISTS (SELECT 1 FROM global_slot WHERE global_slot.job_id=jobs.job_id) "
             "AND NOT EXISTS (SELECT 1 FROM events WHERE events.job_id=jobs.job_id)",
             (cutoff,),
         )
         self._db.execute("DELETE FROM duty_windows WHERE closed_at<? AND recovered_at IS NOT NULL", (cutoff,))
         self._db.execute("DELETE FROM incidents WHERE recovered_at<? AND recovery_receipt IS NOT NULL", (cutoff,))
+        self._db.execute(
+            "DELETE FROM outgoing_observations WHERE observed_at<? AND NOT EXISTS "
+            "(SELECT 1 FROM jobs WHERE jobs.peer_id=outgoing_observations.peer_id "
+            "AND jobs.state IN ('claimed','start_intent','running','needs_review'))",
+            (cutoff,),
+        )
         return removed
 
     def prune(self) -> int:

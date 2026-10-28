@@ -215,7 +215,9 @@ def test_owner_status_is_content_free_and_missing_identity_does_not_escalate(tmp
 
 
 @pytest.mark.parametrize("configured_id", [20, 21, None])
-def test_work_monitor_target_role_uses_only_trusted_owner_binding(monkeypatch, tmp_path, configured_id) -> None:
+def test_work_monitor_target_is_client_regardless_of_owner_notification_binding(
+    monkeypatch, tmp_path, configured_id
+) -> None:
     monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
 
@@ -247,10 +249,10 @@ def test_work_monitor_target_role_uses_only_trusted_owner_binding(monkeypatch, t
         "ok": True,
         "event_id": "inbound-1",
         "target": {"id": 20, "kind": "private"},
-        "role": "owner" if configured_id == 20 else "client",
+        "role": "client",
         "reply_to_message_id": 100,
     }
-    assert owner_reads == [configured_id]
+    assert owner_reads == []
     with pytest.raises(BridgeError, match="inbound_event_unavailable"):
         asyncio.run(
             telegram_bridge._handle_operation(

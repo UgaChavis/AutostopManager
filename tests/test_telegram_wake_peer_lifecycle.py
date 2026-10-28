@@ -104,6 +104,31 @@ def test_empty_peer_requires_materialization_and_bare_resume_loses_settings(tmp_
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("inherited,effective", [("low", "high"), ("medium", "high"), ("max", "max")])
+def test_client_turn_serializes_sufficient_effort_in_native_collaboration_settings(
+    tmp_path, bundle, inherited, effective
+):
+    async def scenario():
+        server = inherited_server()
+        server.thread_settings[THREAD]["reasoningEffort"] = inherited
+        server.thread_settings[THREAD]["collaborationMode"] = {
+            "mode": "default",
+            "settings": {"model": "gpt-test", "reasoning_effort": inherited, "developer_instructions": "retain"},
+        }
+        async with peer_case(tmp_path, bundle, server) as (_bootstrap, dispatcher, inbox, job):
+            await dispatcher._execute(job)
+            starts = [call["params"] for call in server.calls if call["method"] == "turn/start"]
+            assert len(starts) == 1 and starts[0]["effort"] == effective
+            assert starts[0]["collaborationMode"]["settings"] == {
+                "model": "gpt-test",
+                "reasoning_effort": effective,
+                "developer_instructions": "retain",
+            }
+            assert inbox.read_job(job["job_id"])["state"] == "completed"
+
+    asyncio.run(scenario())
+
+
 def test_peer_resume_keeps_overrides_after_reconnect_and_blocks_settings_drift(tmp_path, bundle, monkeypatch):
     async def scenario():
         server = inherited_server()

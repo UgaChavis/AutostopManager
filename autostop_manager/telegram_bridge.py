@@ -577,7 +577,7 @@ class InboundMonitor:
 class DurableInboundMonitor(InboundMonitor):
     """Bridge-owned durable locators, with voice files and subscribers kept transient."""
 
-    def __init__(self, inbox: TelegramInbox, *, enabled: bool) -> None:
+    def __init__(self, inbox: TelegramInbox, *, enabled: bool, config: TelegramConfig | None = None) -> None:
         super().__init__()
         self.inbox = inbox
         self.capture_enabled = enabled
@@ -594,6 +594,40 @@ class DurableInboundMonitor(InboundMonitor):
         self.reconciliation_transport_retries = 0
         self.notification_requested = asyncio.Event()
         self.notification_task: asyncio.Task[None] | None = None
+        self.self_peer_id: int | None = None
+        self.config = config
+        # Internal Codex guidance is transient; only its revision/pause state
+        # survives restart. Missing guidance then blocks new sends safely.
+        self.trusted_guidance: dict[int, list[dict[str, Any]]] = {}
+
+    def observe_self_message(self, message: Any) -> str | None:
+        peer_id, message_id = getattr(message, "chat_id", None), getattr(message, "id", None)
+        if (
+            not bool(getattr(message, "out", False))
+            or not bool(getattr(message, "is_private", False))
+            or self.self_peer_id is None
+            or getattr(message, "sender_id", None) not in {None, self.self_peer_id}
+            or type(peer_id) is not int
+            or peer_id <= 0
+            or peer_id == self.self_peer_id
+            or type(message_id) is not int
+            or message_id <= 0
+        ):
+            return None
+        native_origin = _native_outgoing_origin(self.config, peer_id, message_id) if self.config is not None else None
+        origin = self.inbox.observe_outgoing(peer_id, message_id, native_origin=native_origin)
+        self.changed()
+        return origin
+
+    def reconcile_outgoing(self, peer_id: int) -> None:
+        for row in self.inbox.outgoing_context(peer_id):
+            if row["origin"] != "unresolved":
+                continue
+            native = (
+                _native_outgoing_origin(self.config, peer_id, row["message_id"]) if self.config is not None else None
+            )
+            self.inbox.observe_outgoing(peer_id, row["message_id"], native_origin=native)
+        self.changed()
 
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
@@ -617,6 +651,10 @@ class DurableInboundMonitor(InboundMonitor):
     def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
         del preserve_open
         if bool(getattr(event, "out", False)):
+            self.observe_self_message(event)
+            return None
+        source = getattr(event, "message", event)
+        if getattr(source, "action", None) is not None and not getattr(source, "media", None):
             return None
         if not bool(getattr(event, "is_private", False)):
             return None
@@ -2025,6 +2063,63 @@ def _load_idempotency(path: Path) -> dict[str, dict[str, Any]]:
     return {str(key): value for key, value in payload.items() if isinstance(value, dict)}
 
 
+def _native_outgoing_origin(config: TelegramConfig, peer_id: int, message_id: int) -> str | None:
+    """Match exact native send records, including privacy-bound owner targets."""
+    try:
+        entries = _load_idempotency(config.state_dir / "idempotency.json")
+        pending = False
+        for entry in entries.values():
+            operation = entry.get("operation")
+            if operation not in {
+                None,
+                "send_text",
+                "send_photo",
+                "send_document",
+                "send_voice",
+                "send_owner_notification",
+            }:
+                continue
+            exact_peer = type(entry.get("peer_id")) is int and entry["peer_id"] == peer_id
+            if operation == "send_owner_notification" and entry.get("target_role") == "owner":
+                exact_peer = _owner_peer_id(config) == peer_id
+                if exact_peer:
+                    # Read the existing key; attribution must never create or
+                    # rotate a key merely because its native ledger is missing.
+                    descriptor = os.open(config.state_dir / "contract.key", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+                    try:
+                        info = os.fstat(descriptor)
+                        if (
+                            not stat.S_ISREG(info.st_mode)
+                            or info.st_uid != os.geteuid()
+                            or stat.S_IMODE(info.st_mode) != 0o600
+                        ):
+                            return "unresolved"
+                        key = os.read(descriptor, 33)
+                    finally:
+                        os.close(descriptor)
+                    if len(key) != 32:
+                        return "unresolved"
+                    digest = hmac.new(key, f"owner\0{peer_id}".encode(), hashlib.sha256).digest()
+                    fingerprint = f"{(int.from_bytes(digest[:8], 'big') or 1):016x}"
+                    if entry.get("target_fingerprint") != fingerprint:
+                        return "unresolved"
+            if not exact_peer:
+                continue
+            if type(entry.get("message_id")) is int and entry["message_id"] > 0 and entry["message_id"] == message_id:
+                return "agent"
+            if not entry.get("message_id") or entry.get("readback_verified") is False:
+                pending = True
+        return "unresolved" if pending else None
+    except (BridgeError, OSError):
+        # An unreadable send ledger cannot prove human authorship.
+        return "unresolved"
+
+
+def _require_native_outcome_known(monitor: DurableInboundMonitor, peer_id: int) -> None:
+    if monitor.config is not None and _native_outgoing_origin(monitor.config, peer_id, -1) == "unresolved":
+        raise BridgeError("send_outcome_uncertain")
+
+
 def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
@@ -3139,6 +3234,7 @@ def _record_job_send_receipt(
         monitor.inbox.verify_effect(
             effect_key=str(effect["effect_key"]), receipt_key=key, message_id=message_id, verified=True
         )
+        monitor.reconcile_outgoing(monitor.inbox.read_effect(str(effect["effect_key"]))["peer_id"])
         monitor.changed()
 
 
@@ -3351,6 +3447,9 @@ async def _handle_owner_notification_idempotency_readback(
             "expected_text_sha256": expected_text_sha256,
         },
     )
+    _persist_delivery(
+        config.state_dir / "idempotency.json", idempotency_key, record, message_id=message_id, verified=True
+    )
     return readback | {"outcome": "verified", "found": True}
 
 
@@ -3494,7 +3593,7 @@ async def _handle_monitor_target(
         "ok": True,
         "event_id": event_id,
         "target": {"id": target["id"], "kind": target["kind"]},
-        "role": "owner" if event.peer_id == _owner_peer_id(config) else "client",
+        "role": "client",
         "reply_to_message_id": event.message_id,
     }
 
@@ -3849,6 +3948,12 @@ async def _handle_operation(
                 }.get(str(operation), "send_outcome_uncertain")
                 raise BridgeError(code) from None
             raise
+        job = inbound_monitor.inbox.read_job(str(request["job_id"]))
+        _require_native_outcome_known(inbound_monitor, job["peer_id"])
+        control = job["client_control"]
+        guidance = inbound_monitor.trusted_guidance.get(job["peer_id"], [])
+        if control["guidance_pending"] and not any(item["revision"] == control["revision"] for item in guidance):
+            raise BridgeError("inbox_guidance_unavailable")
         token = _EFFECT_AUTHORITY.set(EffectAuthority(inbound_monitor.inbox, tuple(snapshot.items())))
     try:
         return await _dispatch_operation(client, config, request, inbound_monitor=inbound_monitor)
@@ -3971,6 +4076,8 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         messages = await client.get_messages(entity, limit=limit)
         rows = []
         for message in reversed(messages):
+            if isinstance(inbound_monitor, DurableInboundMonitor):
+                inbound_monitor.observe_self_message(message)
             text, sensitive_content_redacted = redact_sensitive_message_text(str(message.message or ""))
             rows.append(
                 {
@@ -4098,7 +4205,7 @@ async def _handle_job_operation(
         job = inbox.claim(
             instruction_root=str(request.get("instruction_root") or ""),
             instruction_revision=str(request.get("instruction_revision") or ""),
-            exclude_peer_id=_owner_peer_id(config),
+            exclude_peer_id=None,
         )
     elif operation == "job_start_intent":
         job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
@@ -4106,23 +4213,46 @@ async def _handle_job_operation(
         job = inbox.bind_turn(**_job_arguments(request), turn_id=str(request.get("turn_id") or ""))
     elif operation == "job_release":
         job = inbox.release_job(**_job_arguments(request))
+    elif operation == "job_defer_failed":
+        job = inbox.defer_failed_request(**_job_arguments(request))
     elif operation == "job_needs_review":
         job = inbox.needs_review(**_job_arguments(request), reason_code=str(request.get("reason_code") or ""))
     elif operation == "job_refresh":
         job = inbox.refresh_job(**_job_arguments(request), event_ids=request.get("event_ids"))
     elif operation == "job_result":
+        current_peer = inbox.read_job(str(request.get("job_id") or ""))["peer_id"]
+        _require_native_outcome_known(monitor, current_peer)
         if inbox.read_job(str(request.get("job_id") or "")).get("manual_recovery"):
             executor = _effect_executor()
             if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
                 raise BridgeError("inbox_execution_effect_active")
         if request.get("outcome") == "handoff":
             _require_job_handoff_receipts(config, inbox, request)
+        if request.get("reason_code") == "human_answered":
+            job = inbox.read_job(str(request.get("job_id") or ""))
+            ids = request.get("human_message_ids")
+            if (
+                not isinstance(ids, list)
+                or not ids
+                or len(ids) > 100
+                or any(type(value) is not int or value < 1 for value in ids)
+            ):
+                raise BridgeError("inbox_human_evidence_required")
+            entity, target = await _resolve_peer(client, str(job["peer_id"]))
+            for message_id in ids:
+                message = await client.get_messages(entity, ids=message_id)
+                if (
+                    not _outgoing_message_matches(message, peer_id=target["id"], message_id=message_id)
+                    or monitor.observe_self_message(message) != "human"
+                ):
+                    raise BridgeError("inbox_human_evidence_required")
         job = inbox.result(
             **_job_arguments(request),
             outcome=str(request.get("outcome") or ""),
             event_ids=_job_string_list(request, "event_ids"),
             receipt_keys=_job_string_list(request, "receipt_keys"),
             reason_code=request.get("reason_code"),
+            human_message_ids=request.get("human_message_ids"),
         )
         monitor.request_reconciliation()
     elif operation == "job_resolve":
@@ -4297,6 +4427,7 @@ async def _handle_job_effect_readback(
         raise BridgeError("job_effect_readback_failed") from exc
     _persist_delivery(ledger_path, expected_key, entry, message_id=message_id, verified=True)
     monitor.inbox.verify_effect(effect_key=expected_key, receipt_key=expected_key, message_id=message_id)
+    monitor.reconcile_outgoing(job["peer_id"])
     monitor.changed()
     return {
         "ok": True,
@@ -4434,6 +4565,36 @@ def _handle_owner_routing_control(
     return None
 
 
+def _handle_client_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any]:
+    inbox = monitor.inbox
+    # A trusted, explicit Codex call names one exact existing peer or job.
+    # This endpoint is never invoked from Telegram body/name/owner role.
+    if bool(request.get("job_id")) == bool(request.get("peer_id")):
+        raise BridgeError("inbox_client_target_required")
+    peer_id = inbox.read_job(str(request["job_id"]))["peer_id"] if request.get("job_id") else request["peer_id"]
+    if type(peer_id) is not int or peer_id < 1:
+        raise BridgeError("inbox_client_target_required")
+    if request.get("action") is None:
+        return {"ok": True, "peer_id": peer_id, "client_control": inbox.client_control(peer_id)}
+    action = str(request["action"])
+    text = request.get("text")
+    if action in {"check_variant", "context", "reconsider"} and (
+        not isinstance(text, str) or not text.strip() or len(text) > 4000
+    ):
+        raise BridgeError("inbox_client_guidance_invalid")
+    control = inbox.set_client_control(
+        peer_id, action=action, expected_revision=request.get("expected_control_revision")
+    )
+    if action in {"check_variant", "context", "reconsider"}:
+        notes = monitor.trusted_guidance.setdefault(peer_id, [])
+        notes.append({"revision": control["revision"], "action": action, "text": text})
+        del notes[:-32]
+    elif action == "resume":
+        monitor.trusted_guidance.pop(peer_id, None)
+    monitor.changed()
+    return {"ok": True, "peer_id": peer_id, "client_control": control}
+
+
 async def _handle_job_control(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any] | None:
@@ -4479,7 +4640,11 @@ async def _handle_job_control(
         monitor.changed()
         return {"ok": True, **imported, "status": inbox.job_status()}
     if operation == "job_read":
-        return {"ok": True, "job": inbox.read_job(str(request.get("job_id") or ""))}
+        job = inbox.read_job(str(request.get("job_id") or ""))
+        job["trusted_guidance"] = monitor.trusted_guidance.get(job["peer_id"], [])
+        return {"ok": True, "job": job}
+    if operation == "job_client_control":
+        return _handle_client_control(request, monitor)
     if operation == "job_effect_readback":
         return await _handle_job_effect_readback(client, config, request, monitor)
     if operation == "duty_set":
@@ -5030,9 +5195,9 @@ async def run_daemon(
     try:
         if inbox is not None:
             _configure_durable_instructions(inbox)
-            inbox.configure_owner_route(_owner_peer_id(config))
+            inbox.configure_client_only(_owner_peer_id(config))
             inbox.duty_set(enabled=monitor_incoming)
-            inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming)
+            inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
             inbound_monitor = InboundMonitor() if monitor_incoming else None
         client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
@@ -5055,6 +5220,12 @@ async def run_daemon(
         # Telegram RPC while an effect is slow or the transport is unavailable.
         client._autostop_cached_me = None
         if isinstance(inbound_monitor, DurableInboundMonitor):
+            me = await client.get_me()
+            self_id = getattr(me, "id", None)
+            if type(self_id) is not int or self_id < 1:
+                raise BridgeError("work_account_identity_unavailable")
+            client._autostop_cached_me = me
+            inbound_monitor.self_peer_id = self_id
             inbound_monitor.transport_ready = True
             inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
             inbound_monitor.request_reconciliation()
@@ -5292,9 +5463,9 @@ async def _reconcile_peer_history(
             complete = False
             break
         consumed += 1
-        if not bool(getattr(message, "out", False)) and monitor.inbox.recovery_allowed(
-            stamp.isoformat(), timestamp_precision="second"
-        ):
+        if bool(getattr(message, "out", False)):
+            monitor.observe_self_message(message)
+        elif monitor.inbox.recovery_allowed(stamp.isoformat(), timestamp_precision="second"):
             if not bool(getattr(message, "is_private", False)) or int(getattr(message, "chat_id", 0) or 0) != peer_id:
                 raise BridgeError("history_peer_invalid")
             try:
@@ -5597,6 +5768,15 @@ def build_parser() -> argparse.ArgumentParser:
     claim.add_argument("--worker-protocol", type=int, default=2)
     job_read = subparsers.add_parser("job-read")
     job_read.add_argument("--job-id", required=True)
+    client_control = subparsers.add_parser("job-client-control")
+    control_target = client_control.add_mutually_exclusive_group(required=True)
+    control_target.add_argument("--peer-id", type=int)
+    control_target.add_argument("--job-id")
+    client_control.add_argument(
+        "--action", choices=["check_variant", "context", "reconsider", "pause", "takeover", "resume"]
+    )
+    client_control.add_argument("--expected-control-revision", type=int)
+    client_control.add_argument("--text")
     subparsers.add_parser("job-execution-slot")
     peer_read = subparsers.add_parser("job-peer-thread-read")
     peer_read.add_argument("--job-id", required=True)
@@ -5653,7 +5833,9 @@ def build_parser() -> argparse.ArgumentParser:
                 job_command.add_argument("--thread-id", required=True)
                 job_command.add_argument("--effects-reviewed", action="store_true")
         elif command == "job-execution-proof":
-            job_command.add_argument("--proof-kind", choices=["not_started", "terminal"], required=True)
+            job_command.add_argument(
+                "--proof-kind", choices=["not_started", "start_rejected", "terminal"], required=True
+            )
             job_command.add_argument("--thread-id")
             job_command.add_argument("--turn-id")
             job_command.add_argument("--terminal-status", choices=["completed", "failed", "interrupted"])
@@ -5669,6 +5851,7 @@ def build_parser() -> argparse.ArgumentParser:
             job_command.add_argument("--event-id", action="append", required=True)
             job_command.add_argument("--receipt-key", action="append", default=[])
             job_command.add_argument("--reason-code", default=None)
+            job_command.add_argument("--human-message-id", type=int, action="append", default=None)
         elif command == "job-resolve":
             job_command.add_argument("--decision", choices=["retry_no_effects", "continue_bound_turn"], required=True)
             job_command.add_argument("--effects-reviewed", action="store_true", required=True)
@@ -5836,6 +6019,9 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "after_job_id",
         "effect_key",
         "message_id",
+        "peer_id",
+        "action",
+        "expected_control_revision",
     ):
         if hasattr(args, name):
             request[name] = getattr(args, name)
@@ -5843,6 +6029,8 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         request["event_ids"] = args.event_id
     if hasattr(args, "receipt_key"):
         request["receipt_keys"] = args.receipt_key
+    if hasattr(args, "human_message_id"):
+        request["human_message_ids"] = args.human_message_id
     if args.command == "job-import-legacy":
         request["events"] = _read_legacy_references(args.file)
     if args.command == "duty-set":

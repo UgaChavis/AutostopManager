@@ -291,8 +291,8 @@ def test_event_instruction_routes_one_event_through_telegram_skill_and_work_brid
     assert fields == ["event_id"]
     instruction = wake.WAKE_INSTRUCTION.format(event_id="inbound-1")
     assert instruction.count("inbound-1") == 1
-    assert [word for word in instruction.split() if word.startswith("$")] == ["$manage-owner-telegram"]
-    skill = ".agents/skills/manage-owner-telegram/SKILL.md"
+    assert [word for word in instruction.split() if word.startswith("$")] == ["$manage-autostop-client"]
+    skill = ".agents/skills/manage-autostop-client/SKILL.md"
     assert skill in instruction
     assert (ROOT / skill).is_file()
     assert "monitor-target" in instruction and "work bridge" in instruction
