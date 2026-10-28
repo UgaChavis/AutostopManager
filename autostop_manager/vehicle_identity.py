@@ -4,6 +4,7 @@ import json
 import math
 import re
 import unicodedata
+from decimal import Decimal, InvalidOperation
 from itertools import combinations
 from typing import Any
 
@@ -252,7 +253,52 @@ def _uses_strict_north_american_vin(profile: dict[str, Any]) -> bool:
     return "north america" in market or "fca us" in manufacturer
 
 
+_NUMERIC_IDENTITY_FIELDS = frozenset(
+    {"model_year", "production_year", "transmission_speeds", "displacement_cc", "power_hp", "power_kw"}
+)
+
+
+def _numeric_identity_key(field: str, value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return ""
+    try:
+        text = str(value).strip()
+    except (ValueError, OverflowError):
+        return ""
+    if field in {"model_year", "production_year", "transmission_speeds"}:
+        pattern = r"[0-9]{1,2}" if field == "transmission_speeds" else r"[0-9]{4}"
+        if isinstance(value, float) or not re.fullmatch(pattern, text):
+            return ""
+    if len(text) > 128 or not re.fullmatch(r"[+-]?(?:[0-9]+(?:[.,][0-9]+)?|[.,][0-9]+)(?:[eE][+-]?[0-9]+)?", text):
+        return ""
+    try:
+        number = Decimal(text.replace(",", "."))
+    except InvalidOperation:
+        return ""
+    if not number.is_finite() or number <= 0:
+        return ""
+    sign, digits, exponent = number.as_tuple()
+    if not isinstance(exponent, int):
+        return ""
+    end = len(digits)
+    while end > 1 and digits[end - 1] == 0:
+        end -= 1
+        exponent += 1
+    return "number:" + ("-" if sign else "") + "".join(str(digit) for digit in digits[:end]) + ":" + str(exponent)
+
+
+def _option_identity_key(value: Any) -> str:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        return ""
+    options = {" ".join(item.split()).casefold() for item in value if item.strip()}
+    return "options:" + json.dumps(sorted(options), ensure_ascii=False, separators=(",", ":"))
+
+
 def _normalized_identity_value(field: str, value: Any) -> str:
+    if field in _NUMERIC_IDENTITY_FIELDS:
+        return _numeric_identity_key(field, value)
+    if field == "options":
+        return _option_identity_key(value)
     normalized_value = _normalize_identity_field(field, value)
     return re.sub(r"[^0-9a-zа-яё]+", "", _compact(normalized_value).casefold())
 

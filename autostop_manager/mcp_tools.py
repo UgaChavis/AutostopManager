@@ -186,13 +186,6 @@ def _planner_nested_conflicts(
     for nested in nested_profiles:
         for field in sorted(comparable.intersection(nested, normalized)):
             left, right = normalized[field], nested[field]
-            equal_numbers = (
-                isinstance(left, (int, float))
-                and not isinstance(left, bool)
-                and isinstance(right, (int, float))
-                and not isinstance(right, bool)
-                and left == right
-            )
             compatible_month = (
                 field == "production_date"
                 and isinstance(left, str)
@@ -200,7 +193,7 @@ def _planner_nested_conflicts(
                 and left[:7] == right[:7]
                 and (len(left) == 7 or len(right) == 7)
             )
-            if not equal_numbers and not compatible_month and not _claim_matches_profile({field: left}, field, right):
+            if not compatible_month and not _claim_matches_profile({field: left}, field, right):
                 issue = {"field": field, "code": "ready_identity_evidence_conflict"}
                 if issue not in problems:
                     problems.append(issue)

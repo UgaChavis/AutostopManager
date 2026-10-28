@@ -117,6 +117,43 @@ def test_incompatible_semantic_values(field, left, right):
     assert identity.identity_values_agree(field, left, right) is False
 
 
+@pytest.mark.parametrize(
+    ("field", "left", "right", "agreement"),
+    [
+        ("power_kw", 18.4, 184, False),
+        ("power_hp", 14.5, 145, False),
+        ("displacement_cc", 199.5, 1995, False),
+        ("power_hp", 245, 245.0, True),
+        ("power_kw", "18.40", 18.4, True),
+        ("power_kw", "123456789012345678901234567890.0001", "123456789012345678901234567890.0002", False),
+        ("power_kw", "1e100000000000000000000000", "1e100000000000000000000000", False),
+        ("model_year", "2010", 2010, True),
+        ("model_year", 2010.0, 2010, False),
+        ("model_year", "2010.0", 2010, False),
+        ("transmission_speeds", "6", 6, True),
+        ("transmission_speeds", 6.0, 6, False),
+        ("transmission_speeds", "6.0", 6, False),
+        ("power_hp", True, 1, False),
+        ("power_hp", 0, 0, False),
+        ("power_hp", float("inf"), float("inf"), False),
+        ("options", ["AB", "C"], ["A", "BC"], False),
+        ("options", ["A", "B"], ["B", "A"], True),
+        ("options", [" A ", "b", "A"], ["B", "A"], True),
+        ("options", [], [], True),
+        ("options", ["  "], [], True),
+        ("options", [], ["A"], False),
+        ("options", "A,B", ["A", "B"], False),
+        ("options", ["A", True], ["A", "True"], False),
+    ],
+)
+def test_numeric_and_option_identity_values_use_typed_semantics(field, left, right, agreement):
+    assert identity.identity_values_agree(field, left, right) is agreement
+
+
+def test_oversized_numeric_identity_value_fails_closed():
+    assert identity.identity_values_agree("power_hp", 10**5000, 1) is False
+
+
 @pytest.mark.parametrize("caller_gears,provider_gears,disputed", [(6, "6", False), (8, "6", True)])
 def test_transmission_style_comparison_uses_source_gear_count(caller_gears, provider_gears, disputed):
     result = decode(

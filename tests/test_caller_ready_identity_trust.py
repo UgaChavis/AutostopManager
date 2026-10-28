@@ -915,6 +915,118 @@ def test_equivalent_nested_numeric_or_partial_date_facts_remain_valid(tmp_path, 
     assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
 
 
+@pytest.mark.parametrize("carrier", ["vehicle_profile", "family_candidates"])
+@pytest.mark.parametrize(
+    ("field", "outer", "nested"),
+    [
+        ("power_kw", 18.4, 184),
+        ("power_hp", 14.5, 145),
+        ("displacement_cc", 199.5, 1995),
+        ("options", ["AB", "C"], ["A", "BC"]),
+    ],
+)
+def test_nested_numeric_and_option_conflicts_fail_before_provider(tmp_path, monkeypatch, carrier, field, outer, nested):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("conflicting numeric or option facts must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("nested-typed-conflict-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO", field: outer, "vehicle_profile": {field: nested}}
+    identity = {carrier: profile if carrier == "vehicle_profile" else [profile]}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": identity}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["execution"]["network_calls"] == 0
+    assert any(
+        row["field"] == field and row["code"] == "ready_identity_evidence_conflict" for row in result["identity_errors"]
+    )
+
+
+def test_reordered_nested_options_are_compatible_for_planner(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("nested-options-agree-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO", "options": ["A", "B"], "vehicle_profile": {"options": ["B", "A"]}}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "outer", "claim"),
+    [
+        ("power_kw", 18.4, 184),
+        ("power_hp", 14.5, 145),
+        ("displacement_cc", 199.5, 1995),
+        ("options", ["AB", "C"], ["A", "BC"]),
+    ],
+)
+def test_ready_identity_cannot_hide_typed_evidence_conflict(field, outer, claim):
+    supplied = _forged_ready()
+    supplied["vehicle_profile"][field] = outer
+    supplied["field_evidence"].append({"field": field, "value": claim, "source": "NHTSA vPIC"})
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert accepted is None
+    assert any(row["field"] == field and row["code"] == "ready_identity_evidence_conflict" for row in errors)
+    merged = reconcile_vehicle_identity(_identifier(), [supplied])
+    assert merged["data"]["field_statuses"][field] == "disputed"
+    assert field not in merged["data"]["vehicle_profile"]
+
+
+@pytest.mark.parametrize(
+    ("field", "outer", "claim"),
+    [("power_hp", 245, 245.0), ("options", ["A", "B"], ["B", "A"]), ("options", [], [])],
+)
+def test_ready_identity_keeps_compatible_typed_evidence_as_unverified(field, outer, claim):
+    supplied = _forged_ready()
+    supplied["vehicle_profile"][field] = outer
+    supplied["field_evidence"].append({"field": field, "value": claim, "source": "NHTSA vPIC"})
+    accepted, errors = ready_identity(supplied, _identifier())
+    assert errors == []
+    assert accepted["vehicle_profile"][field] == outer
+    assert accepted["field_evidence"][-1]["source_kind"] == "caller"
+    assert accepted["parts_lookup_readiness"]["ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "left", "right", "disputed"),
+    [
+        ("power_hp", 14.5, 145, True),
+        ("displacement_cc", 199.5, 1995, True),
+        ("options", ["AB", "C"], ["A", "BC"], True),
+        ("options", ["A", "B"], ["B", "A"], False),
+        ("power_hp", 245, 245.0, False),
+    ],
+)
+def test_reconciliation_fastpath_uses_typed_numeric_and_option_values(field, left, right, disputed):
+    first = _forged_ready()
+    second = _forged_ready()
+    first["vehicle_profile"][field] = left
+    second["vehicle_profile"][field] = right
+    merged = reconcile_vehicle_identity(_identifier(), [first, second])
+    assert (merged["data"]["field_statuses"][field] == "disputed") is disputed
+    assert (field not in merged["data"]["vehicle_profile"]) is disputed
+
+
 def test_internal_planner_never_converts_input_readiness_to_write_permission(monkeypatch):
     import autostop_manager.catalog_adapters as adapters
 
