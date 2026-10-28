@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 from pathlib import Path
 import stat
@@ -105,6 +106,8 @@ def test_browser_normalization_fails_closed(payload: object, error: str) -> None
 def test_browser_marker_requires_root_owned_private_regular_file(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int] = []
     revision = "a" * 40
+    real_os_functions = (os.open, os.close, os.read, os.fstat)
+    monkeypatch.setattr(j1_browser, "os", SimpleNamespace(**vars(j1_browser.os)))
     monkeypatch.setattr(j1_browser.os, "open", lambda *_args: 42)
     monkeypatch.setattr(j1_browser.os, "read", lambda *_args: j1_browser.attestation_content(revision))
     monkeypatch.setattr(j1_browser.os, "close", lambda descriptor: closed.append(descriptor))
@@ -114,6 +117,7 @@ def test_browser_marker_requires_root_owned_private_regular_file(monkeypatch: py
         "fstat",
         lambda _descriptor: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0),
     )
+    assert (os.open, os.close, os.read, os.fstat) == real_os_functions
     assert j1_browser._isolation_verified("/run/j1-ready") is True
     assert closed == [42]
 
