@@ -400,7 +400,7 @@ def test_schema3_reopen_preserves_pending_events_unknown_send_and_pause(tmp_path
         assert restored.read_job(job["job_id"]) == before
         assert restored.require_open(event).message_id == 100
         assert restored.status()["execution_paused"] is True
-        assert restored.status()["schema_version"] == 5
+        assert restored.status()["schema_version"] == 6
         with pytest.raises(InboxError, match="inbox_effect_outcome_unknown"):
             restored.result(
                 **guard(job),

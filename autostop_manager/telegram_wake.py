@@ -2453,6 +2453,7 @@ class DurableWakeDispatcher:
                 code in {"codex_turn_start_rejected", "codex_turn_failed"}
                 and current.get("state") == "needs_review"
                 and current.get("execution_proof") == "not_started"
+                and not current.get("effects_review_required")
                 and not any(
                     effect.get("attempted") and (not effect.get("verified") or effect.get("kind") != "ack")
                     for effect in current.get("effects", [])

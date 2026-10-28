@@ -116,7 +116,7 @@ def test_reopen_adds_missing_index_without_changing_registry_or_version_contract
     # must leave queue identities, controls, jobs and generation intact.
     for _ in range(2):
         with TelegramInbox(path, clock=lambda: NOW) as restored:
-            assert restored._meta("schema_version") == "5"
+            assert restored._meta("schema_version") == "6"
             assert restored.generation == generation
             assert restored.resolve(event_id).message_id == 1
             assert restored.read_job(job["job_id"]) == job

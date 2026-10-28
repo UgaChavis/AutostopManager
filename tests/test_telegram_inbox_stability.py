@@ -437,7 +437,7 @@ def test_real_legacy_schema_upgrade_preserves_unknowns_without_mapping_mixed_his
     job_id = legacy_database(path, version)
     with TelegramInbox(path, clock=clock) as queue:
         old = queue.read_job(job_id)
-        assert queue.status()["schema_version"] == 5 and queue.status()["worker_protocol"] == 2
+        assert queue.status()["schema_version"] == 6 and queue.status()["worker_protocol"] == 2
         assert queue.generation == 7 and old["revision"] == 3 and old["lease"] == "old-lease"
         assert old["context_revision"] == 3 and old["turn_id"] == "old-turn"
         assert old["context_mode"] == "legacy" and old["deadline_at"] is None

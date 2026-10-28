@@ -22,8 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 5
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
+INBOX_SCHEMA_VERSION = 6
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6)
 WORKER_PROTOCOL_VERSION = 2
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
@@ -213,6 +213,7 @@ class TelegramInbox:
             );
             CREATE INDEX IF NOT EXISTS events_queue ON events(state, received_at);
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
+            CREATE INDEX IF NOT EXISTS events_open_peer_context ON events(peer_id,context_revision) WHERE state='open';
             CREATE INDEX IF NOT EXISTS events_retention_completed_at ON events(completed_at)
                 WHERE completed_at IS NOT NULL;
             CREATE TABLE IF NOT EXISTS effects (
@@ -292,20 +293,19 @@ class TelegramInbox:
                 "proof_at": "TEXT",
                 "context_mode": "TEXT NOT NULL DEFAULT 'legacy'",
                 "manual_recovery": "INTEGER NOT NULL DEFAULT 0",
+                "effects_review_required": "INTEGER NOT NULL DEFAULT 0",
             }
             for name, definition in additions.items():
                 if name not in columns:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS jobs_effects_review_peer ON jobs(peer_id) WHERE effects_review_required=1"
+            )
             control_columns = {row[1] for row in self._db.execute("PRAGMA table_info(client_controls)")}
             if "guidance_count" not in control_columns:
                 self._db.execute("ALTER TABLE client_controls ADD COLUMN guidance_count INTEGER NOT NULL DEFAULT 0")
                 self._db.execute("UPDATE client_controls SET guidance_count=1 WHERE guidance_pending=1")
-            # Older recovery admitted failed started turns based only on the
-            # Telegram ledger, which cannot exclude unknown CRM writes.
-            self._db.execute(
-                "UPDATE jobs SET state='needs_review',reason_code='failed_turn_effects_unreviewed' "
-                "WHERE state='failed_waiting_input' AND execution_proof IS NOT 'not_started'"
-            )
+            self._migrate_failed_waiters()
             retention_index = self._db.execute(
                 "SELECT sql FROM sqlite_master WHERE type='index' AND name='jobs_retention_updated_at'"
             ).fetchone()[0]
@@ -319,6 +319,52 @@ class TelegramInbox:
                 "UPDATE metadata SET value=? WHERE key='schema_version' AND value<>?",
                 (str(INBOX_SCHEMA_VERSION), str(INBOX_SCHEMA_VERSION)),
             )
+
+    def _migrate_failed_waiters(self) -> None:
+        """Fence unresolved original contexts without reviving completed history.
+
+        Old intake detached failed requests before claiming their replacement.
+        Recover those exact earlier contexts; preserve an already assigned
+        holder's lease, turn, execution proof and slot. Newest fences run first
+        so overlapping legacy failures share one valid review owner.
+        """
+        legacy = list(
+            self._db.execute(
+                "SELECT job_id,peer_id,context_revision FROM jobs WHERE state='failed_waiting_input' "
+                "AND execution_proof IS NOT 'not_started' ORDER BY context_revision DESC,created_at DESC,rowid DESC"
+            )
+        )
+        for failed in legacy:
+            affected = list(
+                self._db.execute(
+                    "SELECT sequence,job_id FROM events WHERE peer_id=? AND state='open' AND context_revision<=?",
+                    (failed["peer_id"], failed["context_revision"]),
+                )
+            )
+            if not affected:
+                continue
+            holders = set()
+            for event in affected:
+                holder = event["job_id"] or failed["job_id"]
+                if event["job_id"] is None:
+                    self._db.execute("UPDATE events SET job_id=? WHERE sequence=?", (holder, event["sequence"]))
+                holders.add(holder)
+            for holder in holders:
+                self._db.execute(
+                    "UPDATE jobs SET effects_review_required=1,revision=revision+1,updated_at=?,"
+                    "reason_code=CASE WHEN state='needs_review' THEN reason_code ELSE 'failed_turn_effects_unreviewed' END,"
+                    "state='needs_review' WHERE job_id=? AND effects_review_required=0",
+                    (self._now(), holder),
+                )
+            if failed["job_id"] not in holders:
+                # Review follows the actual event owner. Retire only the old
+                # empty fence, so a later explicit manual recovery survives a
+                # second restart; all historical proofs/effects stay intact.
+                self._db.execute(
+                    "UPDATE jobs SET state='retired',reason_code='failed_request_review_transferred' "
+                    "WHERE job_id=? AND state='failed_waiting_input'",
+                    (failed["job_id"],),
+                )
 
     def close(self) -> None:
         if self._closed:
@@ -1093,6 +1139,10 @@ class TelegramInbox:
         if control["state"] != "active":
             raise InboxError("inbox_client_" + control["state"])
         if self._db.execute(
+            "SELECT 1 FROM jobs WHERE peer_id=? AND effects_review_required=1 LIMIT 1", (peer_id,)
+        ).fetchone():
+            raise InboxError("inbox_resolution_review_required")
+        if self._db.execute(
             "SELECT 1 FROM effects WHERE peer_id=? AND attempted=1 AND verified=0 LIMIT 1", (peer_id,)
         ).fetchone():
             raise InboxError("inbox_effect_outcome_unknown")
@@ -1190,7 +1240,7 @@ class TelegramInbox:
             self._db.execute(
                 "SELECT job_id,peer_id,state,revision,lease,context_revision,instruction_revision,"
                 "thread_id,turn_id,reason_code,deadline_at,execution_revision,execution_proof,proof_at,"
-                "context_mode,manual_recovery FROM jobs "
+                "context_mode,manual_recovery,effects_review_required FROM jobs "
                 "WHERE rowid>? AND (state IN ('claimed','start_intent','running','needs_review') "
                 "OR (state='waiting_control' AND execution_proof IS NULL)) "
                 "ORDER BY rowid LIMIT ?",
@@ -1239,6 +1289,8 @@ class TelegramInbox:
         """A revocable write permit; delivery readback never requires this permit."""
 
         job = self._lease(job_id, lease, expected_revision)
+        if job["effects_review_required"]:
+            raise InboxError("inbox_resolution_review_required")
         if job["state"] != "running":
             raise InboxError("inbox_effect_state_invalid")
         self._require_execution(job)
@@ -1567,6 +1619,8 @@ class TelegramInbox:
 
     def start_intent(self, *, job_id: str, lease: str, expected_revision: int, thread_id: str) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
+        if job["effects_review_required"]:
+            raise InboxError("inbox_resolution_review_required")
         _token(thread_id, "inbox_thread_invalid")
         if job["state"] != "claimed":
             raise InboxError("inbox_start_state_invalid")
@@ -1602,7 +1656,12 @@ class TelegramInbox:
         if slot is None or slot["phase"] != "start_intent" or job["thread_id"] is None:
             raise InboxError("inbox_execution_slot_mismatch")
         with self._write():
-            self._transition(job_id, "running")
+            # Binding a transport fact cannot revoke an existing review hold.
+            self._transition(
+                job_id,
+                "needs_review" if job["state"] == "needs_review" else "running",
+                reason_code=job["reason_code"] if job["state"] == "needs_review" else None,
+            )
             self._db.execute("UPDATE jobs SET turn_id=? WHERE job_id=?", (turn_id, job_id))
             self._db.execute("UPDATE global_slot SET phase='running' WHERE job_id=?", (job_id,))
         return self.read_job(job_id)
@@ -1651,6 +1710,7 @@ class TelegramInbox:
         if (
             job["state"] != "needs_review"
             or job["execution_proof"] != "not_started"
+            or job["effects_review_required"]
             or self.execution_slot() is not None
         ):
             raise InboxError("inbox_failure_recovery_unsafe")
@@ -1906,6 +1966,8 @@ class TelegramInbox:
         guidance_revision: int | None = None,
     ) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
+        if job["effects_review_required"]:
+            raise InboxError("inbox_resolution_review_required")
         if job["state"] not in {"running", "needs_review"}:
             raise InboxError("inbox_result_state_invalid")
         self._event_ids(event_ids)
@@ -2015,6 +2077,7 @@ class TelegramInbox:
                 raise InboxError("inbox_retry_effects_present")
             state = "released"
         with self._write():
+            self._db.execute("UPDATE jobs SET effects_review_required=0 WHERE job_id=?", (job_id,))
             self._transition(job_id, state)
             new_lease = secrets.token_urlsafe(32)
             self._db.execute(

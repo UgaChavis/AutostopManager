@@ -298,7 +298,7 @@ def test_manual_result_cannot_release_slot_while_bridge_work_is_pending(monkeypa
         )
         with pytest.raises(bridge.BridgeError, match="inbox_execution_effect_active"):
             await bridge._handle_job_operation(
-                object(), object(), {"operation": "job_result", "job_id": "job-A"}, monitor
+                object(), object(), {"operation": "job_result", "job_id": "job-A", "receipt_keys": []}, monitor
             )
 
     asyncio.run(scenario())

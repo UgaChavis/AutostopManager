@@ -107,7 +107,7 @@ def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock:
     generation = first.generation
     assert first._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert first._db.execute("PRAGMA synchronous").fetchone()[0] == 2
-    assert first._meta("schema_version") == "5"
+    assert first._meta("schema_version") == "6"
     assert path.parent.stat().st_mode & 0o777 == 0o700
     for suffix in ("", "-wal", "-shm", ".lock"):
         assert Path(str(path) + suffix).stat().st_mode & 0o777 == 0o600
@@ -151,7 +151,7 @@ def test_schema_v1_upgrade_preserves_pending_identity_effects_context_and_pause(
         peer_context = old._peer_revision(1)
         windows = old.duty_windows()
     with TelegramInbox(path, clock=clock) as upgraded:
-        assert upgraded._meta("schema_version") == "5"
+        assert upgraded._meta("schema_version") == "6"
         assert upgraded.read_job(job["job_id"]) == before_job
         assert upgraded.events() == before_events
         assert upgraded.require_open(first).message_id == 1
@@ -171,7 +171,7 @@ def test_unknown_schema_is_rejected_before_registry_or_journal_mutations(tmp_pat
     path.parent.mkdir()
     with sqlite3.connect(path) as future:
         future.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        future.execute("INSERT INTO metadata VALUES ('schema_version','6')")
+        future.execute("INSERT INTO metadata VALUES ('schema_version','7')")
         future.execute("CREATE TABLE future_state (value TEXT)")
         future.execute("INSERT INTO future_state VALUES ('synthetic')")
         before = list(future.iterdump())
@@ -202,7 +202,7 @@ def test_failed_v1_upgrade_rolls_back_defaults_and_schema_version(tmp_path: Path
         assert list(unchanged.iterdump()) == before
         unchanged.execute("DROP TRIGGER fail_upgrade")
     with TelegramInbox(path, clock=clock) as recovered:
-        assert recovered._meta("schema_version") == "5"
+        assert recovered._meta("schema_version") == "6"
         assert recovered.require_open(event).message_id == 1
         assert recovered.status()["execution_paused"] is False
 
