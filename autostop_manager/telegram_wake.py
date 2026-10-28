@@ -2673,6 +2673,27 @@ class DurableWakeDispatcher:
         finally:
             self.active = False
 
+    async def pause_if_idle(self) -> None:
+        # This operation deliberately leaves the worker alive: persistent pause
+        # prevents new claims, without cancelling a turn or touching old jobs.
+        async with self.control_lock:
+            await self._read_status()
+            revision = self.inbox_status.get("execution_revision")
+            if type(revision) is not int or revision < 1:
+                raise WakeError("wake_job_status_invalid")
+            response = await self.jobs.request("job_execution_pause_if_idle", expected_revision=revision)
+            status = response.get("status")
+            if (
+                not isinstance(status, dict)
+                or status.get("execution_paused") is not True
+                or type(status.get("execution_revision")) is not int
+                or status["execution_revision"] < revision
+            ):
+                raise WakeError("wake_job_status_invalid")
+            self.inbox_status = status
+            self.inbox_status_at = asyncio.get_running_loop().time()
+            self.jobs.changed.set()
+
     async def pause(self, *, persist: bool = True) -> None:
         self.pause_requested = True
         self.enabled = False
@@ -2809,6 +2830,9 @@ class DurableWakeDispatcher:
                     response = self.status()
                 elif request == {"operation": "pause"}:
                     await self.pause()
+                    response = self.status()
+                elif request == {"operation": "pause-if-idle"}:
+                    await self.pause_if_idle()
                     response = self.status()
                 elif request == {"operation": "resume"}:
                     await self.resume_execution()
@@ -3046,6 +3070,7 @@ def main() -> int:
             "daemon",
             "status",
             "pause",
+            "pause-if-idle",
             "resume",
             "setup",
             "select-worker",

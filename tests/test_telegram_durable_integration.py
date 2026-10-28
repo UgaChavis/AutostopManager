@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import struct
+import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -873,5 +874,152 @@ def test_paused_operator_finishes_terminal_job_with_verified_effect_and_new_cont
                 await dispatcher.resume_execution()
                 await until(lambda: dispatcher.status()["ready"])
                 assert runtime.client.sent == 2 and server.counter == 0
+
+    asyncio.run(scenario())
+
+
+def test_pause_if_idle_via_two_ipc_sockets_and_client_process(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(901))
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            socket = tmp_path / "wake.sock"
+            async with await asyncio.start_unix_server(dispatcher.serve, path=str(socket)):
+                script = (
+                    "import asyncio,json,sys; from pathlib import Path; "
+                    "from autostop_manager.telegram_wake import local_request; "
+                    'print(json.dumps(asyncio.run(local_request({"operation":"pause-if-idle"}, Path(sys.argv[1])))))'
+                )
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(socket),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+                assert process.returncode == 0, stderr.decode()
+                assert json.loads(stdout)["execution_paused"] is True
+                assert runtime.inbox.status()["execution_paused"] is True
+                assert runtime.inbox.resolve(event).message_id == 901
+                assert runtime.inbox.status()["global_slot"] is None
+                result = await runtime.jobs.request(
+                    "job_claim",
+                    instruction_root=str(bundle),
+                    instruction_revision=REVISION,
+                    worker_protocol=wake.WORKER_PROTOCOL,
+                )
+                assert result["job"] is None
+                assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
+
+
+def test_pause_if_idle_busy_over_ipc_preserves_running_job(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(902))
+            job = await claim_running(runtime, bundle)
+            before = runtime.inbox.read_job(job["job_id"])
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            socket = tmp_path / "wake.sock"
+            async with await asyncio.start_unix_server(dispatcher.serve, path=str(socket)):
+                result = await wake.local_request({"operation": "pause-if-idle"}, socket)
+                assert result == {"ok": False, "error": "inbox_execution_slot_occupied"}
+                assert runtime.inbox.read_job(job["job_id"]) == before
+                assert runtime.inbox.status()["execution_paused"] is False
+                assert runtime.inbox.resolve(event).message_id == 902
+                assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
+
+
+def test_pause_if_idle_old_bridge_rejects_without_fallback(tmp_path, bundle, monkeypatch):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(903))
+            original = runtime.jobs.request
+            calls = []
+
+            async def old_bridge(operation, **arguments):
+                calls.append(operation)
+                if operation == "job_execution_pause_if_idle":
+                    raise wake.WakeError("operation_not_supported")
+                return await original(operation, **arguments)
+
+            monkeypatch.setattr(runtime.jobs, "request", old_bridge)
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            with pytest.raises(wake.WakeError, match="operation_not_supported"):
+                await dispatcher.pause_if_idle()
+            assert calls == ["job_status", "job_execution_pause_if_idle"]
+            assert runtime.inbox.status()["execution_paused"] is False
+            assert runtime.inbox.resolve(event).message_id == 903
+            assert not dispatcher.pause_requested and dispatcher.enabled
+            assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
+
+
+def test_pause_if_idle_lost_reply_is_not_retried(tmp_path, bundle, monkeypatch):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(904))
+            original = runtime.jobs.request
+            calls = []
+
+            async def lost_reply(operation, **arguments):
+                calls.append(operation)
+                result = await original(operation, **arguments)
+                if operation == "job_execution_pause_if_idle":
+                    raise wake.TransportLost("wake_bridge_disconnected")
+                return result
+
+            monkeypatch.setattr(runtime.jobs, "request", lost_reply)
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            with pytest.raises(wake.TransportLost):
+                await dispatcher.pause_if_idle()
+            assert calls == ["job_status", "job_execution_pause_if_idle"]
+            assert runtime.inbox.status()["execution_paused"] is True
+            assert runtime.inbox.resolve(event).message_id == 904
+            assert not dispatcher.pause_requested and dispatcher.enabled
+            assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
+
+
+def test_pause_claim_concurrent_ipc_preserves_event_and_slot(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(905))
+            revision = runtime.inbox.status()["execution_revision"]
+            claim, pause = await asyncio.gather(
+                runtime.jobs.request(
+                    "job_claim",
+                    instruction_root=str(bundle),
+                    instruction_revision=REVISION,
+                    worker_protocol=wake.WORKER_PROTOCOL,
+                ),
+                runtime.jobs.request("job_execution_pause_if_idle", expected_revision=revision),
+                return_exceptions=True,
+            )
+            assert not isinstance(claim, Exception)
+            job = claim["job"]
+            if job is None:
+                assert not isinstance(pause, Exception)
+                assert pause["status"]["execution_paused"] is True
+                assert runtime.inbox.status()["global_slot"] is None
+            else:
+                assert isinstance(pause, wake.WakeError)
+                assert str(pause) == "inbox_execution_slot_occupied"
+                assert runtime.inbox.status()["execution_paused"] is False
+                assert runtime.inbox.status()["global_slot"]["job_id"] == job["job_id"]
+                assert runtime.inbox.read_job(job["job_id"])["event_ids"] == [event]
+            assert runtime.inbox.resolve(event).message_id == 905
+            assert runtime.client.sent == 0
 
     asyncio.run(scenario())

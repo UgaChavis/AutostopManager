@@ -4450,6 +4450,10 @@ async def _handle_job_control(
             "ok": True,
             **inbox.active_job_page(limit=request.get("limit", 50), after_job_id=request.get("after_job_id")),
         }
+    if operation == "job_execution_pause_if_idle":
+        status = inbox.pause_execution_if_idle(expected_revision=_job_revision(request.get("expected_revision")))
+        monitor.changed()
+        return {"ok": True, "status": status}
     if operation == "job_execution_set":
         if type(request.get("paused")) is not bool:
             raise BridgeError("job_execution_paused_invalid")

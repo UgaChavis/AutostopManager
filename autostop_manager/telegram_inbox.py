@@ -879,6 +879,11 @@ class TelegramInbox:
         now = self._now()
         deadline = _timestamp(datetime.fromisoformat(now) + timedelta(seconds=REQUEST_DEADLINE_SECONDS))
         with self._write():
+            # Recheck under the same write lock used by pause-if-idle.
+            if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
+                return None
+            if self._db.execute("SELECT 1 FROM global_slot WHERE singleton=1").fetchone():
+                return None
             self._db.execute(
                 "INSERT INTO jobs(job_id,peer_id,state,revision,lease,context_revision,instruction_root,"
                 "instruction_revision,created_at,updated_at,deadline_at,execution_revision,context_mode) "
@@ -1694,6 +1699,21 @@ class TelegramInbox:
             else:
                 self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (now,))
             self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
+        return self.status()
+
+    def pause_execution_if_idle(self, *, expected_revision: int) -> dict[str, Any]:
+        """Pause only if the slot is empty, atomically with claiming work."""
+        _positive(expected_revision, "inbox_execution_revision_invalid")
+        with self._write():
+            if int(self._meta("execution_revision")) != expected_revision:
+                raise InboxError("inbox_execution_revision_conflict")
+            if self._db.execute("SELECT 1 FROM global_slot WHERE singleton=1").fetchone():
+                raise InboxError("inbox_execution_slot_occupied")
+            if self._compatibility_hold():
+                raise InboxError("inbox_legacy_execution_unproven")
+            if self._meta("execution_paused") != "1":
+                self._db.execute("UPDATE metadata SET value='1' WHERE key='execution_paused'")
+                self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='execution_revision'")
         return self.status()
 
     def set_execution_paused(self, *, paused: bool, expected_revision: int) -> dict[str, Any]:
