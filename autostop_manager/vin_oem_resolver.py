@@ -659,8 +659,14 @@ def _identity_with_tecdoc_selection(identity: dict[str, Any], selection: dict[st
 def _positive_tecdoc_id(value: Any) -> str | None:
     if isinstance(value, bool):
         return None
-    text = str(value or "").strip()
-    return text if text.isascii() and text.isdigit() and int(text) > 0 else None
+    try:
+        text = str(value or "").strip()
+        if not text.isascii() or not text.isdigit():
+            return None
+        number = int(text)
+        return str(number) if number > 0 else None
+    except ValueError:
+        return None
 
 
 def _canonical_vehicle_type(value: Any) -> str:
@@ -718,7 +724,7 @@ def _flat_tree_nodes(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, An
             or (raw_path is not None and not isinstance(raw_path, str))
         ):
             return None
-        node = {
+        node: dict[str, Any] = {
             "id": node_id,
             "title": _compact(name),
             "parent": parent,
@@ -788,6 +794,7 @@ def _tree_node_resolution(
     all_nodes: dict[str, dict[str, Any]] = {}
     legacy_parents: dict[str, set[str]] = {}
     legacy_titles: dict[str, set[str]] = {}
+    legacy_nonleaves: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -799,10 +806,12 @@ def _tree_node_resolution(
                 current = all_nodes.get(node_id)
                 if current is None or depth < current["depth"]:
                     all_nodes[node_id] = {"id": node_id, "title": title, "depth": depth, "source_field": id_key}
-                if not any(
+                if any(
                     _positive_tecdoc_id(row.get(deeper_id)) and _compact(row.get(deeper_text))
                     for deeper_text, deeper_id in levels[:depth]
                 ):
+                    legacy_nonleaves.add(node_id)
+                else:
                     # Auto-match only the most specific node in this path.
                     nodes[node_id] = all_nodes[node_id]
         previous_id = None
@@ -816,10 +825,14 @@ def _tree_node_resolution(
 
     parsed_flat = _flat_tree_nodes(rows)
     flat, parents = parsed_flat if parsed_flat is not None else ({}, set())
-    invalid_flat = parsed_flat is None or any(
-        (node_id in legacy_titles and legacy_titles[node_id] != {node["title"].casefold()})
-        or (node_id in legacy_parents and legacy_parents[node_id] != {node["parent"]})
-        for node_id, node in flat.items()
+    invalid_flat = (
+        parsed_flat is None
+        or any(len(titles) > 1 for titles in legacy_titles.values())
+        or any(
+            (node_id in legacy_titles and legacy_titles[node_id] != {node["title"].casefold()})
+            or (node_id in legacy_parents and legacy_parents[node_id] != {node["parent"]})
+            for node_id, node in flat.items()
+        )
     )
     if invalid_flat:
         return {
@@ -829,13 +842,14 @@ def _tree_node_resolution(
             "category_queryable": False,
             "category_unresolved": True,
             "candidate_node_ids": [],
-            "reason": "Flat TecDoc tree has invalid or conflicting nodes.",
+            "reason": "TecDoc tree has invalid or conflicting nodes.",
         }
+    nonleaves = parents | legacy_nonleaves
     for node_id, node in flat.items():
         all_nodes[node_id] = node
-        if node_id not in parents:
+        if node_id not in nonleaves:
             nodes[node_id] = node
-    for parent_id in parents:
+    for parent_id in nonleaves:
         nodes.pop(parent_id, None)
 
     if selected_id not in (None, ""):

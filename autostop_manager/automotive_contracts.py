@@ -656,7 +656,11 @@ def validate_catalog_context(operation: str, params: dict[str, Any], context: An
         node = context.get("tree_node")
         if not isinstance(node, dict) or not catalog_ref(node, namespace="tecdoc", entity_kind="tree_node"):
             return ["invalid_tree_node_reference"]
-        if str(node["id"]) != str(params.get("strId")) or node.get("parent") != modification:
+        if (
+            str(node["id"]) != str(params.get("strId"))
+            or node.get("parent") != modification
+            or node.get("carType") != modification.get("carType")
+        ):
             return ["tree_node_reference_mismatch"]
         if not isinstance(node.get("tree_sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", node["tree_sha256"]) is None:
             return ["tree_evidence_missing"]

@@ -173,3 +173,69 @@ def test_partial_flat_fields_cannot_be_hidden_inside_a_legacy_row(partial):
 def test_legacy_row_with_parent_metadata_keeps_legacy_selection():
     legacy = {"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 100259, "STR_ID_PARENT": 1}
     assert _resolve([legacy], selected=100259)["data"]["category"] == "100259"
+
+
+def test_mixed_tree_does_not_treat_flat_root_as_a_leaf_when_legacy_row_has_child():
+    legacy = {
+        "ROOT_NODE_TEXT": "Фильтр",
+        "ROOT_NODE_STR_ID": 100005,
+        "NODE_1_TEXT": "Масляный фильтр",
+        "NODE_1_STR_ID": 100259,
+    }
+    for rows in ([ROOT, legacy], [legacy, ROOT]):
+        assert _resolve(rows, intent="Фильтр")["data"]["category_queryable"] is False
+        assert _resolve(rows, selected=100005, intent="Фильтр")["data"]["category"] == "100005"
+        assert _resolve(rows)["data"]["category"] == "100259"
+
+
+def test_legacy_root_is_not_auto_selected_when_another_row_contains_a_child():
+    root_only = {"ROOT_NODE_TEXT": "Фильтр", "ROOT_NODE_STR_ID": 100005}
+    path = {**root_only, "NODE_1_TEXT": "Масляный фильтр", "NODE_1_STR_ID": 100259}
+    for rows in ([root_only, path], [path, root_only]):
+        assert _resolve(rows, intent="Фильтр")["data"]["category_queryable"] is False
+
+
+def test_leading_zero_aliases_cannot_hide_conflicting_flat_or_legacy_nodes():
+    conflicting = {**LEAF, "STR_ID": "0100259", "STR_NODE_NAME": "Воздушный фильтр"}
+    for rows in ([ROOT, LEAF, conflicting], [ROOT, conflicting, LEAF]):
+        assert _resolve(rows, selected=100259)["data"]["category_queryable"] is False
+    legacy_conflicting = {"NODE_3_TEXT": "Воздушный фильтр", "NODE_3_STR_ID": "0100259"}
+    assert _resolve([ROOT, LEAF, legacy_conflicting], selected=100259)["data"]["category_queryable"] is False
+
+
+def test_matching_leading_zero_aliases_resolve_to_one_canonical_id():
+    matching = {**LEAF, "STR_ID": "0100259", "STR_ID_PARENT": "0100005"}
+    assert _resolve([ROOT, LEAF, matching], selected="0100259")["data"]["category"] == "100259"
+
+
+@pytest.mark.parametrize("field", ["STR_ID", "STR_ID_PARENT", "STR_LEVEL"])
+def test_unreasonably_long_flat_numeric_fields_fail_closed_without_an_exception(field):
+    too_long = {**LEAF, field: "9" * 5000}
+    assert _resolve([ROOT, too_long], selected=100259)["data"]["category_queryable"] is False
+
+
+def test_unreasonably_long_selected_and_legacy_ids_do_not_raise():
+    assert _resolve([ROOT, LEAF], selected="9" * 5000)["data"]["category_queryable"] is False
+    legacy = {"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": "9" * 5000}
+    assert _resolve([legacy], selected="9" * 5000)["data"]["category_queryable"] is False
+
+
+def test_legacy_duplicate_id_with_conflicting_names_never_selects_first():
+    first = {"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 100259}
+    second = {"NODE_3_TEXT": "Воздушный фильтр", "NODE_3_STR_ID": "0100259"}
+    for rows in ([first, second], [second, first]):
+        assert _resolve(rows)["data"]["category_queryable"] is False
+        assert _resolve(rows, selected=100259)["data"]["category_queryable"] is False
+
+
+@pytest.mark.parametrize("node_type", ["CV", "Motorcycle"])
+def test_article_context_rejects_node_vehicle_type_from_another_catalog(node_type):
+    node = _resolve([ROOT, LEAF], selected=100259)["data"]["nodes"][0]
+    wrong_type = {**node, "carType": node_type}
+    context = {"modification": MODIFICATION, "tree_node": wrong_type}
+    assert validate_catalog_context("articles", {"carId": "13895", "carType": "PC", "strId": "100259"}, context) == [
+        "tree_node_reference_mismatch"
+    ]
+    assert validate_catalog_context("articles", {"carId": "13895", "strId": "100259"}, context) == [
+        "tree_node_reference_mismatch"
+    ]
