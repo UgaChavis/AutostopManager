@@ -202,3 +202,92 @@ def test_malformed_alias_on_a_reused_selected_id_blocks_it():
     assert result["status"] == "ambiguous_vehicle_modification"
     assert result["selected_profile"] is None
     assert [operation for operation, _ in calls] == ["getMakes", "getModels"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("selected_id", [20, 21])
+def test_nameless_conflicting_model_ids_invalidate_either_selected_id(reverse, selected_id):
+    models = [{"modelId": selected_id, "modelName": "KUGA"}, {"modelId": 20, "MOD_ID": 21}]
+    if reverse:
+        models.reverse()
+    lookup, calls = _directory([{"makeId": 36, "makeName": "Ford"}], models)
+    result = resolve_tecdoc_vehicle(_ford("Kuga"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "ambiguous_vehicle_modification"
+    assert result["provider_outcome"] == "ambiguous_catalogue_reference_aliases"
+    assert result["selected_profile"] is None
+    assert any("conflicting_catalogue_reference_ids" in row.get("reference_errors", []) for row in result["choices"])
+    assert [operation for operation, _ in calls] == ["getMakes", "getModels"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("selected_id", [36, 37])
+def test_nameless_conflicting_make_ids_invalidate_either_selected_id(reverse, selected_id):
+    makes = [{"makeId": selected_id, "makeName": "Ford"}, {"makeId": 36, "MFA_ID": 37}]
+    if reverse:
+        makes.reverse()
+    lookup, calls = _directory(makes, [{"modelId": 20, "modelName": "KUGA"}])
+    result = resolve_tecdoc_vehicle(_ford("Kuga"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "ambiguous_vehicle_modification"
+    assert result["provider_outcome"] == "ambiguous_catalogue_reference_aliases"
+    assert result["selected_profile"] is None
+    assert any("conflicting_catalogue_reference_ids" in row.get("reference_errors", []) for row in result["choices"])
+    assert [operation for operation, _ in calls] == ["getMakes"]
+
+
+@pytest.mark.parametrize("bad_name", [["secret"], {"private": "secret"}, True, " \t\u00a0 ", None])
+@pytest.mark.parametrize("kind", ["make", "model"])
+def test_nameless_invalid_name_on_selected_reference_stops_navigation(kind, bad_name):
+    makes = [{"makeId": 36, "makeName": "Ford"}]
+    models = [{"modelId": 20, "modelName": "KUGA"}]
+    if kind == "make":
+        makes.append({"makeId": 36, "makeName": bad_name})
+    else:
+        models.append({"modelId": 20, "modelName": bad_name})
+    lookup, calls = _directory(makes, models)
+    result = resolve_tecdoc_vehicle(_ford("Kuga"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "ambiguous_vehicle_modification"
+    assert result["provider_outcome"] == "ambiguous_catalogue_reference_aliases"
+    assert result["selected_profile"] is None
+    assert any("invalid_catalogue_reference_name" in row.get("reference_errors", []) for row in result["choices"])
+    assert [operation for operation, _ in calls] == (["getMakes"] if kind == "make" else ["getMakes", "getModels"])
+    assert "secret" not in str(result)
+
+
+@pytest.mark.parametrize("kind", ["make", "model"])
+def test_unrelated_nameless_conflicting_or_bad_rows_do_not_block_matching_reference(kind):
+    makes = [{"makeId": 36, "makeName": "Ford"}]
+    models = [{"modelId": 20, "modelName": "KUGA"}]
+    if kind == "make":
+        makes.extend([{"makeId": 90, "MFA_ID": 91}, {"makeId": 92, "makeName": ["invalid"]}])
+    else:
+        models.extend([{"modelId": 90, "MOD_ID": 91}, {"modelId": 92, "modelName": ["invalid"]}])
+    lookup, calls = _directory(makes, models)
+    result = resolve_tecdoc_vehicle(_ford("Kuga"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "matched"
+    assert result["selected_profile"]["tecdoc_car_id"] == 101
+    assert calls[-1][0] == "getCars"
+    assert calls[-1][1]["provider_parameters"]["modelId"] == 20
+    assert result["exact_applicability_confirmed"] is False
+
+
+def test_unrelated_nameless_conflict_preserves_absent_model_result():
+    models = [{"modelId": 20, "modelName": "KUGA"}, {"modelId": 90, "MOD_ID": 91}]
+    lookup, calls = _directory([{"makeId": 36, "makeName": "Ford"}], models)
+    result = resolve_tecdoc_vehicle(_ford("Mustang Mach-E"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "no_catalog_vehicle"
+    assert result["selected_profile"] is None
+    assert [operation for operation, _ in calls] == ["getMakes", "getModels"]
+
+
+@pytest.mark.parametrize("kind", ["make", "model"])
+def test_duplicate_id_without_name_or_bad_alias_does_not_block_valid_reference(kind):
+    makes = [{"makeId": 36, "makeName": "Ford"}]
+    models = [{"modelId": 20, "modelName": "KUGA"}]
+    if kind == "make":
+        makes.append({"makeId": 36})
+    else:
+        models.append({"modelId": 20})
+    lookup, calls = _directory(makes, models)
+    result = resolve_tecdoc_vehicle(_ford("Kuga"), vehicle_type="PC", call=lookup)
+    assert result["status"] == "matched"
+    assert calls[-1][0] == "getCars"

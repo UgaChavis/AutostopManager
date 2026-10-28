@@ -242,6 +242,7 @@ def _directory_aliases(
             identifiers.append(identifier)
     names: dict[str, str] = {}
     invalid_name = False
+    has_name_field = any(key in raw for key in name_keys)
     for key in dict.fromkeys(name_keys):
         value = raw.get(key)
         if value is None or (isinstance(value, str) and not value.strip()):
@@ -257,7 +258,7 @@ def _directory_aliases(
         errors.append("invalid_catalogue_reference_id")
     if len(identifiers) > 1:
         errors.append("conflicting_catalogue_reference_ids")
-    if invalid_name:
+    if invalid_name or (has_name_field and not names):
         errors.append("invalid_catalogue_reference_name")
     return identifiers or [None], names, errors
 
@@ -282,13 +283,20 @@ def _directory_rows(call: dict[str, Any], kind: str) -> list[dict[str, Any]]:
         "description",
     )
     rows: dict[tuple[int | None, str], dict[str, Any]] = {}
+    unsafe_references: dict[int, set[str]] = {}
     for raw in _records(call.get("payload")):
         identifiers, names, errors = _directory_aliases(raw, id_keys, name_keys)
         for identifier in identifiers:
+            if identifier is not None and errors:
+                unsafe_references.setdefault(identifier, set()).update(errors)
             for normalized_name, name in names.items():
                 row = rows.setdefault((identifier, normalized_name), {"id": identifier, "name": name})
                 if errors:
                     row["reference_errors"] = sorted(set(row.get("reference_errors", [])) | set(errors))
+    for row in rows.values():
+        reference_errors = unsafe_references.get(row["id"])
+        if reference_errors:
+            row["reference_errors"] = sorted(set(row.get("reference_errors", [])) | reference_errors)
     return list(rows.values())
 
 
