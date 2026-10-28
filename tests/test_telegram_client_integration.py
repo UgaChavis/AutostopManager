@@ -265,8 +265,8 @@ def test_private_client_owner_name_text_and_forward_cannot_override_role_or_excl
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("peer", [CLIENT, OWNER], ids=["client", "former-owner"])
-def test_no_work_sender_can_dispatch_owner_command_through_compat_route(tmp_path, bundle, peer):
+@pytest.mark.parametrize("peer", [CLIENT, OTHER], ids=["client", "other-client"])
+def test_no_client_can_dispatch_owner_command_through_compat_route(tmp_path, bundle, peer):
     async def scenario():
         async with bridge_runtime(tmp_path) as runtime:
             event = runtime.monitor.record(runtime.client.inbound(100, peer=peer, text="/automations"))
