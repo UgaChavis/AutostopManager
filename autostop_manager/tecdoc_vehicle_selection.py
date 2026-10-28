@@ -215,13 +215,51 @@ def _records(payload: Any, *, depth: int = 0) -> list[dict[str, Any]]:
     return [payload]
 
 
-def _first(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    return next((row[key] for key in keys if _present(row.get(key))), None)
-
-
 def _id(value: Any) -> int | None:
     text = str(value or "").strip()
-    return int(text) if text.isascii() and text.isdigit() and int(text) > 0 else None
+    if not text.isascii() or not text.isdigit():
+        return None
+    try:
+        identifier = int(text)
+    except ValueError:
+        return None
+    return identifier if identifier > 0 else None
+
+
+def _directory_aliases(
+    raw: dict[str, Any], id_keys: tuple[str, ...], name_keys: tuple[str, ...]
+) -> tuple[list[int | None], dict[str, str], list[str]]:
+    identifiers: list[int | None] = []
+    invalid_id = False
+    for key in dict.fromkeys(id_keys):
+        value = raw.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        identifier = _id(value)
+        if identifier is None:
+            invalid_id = True
+        elif identifier not in identifiers:
+            identifiers.append(identifier)
+    names: dict[str, str] = {}
+    invalid_name = False
+    for key in dict.fromkeys(name_keys):
+        value = raw.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            invalid_name = True
+            continue
+        normalized = " ".join(str(value).split()).casefold()
+        if normalized:
+            names.setdefault(normalized, str(value))
+    errors = []
+    if invalid_id or not identifiers:
+        errors.append("invalid_catalogue_reference_id")
+    if len(identifiers) > 1:
+        errors.append("conflicting_catalogue_reference_ids")
+    if invalid_name:
+        errors.append("invalid_catalogue_reference_name")
+    return identifiers or [None], names, errors
 
 
 def _directory_rows(call: dict[str, Any], kind: str) -> list[dict[str, Any]]:
@@ -243,13 +281,14 @@ def _directory_rows(call: dict[str, Any], kind: str) -> list[dict[str, Any]]:
         "NAME",
         "description",
     )
-    rows: dict[tuple[int, str], dict[str, Any]] = {}
+    rows: dict[tuple[int | None, str], dict[str, Any]] = {}
     for raw in _records(call.get("payload")):
-        identifier, name = _id(_first(raw, id_keys)), _first(raw, name_keys)
-        if identifier and name:
-            normalized_name = " ".join(str(name).split()).casefold()
-            if normalized_name:
-                rows.setdefault((identifier, normalized_name), {"id": identifier, "name": str(name)})
+        identifiers, names, errors = _directory_aliases(raw, id_keys, name_keys)
+        for identifier in identifiers:
+            for normalized_name, name in names.items():
+                row = rows.setdefault((identifier, normalized_name), {"id": identifier, "name": name})
+                if errors:
+                    row["reference_errors"] = sorted(set(row.get("reference_errors", [])) | set(errors))
     return list(rows.values())
 
 
@@ -257,13 +296,18 @@ def _conflicting_directory_references(
     directory: list[dict[str, Any]], selected: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Keep matching references and all their names if any selected ID conflicts."""
-    selected_ids = {row["id"] for row in selected}
+    selected_ids = {row["id"] for row in selected if row["id"] is not None}
     counts: dict[int, int] = {}
     for row in directory:
         if row["id"] in selected_ids:
             counts[row["id"]] = counts.get(row["id"], 0) + 1
     ambiguous_ids = {identifier for identifier, count in counts.items() if count > 1}
-    return [row for row in directory if row["id"] in selected_ids] if ambiguous_ids else []
+    unsafe_alias = any(row.get("reference_errors") for row in selected) or any(
+        row.get("reference_errors") for row in directory if row["id"] in selected_ids
+    )
+    if not ambiguous_ids and not unsafe_alias:
+        return []
+    return [row for row in directory if row["id"] in selected_ids or (row["id"] is None and row in selected)]
 
 
 def _model_family(value: Any) -> str:
@@ -427,7 +471,9 @@ def _navigate_catalogue(
     if conflicting_makes:
         return {
             "status": "ambiguous_vehicle_modification",
-            "provider_outcome": "conflicting_catalogue_reference_names",
+            "provider_outcome": "ambiguous_catalogue_reference_aliases"
+            if any(row.get("reference_errors") for row in conflicting_makes)
+            else "conflicting_catalogue_reference_names",
             "missing_fields": ["make"],
             "choices": conflicting_makes,
         }
@@ -454,7 +500,9 @@ def _navigate_catalogue(
     if conflicting_models:
         return {
             "status": "ambiguous_vehicle_modification",
-            "provider_outcome": "conflicting_catalogue_reference_names",
+            "provider_outcome": "ambiguous_catalogue_reference_aliases"
+            if any(row.get("reference_errors") for row in conflicting_models)
+            else "conflicting_catalogue_reference_names",
             "missing_fields": ["series"],
             "choices": conflicting_models,
         }
