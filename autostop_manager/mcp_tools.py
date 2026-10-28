@@ -80,6 +80,8 @@ def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
     codes = (
         "invalid_ready_identity",
         "invalid_vehicle_profile",
+        "invalid_vehicle_profile_field",
+        "invalid_vehicle_family_candidates",
         "ready_identity_binding_mismatch",
         "ready_identity_binding_conflict",
         "provider_identifier_unverified",
@@ -103,6 +105,20 @@ def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
         "power_kw",
         "production_date",
         "vehicle_profile",
+        "model_family",
+        "platform",
+        "series2",
+        "production_year",
+        "transmission_speeds",
+        "options",
+        "make_display",
+        "model_display",
+        "engine_model",
+        "gearbox_model",
+        "engine_code",
+        "engine_displacement_cc",
+        "horsepower",
+        "engine_power_kw",
     )
     safe_errors = [
         {
@@ -133,6 +149,70 @@ def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
         "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
         "execution": {"network_calls": 0},
     }
+
+
+def _validated_planner_profile(
+    identifier: str, profile: dict[str, Any], *, depth: int = 0
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Normalize caller profile facts without granting trust or leaking their values."""
+    from .automotive_contracts import identity_errors
+    from .vehicle_identity_inputs import ALIASES, CONTEXT_FIELDS, EVIDENCE_FIELD_ALIASES, PROFILE_KEYS
+    from .vehicle_identity_inputs import validate_identity_input
+
+    if depth > 8:
+        return {}, [{"field": "vehicle_profile", "code": "invalid_vehicle_profile_field"}]
+    problems: list[dict[str, str]] = []
+    nested_facts: dict[str, Any] = {}
+    for key in PROFILE_KEYS:
+        nested = profile.get(key)
+        if nested is None or nested == "":
+            continue
+        if isinstance(nested, str):
+            try:
+                nested = json.loads(nested)
+            except (ValueError, TypeError):
+                nested = None
+        if not isinstance(nested, dict):
+            problems.append({"field": "vehicle_profile", "code": "invalid_vehicle_profile_field"})
+            continue
+        clean_nested, nested_errors = _validated_planner_profile(identifier, nested, depth=depth + 1)
+        nested_facts.update(clean_nested)
+        problems.extend(nested_errors)
+
+    prepared = validate_identity_input(identifier, profile)
+    problems.extend(
+        {"field": str(issue.get("field") or "vehicle_profile"), "code": "invalid_vehicle_profile_field"}
+        for issue in prepared["errors"]
+    )
+    normalized = {key: value for key, value in prepared["context"].items() if key in CONTEXT_FIELDS}
+    for key, value in nested_facts.items():
+        normalized.setdefault(key, value)
+
+    for alias, canonical in EVIDENCE_FIELD_ALIASES.items():
+        if alias in ALIASES or alias not in profile:
+            continue
+        value = profile[alias]
+        result = validate_identity_input(identifier, {canonical: value})
+        if result["errors"]:
+            problems.append({"field": alias, "code": "invalid_vehicle_profile_field"})
+        elif canonical in result["context"]:
+            normalized.setdefault(canonical, result["context"][canonical])
+
+    for field in ("model_family", "platform", "series2"):
+        value = profile.get(field)
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            problems.append({"field": field, "code": "invalid_vehicle_profile_field"})
+        elif value.strip():
+            normalized[field] = value.strip()
+    if not problems:
+        envelope = {"vehicle_profile": profile}
+        problems.extend(
+            {"field": str(issue.get("field") or "vehicle_profile"), "code": "ready_identity_evidence_conflict"}
+            for issue in identity_errors(envelope, envelope)
+        )
+    return normalized, problems
 
 
 class _OriginalJsonMetadata(FuncMetadata):
@@ -1269,6 +1349,25 @@ def register_manager_tools(  # noqa: C901
         data = data if isinstance(data, dict) else vehicle_identity
         if data.get("vehicle_profile") is not None and not isinstance(data.get("vehicle_profile"), dict):
             problems.append({"field": "vehicle_profile", "code": "invalid_vehicle_profile"})
+        normalized_profile = None
+        if isinstance(data.get("vehicle_profile"), dict):
+            normalized_profile, profile_errors = _validated_planner_profile(identifier, data["vehicle_profile"])
+            problems.extend(profile_errors)
+        candidates = data.get("family_candidates")
+        normalized_families = []
+        if candidates is not None:
+            if not isinstance(candidates, list):
+                problems.append({"field": "vehicle_identity", "code": "invalid_vehicle_family_candidates"})
+            else:
+                for candidate in candidates:
+                    if not isinstance(candidate, dict):
+                        problems.append({"field": "vehicle_identity", "code": "invalid_vehicle_family_candidates"})
+                        continue
+                    normalized, family_errors = _validated_planner_profile(identifier, candidate)
+                    normalized_families.append(normalized)
+                    problems.extend(family_errors)
+        if problems:
+            return _invalid_planner_identity(problems)
         problems.extend(identity_errors(vehicle_identity, data))
         supplied_bindings = (vehicle_identity.get("input_binding"), data.get("input_binding"))
         identity_identifier = data.get("identifier")
@@ -1285,6 +1384,13 @@ def register_manager_tools(  # noqa: C901
             identity = caller_supplied_claims(data)
         except ValueError:
             return _invalid_planner_identity([{"field": "vehicle_identity", "code": "caller_claims_too_deep"}])
+        if normalized_profile is not None:
+            identity["vehicle_profile"] = {**identity["vehicle_profile"], **normalized_profile}
+        if isinstance(candidates, list):
+            identity["family_candidates"] = [
+                {**candidate, **normalized}
+                for candidate, normalized in zip(identity["family_candidates"], normalized_families, strict=True)
+            ]
         profile = identity.get("vehicle_profile") if isinstance(identity.get("vehicle_profile"), dict) else {}
         readiness = identity.get("parts_lookup_readiness")
         if not isinstance(readiness, dict):
@@ -1293,8 +1399,9 @@ def register_manager_tools(  # noqa: C901
         supplied_family = (
             supplied_readiness.get("ready_for_family_lookup") if isinstance(supplied_readiness, dict) else None
         )
-        has_family = bool(profile.get("make") and (profile.get("model") or profile.get("model_family"))) or bool(
-            identity.get("family_candidates")
+        has_family = bool(profile.get("make") and (profile.get("model") or profile.get("model_family"))) or any(
+            family.get("make") and (family.get("model") or family.get("model_family"))
+            for family in identity.get("family_candidates") or []
         )
         readiness.update(
             ready_for_family_lookup=has_family and supplied_family is not False,

@@ -510,6 +510,215 @@ def test_public_planner_rejects_invalid_identity_before_provider_status(tmp_path
     assert all(value is False for value in plan["live_capability"].values())
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("make", ["private-invalid-value"]),
+        ("model", ["private-invalid-value"]),
+        ("model", {"secret": "private-invalid-value"}),
+        ("model", True),
+        ("engine", ["private-invalid-value"]),
+        ("model_year", True),
+        ("displacement_cc", -1),
+        ("power_hp", float("inf")),
+        ("transmission_speeds", 31),
+        ("production_date", "private-invalid-value"),
+        ("options", "private-invalid-value"),
+        ("make_display", {"secret": "private-invalid-value"}),
+        ("engine_model", ["private-invalid-value"]),
+        ("engine_code", ["private-invalid-value"]),
+        ("horsepower", -1),
+        ("model_family", ["private-invalid-value"]),
+        ("platform", {"secret": "private-invalid-value"}),
+        ("series2", True),
+    ],
+)
+def test_public_planner_rejects_bad_profile_fields_before_planning(tmp_path, monkeypatch, field, value):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("invalid profile must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("invalid-profile-fields-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO", "engine": "E1", field: value}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["manual_public_search_queries"] == []
+    assert result["execution"]["network_calls"] == 0
+    assert all(value is False for value in result["live_capability"].values())
+    assert "private-invalid-value" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("carrier", ["vehicle_profile", "vehicle_profile_compact", "crm_vehicle_profile"])
+def test_bad_nested_profile_field_is_not_hidden_by_a_valid_outer_field(tmp_path, monkeypatch, carrier):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("invalid nested profile must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("invalid-nested-profile-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO", carrier: {"model": ["private-invalid-value"]}}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["execution"]["network_calls"] == 0
+    assert "private-invalid-value" not in json.dumps(result)
+
+
+def test_public_planner_normalizes_supported_aliases_without_inventing_vehicle_fields(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("profile-aliases-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    supplied = {
+        "vehicle_profile": {
+            "make_display": " BMW ",
+            "model_display": " DEMO ",
+            "engine_model": " E1 ",
+            "model_year": "2010",
+            "horsepower": 245,
+        }
+    }
+    original = deepcopy(supplied)
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": supplied}
+        )
+    )
+    assert supplied == original
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["vehicle_profile"] == {"make": "BMW", "model": "DEMO", "model_year": 2010, "engine": "E1"}
+    assert result["trust"]["state"] == "caller_supplied_unverified"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize(
+    "families",
+    [
+        "private-invalid-value",
+        [True],
+        [{"make": ["private-invalid-value"], "model": "DEMO"}],
+        [{"make": "BMW", "model_family": {"private": "private-invalid-value"}}],
+        [{"make": "BMW", "model": "DEMO", "model_display": "OTHER"}],
+    ],
+)
+def test_bad_family_candidates_fail_before_planning(tmp_path, monkeypatch, families):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("invalid family candidates must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("invalid-family-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"family_candidates": families}}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["manual_public_search_queries"] == []
+    assert result["execution"]["network_calls"] == 0
+    assert "private-invalid-value" not in json.dumps(result)
+
+
+def test_incomplete_family_candidate_cannot_create_family_readiness(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("incomplete-family-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"family_candidates": [{}]}}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "blocked"
+    assert result["live_capability"]["identity_ready_for_family_lookup"] is False
+
+
+def test_family_candidate_aliases_are_normalized_without_fabricating_profile(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("family-aliases-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {
+                "identifier": "",
+                "requested_part": "фильтр",
+                "vehicle_identity": {"family_candidates": [{"make_display": " BMW ", "model_display": " DEMO "}]},
+            }
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["vehicle_profile"] == {}
+    assert result["family_candidates"][0]["make"] == "BMW"
+    assert result["family_candidates"][0]["model"] == "DEMO"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+def test_nested_compact_profile_aliases_are_normalized_without_fabricating_facts(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("nested-profile-aliases-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    supplied = {
+        "vehicle_profile": {
+            "vehicle_profile_compact": json.dumps(
+                {"make_display": " BMW ", "model_display": " DEMO ", "engine_code": " E1 "}
+            )
+        }
+    }
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": supplied}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["vehicle_profile"] == {"make": "BMW", "model": "DEMO", "engine": "E1"}
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
 def test_internal_planner_never_converts_input_readiness_to_write_permission(monkeypatch):
     import autostop_manager.catalog_adapters as adapters
 
