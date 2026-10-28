@@ -151,6 +151,62 @@ def _invalid_planner_identity(problems: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _planner_nested_conflicts(
+    normalized: dict[str, Any], nested_profiles: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    from .automotive_contracts import _claim_matches_profile
+
+    problems: list[dict[str, str]] = []
+    comparable = {
+        "make",
+        "model",
+        "model_family",
+        "platform",
+        "model_year",
+        "production_year",
+        "production_date",
+        "engine",
+        "transmission",
+        "transmission_speeds",
+        "drivetrain",
+        "market",
+        "trim",
+        "series",
+        "series2",
+        "modification",
+        "options",
+        "fuel_type",
+        "engine_type",
+        "displacement_cc",
+        "power_hp",
+        "power_kw",
+        "vin",
+        "frame",
+    }
+    for nested in nested_profiles:
+        for field in sorted(comparable.intersection(nested, normalized)):
+            left, right = normalized[field], nested[field]
+            equal_numbers = (
+                isinstance(left, (int, float))
+                and not isinstance(left, bool)
+                and isinstance(right, (int, float))
+                and not isinstance(right, bool)
+                and left == right
+            )
+            compatible_month = (
+                field == "production_date"
+                and isinstance(left, str)
+                and isinstance(right, str)
+                and left[:7] == right[:7]
+                and (len(left) == 7 or len(right) == 7)
+            )
+            if not equal_numbers and not compatible_month and not _claim_matches_profile({field: left}, field, right):
+                issue = {"field": field, "code": "ready_identity_evidence_conflict"}
+                if issue not in problems:
+                    problems.append(issue)
+    return problems
+
+
 def _validated_planner_profile(
     identifier: str, profile: dict[str, Any], *, depth: int = 0
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
@@ -163,6 +219,7 @@ def _validated_planner_profile(
         return {}, [{"field": "vehicle_profile", "code": "invalid_vehicle_profile_field"}]
     problems: list[dict[str, str]] = []
     nested_facts: dict[str, Any] = {}
+    nested_profiles: list[dict[str, Any]] = []
     for key in PROFILE_KEYS:
         nested = profile.get(key)
         if nested is None or nested == "":
@@ -176,17 +233,17 @@ def _validated_planner_profile(
             problems.append({"field": "vehicle_profile", "code": "invalid_vehicle_profile_field"})
             continue
         clean_nested, nested_errors = _validated_planner_profile(identifier, nested, depth=depth + 1)
+        nested_profiles.append(clean_nested)
         nested_facts.update(clean_nested)
         problems.extend(nested_errors)
 
-    prepared = validate_identity_input(identifier, profile)
+    direct_profile = {key: value for key, value in profile.items() if key not in PROFILE_KEYS}
+    prepared = validate_identity_input(identifier, direct_profile)
     problems.extend(
         {"field": str(issue.get("field") or "vehicle_profile"), "code": "invalid_vehicle_profile_field"}
         for issue in prepared["errors"]
     )
     normalized = {key: value for key, value in prepared["context"].items() if key in CONTEXT_FIELDS}
-    for key, value in nested_facts.items():
-        normalized.setdefault(key, value)
 
     for alias, canonical in EVIDENCE_FIELD_ALIASES.items():
         if alias in ALIASES or alias not in profile:
@@ -206,6 +263,8 @@ def _validated_planner_profile(
             problems.append({"field": field, "code": "invalid_vehicle_profile_field"})
         elif value.strip():
             normalized[field] = value.strip()
+    normalized = {**nested_facts, **normalized}
+    problems.extend(_planner_nested_conflicts(normalized, nested_profiles))
     if not problems:
         envelope = {"vehicle_profile": profile}
         problems.extend(
@@ -213,6 +272,14 @@ def _validated_planner_profile(
             for issue in identity_errors(envelope, envelope)
         )
     return normalized, problems
+
+
+def _merge_planner_profile(profile: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
+    """Do not restore raw whitespace-only values after input validation."""
+    return {
+        **{key: value for key, value in profile.items() if not isinstance(value, str) or value.strip()},
+        **normalized,
+    }
 
 
 class _OriginalJsonMetadata(FuncMetadata):
@@ -1385,10 +1452,10 @@ def register_manager_tools(  # noqa: C901
         except ValueError:
             return _invalid_planner_identity([{"field": "vehicle_identity", "code": "caller_claims_too_deep"}])
         if normalized_profile is not None:
-            identity["vehicle_profile"] = {**identity["vehicle_profile"], **normalized_profile}
+            identity["vehicle_profile"] = _merge_planner_profile(identity["vehicle_profile"], normalized_profile)
         if isinstance(candidates, list):
             identity["family_candidates"] = [
-                {**candidate, **normalized}
+                _merge_planner_profile(candidate, normalized)
                 for candidate, normalized in zip(identity["family_candidates"], normalized_families, strict=True)
             ]
         profile = identity.get("vehicle_profile") if isinstance(identity.get("vehicle_profile"), dict) else {}

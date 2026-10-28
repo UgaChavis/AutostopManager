@@ -719,6 +719,202 @@ def test_nested_compact_profile_aliases_are_normalized_without_fabricating_facts
     assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
 
 
+@pytest.mark.parametrize("carrier", ["vehicle_profile", "family_candidates"])
+@pytest.mark.parametrize("field", ["make", "model", "model_family"])
+def test_whitespace_only_vehicle_fields_do_not_create_family_readiness(tmp_path, monkeypatch, carrier, field):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("blank-family-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO"}
+    if field == "model_family":
+        profile.pop("model")
+    profile[field] = " \t\u00a0 "
+    identity = {carrier: profile if carrier == "vehicle_profile" else [profile]}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": identity}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "blocked"
+    assert result["live_capability"]["identity_ready_for_family_lookup"] is False
+    stored = result["vehicle_profile"] if carrier == "vehicle_profile" else result["family_candidates"][0]
+    assert field not in stored
+
+
+@pytest.mark.parametrize("carrier", ["vehicle_profile", "family_candidates"])
+def test_blank_model_does_not_hide_an_explicit_model_family(tmp_path, monkeypatch, carrier):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("blank-model-fallback-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "  ", "model_family": "DEMO"}
+    identity = {carrier: profile if carrier == "vehicle_profile" else [profile]}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": identity}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    stored = result["vehicle_profile"] if carrier == "vehicle_profile" else result["family_candidates"][0]
+    assert "model" not in stored
+    assert stored["model_family"] == "DEMO"
+    assert any("DEMO" in query["query"] for query in result["manual_public_search_queries"])
+
+
+@pytest.mark.parametrize("carrier", ["vehicle_profile", "vehicle_profile_compact", "crm_vehicle_profile"])
+@pytest.mark.parametrize("field", ["model", "engine"])
+@pytest.mark.parametrize("outer", ["vehicle_profile", "family_candidates"])
+def test_nested_conflicting_facts_stop_planner_before_provider_status(tmp_path, monkeypatch, carrier, field, outer):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("conflicting nested profile must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("nested-contradiction-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    nested = {field: "OTHER"}
+    profile = {
+        "make": "BMW",
+        "model": "DEMO",
+        "engine": "E1",
+        carrier: json.dumps(nested) if carrier == "vehicle_profile_compact" else nested,
+    }
+    identity = {outer: profile if outer == "vehicle_profile" else [profile]}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": identity}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["execution"]["network_calls"] == 0
+    assert any(
+        row["field"] == field and row["code"] == "ready_identity_evidence_conflict" for row in result["identity_errors"]
+    )
+
+
+def test_sibling_nested_alias_contradiction_blocks_before_planning(tmp_path, monkeypatch):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("conflicting sibling profiles must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("sibling-contradiction-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "vehicle_profile": {"model_display": "DEMO"}, "crm_vehicle_profile": {"model": "OTHER"}}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert any(
+        row["field"] == "model" and row["code"] == "ready_identity_evidence_conflict"
+        for row in result["identity_errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("alias", "outer", "field", "inner"),
+    [
+        ("model_display", "DEMO", "model", "OTHER"),
+        ("engine_model", "E1", "engine", "E2"),
+        ("engine_code", "E1", "engine", "E2"),
+    ],
+)
+def test_outer_alias_cannot_hide_conflicting_nested_canonical_fact(tmp_path, monkeypatch, alias, outer, field, inner):
+    import autostop_manager.mcp_tools as mcp_tools
+
+    def forbidden_planner(**_kwargs):
+        raise AssertionError("conflicting aliases must not reach provider planning")
+
+    monkeypatch.setattr(mcp_tools, "build_oem_parts_provider_plan", forbidden_planner)
+    server = FastMCP("outer-alias-contradiction-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", alias: outer, "vehicle_profile": {field: inner}}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is False
+    assert result["lookup_scope"] == "blocked"
+    assert result["execution"]["network_calls"] == 0
+    assert any(
+        row["field"] == field and row["code"] == "ready_identity_evidence_conflict" for row in result["identity_errors"]
+    )
+
+
+def test_equivalent_nested_aliases_and_year_still_plan_without_writeback(tmp_path, monkeypatch):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("nested-agreement-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {
+        "make": "BMW",
+        "model_display": " DEMO ",
+        "model_year": "2010",
+        "vehicle_profile_compact": {"make_display": "bmw", "model": "demo", "model_year": 2010},
+    }
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["vehicle_profile"]["model_year"] == 2010
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "outer", "nested"),
+    [("power_hp", 245, 245.0), ("production_date", "2020-06", "2020-06-17")],
+)
+def test_equivalent_nested_numeric_or_partial_date_facts_remain_valid(tmp_path, monkeypatch, field, outer, nested):
+    import autostop_manager.catalog_adapters as adapters
+
+    monkeypatch.setattr(adapters, "catalog_provider_status", lambda **_kwargs: {"providers": []})
+    monkeypatch.setattr(adapters, "_providers_for_stage", lambda *_args, **_kwargs: [])
+    server = FastMCP("nested-compatible-facts-test")
+    register_manager_tools(
+        server, StoreState(tmp_path / "synthetic.sqlite3"), include_tools={"plan_oem_parts_providers"}
+    )
+    profile = {"make": "BMW", "model": "DEMO", field: outer, "vehicle_profile": {field: nested}}
+    result = asyncio.run(
+        server._tool_manager.get_tool("plan_oem_parts_providers").run(
+            {"identifier": "", "requested_part": "фильтр", "vehicle_identity": {"vehicle_profile": profile}}
+        )
+    )
+    assert result["ok"] is True
+    assert result["lookup_scope"] == "family"
+    assert result["live_capability"]["identity_ready_for_crm_writeback"] is False
+
+
 def test_internal_planner_never_converts_input_readiness_to_write_permission(monkeypatch):
     import autostop_manager.catalog_adapters as adapters
 
