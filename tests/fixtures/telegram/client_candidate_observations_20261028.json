@@ -1,0 +1,739 @@
+{
+  "schema": "autostopmanager.client-candidate-observations.v1",
+  "synthetic_only": true,
+  "evaluation_kind": "engineering_self_rehearsal",
+  "claim_limits": [
+    "Engineering self-rehearsal against local client instructions, not independent code review.",
+    "All vehicles, sources, prices, IDs, messages and receipts are synthetic.",
+    "Worker actions are proposals; observed_stub contains only executed in-memory fake effects.",
+    "No native Telegram/CRM/Store/provider/search or live delivery was exercised.",
+    "Text representations of media/document exports do not attest binary rendering or image inspection."
+  ],
+  "instruction_sha256": {
+    "AGENTS.md": "b1c8360e48919bcf5cd441713ba1e35db702ab3390337591d75c9fc8b3e3a5d7",
+    ".agents/skills/manage-autostop-client/SKILL.md": "0cbaeb0358bc732cbe392447bd978a708b9c67d1c24c28f3e663a06cceb0a172",
+    "docs/agent/modules/B1.md": "124fe5795e965c4eb426f66715c2b0b70ac2e903ea1f17f633e02bf1288859e3",
+    "docs/agent/modules/B2.md": "8ba92678d5e6544666a2b66ae891a7773184231ddeda773d8b12d71d2201f582",
+    "docs/agent/modules/B3.md": "a1ea7f4c9f7bb4544353ae13a8d4606e7714a2ccdc4cdcf090a62c1bd8ab6fc4",
+    "docs/agent/modules/B4.md": "9826cafd9783b77e07fb68754a4aa6f217d10c2d4a6b7ac40051ceaa5cc224e1",
+    "docs/agent/modules/F4.md": "70ab91ca4abcec846100672d6dfc1b26883b06734a1273b02a2e88778a106084",
+    "docs/agent/modules/C6.md": "d8b968a40346332d469db14a17eb3ae6d40dd202f3296a142b4e75bdddefebb2",
+    "docs/agent/modules/C7.md": "bb9b8664c4f310f98f4ab79c27a64c8adac5bbb8b2cebc3d0a83fbba8a51bff7"
+  },
+  "observations": [
+    {
+      "case_id": "candidate-01-multi-unit-fallback",
+      "based_on": [
+        "C09"
+      ],
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "facts": {
+          "now": "2026-10-13T11:00:00+07:00",
+          "timezone": "Asia/Krasnoyarsk",
+          "vehicle": "Учебный кроссовер A, 2018",
+          "vin": "SYNTHETIC_VIN_A_NOT_A_REAL_VIN",
+          "crm_columns": {
+            "parts": "Магазин автозапчастей",
+            "repair": "Запись на ремонт"
+          },
+          "crm_phone_required": false,
+          "crm_existing_cards": [],
+          "crm_write_result": "success",
+          "crm_independent_reread": "matches",
+          "owner_notification_delivery": "verified",
+          "explicit_consent": false,
+          "payment_receipt": null,
+          "part": "Передние колодки",
+          "quantity": 1,
+          "fitment": "not_confirmed",
+          "availability": "not_confirmed",
+          "market_anchor": {
+            "range": [
+              1800,
+              2500
+            ],
+            "source": "fixture://public/aggregate",
+            "is_procurement": false
+          },
+          "sources": [
+            {
+              "id": "fixture://decoder/primary",
+              "result": "quota_exceeded"
+            },
+            {
+              "id": "fixture://decoder/alternative",
+              "result": "partial",
+              "confirmed": {
+                "model": "Учебный кроссовер A",
+                "year": 2018,
+                "engine": "EDU-2.0",
+                "drive": "AWD"
+              },
+              "candidate": {
+                "gearbox": [
+                  "AT-A",
+                  "AT-B"
+                ]
+              },
+              "unknown": [
+                "transfer_code"
+              ]
+            },
+            {
+              "id": "fixture://history/rear-marking",
+              "result": "ok",
+              "confirmed": {
+                "rear_reducer": "RD-A"
+              }
+            },
+            {
+              "id": "fixture://technical/manual",
+              "result": "ok",
+              "scope": "synthetic exact unit only",
+              "units": {
+                "EDU-2.0": {
+                  "fluid_spec": "EDU-OIL-1",
+                  "service_l": "4.5",
+                  "filter": "EDU-EF-1",
+                  "seal": "EDU-ES-1"
+                },
+                "AT-A": {
+                  "fluid_spec": "EDU-ATF-A",
+                  "partial_l": "4",
+                  "full_l": "8",
+                  "filter": "EDU-AF-A",
+                  "seal": "EDU-AS-A"
+                },
+                "AT-B": {
+                  "fluid_spec": "EDU-ATF-B",
+                  "partial_l": "5",
+                  "full_l": "9",
+                  "filter": "EDU-AF-B",
+                  "seal": "EDU-AS-B"
+                },
+                "RD-A": {
+                  "fluid_spec": "EDU-GEAR-R",
+                  "service_l": "1.1",
+                  "seal": "EDU-RS-1"
+                }
+              }
+            }
+          ]
+        },
+        "history": [],
+        "events": [
+          {
+            "id": "candidate-01-in",
+            "kind": "text",
+            "text": "Подберите жидкости и расходники для двигателя, АКПП, раздатки и заднего редуктора. VIN уже прислал."
+          }
+        ]
+      },
+      "evaluation_kind": "isolated_behavioral_rehearsal",
+      "client_replies": [
+        {
+          "kind": "ack",
+          "text": "Проверю жидкости, объёмы и расходники для всех четырёх агрегатов. Вернусь с вариантами."
+        },
+        {
+          "kind": "clarification",
+          "text": "Для двигателя EDU-2.0 подходит EDU-OIL-1: сервисная замена 4,5 л, фильтр EDU-EF-1 и уплотнение EDU-ES-1. Для подтверждённого заднего редуктора RD-A — EDU-GEAR-R, 1,1 л и уплотнение EDU-RS-1.\n\nПо АКПП пока два варианта: AT-A — EDU-ATF-A, частичная замена 4 л; AT-B — EDU-ATF-B, 5 л. Полная ёмкость соответственно 8 и 9 л; это не объём обычной частичной замены. Фильтр и прокладка зависят от исполнения коробки. Эти варианты предварительные, заливать жидкость до проверки маркировки не следует.\n\nКод раздатки пока не подтверждён, поэтому жидкость и объём для неё уточню. Пришлите фото маркировок АКПП и раздатки — двигатель и редуктор повторно уточнять не нужно."
+        }
+      ],
+      "actions": [
+        {
+          "action": "context.read",
+          "data": "Reuse supplied exact vehicle and rear marking, no repeated VIN request."
+        },
+        {
+          "action": "reply.ack",
+          "data": "Proposed bounded ack, then independent fake verification."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed ack check before research."
+        },
+        {
+          "action": "evidence.research",
+          "data": "Primary decoder returns quota once; no retry."
+        },
+        {
+          "action": "evidence.alternative",
+          "data": "Alternative decoder partial; exact unit manual plus saved rear marking refine profile."
+        },
+        {
+          "action": "context.refresh",
+          "data": "No new manual outgoing or trusted control in fixture. Read job-read outgoing_context/trusted_guidance/client_control; use job-refresh and current revision if context changed, then a fresh dry-run."
+        },
+        {
+          "action": "reply.clarification",
+          "data": "Useful preliminary answer covers four units; request only gearbox and transfer marking."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed clarification verification."
+        },
+        {
+          "action": "job.result",
+          "data": "awaiting_client with all supplied events covered, if fake send verified."
+        }
+      ],
+      "outcome": "awaiting_client",
+      "claims": {
+        "preliminary": true,
+        "offer_provided": true,
+        "handoff_confirmed": false,
+        "booking_confirmed": false,
+        "payment_confirmed": false
+      },
+      "observed_stub": {
+        "source_results_consumed": [
+          "fixture://decoder/primary",
+          "fixture://decoder/alternative",
+          "fixture://history/rear-marking",
+          "fixture://technical/manual"
+        ],
+        "quota_calls": 1,
+        "provider_retries": 0,
+        "crm_writes": 0,
+        "native_effects": 0
+      },
+      "semantic_observation": "Usable maintenance direction survives primary quota and partial VIN. Unit-specific evidence is retained; family gearbox variants remain conditional; transfer facts stay unknown. No unconditional fill instruction for a candidate.",
+      "unresolved": "Gearbox and transfer markings. All technical specifications above exist only in synthetic fixtures."
+    },
+    {
+      "case_id": "candidate-02-price-and-media-fallback",
+      "based_on": [
+        "C12",
+        "C30"
+      ],
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "facts": {
+          "now": "2026-10-13T11:00:00+07:00",
+          "timezone": "Asia/Krasnoyarsk",
+          "vehicle": "Учебный седан A, 2018",
+          "vin": null,
+          "crm_columns": {
+            "parts": "Магазин автозапчастей",
+            "repair": "Запись на ремонт"
+          },
+          "crm_phone_required": false,
+          "crm_existing_cards": [],
+          "crm_write_result": "success",
+          "crm_independent_reread": "matches",
+          "owner_notification_delivery": "verified",
+          "explicit_consent": false,
+          "payment_receipt": null,
+          "part": "Передние колодки",
+          "quantity": 1,
+          "fitment": "confirmed_by_fake_catalog",
+          "offers": [
+            {
+              "id": "SYN-ORIGINAL-A",
+              "kind": "original",
+              "purchase_unit": 1400,
+              "delivery_unit": 350,
+              "direct_expenses_unit": 350,
+              "available": true,
+              "lead_days": 3
+            },
+            {
+              "id": "SYN-ANALOG-A",
+              "kind": "quality_analog",
+              "purchase_unit": 700,
+              "delivery_unit": 0,
+              "direct_expenses_unit": 0,
+              "available": true,
+              "lead_days": 2
+            }
+          ],
+          "labor_evidence": {
+            "spb_comparable_labor": 1000,
+            "krasnoyarsk_comparable_labor": 1000,
+            "norm_hours": 1.25,
+            "scope": "Замена передних колодок",
+            "hour_rate": 4000
+          },
+          "selected_part": "SYN-ANALOG-A",
+          "media_fetch": "failed_before_send_intent"
+        },
+        "history": [],
+        "events": [
+          {
+            "id": "candidate-02-in",
+            "kind": "text",
+            "text": "Покажите этот комплект с фото и ценой."
+          }
+        ]
+      },
+      "evaluation_kind": "isolated_behavioral_rehearsal",
+      "client_replies": [
+        {
+          "kind": "ack",
+          "text": "Проверю комплект и цену, подберу подходящее фото."
+        },
+        {
+          "kind": "result",
+          "text": "SynParts, комплект SYN-ANALOG-A — **1 000 ₽**. Предварительный срок — 2 дня; цену, наличие и совместимость подтвердим перед заказом. Если подходит, передам предварительную заявку коллеге для проверки."
+        }
+      ],
+      "client_export_proposals": {
+        "main_text": "SynParts, комплект SYN-ANALOG-A — **1 000 ₽**. Предварительный срок — 2 дня; цену, наличие и совместимость подтвердим перед заказом. Если подходит, передам предварительную заявку коллеге для проверки.",
+        "caption_draft": "SynParts **SYN-ANALOG-A — 1 000 ₽**. Иллюстрация комплекта; совместимость перепроверим.",
+        "table_draft": {
+          "columns": [
+            "Производитель",
+            "Артикул",
+            "Цена клиенту",
+            "Срок"
+          ],
+          "rows": [
+            [
+              "SynParts",
+              "SYN-ANALOG-A",
+              "1 000 ₽",
+              "2 дня, предварительно"
+            ]
+          ]
+        },
+        "document_excerpt_draft": "Предварительное предложение: SynParts SYN-ANALOG-A, 1 комплект, 1 000 ₽. Условия перед заказом уточняются.",
+        "image_excerpt_layout_draft": {
+          "visible_fields": {
+            "manufacturer": "SynParts",
+            "article": "SYN-ANALOG-A",
+            "customer_price": "1 000 ₽"
+          },
+          "excluded_source_columns": [
+            "purchase_unit",
+            "delivery_unit",
+            "direct_expenses_unit",
+            "profit"
+          ]
+        }
+      },
+      "actions": [
+        {
+          "action": "context.read",
+          "data": "Exact synthetic client and selected article."
+        },
+        {
+          "action": "reply.ack",
+          "data": "Guarded ack proposal."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed ack check."
+        },
+        {
+          "action": "evidence.research",
+          "data": "Fake catalog confirms part; known purchase 700, delivery 0 and direct cost 0 produce sale 1000 using F4."
+        },
+        {
+          "action": "media.cleanup",
+          "data": "Source fetch failed before send intent; no file or unknown effect remains."
+        },
+        {
+          "action": "context.refresh",
+          "data": "No later changes in supplied history. Read job-read outgoing_context/trusted_guidance/client_control; use job-refresh and current revision if context changed, then a fresh dry-run."
+        },
+        {
+          "action": "reply.result",
+          "data": "Send complete text proposal; media drafts remain unsent."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed text readback."
+        },
+        {
+          "action": "job.result",
+          "data": "answered only after fake text verification."
+        }
+      ],
+      "outcome": "answered",
+      "claims": {
+        "client_unit_price": 1000,
+        "quantity": 1,
+        "preliminary": true,
+        "offer_provided": true,
+        "handoff_confirmed": false,
+        "payment_confirmed": false
+      },
+      "observed_stub": {
+        "price_calculation": {
+          "policy": "F4 margin 30 percent",
+          "purchase": 700,
+          "delivery": 0,
+          "direct_expenses": 0,
+          "sale": "1000.00"
+        },
+        "media_send_intents": 0,
+        "media_receipts": [],
+        "temporary_files_created": 0,
+        "crm_writes": 0,
+        "native_effects": 0
+      },
+      "semantic_observation": "All proposed customer surfaces carry sale 1000 and terms. Media retrieval failure leaves a useful text answer; captions/docs/image layouts are proposals and were not rendered or sent.",
+      "unresolved": "Real media compatibility, visual crop and native delivery remain outside this rehearsal."
+    },
+    {
+      "case_id": "candidate-03-preliminary-consent-to-exact-handoff",
+      "based_on": [
+        "C18",
+        "C19"
+      ],
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "facts": {
+          "now": "2026-10-13T11:00:00+07:00",
+          "timezone": "Asia/Krasnoyarsk",
+          "vehicle": "Учебный седан A, 2018",
+          "vin": null,
+          "crm_columns": {
+            "parts": "Магазин автозапчастей",
+            "repair": "Запись на ремонт"
+          },
+          "crm_phone_required": false,
+          "crm_existing_cards": [
+            {
+              "id": "FIXTURE_CARD_A",
+              "match": "exact_client_and_deal",
+              "column": "Магазин автозапчастей",
+              "preserve": [
+                "history",
+                "labels",
+                "other_positions"
+              ]
+            }
+          ],
+          "crm_write_result": "success",
+          "crm_independent_reread": "matches",
+          "owner_notification_delivery": "verified",
+          "explicit_consent": false,
+          "payment_receipt": null,
+          "part": "Передние колодки",
+          "quantity": 1,
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "terms": "Предварительный заказ, наличие и применимость проверят коллеги",
+          "phone": null,
+          "client_name": null,
+          "consent_kind": "preliminary_request_only",
+          "crm_client_id": "FIXTURE_CLIENT_A",
+          "crm_vehicle_id": "FIXTURE_VEHICLE_A",
+          "crm_card_id": "FIXTURE_CARD_A",
+          "expected_updated_at": "fixture-revision-7"
+        },
+        "history": [],
+        "events": [
+          {
+            "id": "candidate-03-yes",
+            "kind": "text",
+            "text": "Да."
+          },
+          {
+            "id": "candidate-03-consent",
+            "phase": "after_clarification",
+            "kind": "text",
+            "text": "Оформите только предварительную заявку на один комплект за 1 000 ₽. Подбор и срок перепроверят коллеги. Заказывать и записывать пока не надо."
+          }
+        ]
+      },
+      "evaluation_kind": "isolated_behavioral_rehearsal",
+      "client_replies": [
+        {
+          "kind": "clarification",
+          "text": "Правильно понял: оформить предварительную заявку на комплект, без заказа деталей и записи на установку?"
+        },
+        {
+          "kind": "handoff",
+          "text": "Передал предварительную заявку коллегам: один комплект SYN-ANALOG-A за 1 000 ₽. Они перепроверят подбор и срок и свяжутся с вами. Заказ деталей и запись пока не оформлены."
+        }
+      ],
+      "actions": [
+        {
+          "action": "context.read",
+          "data": "Read offer alternatives and ambiguous yes."
+        },
+        {
+          "action": "reply.clarification",
+          "data": "Bind consent to preliminary request only; no CRM write yet."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed clarification readback."
+        },
+        {
+          "action": "context.refresh",
+          "data": "Consume explicit preliminary-only consent event. Read job-read outgoing_context/trusted_guidance/client_control; use job-refresh and current revision if context changed, then a fresh dry-run."
+        },
+        {
+          "action": "crm.search",
+          "data": "Existing exact client/vehicle/card IDs, parts column and no duplicate."
+        },
+        {
+          "action": "crm.read",
+          "data": "Read complete exact card at fixture-revision-7."
+        },
+        {
+          "action": "crm.update",
+          "data": "Append only consented preliminary terms with original key; preserve history/labels/other positions."
+        },
+        {
+          "action": "crm.reread",
+          "data": "Compare exact card ID, links, revision, appended content and preserved fields."
+        },
+        {
+          "action": "owner.target",
+          "data": "Fixed fake recipient FIXTURE_OWNER_100."
+        },
+        {
+          "action": "owner.notify",
+          "data": "One fake notice with exact card and next step; original key."
+        },
+        {
+          "action": "owner.notification_readback",
+          "data": "Controlled fake notification independently copied and compared."
+        },
+        {
+          "action": "reply.handoff",
+          "data": "Draft refers to preliminary request, not a completed order or booking."
+        },
+        {
+          "action": "reply.verify",
+          "data": "Proposed final client readback."
+        },
+        {
+          "action": "job.result",
+          "data": "handoff only conditional on verified client reply in native runtime."
+        }
+      ],
+      "outcome": "handoff",
+      "claims": {
+        "handoff_confirmed": true,
+        "handoff_evidence_scope": "controlled_in_memory_fake_only",
+        "booking_confirmed": false,
+        "payment_confirmed": false,
+        "order_created": false,
+        "crm_card_id": "FIXTURE_CARD_A",
+        "crm_column": "Магазин автозапчастей",
+        "client_unit_price": 1000
+      },
+      "observed_stub": {
+        "trace": [
+          {
+            "operation": "crm.append",
+            "result": "applied_once",
+            "key": "fixture:case:03:preliminary"
+          },
+          {
+            "operation": "crm.reread",
+            "result": "exact_id_links_revision_and_appended_content_match"
+          },
+          {
+            "operation": "owner.notification_readback",
+            "result": "matches_controlled_stub_notification",
+            "message_id": "FAKE_MESSAGE_501"
+          },
+          {
+            "operation": "crm.append",
+            "result": "reused_original_receipt",
+            "key": "fixture:case:03:preliminary"
+          }
+        ],
+        "card_count": 1,
+        "applied_write_count": 1,
+        "notification_count": 1,
+        "notification_receipt": {
+          "type": "controlled_stub_notification",
+          "target": "FIXTURE_OWNER_100",
+          "message_id": "FAKE_MESSAGE_501",
+          "key": "fixture:case:03:notify",
+          "card_id": "FIXTURE_CARD_A"
+        },
+        "exact_card_readback": {
+          "id": "FIXTURE_CARD_A",
+          "client_id": "FIXTURE_CLIENT_A",
+          "client_vehicle_id": "FIXTURE_VEHICLE_A",
+          "updated_at": "fixture-revision-8",
+          "column": "Магазин автозапчастей",
+          "history": [
+            "prior-history"
+          ],
+          "labels": [
+            "prior-label"
+          ],
+          "other_positions": [
+            "prior-position"
+          ],
+          "description": "Prior customer request.\nClient explicitly agreed to preliminary request only: SYN-ANALOG-A, quantity 1, sale 1000, lead 2 days preliminary; fitment/availability/lead to recheck. No purchase or appointment. Next step colleague verifies and contacts client."
+        },
+        "native_effects": 0
+      },
+      "semantic_observation": "Ambiguous yes causes clarification, not a write. Explicit preliminary-only consent updates existing exact card once. All prior fields survive, independent fake readback precedes one fake handoff, and replay returns original receipt.",
+      "instruction_issue_found": "Hardcoded generic parts closing said order even for preliminary-only consent; reported to root for correction.",
+      "unresolved": "No actual CRM or notification route was exercised; native client send remains proposed.",
+      "instruction_issue_resolution": "Final client skill separates preliminary-request, order and appointment closings; this proposed closing matches the preliminary consent."
+    },
+    {
+      "case_id": "candidate-04-ambiguous-links-and-unknown-send",
+      "based_on": [
+        "C20",
+        "C35"
+      ],
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "facts": {
+          "now": "2026-10-13T11:00:00+07:00",
+          "timezone": "Asia/Krasnoyarsk",
+          "vehicle": "Учебный седан A, 2018",
+          "vin": null,
+          "crm_columns": {
+            "parts": "Магазин автозапчастей",
+            "repair": "Запись на ремонт"
+          },
+          "crm_phone_required": false,
+          "crm_existing_cards": [
+            {
+              "id": "FIXTURE_CARD_A",
+              "client_id": "FIXTURE_CLIENT_A",
+              "client_vehicle_id": "FIXTURE_VEHICLE_A",
+              "match": "unverified_text"
+            },
+            {
+              "id": "FIXTURE_CARD_B",
+              "client_id": "FIXTURE_CLIENT_B",
+              "client_vehicle_id": "FIXTURE_VEHICLE_B",
+              "match": "unverified_text"
+            }
+          ],
+          "crm_write_result": "success",
+          "crm_independent_reread": "matches",
+          "owner_notification_delivery": "verified",
+          "explicit_consent": true,
+          "payment_receipt": null,
+          "part": "Передние колодки",
+          "quantity": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "offers": [
+            {
+              "id": "SYN-ORIGINAL-A",
+              "kind": "original",
+              "purchase_unit": 1400,
+              "delivery_unit": 350,
+              "direct_expenses_unit": 350,
+              "available": true,
+              "lead_days": 3
+            },
+            {
+              "id": "SYN-ANALOG-A",
+              "kind": "quality_analog",
+              "purchase_unit": 700,
+              "delivery_unit": 0,
+              "direct_expenses_unit": 0,
+              "available": true,
+              "lead_days": 2
+            }
+          ],
+          "labor_evidence": {
+            "spb_comparable_labor": 1000,
+            "krasnoyarsk_comparable_labor": 1000,
+            "norm_hours": 1.25,
+            "scope": "Замена передних колодок",
+            "hour_rate": 4000
+          },
+          "ack_send_outcome": "unknown",
+          "outgoing_readback": "unavailable",
+          "original_send_key": "fixture:case:04:ack",
+          "original_send_state": "unknown",
+          "agent_receipt": null,
+          "possible_work_account_outgoing": "FAKE_MESSAGE_600",
+          "outgoing_origin": "unresolved_until_original_send_reconciled"
+        },
+        "history": [],
+        "events": [
+          {
+            "id": "C35-event-1",
+            "kind": "text",
+            "text": "Посчитайте колодки с заменой."
+          }
+        ]
+      },
+      "evaluation_kind": "isolated_behavioral_rehearsal",
+      "client_replies": [],
+      "actions": [
+        {
+          "action": "context.read",
+          "data": "Exact current dialogue; matching CRM summaries are unverified."
+        },
+        {
+          "action": "reply.readback",
+          "data": "Inspect original fixture:case:04:ack; fake readback unavailable."
+        },
+        {
+          "action": "crm.search",
+          "data": "Two unverified client/vehicle/card relationships; no arbitrary choice."
+        },
+        {
+          "action": "job.needs_review",
+          "data": "Preserve original unknown effect and ambiguity; no new key, message or terminal success."
+        }
+      ],
+      "outcome": "needs_review",
+      "claims": {
+        "handoff_confirmed": false,
+        "booking_confirmed": false,
+        "payment_confirmed": false,
+        "crm_card_id": null,
+        "outgoing_attributed_to_human": false,
+        "agent_receipt_fabricated": false
+      },
+      "observed_stub": {
+        "new_send_intents": 0,
+        "crm_writes": 0,
+        "new_cards": 0,
+        "owner_notifications": 0,
+        "terminal_job_results": 0,
+        "original_send_key_retained": "fixture:case:04:ack",
+        "receipts_created": 0,
+        "native_effects": 0
+      },
+      "semantic_observation": "Unknown original send blocks all new effects. Missing receipt does not label possible own-account outgoing as human. Ambiguous card links remain unresolved; no duplicate card and no handoff success claim.",
+      "unresolved": "Exact original outgoing result and verified client/vehicle/card relationship need reconciliation."
+    }
+  ],
+  "final_instruction_reconciliation": {
+    "changed_instruction_reread": "docs/agent/modules/B4.md",
+    "checks": [
+      "All four synthetic work peers remain clients; no owner role elevation.",
+      "The first two scenarios refresh outgoing context, trusted guidance and client control before a new dry-run.",
+      "The preliminary-only case uses the corrected preliminary request closing and does not claim an order.",
+      "The unknown-send case preserves the original key and stops without new effects or terminal success.",
+      "No scenario reuses a prior acknowledgement receipt as a current-job result receipt."
+    ],
+    "new_native_checks_run": false,
+    "native_effects": 0
+  }
+}
