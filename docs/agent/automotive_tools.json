@@ -2670,7 +2670,7 @@
       ],
       "limitations": [
         "This plans catalogue routes and captures explicitly supplied candidates; a route or OE reference does not verify an original part for the VIN.",
-        "Bound vehicle_identity is reused without decode; foreign, failed or conflicted identity is rejected before provider calls.",
+        "`vehicle_identity` is reused without decode as an unverified caller context, never as `decoded_vehicle`; foreign, failed or conflicted identity is rejected before provider calls. The public binding does not authenticate its source or contents.",
         "live_vpic=true is the legacy default; live_vpic=false avoids that provider read."
       ],
       "example": {
@@ -2767,7 +2767,8 @@
       "limitations": [
         "Read-only catalogue research; no CRM write and no automatic order.",
         "Article candidates and TecDoc modification agreement do not establish the original part for this VIN; current PartsAPI methods do not return authoritative VIN-specific OEM numbers.",
-        "dry_run=true makes configured requests unverified and skips live calls; live_vpic defaults true outside dry run."
+        "dry_run=true makes configured requests unverified and skips live calls; live_vpic defaults true outside dry run.",
+        "Public `vehicle_identity` is unverified caller context: its claimed supported/ready values are not carried as provider confirmation. A fresh provider result obtained within this composed call retains the normal bound-decoder checks."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
@@ -4197,7 +4198,8 @@
       ],
       "limitations": [
         "Reads local source routing and provider configuration; does not decode an identifier or send provider requests.",
-        "The optional vehicle_identity supplies planning context; no automatic VIN fitment, purchase, CRM write or provider authentication claim."
+        "The optional vehicle_identity supplies planning context; no automatic VIN fitment, purchase, CRM write or provider authentication claim.",
+        "The public `vehicle_identity` is unverified caller context; claimed `supported` and ready flags cannot grant vehicle-specific readiness or CRM writeback. Family research remains available as a conditional planning lead."
       ],
       "example": {
         "identifier": "WVWZZZ1KZAW000001",
@@ -4695,9 +4697,9 @@
       },
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
-        "vehicle_profile/field_statuses(candidate/supported/observed/disputed)/provenance/variants/model_year_candidates/family_candidates",
-        "input_binding/conflicts/missing_fields/parts_lookup_readiness; спорное поле исключается из profile",
-        "manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years; input evidence strength/binding/lineage is preserved.",
+        "vehicle_profile/field_statuses(candidate/observed/disputed)/provenance/variants/model_year_candidates/family_candidates",
+        "input_binding/conflicts/missing_fields/parts_lookup_readiness/trust; спорное поле исключается из profile",
+        "manufacturer_country remains separate from country; model-year alternatives include diagnostics.model_year.candidate_years. Declared lineage is retained as a caller claim, not authenticated provider evidence.",
         "detail=summary сохраняет профиль, binding, статусы, годы, конфликты и root provenance/evidence; повторное происхождение вариантов представлено ссылками, family_candidate_refs ссылается на variants."
       ],
       "errors": [
@@ -4708,7 +4710,8 @@
         "Модельный год отдельно от даты производства; WMI не определяет двигатель.",
         "До500 переданных результатов, network_calls=0; input_binding должен совпадать с identifier (WMI ограничен manufacturer-family).",
         "Сохраняются child variants/model_year_candidates и исходная lineage, включая профиль провайдера, переданный как context.",
-        "Default full совместим с прежним ответом. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям.",
+        "Переданный `supported` становится `candidate`; `trust.state=caller_supplied_unverified`. Хэш связывает identifier, но не доказывает источник, независимость или содержимое переданного результата.",
+        "Default full сохраняет форму ответа, но переданные provider-утверждения теперь явно неподтверждены. Summary строится после проверки binding/conflicts, удаляет raw provider payload и разворачивается при повторной сверке; root provenance/evidence доступны обычным потребителям.",
         "Все пары фактов проверяются независимо от порядка; transmission_speeds сохраняется отдельно. Неверные типы/диапазоны полей не становятся canonical/supported; исходные variants и причины сохраняются. Correct 3/6-character WMI остаётся manufacturer-family.",
         "Blank outer context fields сохраняют источник вложенного факта; непустой explicit override сохраняет приоритет. Это не добавляет независимого свидетельства copied provider данным."
       ],
@@ -5190,6 +5193,7 @@
       ],
       "limitations": [
         "Нет явного запрета не означает supported; family не exact_identifier.",
+        "Любой `state`, включая `supported`, условен относительно переданных caller evidence: `conditional_on_caller_evidence=true`, `independent_source_verified=false`, `exact_applicability_confirmed=false`, `ready_for_crm_writeback=false`. Pure helper не проверяет подлинность источника.",
         "Primary source: fitment_assertion=true, official_epc/manufacturer_fitment_catalog, matching part_number/brand/scope и provider/lineage/method/locator/aware ISO fetched_at.",
         "exact_identifier requires matching valid input_binding; modification requires matching typed TecDoc catalog_ref (numeric ID/carType) or matching native Elcats/Japancats/SsangYong refs with their provider/namespace/entry_id/vehicle_context preserved and checked against the vehicle profile. evidence.conditions and inherited/unparsed restrictions are checked with caller criteria; missing/invalid conditions remain unknown.",
         "production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.",
