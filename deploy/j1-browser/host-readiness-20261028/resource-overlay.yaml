@@ -1,0 +1,11 @@
+services:
+  renderer:
+    environment:
+      AUTOSTOP_J1_CHROMIUM_BINARY: /usr/local/bin/autostop-j1-chromium
+    volumes:
+      - type: bind
+        source: /etc/autostop-j1-browser/20261028/chromium-launcher.sh
+        target: /usr/local/bin/autostop-j1-chromium
+        read_only: true
+        bind:
+          create_host_path: false
