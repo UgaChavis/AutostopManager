@@ -243,14 +243,27 @@ def _directory_rows(call: dict[str, Any], kind: str) -> list[dict[str, Any]]:
         "NAME",
         "description",
     )
-    rows: dict[int, dict[str, Any]] = {}
+    rows: dict[tuple[int, str], dict[str, Any]] = {}
     for raw in _records(call.get("payload")):
         identifier, name = _id(_first(raw, id_keys)), _first(raw, name_keys)
         if identifier and name:
-            if identifier in rows and rows[identifier]["name"].strip().casefold() != str(name).strip().casefold():
-                raise ValueError("conflicting_catalogue_reference_names")
-            rows[identifier] = {"id": identifier, "name": str(name)}
+            normalized_name = " ".join(str(name).split()).casefold()
+            if normalized_name:
+                rows.setdefault((identifier, normalized_name), {"id": identifier, "name": str(name)})
     return list(rows.values())
+
+
+def _conflicting_directory_references(
+    directory: list[dict[str, Any]], selected: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep matching references and all their names if any selected ID conflicts."""
+    selected_ids = {row["id"] for row in selected}
+    counts: dict[int, int] = {}
+    for row in directory:
+        if row["id"] in selected_ids:
+            counts[row["id"]] = counts.get(row["id"], 0) + 1
+    ambiguous_ids = {identifier for identifier, count in counts.items() if count > 1}
+    return [row for row in directory if row["id"] in selected_ids] if ambiguous_ids else []
 
 
 def _model_family(value: Any) -> str:
@@ -406,11 +419,18 @@ def _navigate_catalogue(
     if not makes.get("ok") or makes.get("dry_run"):
         return _provider_failure(makes)
     try:
-        matching_makes = [
-            row for row in _directory_rows(makes, "make") if _agrees("make", values["make"][0], row["name"])
-        ]
+        directory_makes = _directory_rows(makes, "make")
+        matching_makes = [row for row in directory_makes if _agrees("make", values["make"][0], row["name"])]
     except ValueError:
         return {"status": "provider_failed", "provider_outcome": "unparsed_response"}
+    conflicting_makes = _conflicting_directory_references(directory_makes, matching_makes)
+    if conflicting_makes:
+        return {
+            "status": "ambiguous_vehicle_modification",
+            "provider_outcome": "conflicting_catalogue_reference_names",
+            "missing_fields": ["make"],
+            "choices": conflicting_makes,
+        }
     if len(matching_makes) != 1:
         return {
             "status": "ambiguous_vehicle_modification" if matching_makes else "no_catalog_vehicle",
@@ -422,13 +442,22 @@ def _navigate_catalogue(
     if not models.get("ok") or models.get("dry_run"):
         return _provider_failure(models)
     try:
+        directory_models = _directory_rows(models, "model")
         matching_models = [
             row
-            for row in _directory_rows(models, "model")
+            for row in directory_models
             if _agrees("model", _model_family(values["model"][0]), _model_family(row["name"]))
         ]
     except ValueError:
         return {"status": "provider_failed", "provider_outcome": "unparsed_response"}
+    conflicting_models = _conflicting_directory_references(directory_models, matching_models)
+    if conflicting_models:
+        return {
+            "status": "ambiguous_vehicle_modification",
+            "provider_outcome": "conflicting_catalogue_reference_names",
+            "missing_fields": ["series"],
+            "choices": conflicting_models,
+        }
     if not matching_models or len(matching_models) > MAX_MATCHED_MODELS:
         return {
             "status": "ambiguous_vehicle_modification" if matching_models else "no_catalog_vehicle",
