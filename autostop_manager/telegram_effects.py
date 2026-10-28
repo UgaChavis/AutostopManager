@@ -13,6 +13,8 @@ def server_budget(request: dict[str, Any]) -> float:
     operation = str(request.get("operation") or "")
     if operation in {"monitor_voice_stage", "owner_event_voice_stage"}:
         return 120.0
+    if operation == "job_result" and request.get("reason_code") == "human_answered":
+        return 20.0
     if operation in {"send_photo", "send_document", "send_voice", "download", "job_effect_readback"}:
         return 20.0 if request.get("mode") == "dry_run" else 150.0
     if operation in {"send", "send_owner_notification", "notify_owner", "job_handoff"}:

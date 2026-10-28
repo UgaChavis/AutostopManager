@@ -802,11 +802,13 @@ class TelegramInbox:
     def job_status(self) -> dict[str, Any]:
         counts = dict(self._db.execute("SELECT state,COUNT(*) FROM jobs GROUP BY state"))
         slot = self._db.execute(
-            "SELECT jobs.job_id,jobs.deadline_at,global_slot.phase AS slot_phase "
+            "SELECT jobs.job_id,jobs.deadline_at,jobs.state,global_slot.phase AS slot_phase "
             "FROM global_slot JOIN jobs USING(job_id) WHERE singleton=1"
         ).fetchone()
         return {
-            "active_jobs": sum(counts.get(state, 0) for state in ACTIVE_STATES),
+            "active_jobs": sum(counts.get(state, 0) for state in ACTIVE_STATES)
+            + int(slot is not None and slot["state"] == "waiting_control"),
+            "waiting_control_jobs": counts.get("waiting_control", 0),
             "needs_review_jobs": counts.get("needs_review", 0),
             "completed_jobs": counts.get("completed", 0),
             "needs_review_events": self._db.execute(
@@ -1083,7 +1085,33 @@ class TelegramInbox:
                 (peer_id, state, old["revision"] + 1, int(action in {"check_variant", "context", "reconsider"})),
             )
             self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+            if action == "resume":
+                self._release_control_waiters(peer_id)
         return self.client_control(peer_id)
+
+    def _release_control_waiters(self, peer_id: int) -> None:
+        """Release only proven-stopped requests after explicit client resume.
+
+        Called inside the current write transaction. Unknown effects and jobs
+        whose model turn has not stopped retain their original binding.
+        """
+        if self.client_control(peer_id)["state"] != "active":
+            return
+        rows = list(
+            self._db.execute(
+                "SELECT job_id FROM jobs WHERE peer_id=? AND state='waiting_control' AND execution_proof IS NOT NULL",
+                (peer_id,),
+            )
+        )
+        for row in rows:
+            job_id = row["job_id"]
+            if self._db.execute(
+                "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND (verified=0 OR kind<>'ack')",
+                (job_id,),
+            ).fetchone():
+                continue
+            self._transition(job_id, "released", reason_code="client_resumed")
+            self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=? AND state='open'", (job_id,))
 
     def _job_event_ids(self, job_id: str) -> list[str]:
         return [
@@ -1098,6 +1126,7 @@ class TelegramInbox:
             self.read_job(row[0])
             for row in self._db.execute(
                 "SELECT job_id FROM jobs WHERE state IN ('claimed','start_intent','running','needs_review') "
+                "OR (state='waiting_control' AND execution_proof IS NULL) "
                 "ORDER BY created_at,rowid"
             )
         ]
@@ -1124,7 +1153,8 @@ class TelegramInbox:
                 "SELECT job_id,peer_id,state,revision,lease,context_revision,instruction_revision,"
                 "thread_id,turn_id,reason_code,deadline_at,execution_revision,execution_proof,proof_at,"
                 "context_mode,manual_recovery FROM jobs "
-                "WHERE rowid>? AND state IN ('claimed','start_intent','running','needs_review') "
+                "WHERE rowid>? AND (state IN ('claimed','start_intent','running','needs_review') "
+                "OR (state='waiting_control' AND execution_proof IS NULL)) "
                 "ORDER BY rowid LIMIT ?",
                 (cursor, limit + 1),
             )
@@ -1484,6 +1514,7 @@ class TelegramInbox:
                     "UPDATE jobs SET state='needs_review',reason_code='execution_stopped' WHERE job_id=?", (job_id,)
                 )
             self._db.execute("DELETE FROM global_slot WHERE job_id=?", (job_id,))
+            self._release_control_waiters(job["peer_id"])
         return self.read_job(job_id)
 
     def _transition(self, job_id: str, state: str, *, reason_code: str | None = None) -> None:
@@ -1592,6 +1623,14 @@ class TelegramInbox:
             raise InboxError("inbox_failure_recovery_unsafe")
         with self._write():
             self._transition(job_id, "failed_waiting_input", reason_code="retry_on_new_client_input")
+            # A continuation may already have arrived while the failed turn
+            # was stopping. Adopt it with the original question now; waiting
+            # for another record() would strand and later replay the question.
+            if self._db.execute(
+                "SELECT 1 FROM events WHERE peer_id=? AND state='open' AND job_id IS NULL",
+                (job["peer_id"],),
+            ).fetchone():
+                self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=? AND state='open'", (job_id,))
         return self.read_job(job_id)
 
     def recover_on_startup(self) -> None:
@@ -1789,6 +1828,30 @@ class TelegramInbox:
                 )
         return self.read_effect(effect_key)
 
+    def _validate_no_reply_result(
+        self, job: sqlite3.Row, event_ids: list[str], reason_code: Any, human_message_ids: Any
+    ) -> bool:
+        if not isinstance(reason_code, str) or reason_code not in NO_REPLY_REASONS:
+            raise InboxError("inbox_no_reply_reason_invalid")
+        if reason_code == "human_answered":
+            if (
+                not isinstance(human_message_ids, list)
+                or not human_message_ids
+                or any(type(value) is not int for value in human_message_ids)
+                or len(human_message_ids) != len(set(human_message_ids))
+            ):
+                raise InboxError("inbox_human_evidence_required")
+            latest = max(self.resolve(event).message_id for event in event_ids)
+            known = {row["message_id"] for row in self.outgoing_context(job["peer_id"]) if row["origin"] == "human"}
+            if not set(human_message_ids).issubset(known) or min(human_message_ids) <= latest:
+                raise InboxError("inbox_human_evidence_required")
+        elif human_message_ids:
+            raise InboxError("inbox_human_evidence_invalid")
+        waiting_control = reason_code in {"paused", "human_takeover"}
+        if waiting_control and self.client_control(job["peer_id"])["state"] != reason_code:
+            raise InboxError("inbox_client_control_invalid")
+        return waiting_control
+
     def result(
         self,
         *,
@@ -1800,6 +1863,7 @@ class TelegramInbox:
         receipt_keys: list[str],
         reason_code: str | None = None,
         human_message_ids: list[int] | None = None,
+        guidance_revision: int | None = None,
     ) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
         if job["state"] not in {"running", "needs_review"}:
@@ -1829,28 +1893,9 @@ class TelegramInbox:
             if effect["receipt_key"] in supplied and effect["context_revision"] == job["context_revision"]
         }
         expected = {"answered": "result", "awaiting_client": "clarification", "handoff": "handoff"}
+        waiting_control = False
         if outcome == "no_reply_needed":
-            if not isinstance(reason_code, str) or reason_code not in NO_REPLY_REASONS:
-                raise InboxError("inbox_no_reply_reason_invalid")
-            if reason_code == "human_answered":
-                if (
-                    not isinstance(human_message_ids, list)
-                    or not human_message_ids
-                    or any(type(value) is not int for value in human_message_ids)
-                    or len(human_message_ids) != len(set(human_message_ids))
-                ):
-                    raise InboxError("inbox_human_evidence_required")
-                latest = max(self.resolve(event).message_id for event in event_ids)
-                known = {row["message_id"] for row in self.outgoing_context(job["peer_id"]) if row["origin"] == "human"}
-                if not set(human_message_ids).issubset(known) or min(human_message_ids) <= latest:
-                    raise InboxError("inbox_human_evidence_required")
-            elif human_message_ids:
-                raise InboxError("inbox_human_evidence_invalid")
-            if (
-                reason_code in {"paused", "human_takeover"}
-                and self.client_control(job["peer_id"])["state"] != reason_code
-            ):
-                raise InboxError("inbox_client_control_invalid")
+            waiting_control = self._validate_no_reply_result(job, event_ids, reason_code, human_message_ids)
         else:
             if reason_code is not None:
                 raise InboxError("inbox_reason_invalid")
@@ -1860,13 +1905,29 @@ class TelegramInbox:
             "context_revision"
         ] != self._peer_revision(job["peer_id"]):
             raise InboxError("inbox_context_stale")
+        if waiting_control and any(effect["attempted"] and effect["kind"] != "ack" for effect in effects):
+            raise InboxError("inbox_control_result_effects_present")
+        control = self.client_control(job["peer_id"])
+        consume_guidance = (
+            not waiting_control
+            and control["guidance_pending"]
+            and type(guidance_revision) is int
+            and guidance_revision == control["revision"]
+            and job["context_revision"] == self._peer_revision(job["peer_id"])
+        )
         with self._write():
-            self._transition(job_id, "completed", reason_code=reason_code)
-            self._db.execute("UPDATE jobs SET outcome=? WHERE job_id=?", (outcome, job_id))
-            self._db.execute(
-                "UPDATE events SET state=?,completed_at=? WHERE job_id=?",
-                ("no_reply_needed" if outcome == "no_reply_needed" else "reply_verified", self._now(), job_id),
-            )
+            self._transition(job_id, "waiting_control" if waiting_control else "completed", reason_code=reason_code)
+            self._db.execute("UPDATE jobs SET outcome=? WHERE job_id=?", (None if waiting_control else outcome, job_id))
+            if not waiting_control:
+                self._db.execute(
+                    "UPDATE events SET state=?,completed_at=? WHERE job_id=?",
+                    ("no_reply_needed" if outcome == "no_reply_needed" else "reply_verified", self._now(), job_id),
+                )
+            if consume_guidance:
+                self._db.execute(
+                    "UPDATE client_controls SET guidance_pending=0 WHERE peer_id=? AND revision=?",
+                    (job["peer_id"], guidance_revision),
+                )
             if job["manual_recovery"] and job["execution_proof"] is not None:
                 self._db.execute("DELETE FROM global_slot WHERE job_id=? AND phase='manual'", (job_id,))
             self._prune()

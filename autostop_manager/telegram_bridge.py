@@ -574,6 +574,15 @@ class InboundMonitor:
         return peer_events[start:end]
 
 
+def _service_event_without_request(event: Any) -> bool:
+    source = getattr(event, "message", None)
+    # NewMessage.Event wraps a Message, whereas history returns raw TL
+    # MessageService objects whose .message is None and .action is on self.
+    if source is None or isinstance(source, str):
+        source = event
+    return getattr(source, "action", None) is not None and not getattr(source, "media", None)
+
+
 class DurableInboundMonitor(InboundMonitor):
     """Bridge-owned durable locators, with voice files and subscribers kept transient."""
 
@@ -599,6 +608,7 @@ class DurableInboundMonitor(InboundMonitor):
         # Internal Codex guidance is transient; only its revision/pause state
         # survives restart. Missing guidance then blocks new sends safely.
         self.trusted_guidance: dict[int, list[dict[str, Any]]] = {}
+        self.guidance_read: dict[str, int] = {}
 
     def observe_self_message(self, message: Any) -> str | None:
         peer_id, message_id = getattr(message, "chat_id", None), getattr(message, "id", None)
@@ -653,8 +663,7 @@ class DurableInboundMonitor(InboundMonitor):
         if bool(getattr(event, "out", False)):
             self.observe_self_message(event)
             return None
-        source = getattr(event, "message", event)
-        if getattr(source, "action", None) is not None and not getattr(source, "media", None):
+        if _service_event_without_request(event):
             return None
         if not bool(getattr(event, "is_private", False)):
             return None
@@ -3914,6 +3923,17 @@ async def _handle_monitor_operation(
     return await _handle_monitor_read(client, inbound_monitor, str(request.get("event_id") or ""))
 
 
+def _require_current_guidance(monitor: DurableInboundMonitor, job: dict[str, Any]) -> None:
+    control = job["client_control"]
+    if not control["guidance_pending"]:
+        return
+    guidance = monitor.trusted_guidance.get(job["peer_id"], [])
+    if not any(item["revision"] == control["revision"] for item in guidance):
+        raise BridgeError("inbox_guidance_unavailable")
+    if monitor.guidance_read.get(job["job_id"]) != control["revision"]:
+        raise BridgeError("inbox_guidance_unread")
+
+
 async def _handle_operation(
     client: Any,
     config: TelegramConfig,
@@ -3950,10 +3970,7 @@ async def _handle_operation(
             raise
         job = inbound_monitor.inbox.read_job(str(request["job_id"]))
         _require_native_outcome_known(inbound_monitor, job["peer_id"])
-        control = job["client_control"]
-        guidance = inbound_monitor.trusted_guidance.get(job["peer_id"], [])
-        if control["guidance_pending"] and not any(item["revision"] == control["revision"] for item in guidance):
-            raise BridgeError("inbox_guidance_unavailable")
+        _require_current_guidance(inbound_monitor, job)
         token = _EFFECT_AUTHORITY.set(EffectAuthority(inbound_monitor.inbox, tuple(snapshot.items())))
     try:
         return await _dispatch_operation(client, config, request, inbound_monitor=inbound_monitor)
@@ -4189,6 +4206,27 @@ def _require_job_handoff_receipts(config: TelegramConfig, inbox: TelegramInbox, 
             raise BridgeError("job_handoff_receipt_required")
 
 
+async def _verify_human_answer(client: Any, monitor: DurableInboundMonitor, job: dict[str, Any], ids: Any) -> None:
+    if (
+        not isinstance(ids, list)
+        or not ids
+        or len(ids) > 100
+        or any(type(value) is not int or value < 1 for value in ids)
+        or len(ids) != len(set(ids))
+    ):
+        raise BridgeError("inbox_human_evidence_required")
+    entity, target = await _resolve_peer(client, str(job["peer_id"]))
+    messages = await client.get_messages(entity, ids=ids)
+    if not isinstance(messages, (list, tuple)) or len(messages) != len(ids):
+        raise BridgeError("inbox_human_evidence_required")
+    for message_id, message in zip(ids, messages, strict=True):
+        if (
+            not _outgoing_message_matches(message, peer_id=target["id"], message_id=message_id)
+            or monitor.observe_self_message(message) != "human"
+        ):
+            raise BridgeError("inbox_human_evidence_required")
+
+
 async def _handle_job_operation(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any]:
@@ -4220,8 +4258,9 @@ async def _handle_job_operation(
     elif operation == "job_refresh":
         job = inbox.refresh_job(**_job_arguments(request), event_ids=request.get("event_ids"))
     elif operation == "job_result":
-        current_peer = inbox.read_job(str(request.get("job_id") or ""))["peer_id"]
-        _require_native_outcome_known(monitor, current_peer)
+        current_job = inbox.read_job(str(request.get("job_id") or ""))
+        _require_native_outcome_known(monitor, current_job["peer_id"])
+        _require_current_guidance(monitor, current_job)
         if inbox.read_job(str(request.get("job_id") or "")).get("manual_recovery"):
             executor = _effect_executor()
             if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
@@ -4229,23 +4268,7 @@ async def _handle_job_operation(
         if request.get("outcome") == "handoff":
             _require_job_handoff_receipts(config, inbox, request)
         if request.get("reason_code") == "human_answered":
-            job = inbox.read_job(str(request.get("job_id") or ""))
-            ids = request.get("human_message_ids")
-            if (
-                not isinstance(ids, list)
-                or not ids
-                or len(ids) > 100
-                or any(type(value) is not int or value < 1 for value in ids)
-            ):
-                raise BridgeError("inbox_human_evidence_required")
-            entity, target = await _resolve_peer(client, str(job["peer_id"]))
-            for message_id in ids:
-                message = await client.get_messages(entity, ids=message_id)
-                if (
-                    not _outgoing_message_matches(message, peer_id=target["id"], message_id=message_id)
-                    or monitor.observe_self_message(message) != "human"
-                ):
-                    raise BridgeError("inbox_human_evidence_required")
+            await _verify_human_answer(client, monitor, current_job, request.get("human_message_ids"))
         job = inbox.result(
             **_job_arguments(request),
             outcome=str(request.get("outcome") or ""),
@@ -4253,7 +4276,9 @@ async def _handle_job_operation(
             receipt_keys=_job_string_list(request, "receipt_keys"),
             reason_code=request.get("reason_code"),
             human_message_ids=request.get("human_message_ids"),
+            guidance_revision=monitor.guidance_read.get(str(request.get("job_id") or "")),
         )
+        monitor.guidance_read.pop(job["job_id"], None)
         monitor.request_reconciliation()
     elif operation == "job_resolve":
         job = inbox.resolve_job(
@@ -4642,6 +4667,11 @@ async def _handle_job_control(
     if operation == "job_read":
         job = inbox.read_job(str(request.get("job_id") or ""))
         job["trusted_guidance"] = monitor.trusted_guidance.get(job["peer_id"], [])
+        revision = job["client_control"]["revision"]
+        if job["client_control"]["guidance_pending"] and any(
+            item["revision"] == revision for item in job["trusted_guidance"]
+        ):
+            monitor.guidance_read[job["job_id"]] = revision
         return {"ok": True, "job": job}
     if operation == "job_client_control":
         return _handle_client_control(request, monitor)
@@ -5469,7 +5499,10 @@ async def _reconcile_peer_history(
             if not bool(getattr(message, "is_private", False)) or int(getattr(message, "chat_id", 0) or 0) != peer_id:
                 raise BridgeError("history_peer_invalid")
             try:
-                monitor.inbox.record(peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second")
+                if not _service_event_without_request(message):
+                    monitor.inbox.record(
+                        peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second"
+                    )
             except InboxError as exc:
                 if str(exc) != "inbound_monitor_full":
                     raise

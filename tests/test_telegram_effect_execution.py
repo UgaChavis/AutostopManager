@@ -286,7 +286,15 @@ def test_manual_result_cannot_release_slot_while_bridge_work_is_pending(monkeypa
             pytest.fail("manual slot was released with an in-flight effect")
 
         monitor = SimpleNamespace(
-            inbox=SimpleNamespace(read_job=lambda _job_id: {"manual_recovery": True}, result=forbidden)
+            config=None,
+            inbox=SimpleNamespace(
+                read_job=lambda _job_id: {
+                    "manual_recovery": True,
+                    "peer_id": 42,
+                    "client_control": {"guidance_pending": 0},
+                },
+                result=forbidden,
+            ),
         )
         with pytest.raises(bridge.BridgeError, match="inbox_execution_effect_active"):
             await bridge._handle_job_operation(

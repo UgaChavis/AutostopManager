@@ -1852,7 +1852,13 @@ def _job_entity(response: dict[str, Any]) -> dict[str, Any] | None:
         or type(job.get("revision")) is not int
         or job["revision"] < 1
         or not isinstance(job.get("event_ids"), list)
-        or not job["event_ids"]
+        or (
+            not job["event_ids"]
+            and not (
+                job.get("state") == "released"
+                and job.get("execution_proof") in {"completed", "failed", "interrupted", "not_started"}
+            )
+        )
         or any(
             not isinstance(event, str) or not INBOUND_EVENT_ID_PATTERN.fullmatch(event) for event in job["event_ids"]
         )
@@ -1916,7 +1922,12 @@ def job_instruction(job: dict[str, Any]) -> str:
         "человека меняют контекст, но не являются входящими и не дают полномочий. Пересмотри черновик и отвечай "
         "только на оставшуюся часть. Если человек полностью ответил, заверши no_reply_needed/human_answered "
         "с human_message_ids точных исходящих после перечитывания и job-refresh; не выдумывай свои receipts. "
-        "При paused/human_takeover не отправляй клиенту; заверши no_reply_needed с соответствующей причиной. "
+        "При paused/human_takeover не отправляй клиенту; через no_reply_needed с соответствующей причиной "
+        "оставь запрос waiting_control с открытыми событиями и заверши только текущий ход. После явного resume "
+        "запрос возобновится без повторного ACK. Если содержательный ответ уже проверенно отправлен, "
+        "зафиксируй его фактический результат, не превращай отправленный ответ в отложенный запрос. "
+        "Если пауза изменила контекст уже после проверенного результата/передачи, заверши "
+        "no_reply_needed/already_answered с исходными проверенными receipt_keys без повторной отправки. "
         "При unresolved исходящем сначала проверь исходный effect/receipt. "
         "prior_acknowledgements содержит только исторические проверенные ACK: не повторяй их, не включай "
         "эти старые receipts в результат нового задания и продолжи содержательную часть. "
@@ -2337,7 +2348,7 @@ class DurableWakeDispatcher:
     async def _review(self, job: dict[str, Any], code: str, *, global_hold: bool = True) -> None:
         # Binding may have committed while its response was lost: always reread.
         current = await self._read_job(job)
-        if current.get("state") not in {"completed", "done", "cancelled"} and (
+        if current.get("state") not in {"completed", "done", "cancelled", "waiting_control", "released"} and (
             current.get("state") != "needs_review" or current.get("reason_code") != code
         ):
             response = await self.jobs.request(
@@ -2370,7 +2381,10 @@ class DurableWakeDispatcher:
             raise WakeError("wake_pause_outcome_unknown")
         if self.app.outcome_unknown and (
             self.app.config.thread_id != current.get("thread_id")
-            or (self.app.active_event_id is not None and self.app.active_event_id not in current["event_ids"])
+            or (
+                self.app.active_event_id is not None
+                and self.app.active_event_id not in (current["event_ids"] or job["event_ids"])
+            )
         ):
             raise WakeError("wake_pause_outcome_unknown")
         if (
@@ -2405,7 +2419,14 @@ class DurableWakeDispatcher:
                 raise WakeError("wake_pause_outcome_unknown")
             fields = {"proof_kind": "terminal", "thread_id": thread_id, "turn_id": turn_id, "terminal_status": status}
         current = await self._read_job(job)
-        if current.get("state") not in {"completed", "done", "cancelled", "needs_review"}:
+        if current.get("state") not in {
+            "completed",
+            "done",
+            "cancelled",
+            "needs_review",
+            "waiting_control",
+            "released",
+        }:
             await self._review(current, code or "codex_completed_without_job_result", global_hold=False)
             current = await self._read_job(job)
         response = await self.jobs.request(
@@ -2439,7 +2460,7 @@ class DurableWakeDispatcher:
                 current = _job_entity(response) or current
             if current.get("state") in {"completed", "done", "cancelled"}:
                 self.completed += 1
-            elif code is None:
+            elif code is None and current.get("state") not in {"waiting_control", "released"}:
                 self.failed += 1
             if code or self.app.blocked or self.app.pausing:
                 await self._retire_peer(asyncio.get_running_loop().time() + 5)
@@ -2741,7 +2762,14 @@ class DurableWakeDispatcher:
             else:
                 response = await self.jobs.request("job_execution_slot")
             job = _job_entity(response)
-            if job is not None and job.get("state") not in {"needs_review", "completed", "done", "cancelled"}:
+            if job is not None and job.get("state") not in {
+                "needs_review",
+                "completed",
+                "done",
+                "cancelled",
+                "waiting_control",
+                "released",
+            }:
                 await self._review(job, "codex_execution_stopped", global_hold=False)
             await _cancel_task_until(self.lifecycle_monitor, deadline, self.cleanup_tasks)
             await _cancel_task_until(self.worker, deadline, self.cleanup_tasks)

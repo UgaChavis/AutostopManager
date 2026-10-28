@@ -54,6 +54,8 @@ class Client:
         return SimpleNamespace(pts=self.update_revision, qts=0, seq=self.update_revision)
 
     async def get_messages(self, _entity, *, ids=None, limit=None):
+        if isinstance(ids, list):
+            return [self.messages.get(identifier) for identifier in ids]
         if ids is not None:
             return self.messages.get(ids)
         rows = sorted(self.messages.values(), key=lambda message: message.id, reverse=True)
