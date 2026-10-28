@@ -7,10 +7,11 @@ import json
 import pytest
 
 from autostop_manager.automotive_contracts import binding
-from autostop_manager.tecdoc_vehicle_selection import _independent_values
+from autostop_manager.tecdoc_vehicle_selection import _independent_values, resolve_tecdoc_vehicle
 from autostop_manager.vehicle_identity import _check_digit, _family_candidates, decode_vehicle_identity
 from autostop_manager.vin_oem_resolver import _identity_with_partsapi_agreement
 from tests.test_e2_partsapi_group_resolver import _group_call
+from tests.test_tecdoc_vehicle_selection import _car, _catalogue, _identity
 
 
 def _synthetic_identifier() -> str:
@@ -166,3 +167,110 @@ def test_group_comparison_keeps_claimed_market_as_a_conflicting_constraint(claim
     assert {row["field"] for row in agreement["conflicting_fields"]} == {"market"}
     assert readiness["ready_for_tecdoc_candidate_lookup"] is False
     assert readiness["ready_for_crm_writeback"] is False
+
+
+_TECHNICAL_CONSTRAINTS = [
+    ("displacement_cc", 9999, 1995, {"displacement_cc": 1995}),
+    ("power_hp", 999, 245, {"power_hp": 245}),
+    ("power_kw", 999, 180, {"power_kw": 180}),
+    ("fuel_type", "petrol", "diesel", {"fuel_type": "diesel"}),
+    (
+        "production_date",
+        "2010-01-01",
+        "2011-06-01",
+        {"production_date_from": "2011-01-01", "production_date_to": "2011-12-31"},
+    ),
+]
+
+
+@pytest.mark.parametrize(("field", "claimed", "matching", "catalog"), _TECHNICAL_CONSTRAINTS)
+@pytest.mark.parametrize("location", ["context", "caller_evidence"])
+@pytest.mark.parametrize("claimed_source", ["NHTSA vPIC", "partsapi_ru"])
+def test_claimed_vpic_technical_constraint_blocks_both_catalog_paths(
+    field, claimed, matching, catalog, location, claimed_source
+):
+    context = (
+        _context(**{field: claimed}, field_provenance={field: claimed_source}) if location == "context" else _context()
+    )
+    identity = _decode(context, {})
+    fallback_identity = _identity(engine="CRCA")
+    if location == "caller_evidence":
+        row = {"field": field, "value": claimed, "source": claimed_source, "source_kind": "caller"}
+        identity["field_evidence"].append(row)
+        fallback_identity["field_evidence"].append(row)
+
+    group = _group_call()
+    group["input_binding"] = binding(_synthetic_identifier(), "vin")
+    group["vehicle_profiles"][0].update(
+        input_binding=group["input_binding"], make="VOLKSWAGEN", model="Golf", vehicle_type="PC", **catalog
+    )
+    agreement = _identity_with_partsapi_agreement(identity, group, independent_context=context)[
+        "parts_lookup_readiness"
+    ]
+    assert agreement["cross_source_agreement"]["status"] == "conflict"
+    assert field in {row["field"] for row in agreement["cross_source_agreement"]["conflicting_fields"]}
+    assert agreement["ready_for_tecdoc_candidate_lookup"] is False
+
+    call, _ = _catalogue([_car(**catalog)])
+    fallback = resolve_tecdoc_vehicle(
+        fallback_identity,
+        vehicle_type="PC",
+        call=call,
+        independent_context={field: claimed, "field_provenance": {field: claimed_source}}
+        if location == "context"
+        else None,
+    )
+    assert fallback["status"] == "conflict"
+    assert field in {row["field"] for row in fallback["conflicting_fields"]}
+    assert fallback["selected_profile"] is None
+    assert fallback["exact_applicability_confirmed"] is False
+
+
+@pytest.mark.parametrize(("field", "claimed", "matching", "catalog"), _TECHNICAL_CONSTRAINTS)
+@pytest.mark.parametrize("claimed_source", ["NHTSA vPIC", "partsapi_ru"])
+def test_matching_claimed_technical_constraint_is_not_positive_independent_confirmation(
+    field, claimed, matching, catalog, claimed_source
+):
+    context = {field: matching, "field_provenance": {field: claimed_source}}
+    assert _independent_values({}, context)[field] == []
+    call, _ = _catalogue([_car(**catalog)])
+    fallback = resolve_tecdoc_vehicle(_identity(), vehicle_type="PC", call=call, independent_context=context)
+    assert fallback["status"] == "needs_vehicle_context"
+    assert field not in fallback["matched_fields"]
+    assert fallback["selected_profile"] is None
+
+    call, _ = _catalogue([_car(**catalog)])
+    matched = resolve_tecdoc_vehicle(
+        _identity(engine="CRCA"), vehicle_type="PC", call=call, independent_context=context
+    )
+    assert matched["status"] == "matched"
+    assert field not in matched["matched_fields"]
+    assert field in matched["missing_fields"]
+    assert matched["exact_applicability_confirmed"] is False
+
+    group_context = _context(**{field: matching}, field_provenance={field: claimed_source})
+    group_identity = _decode(group_context, {})
+    group = _group_call()
+    group["input_binding"] = binding(_synthetic_identifier(), "vin")
+    group["vehicle_profiles"][0].update(
+        input_binding=group["input_binding"], make="VOLKSWAGEN", model="Golf", vehicle_type="PC", **catalog
+    )
+    readiness = _identity_with_partsapi_agreement(group_identity, group, independent_context=group_context)[
+        "parts_lookup_readiness"
+    ]
+    assert readiness["cross_source_agreement"]["status"] == "group_match"
+    assert field not in readiness["cross_source_agreement"]["matched_fields"]
+    assert readiness["ready_for_crm_writeback"] is False
+
+
+def test_contradictory_caller_context_constraints_stop_before_catalogue_calls():
+    context = {
+        "power_hp": 245,
+        "vehicle_profile": {"power_hp": 999},
+        "field_provenance": {"power_hp": "NHTSA vPIC"},
+    }
+    call, calls = _catalogue([_car(power_hp=245)])
+    result = resolve_tecdoc_vehicle(_identity(engine="CRCA"), vehicle_type="PC", call=call, independent_context=context)
+    assert result["status"] == "conflict"
+    assert {row["field"] for row in result["conflicting_fields"]} == {"power_hp"}
+    assert calls == []

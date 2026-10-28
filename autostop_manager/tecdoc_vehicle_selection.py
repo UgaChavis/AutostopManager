@@ -142,7 +142,26 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
         )
         field = _ALIASES.get(str(row.get("field")), row.get("field"))
         value = row.get("value")
-        if trusted and field in values and _present(value) and value not in values[field]:
+        if trusted and isinstance(field, str) and field in values and _present(value) and value not in values[field]:
+            values[field].append(value)
+    return values
+
+
+def _constraint_values(identity: dict[str, Any], context: dict[str, Any] | None) -> dict[str, list[Any]]:
+    """Keep caller claims as negative constraints without treating them as independent proof."""
+    from .automotive_contracts import context_field_evidence
+
+    values = _independent_values(identity, context)
+    evidence = [
+        row
+        for row in identity.get("field_evidence") or []
+        if isinstance(row, dict) and row.get("source_kind") == "caller"
+    ]
+    evidence.extend(context_field_evidence(context or {}))
+    for row in evidence:
+        field = _ALIASES.get(str(row.get("field")), row.get("field"))
+        value = row.get("value")
+        if isinstance(field, str) and field in values and _present(value) and value not in values[field]:
             values[field].append(value)
     return values
 
@@ -159,7 +178,7 @@ def _invalid_context_numbers(context: dict[str, Any] | None) -> list[str]:
 
 def _context_conflicts(identity: dict[str, Any], values: dict[str, list[Any]]) -> list[dict[str, Any]]:
     conflicts = [
-        {"field": field, "identity": candidates, "source": "independent_context"}
+        {"field": field, "identity": candidates, "source": "vehicle_context_constraints"}
         for field, candidates in values.items()
         if len(candidates) > 1
         and any(
@@ -524,7 +543,8 @@ def resolve_tecdoc_vehicle(
         "catalogue_route": "getMakes/getModels/getCars",
     }
     values = _independent_values(identity, independent_context)
-    conflicts = _context_conflicts(identity, values)
+    constraints = _constraint_values(identity, independent_context)
+    conflicts = _context_conflicts(identity, constraints)
     if conflicts:
         return {
             **result,
@@ -533,7 +553,7 @@ def resolve_tecdoc_vehicle(
             "conflicting_fields": conflicts,
         }
     invalid = _invalid_context_numbers(independent_context) + [
-        field for field in _NUMBERS for value in values[field] if _number(value) is None
+        field for field in _NUMBERS for value in constraints[field] if _number(value) is None
     ]
     if invalid:
         return {**result, "invalid_context_fields": invalid, "missing_fields": invalid}
@@ -564,16 +584,16 @@ def resolve_tecdoc_vehicle(
     navigation = _navigate_catalogue(values, car_type, invoke)
     if navigation["status"] != "profiles_present":
         return {**result, **navigation}
-    enrichment = _enrich_engines(navigation["vehicle_profiles"], values, car_type, invoke)
+    enrichment = _enrich_engines(navigation["vehicle_profiles"], constraints, car_type, invoke)
     if enrichment["status"] != "profiles_present":
         return {**result, **enrichment}
     profiles = enrichment["vehicle_profiles"]
-    eligible = [profile for profile in profiles if not _profile_conflicts(profile, values)]
+    eligible = [profile for profile in profiles if not _profile_conflicts(profile, constraints)]
     if not eligible:
         rejected = [
             {"tecdoc_car_id": profile["tecdoc_car_id"], **conflict}
             for profile in profiles
-            for conflict in _profile_conflicts(profile, values)
+            for conflict in _profile_conflicts(profile, constraints)
         ]
         return {
             **result,
@@ -606,6 +626,9 @@ def resolve_tecdoc_vehicle(
             "missing_fields": unmatched or ["engine", "power_hp", "production_year"],
         }
     unverified = [field for field in ("engine", "transmission", "drivetrain") if not values[field]]
+    unverified.extend(
+        field for field, claimed in constraints.items() if claimed and not values[field] and field not in unverified
+    )
     return {
         **result,
         "status": "matched",

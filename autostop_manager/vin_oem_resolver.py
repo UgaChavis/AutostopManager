@@ -13,8 +13,8 @@ from .catalog_clients import (
 )
 from .parts_intent import normalize_part_intent
 from .tecdoc_vehicle_selection import (
+    _constraint_values,
     _context_conflicts,
-    _independent_values,
     _profile_conflicts,
     resolve_tecdoc_vehicle,
 )
@@ -462,8 +462,8 @@ def _assess_partsapi_identity_agreement(
             }
         )
     extra_fields = {"displacement_cc", "power_hp", "power_kw", "engine_type", "fuel_type", "production_date"}
-    independent_values = _independent_values(identity, independent_context)
-    extra_values = {field: values if field in extra_fields else [] for field, values in independent_values.items()}
+    constraint_values = _constraint_values(identity, independent_context)
+    extra_values = {field: values if field in extra_fields else [] for field, values in constraint_values.items()}
     extra_known_conflicts = _context_conflicts({}, extra_values)
     independent_conflict = independent_conflict or bool(extra_known_conflicts)
     conflicts.extend(
@@ -1063,10 +1063,10 @@ def _resolver_identity_context(
     prepared_context = validate_identity_input(raw_identifier, crm_context, identifier_type=identifier_type)
     context = prepared_context["context"]
     context_errors = list(prepared_context["errors"])
-    independently_supplied = _independent_values({}, crm_context if isinstance(crm_context, dict) else None)
+    supplied_constraints = _constraint_values({}, crm_context if isinstance(crm_context, dict) else None)
     context_errors.extend(
         {"code": "conflicting_context_field", "field": row["field"], "stage": "input_validation"}
-        for row in _context_conflicts({}, independently_supplied)
+        for row in _context_conflicts({}, supplied_constraints)
     )
     for key, value in explicit_context.items():
         if value in (None, ""):
