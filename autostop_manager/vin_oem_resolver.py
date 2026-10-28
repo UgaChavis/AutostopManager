@@ -627,6 +627,8 @@ def _identity_with_tecdoc_selection(identity: dict[str, Any], selection: dict[st
             "requires_exact_identifier_confirmation": True,
             "independent_vehicle_context_required": True,
             "partsapi_profile": selected,
+            "selection_depends_on_unverified_fields": selection.get("selection_depends_on_unverified_fields") or [],
+            "warnings": selection.get("warnings") or [],
         }
     updated = {**identity, "parts_lookup_readiness": readiness}
     if selection.get("conflict_scope") == "independent_vehicle":
@@ -1325,6 +1327,7 @@ def _resolve_vin_oem_parts(
             vehicle_type=requested_vehicle_type or _canonical_vehicle_type(context.get("vehicle_type")),
             independent_context=context,
             call=fallback_call,
+            trusted_provider_evidence=vehicle_identity is None,
         )
         identity = _identity_with_tecdoc_selection(identity, fallback)
         identity_conflict = identity_conflict or identity_has_blocking_conflicts(identity, scope="vehicle")
@@ -1514,7 +1517,7 @@ def _resolve_vin_oem_parts(
             if fallback.get("status") == "conflict"
             else "needs_vehicle_modification"
         )
-    result = {
+    result: dict[str, Any] = {
         "ok": True,
         "schema": "VinOemResolution",  # Existing MCP consumer contract.
         "mode": "read_only_tecdoc_catalog_research",
@@ -1538,6 +1541,8 @@ def _resolve_vin_oem_parts(
             "vin_fitment_confirmed": False,
         },
         "tecdoc_vehicle_fallback": fallback,
+        "selection_depends_on_unverified_fields": (fallback or {}).get("selection_depends_on_unverified_fields") or [],
+        "warnings": (fallback or {}).get("warnings") or [],
         "category_resolution": category_resolution,
         "readiness": readiness,
         "article_candidates": article_candidates,

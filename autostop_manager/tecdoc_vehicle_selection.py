@@ -587,12 +587,74 @@ def _matched_fields(profile: dict[str, Any], values: dict[str, list[Any]]) -> li
     return fields
 
 
+def _selection_dependencies(
+    profiles: list[dict[str, Any]],
+    selected: dict[str, Any],
+    identity: dict[str, Any],
+    values: dict[str, list[Any]],
+    constraints: dict[str, list[Any]],
+    *,
+    trusted_provider_evidence: bool,
+) -> list[str]:
+    """Disclose caller facts which eliminated otherwise eligible catalog alternatives."""
+    verified: dict[str, list[Any]] = {field: [] for field in _FIELDS}
+    identity_trust = identity.get("trust")
+    caller_dossier = isinstance(identity_trust, dict) and identity_trust.get("state") == "caller_supplied_unverified"
+    for row in identity.get("field_evidence") or []:
+        if (
+            not trusted_provider_evidence
+            or caller_dossier
+            or not isinstance(row, dict)
+            or row.get("source") != "NHTSA vPIC"
+            or row.get("source_kind") != "provider"
+            or row.get("bound") is not True
+            or row.get("independent") is not True
+            or row.get("identifier_binding") != "exact"
+            or row.get("strength") != "supported"
+            or row.get("depends_on")
+        ):
+            continue
+        # A fresh decoder result uses canonical field names. Public aliases do
+        # not by themselves establish that a provider supplied the value.
+        field = row.get("field")
+        if isinstance(field, str) and field in verified and _present(row.get("value")):
+            verified[field].append(row["value"])
+
+    def corroborated(field: str, value: Any) -> bool:
+        return any(
+            _number(value) is not None and _number(value) == _number(claim)
+            if field in _NUMBERS
+            else " ".join(str(value).split()).casefold() == " ".join(str(claim).split()).casefold()
+            for claim in verified[field]
+        )
+
+    unverified = {
+        field: [value for value in known if not corroborated(field, value)] for field, known in constraints.items()
+    }
+    fields: set[str] = set()
+    for profile in profiles:
+        if _profile_conflicts(profile, verified):
+            continue
+        fields.update(row["field"] for row in _profile_conflicts(profile, unverified))
+    verified_values = {
+        field: [value for value in known if corroborated(field, value)] for field, known in values.items()
+    }
+    unverified_values = {
+        field: [value for value in known if not corroborated(field, value)] for field, known in values.items()
+    }
+    fields.update(field for field in ("make", "model") if values[field] and not verified_values[field])
+    if not set(_matched_fields(selected, verified_values)) - {"make", "model", "model_year"}:
+        fields.update(set(_matched_fields(selected, unverified_values)) - {"make", "model", "model_year"})
+    return sorted(fields)
+
+
 def resolve_tecdoc_vehicle(
     identity: dict[str, Any],
     *,
     vehicle_type: str | None,
     call: Callable[..., dict[str, Any]],
     independent_context: dict[str, Any] | None = None,
+    trusted_provider_evidence: bool = False,
 ) -> dict[str, Any]:
     """Navigate the catalogue without using its VINdecode as identity evidence.
 
@@ -606,6 +668,8 @@ def resolve_tecdoc_vehicle(
         "missing_fields": [],
         "conflicting_fields": [],
         "matched_fields": [],
+        "selection_depends_on_unverified_fields": [],
+        "warnings": [],
         "calls": [],
         "requires_exact_identifier_confirmation": True,
         "exact_applicability_confirmed": False,
@@ -700,6 +764,18 @@ def resolve_tecdoc_vehicle(
     unverified.extend(
         field for field, claimed in constraints.items() if claimed and not values[field] and field not in unverified
     )
+    dependencies = _selection_dependencies(
+        profiles, selected, identity, values, constraints, trusted_provider_evidence=trusted_provider_evidence
+    )
+    warnings = (
+        [
+            "Выбор каталожного кандидата зависит от неподтверждённых характеристик: "
+            + ", ".join(dependencies)
+            + ". Уточните их; применимость к VIN и оригинальный артикул не подтверждены."
+        ]
+        if dependencies
+        else []
+    )
     return {
         **result,
         "status": "matched",
@@ -707,4 +783,6 @@ def resolve_tecdoc_vehicle(
         "selected_profile": selected,
         "matched_fields": matched,
         "missing_fields": unverified,
+        "selection_depends_on_unverified_fields": dependencies,
+        "warnings": warnings,
     }

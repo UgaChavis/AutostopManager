@@ -567,6 +567,7 @@ def benchmark_vin_parts_lookup(
                 vehicle_type=item_vehicle_type,
                 independent_context=request_context,
                 call=fallback_call,
+                trusted_provider_evidence=True,
             )
             identity = _identity_with_tecdoc_selection(identity, fallback)
         oem_resolution = None
