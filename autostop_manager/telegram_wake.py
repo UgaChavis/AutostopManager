@@ -2673,11 +2673,32 @@ class DurableWakeDispatcher:
         finally:
             self.active = False
 
+    def _idle_pause_locally_clear(self) -> bool:
+        if (
+            self.active
+            or self.current_job is not None
+            or self.terminal_stop_pending
+            or self.cleanup_pending
+            or (self.execution_task is not None and not self.execution_task.done())
+        ):
+            return False
+        return all(
+            app.active_turn is None
+            and app.active_event_id is None
+            and not app.outcome_unknown
+            and app.failed_turn is None
+            for app in (self.app, self.bootstrap_app)
+        )
+
     async def pause_if_idle(self) -> None:
         # This operation deliberately leaves the worker alive: persistent pause
         # prevents new claims, without cancelling a turn or touching old jobs.
         async with self.control_lock:
+            if not self._idle_pause_locally_clear():
+                raise WakeError("wake_idle_local_unproven")
             await self._read_status()
+            if not self._idle_pause_locally_clear():
+                raise WakeError("wake_idle_local_unproven")
             revision = self.inbox_status.get("execution_revision")
             if type(revision) is not int or revision < 1:
                 raise WakeError("wake_job_status_invalid")
@@ -2693,6 +2714,10 @@ class DurableWakeDispatcher:
             self.inbox_status = status
             self.inbox_status_at = asyncio.get_running_loop().time()
             self.jobs.changed.set()
+            # The durable pause may have committed even if local state changed
+            # while the bridge response was in flight. Never claim local idle.
+            if not self._idle_pause_locally_clear():
+                raise WakeError("wake_idle_local_unproven_after_pause")
 
     async def pause(self, *, persist: bool = True) -> None:
         self.pause_requested = True

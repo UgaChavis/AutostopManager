@@ -1023,3 +1023,89 @@ def test_pause_claim_concurrent_ipc_preserves_event_and_slot(tmp_path, bundle):
             assert runtime.client.sent == 0
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "execution_task",
+        "active",
+        "current_job",
+        "terminal_stop_pending",
+        "cleanup",
+        "active_turn",
+        "active_event",
+        "outcome_unknown",
+        "failed_turn",
+        "bootstrap_active_turn",
+        "bootstrap_unknown",
+    ],
+)
+def test_pause_if_idle_rejects_local_orphan_and_cleanup(tmp_path, bundle, condition):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(906))
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            bootstrap = wake.AppServer(
+                wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION)
+            )
+            dispatcher.bootstrap_app = bootstrap
+            pending = asyncio.get_running_loop().create_future()
+            if condition == "execution_task":
+                dispatcher.execution_task = pending
+            elif condition == "cleanup":
+                dispatcher.cleanup_tasks.add(pending)
+            elif condition in {"active", "terminal_stop_pending"}:
+                setattr(dispatcher, condition, True)
+            elif condition == "current_job":
+                dispatcher.current_job = {"job_id": "synthetic"}
+            elif condition == "active_turn":
+                app.active_turn = "synthetic-turn"
+            elif condition == "active_event":
+                app.active_event_id = "synthetic-event"
+            elif condition == "outcome_unknown":
+                app.outcome_unknown = True
+            elif condition == "failed_turn":
+                app.failed_turn = object()
+            elif condition == "bootstrap_active_turn":
+                bootstrap.active_turn = "synthetic-legacy-turn"
+            else:
+                bootstrap.outcome_unknown = True
+            before = runtime.inbox.status()
+            try:
+                with pytest.raises(wake.WakeError, match="wake_idle_local_unproven"):
+                    await dispatcher.pause_if_idle()
+                assert runtime.inbox.status() == before
+                assert runtime.inbox.resolve(event).message_id == 906
+                assert not pending.cancelled()
+                assert runtime.client.sent == 0
+            finally:
+                pending.cancel()
+
+    asyncio.run(scenario())
+
+
+def test_pause_if_idle_local_state_changes_after_commit(tmp_path, bundle, monkeypatch):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            event = runtime.monitor.record(runtime.client.inbound(907))
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), runtime.jobs)
+            original = runtime.jobs.request
+
+            async def orphan_after_commit(operation, **arguments):
+                result = await original(operation, **arguments)
+                if operation == "job_execution_pause_if_idle":
+                    app.active_turn = "synthetic-orphan"
+                return result
+
+            monkeypatch.setattr(runtime.jobs, "request", orphan_after_commit)
+            with pytest.raises(wake.WakeError, match="wake_idle_local_unproven_after_pause"):
+                await dispatcher.pause_if_idle()
+            assert runtime.inbox.status()["execution_paused"] is True
+            assert app.active_turn == "synthetic-orphan"
+            assert runtime.inbox.resolve(event).message_id == 907
+            assert runtime.client.sent == 0
+
+    asyncio.run(scenario())
