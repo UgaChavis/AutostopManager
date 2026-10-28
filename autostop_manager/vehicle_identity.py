@@ -973,7 +973,10 @@ def _evidence_metadata(
             )
     for index, row in enumerate(evidence):
         source = row["source"]
-        origin = origins.get(row["field"], {}) if source.startswith("CRM") else {}
+        # A caller can describe where a context value came from, but that
+        # description cannot turn the value into a fresh provider response.
+        caller_supplied = source.startswith("CRM")
+        origin = origins.get(row["field"], {}) if caller_supplied else {}
         if origin.get("derived"):
             source = row["source"] = origin["source"]
             row["primary_lineage"] = origin["primary_lineage"]
@@ -990,7 +993,15 @@ def _evidence_metadata(
             else "validated_scalar",
             "changed": row["value"] != row["raw_value"],
         }
-        provider = vpic_result if source == "NHTSA vPIC" else wmi_result if source == "NHTSA vPIC WMI" else None
+        provider = (
+            None
+            if caller_supplied
+            else vpic_result
+            if source == "NHTSA vPIC"
+            else wmi_result
+            if source == "NHTSA vPIC WMI"
+            else None
+        )
         binding = (provider or {}).get("identifier_binding") or {}
         clean = bool(
             provider and provider.get("ok") and (source == "NHTSA vPIC WMI" or _vpic_has_clean_diagnostics(provider))
@@ -1004,7 +1015,7 @@ def _evidence_metadata(
         )
         source_kind = (
             "caller"
-            if source.startswith("CRM")
+            if caller_supplied
             else "provider"
             if provider or origin.get("derived")
             else "local_hint"
@@ -1027,7 +1038,9 @@ def _effective_transmission(row: dict[str, Any], evidence: list[dict[str, Any]])
         (
             item["value"]
             for item in evidence
-            if item["source"] == row["source"] and item["field"] == "transmission_speeds"
+            if item["source"] == row["source"]
+            and item["source_kind"] == row["source_kind"]
+            and item["field"] == "transmission_speeds"
         ),
         None,
     )
@@ -1056,11 +1069,7 @@ def _semantic_field_conflicts(evidence: list[dict[str, Any]], legacy: list[dict[
     conflicts = [dict(row, blocking_scopes=["vehicle"], code="vin_diagnostic_conflict") for row in legacy]
     for field in IDENTITY_FIELDS:
         rows = [row for row in evidence if row["field"] == field and _is_conflict_evidence(row)]
-        differing = [
-            (a, b)
-            for a, b in combinations(rows, 2)
-            if a["source"] != b["source"] and not _evidence_pair_agrees(field, a, b, evidence)
-        ]
+        differing = [(a, b) for a, b in combinations(rows, 2) if not _evidence_pair_agrees(field, a, b, evidence)]
         if not differing:
             continue
         ids = sorted({row["evidence_id"] for pair in differing for row in pair})
@@ -1140,8 +1149,10 @@ def _field_status_and_provenance(
 
 def _family_candidates(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for source in dict.fromkeys(row["source"] for row in evidence):
-        fields = {row["field"]: row for row in evidence if row["source"] == source}
+    for source, source_kind in dict.fromkeys((row["source"], row["source_kind"]) for row in evidence):
+        fields = {
+            row["field"]: row for row in evidence if row["source"] == source and row["source_kind"] == source_kind
+        }
         make, model = fields.get("make"), fields.get("model") or fields.get("model_family")
         if not make or not model:
             continue
@@ -1149,14 +1160,23 @@ def _family_candidates(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
             (
                 row
                 for row in candidates
-                if identity_values_agree("make", row["make"], make["value"])
+                if row["source_kind"] == source_kind
+                and identity_values_agree("make", row["make"], make["value"])
                 and identity_values_agree("model", row["model"], model["value"])
             ),
             None,
         )
         ids = [make["evidence_id"], model["evidence_id"]]
         if candidate is None:
-            candidates.append({"make": make["value"], "model": model["value"], "source": source, "evidence_ids": ids})
+            candidates.append(
+                {
+                    "make": make["value"],
+                    "model": model["value"],
+                    "source": source,
+                    "source_kind": source_kind,
+                    "evidence_ids": ids,
+                }
+            )
         else:
             candidate["evidence_ids"].extend(ids)
     return candidates

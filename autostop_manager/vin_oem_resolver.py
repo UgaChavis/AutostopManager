@@ -412,24 +412,34 @@ def _assess_partsapi_identity_agreement(
     for field, (profile_value, right) in compare_fields.items():
         field_evidence = [item for item in identity.get("field_evidence") or [] if item.get("field") == field]
         sources = {"CRM context"} if field == "market" else {"CRM context", "NHTSA vPIC"}
-        values = [item.get("value", profile_value) for item in field_evidence if item.get("source") in sources]
+        # A caller's claimed origin may not establish a provider match, but
+        # the supplied value must still be checked for contradictions.
+        values = [
+            (
+                item.get("value", profile_value),
+                item.get("source") in sources
+                and (item.get("source") != "NHTSA vPIC" or item.get("source_kind") != "caller"),
+            )
+            for item in field_evidence
+            if item.get("source") in sources or item.get("source_kind") == "caller"
+        ]
         # Geographic and platform hints do not establish exact engine/market facts.
         if not field_evidence or (not values and field not in {"engine", "market"}):
-            values = [profile_value]
-        values = [value for value in values if _normalize_compare_value(value)]
+            values = [(profile_value, True)]
+        values = [(value, credit) for value, credit in values if _normalize_compare_value(value)]
         if field == "model_year" and values:
-            year = _partsapi_year(values[0])
+            year = _partsapi_year(values[0][0])
         if field == "production_year" and values:
-            production_year = _partsapi_year(values[0])
-        if values and any(not identity_values_agree(field, values[0], value) for value in values[1:]):
-            conflicts.append({"field": field, "identity": values, "partsapi_value": right})
+            production_year = _partsapi_year(values[0][0])
+        if values and any(not identity_values_agree(field, values[0][0], value) for value, _ in values[1:]):
+            conflicts.append({"field": field, "identity": [value for value, _ in values], "partsapi_value": right})
             independent_conflict = True
             continue
-        for left in values:
+        for left, credit in values:
             if not _normalize_compare_value(right):
                 continue
             if identity_values_agree(field, left, right):
-                if field not in matched:
+                if credit and field not in matched:
                     matched.append(field)
             else:
                 conflicts.append({"field": field, "identity": left, "partsapi_value": right})

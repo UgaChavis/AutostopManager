@@ -123,9 +123,10 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
     from .automotive_contracts import context_field_evidence
 
     values: dict[str, list[Any]] = {field: [] for field in _FIELDS}
-    evidence = list(identity.get("field_evidence") or [])
-    evidence.extend(context_field_evidence(context or {}))
-    for row in evidence:
+    identity_evidence = list(identity.get("field_evidence") or [])
+    context_evidence = context_field_evidence(context or {})
+    evidence = [(row, True) for row in identity_evidence] + [(row, False) for row in context_evidence]
+    for row, from_identity in evidence:
         if not isinstance(row, dict):
             continue
         source = str(row.get("source") or "")
@@ -133,6 +134,8 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
         # catalogue being queried cannot establish characteristics of this car.
         trusted = source.startswith("CRM") or (
             source == "NHTSA vPIC"
+            and from_identity
+            and row.get("source_kind") != "caller"
             and row.get("bound") is not False
             and row.get("identifier_binding") not in {"mismatch", "unverified", "identifier_mismatch"}
             and not row.get("depends_on")
