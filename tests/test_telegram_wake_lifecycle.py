@@ -509,7 +509,7 @@ def test_pause_keeps_unresolved_incident_until_verified_resolution_and_resume(tm
                     outcome="no_reply_needed",
                     event_ids=job["event_ids"],
                     receipt_keys=[],
-                    reason_code="already_answered",
+                    reason_code="not_actionable",
                 )
             else:
                 assert jobs.health[-1] == {"component": "codex", "state": "paused", "error_code": None}

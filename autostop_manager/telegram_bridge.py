@@ -2090,28 +2090,27 @@ def _native_outgoing_origin(config: TelegramConfig, peer_id: int, message_id: in
                 continue
             exact_peer = type(entry.get("peer_id")) is int and entry["peer_id"] == peer_id
             if operation == "send_owner_notification" and entry.get("target_role") == "owner":
-                exact_peer = _owner_peer_id(config) == peer_id
-                if exact_peer:
-                    # Read the existing key; attribution must never create or
-                    # rotate a key merely because its native ledger is missing.
-                    descriptor = os.open(config.state_dir / "contract.key", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-                    try:
-                        info = os.fstat(descriptor)
-                        if (
-                            not stat.S_ISREG(info.st_mode)
-                            or info.st_uid != os.geteuid()
-                            or stat.S_IMODE(info.st_mode) != 0o600
-                        ):
-                            return "unresolved"
-                        key = os.read(descriptor, 33)
-                    finally:
-                        os.close(descriptor)
-                    if len(key) != 32:
+                # Match the persisted privacy binding to the queried peer,
+                # independently of a later owner configuration change.
+                # Read the existing key; attribution must never create or
+                # rotate a key merely because its native ledger is missing.
+                descriptor = os.open(config.state_dir / "contract.key", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+                try:
+                    info = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600
+                    ):
                         return "unresolved"
-                    digest = hmac.new(key, f"owner\0{peer_id}".encode(), hashlib.sha256).digest()
-                    fingerprint = f"{(int.from_bytes(digest[:8], 'big') or 1):016x}"
-                    if entry.get("target_fingerprint") != fingerprint:
-                        return "unresolved"
+                    key = os.read(descriptor, 33)
+                finally:
+                    os.close(descriptor)
+                if len(key) != 32:
+                    return "unresolved"
+                digest = hmac.new(key, f"owner\0{peer_id}".encode(), hashlib.sha256).digest()
+                fingerprint = f"{(int.from_bytes(digest[:8], 'big') or 1):016x}"
+                exact_peer = entry.get("target_fingerprint") == fingerprint
             if not exact_peer:
                 continue
             if type(entry.get("message_id")) is int and entry["message_id"] > 0 and entry["message_id"] == message_id:
@@ -2127,6 +2126,25 @@ def _native_outgoing_origin(config: TelegramConfig, peer_id: int, message_id: in
 def _require_native_outcome_known(monitor: DurableInboundMonitor, peer_id: int) -> None:
     if monitor.config is not None and _native_outgoing_origin(monitor.config, peer_id, -1) == "unresolved":
         raise BridgeError("send_outcome_uncertain")
+
+
+def _require_direct_send_allowed(
+    config: TelegramConfig, monitor: InboundMonitor | None, request: dict[str, Any], peer_id: int, key: str
+) -> None:
+    if not isinstance(monitor, DurableInboundMonitor) or request.get("job_id"):
+        return
+    # Existing intents are readback-only. They retain their exact body/target
+    # checks below and never gain authority for a second transport write.
+    if key and key in _load_idempotency(config.state_dir / "idempotency.json"):
+        return
+    monitor.inbox.require_client_send_allowed(peer_id)
+    if _native_outgoing_origin(config, peer_id, -1) == "unresolved":
+        raise BridgeError("send_outcome_uncertain")
+    control = monitor.inbox.client_control(peer_id)
+    if control["guidance_pending"]:
+        if not _guidance_available(monitor, peer_id, control):
+            raise BridgeError("inbox_guidance_unavailable")
+        raise BridgeError("job_binding_required")
 
 
 def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
@@ -2436,6 +2454,7 @@ async def _handle_send_photo(
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
     if mode == "dry_run":
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _check_effect_authority()
         response = {
             "ok": True,
@@ -2495,6 +2514,7 @@ async def _handle_send_photo(
     else:
         if contract["last_message_id"] != last_message_id:
             raise BridgeError("conversation_changed_since_dry_run")
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_photo",
@@ -2605,6 +2625,7 @@ async def _handle_send_document(
     contract_key = _ensure_private_key(config.state_dir / "contract.key")
     caption_sha256 = hashlib.sha256(caption.encode("utf-8")).hexdigest()
     if mode == "dry_run":
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _check_effect_authority()
         response = {
             "ok": True,
@@ -2674,6 +2695,7 @@ async def _handle_send_document(
             raise BridgeError("conversation_changed_since_dry_run")
         if group_reply:
             _personal_group_document_reply(config, request, target, inbound_monitor)
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_document",
@@ -3029,6 +3051,7 @@ async def _handle_send_text_to_entity(
         contract_peer_id = int.from_bytes(binding[:8], "big") or 1
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if mode == "dry_run":
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _check_effect_authority()
         response = {
             "ok": True,
@@ -3093,6 +3116,7 @@ async def _handle_send_text_to_entity(
             raise BridgeError("conversation_changed_since_dry_run")
         if group_reply:
             _require_personal_group_reply(config, request, target, reply_to_message_id)
+        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
@@ -3923,12 +3947,15 @@ async def _handle_monitor_operation(
     return await _handle_monitor_read(client, inbound_monitor, str(request.get("event_id") or ""))
 
 
+def _guidance_available(monitor: DurableInboundMonitor, peer_id: int, control: dict[str, Any]) -> bool:
+    return len(monitor.trusted_guidance.get(peer_id, [])) == control["guidance_count"]
+
+
 def _require_current_guidance(monitor: DurableInboundMonitor, job: dict[str, Any]) -> None:
     control = job["client_control"]
     if not control["guidance_pending"]:
         return
-    guidance = monitor.trusted_guidance.get(job["peer_id"], [])
-    if not any(item["revision"] == control["revision"] for item in guidance):
+    if not _guidance_available(monitor, job["peer_id"], control):
         raise BridgeError("inbox_guidance_unavailable")
     if monitor.guidance_read.get(job["job_id"]) != control["revision"]:
         raise BridgeError("inbox_guidance_unread")
@@ -4260,7 +4287,15 @@ async def _handle_job_operation(
     elif operation == "job_result":
         current_job = inbox.read_job(str(request.get("job_id") or ""))
         _require_native_outcome_known(monitor, current_job["peer_id"])
-        _require_current_guidance(monitor, current_job)
+        receipt_keys = _job_string_list(request, "receipt_keys")
+        verified_answer = request.get("reason_code") == "already_answered" and any(
+            effect["verified"] and effect["kind"] in {"result", "handoff"} and effect["receipt_key"] in receipt_keys
+            for effect in current_job["effects"]
+        )
+        if request.get("outcome") != "no_reply_needed" or not (
+            request.get("reason_code") in {"paused", "human_takeover"} or verified_answer
+        ):
+            _require_current_guidance(monitor, current_job)
         if inbox.read_job(str(request.get("job_id") or "")).get("manual_recovery"):
             executor = _effect_executor()
             if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
@@ -4273,12 +4308,14 @@ async def _handle_job_operation(
             **_job_arguments(request),
             outcome=str(request.get("outcome") or ""),
             event_ids=_job_string_list(request, "event_ids"),
-            receipt_keys=_job_string_list(request, "receipt_keys"),
+            receipt_keys=receipt_keys,
             reason_code=request.get("reason_code"),
             human_message_ids=request.get("human_message_ids"),
             guidance_revision=monitor.guidance_read.get(str(request.get("job_id") or "")),
         )
         monitor.guidance_read.pop(job["job_id"], None)
+        if not job["client_control"]["guidance_pending"]:
+            monitor.trusted_guidance.pop(job["peer_id"], None)
         monitor.request_reconciliation()
     elif operation == "job_resolve":
         job = inbox.resolve_job(
@@ -4603,19 +4640,24 @@ def _handle_client_control(request: dict[str, Any], monitor: DurableInboundMonit
         return {"ok": True, "peer_id": peer_id, "client_control": inbox.client_control(peer_id)}
     action = str(request["action"])
     text = request.get("text")
-    if action in {"check_variant", "context", "reconsider"} and (
+    if action in {"check_variant", "context", "reconsider", "recover_guidance"} and (
         not isinstance(text, str) or not text.strip() or len(text) > 4000
     ):
         raise BridgeError("inbox_client_guidance_invalid")
+    if action == "recover_guidance":
+        old = inbox.client_control(peer_id)
+        if not old["guidance_pending"] or _guidance_available(monitor, peer_id, old):
+            raise BridgeError("inbox_guidance_recovery_unneeded")
     control = inbox.set_client_control(
-        peer_id, action=action, expected_revision=request.get("expected_control_revision")
+        peer_id, action=action, expected_revision=cast(int, request.get("expected_control_revision"))
     )
-    if action in {"check_variant", "context", "reconsider"}:
+    if action == "recover_guidance":
+        monitor.trusted_guidance[peer_id] = [{"revision": control["revision"], "action": action, "text": text}]
+    elif action in {"check_variant", "context", "reconsider"}:
         notes = monitor.trusted_guidance.setdefault(peer_id, [])
+        if control["guidance_count"] == 1:
+            notes.clear()  # Only already consumed history may be compacted.
         notes.append({"revision": control["revision"], "action": action, "text": text})
-        del notes[:-32]
-    elif action == "resume":
-        monitor.trusted_guidance.pop(peer_id, None)
     monitor.changed()
     return {"ok": True, "peer_id": peer_id, "client_control": control}
 
@@ -4668,8 +4710,8 @@ async def _handle_job_control(
         job = inbox.read_job(str(request.get("job_id") or ""))
         job["trusted_guidance"] = monitor.trusted_guidance.get(job["peer_id"], [])
         revision = job["client_control"]["revision"]
-        if job["client_control"]["guidance_pending"] and any(
-            item["revision"] == revision for item in job["trusted_guidance"]
+        if job["client_control"]["guidance_pending"] and _guidance_available(
+            monitor, job["peer_id"], job["client_control"]
         ):
             monitor.guidance_read[job["job_id"]] = revision
         return {"ok": True, "job": job}
@@ -5806,7 +5848,8 @@ def build_parser() -> argparse.ArgumentParser:
     control_target.add_argument("--peer-id", type=int)
     control_target.add_argument("--job-id")
     client_control.add_argument(
-        "--action", choices=["check_variant", "context", "reconsider", "pause", "takeover", "resume"]
+        "--action",
+        choices=["check_variant", "context", "reconsider", "recover_guidance", "pause", "takeover", "resume"],
     )
     client_control.add_argument("--expected-control-revision", type=int)
     client_control.add_argument("--text")

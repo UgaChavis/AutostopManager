@@ -22,10 +22,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 4
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4)
+INBOX_SCHEMA_VERSION = 5
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
 WORKER_PROTOCOL_VERSION = 2
 REQUEST_DEADLINE_SECONDS = 1200
+MAX_PENDING_GUIDANCE = 32
 
 EVENT_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,39})")
 JOB_PATTERN = re.compile(r"job-[a-f0-9]{32}")
@@ -203,7 +204,7 @@ class TelegramInbox:
             );
             CREATE INDEX IF NOT EXISTS jobs_peer_state ON jobs(peer_id, state);
             CREATE INDEX IF NOT EXISTS jobs_retention_updated_at ON jobs(updated_at)
-                WHERE state IN ('completed','released');
+                WHERE state IN ('completed','released','retired','failed_waiting_input');
             CREATE TABLE IF NOT EXISTS events (
                 sequence TEXT PRIMARY KEY, peer_id INTEGER NOT NULL REFERENCES peers(peer_id),
                 message_id INTEGER NOT NULL, received_at TEXT NOT NULL, state TEXT NOT NULL,
@@ -276,7 +277,8 @@ class TelegramInbox:
             );
             CREATE TABLE IF NOT EXISTS client_controls (
                 peer_id INTEGER PRIMARY KEY REFERENCES peers(peer_id), state TEXT NOT NULL,
-                revision INTEGER NOT NULL, guidance_pending INTEGER NOT NULL DEFAULT 0
+                revision INTEGER NOT NULL, guidance_pending INTEGER NOT NULL DEFAULT 0,
+                guidance_count INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS effects_peer_message ON effects(peer_id,sent_message_id);
             CREATE INDEX IF NOT EXISTS effects_peer_unknown ON effects(peer_id) WHERE attempted=1 AND verified=0;
@@ -294,6 +296,25 @@ class TelegramInbox:
             for name, definition in additions.items():
                 if name not in columns:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+            control_columns = {row[1] for row in self._db.execute("PRAGMA table_info(client_controls)")}
+            if "guidance_count" not in control_columns:
+                self._db.execute("ALTER TABLE client_controls ADD COLUMN guidance_count INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("UPDATE client_controls SET guidance_count=1 WHERE guidance_pending=1")
+            # Older recovery admitted failed started turns based only on the
+            # Telegram ledger, which cannot exclude unknown CRM writes.
+            self._db.execute(
+                "UPDATE jobs SET state='needs_review',reason_code='failed_turn_effects_unreviewed' "
+                "WHERE state='failed_waiting_input' AND execution_proof IS NOT 'not_started'"
+            )
+            retention_index = self._db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='jobs_retention_updated_at'"
+            ).fetchone()[0]
+            if "failed_waiting_input" not in retention_index:
+                self._db.execute("DROP INDEX jobs_retention_updated_at")
+                self._db.execute(
+                    "CREATE INDEX jobs_retention_updated_at ON jobs(updated_at) "
+                    "WHERE state IN ('completed','released','retired','failed_waiting_input')"
+                )
             self._db.execute(
                 "UPDATE metadata SET value=? WHERE key='schema_version' AND value<>?",
                 (str(INBOX_SCHEMA_VERSION), str(INBOX_SCHEMA_VERSION)),
@@ -577,11 +598,11 @@ class TelegramInbox:
                 rejected = True
             else:
                 self._db.execute("INSERT OR IGNORE INTO peers(peer_id) VALUES (?)", (peer_id,))
-                # A proven, effect-free failed turn is retried only on genuinely
-                # new client input. A repeated update never replays that turn.
+                # Only proven unstarted turns may be retried on new input.
                 self._db.execute(
                     "UPDATE events SET job_id=NULL WHERE peer_id=? AND state='open' AND job_id IN "
-                    "(SELECT job_id FROM jobs WHERE peer_id=? AND state='failed_waiting_input')",
+                    "(SELECT job_id FROM jobs WHERE peer_id=? AND state='failed_waiting_input' "
+                    "AND execution_proof='not_started')",
                     (peer_id, peer_id),
                 )
                 self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
@@ -1063,26 +1084,42 @@ class TelegramInbox:
 
     def client_control(self, peer_id: int) -> dict[str, Any]:
         row = self._db.execute(
-            "SELECT state,revision,guidance_pending FROM client_controls WHERE peer_id=?", (peer_id,)
+            "SELECT state,revision,guidance_pending,guidance_count FROM client_controls WHERE peer_id=?", (peer_id,)
         ).fetchone()
-        return dict(row) if row else {"state": "active", "revision": 0, "guidance_pending": 0}
+        return dict(row) if row else {"state": "active", "revision": 0, "guidance_pending": 0, "guidance_count": 0}
+
+    def require_client_send_allowed(self, peer_id: int) -> None:
+        control = self.client_control(peer_id)
+        if control["state"] != "active":
+            raise InboxError("inbox_client_" + control["state"])
+        if self._db.execute(
+            "SELECT 1 FROM effects WHERE peer_id=? AND attempted=1 AND verified=0 LIMIT 1", (peer_id,)
+        ).fetchone():
+            raise InboxError("inbox_effect_outcome_unknown")
 
     def set_client_control(self, peer_id: int, *, action: str, expected_revision: int) -> dict[str, Any]:
         """Called only by the explicit trusted Codex control endpoint."""
         _positive(peer_id, "inbound_peer_invalid")
-        if action not in {"check_variant", "context", "reconsider", "pause", "takeover", "resume"}:
+        if action not in {"check_variant", "context", "reconsider", "recover_guidance", "pause", "takeover", "resume"}:
             raise InboxError("inbox_client_control_invalid")
         if self._db.execute("SELECT 1 FROM peers WHERE peer_id=?", (peer_id,)).fetchone() is None:
             raise InboxError("inbox_client_unknown")
         old = self.client_control(peer_id)
         if type(expected_revision) is not int or old["revision"] != expected_revision:
             raise InboxError("inbox_revision_conflict")
+        guidance = action in {"check_variant", "context", "reconsider", "recover_guidance"}
+        if guidance and action != "recover_guidance" and old["guidance_count"] >= MAX_PENDING_GUIDANCE:
+            raise InboxError("inbox_client_guidance_full")
+        if action == "recover_guidance" and not old["guidance_pending"]:
+            raise InboxError("inbox_guidance_recovery_unneeded")
+        count = 1 if action == "recover_guidance" else old["guidance_count"] + int(guidance)
         state = {"pause": "paused", "takeover": "human_takeover", "resume": "active"}.get(action, old["state"])
         with self._write():
             self._db.execute(
-                "INSERT INTO client_controls VALUES (?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET "
-                "state=excluded.state,revision=excluded.revision,guidance_pending=excluded.guidance_pending",
-                (peer_id, state, old["revision"] + 1, int(action in {"check_variant", "context", "reconsider"})),
+                "INSERT INTO client_controls VALUES (?,?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET "
+                "state=excluded.state,revision=excluded.revision,guidance_pending=excluded.guidance_pending,"
+                "guidance_count=excluded.guidance_count",
+                (peer_id, state, old["revision"] + 1, int(bool(count)), count),
             )
             self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
             if action == "resume":
@@ -1099,7 +1136,8 @@ class TelegramInbox:
             return
         rows = list(
             self._db.execute(
-                "SELECT job_id FROM jobs WHERE peer_id=? AND state='waiting_control' AND execution_proof IS NOT NULL",
+                "SELECT job_id FROM jobs WHERE peer_id=? AND state='waiting_control' "
+                "AND execution_proof IN ('completed','not_started')",
                 (peer_id,),
             )
         )
@@ -1509,7 +1547,9 @@ class TelegramInbox:
                 "UPDATE jobs SET execution_proof=?,proof_at=?,revision=revision+1,updated_at=? WHERE job_id=?",
                 (proof, self._now(), self._now(), job_id),
             )
-            if job["state"] in ACTIVE_STATES and job["state"] != "needs_review":
+            if (job["state"] in ACTIVE_STATES and job["state"] != "needs_review") or (
+                job["state"] == "waiting_control" and proof in {"failed", "interrupted"}
+            ):
                 self._db.execute(
                     "UPDATE jobs SET state='needs_review',reason_code='execution_stopped' WHERE job_id=?", (job_id,)
                 )
@@ -1601,16 +1641,16 @@ class TelegramInbox:
     mark_needs_review = needs_review
 
     def defer_failed_request(self, *, job_id: str, lease: str, expected_revision: int) -> dict[str, Any]:
-        """Allow the next new input after a proven failure with at most an ACK.
+        """Allow the next new input only after a proven rejected/unstarted turn.
 
-        This does not retry old events, finish a client request, or clear an
-        unknown start/send. Such cases retain their original review boundary.
-        Verified acknowledgements remain attached to their original job.
+        A stopped started turn may have an unknown CRM write even when this
+        Telegram ledger is empty or contains only an ACK. It requires explicit
+        cross-system review through the existing manual recovery path.
         """
         job = self._lease(job_id, lease, expected_revision)
         if (
             job["state"] != "needs_review"
-            or job["execution_proof"] not in {"failed", "not_started"}
+            or job["execution_proof"] != "not_started"
             or self.execution_slot() is not None
         ):
             raise InboxError("inbox_failure_recovery_unsafe")
@@ -1896,6 +1936,11 @@ class TelegramInbox:
         waiting_control = False
         if outcome == "no_reply_needed":
             waiting_control = self._validate_no_reply_result(job, event_ids, reason_code, human_message_ids)
+            if reason_code == "already_answered" and not any(
+                effect["verified"] and effect["kind"] in {"result", "handoff"} and effect["receipt_key"] in supplied
+                for effect in effects
+            ):
+                raise InboxError("inbox_result_receipt_required")
         else:
             if reason_code is not None:
                 raise InboxError("inbox_reason_invalid")
@@ -1925,7 +1970,7 @@ class TelegramInbox:
                 )
             if consume_guidance:
                 self._db.execute(
-                    "UPDATE client_controls SET guidance_pending=0 WHERE peer_id=? AND revision=?",
+                    "UPDATE client_controls SET guidance_pending=0,guidance_count=0 WHERE peer_id=? AND revision=?",
                     (job["peer_id"], guidance_revision),
                 )
             if job["manual_recovery"] and job["execution_proof"] is not None:

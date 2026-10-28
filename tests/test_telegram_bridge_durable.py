@@ -1092,14 +1092,11 @@ def test_unknown_handoff_cannot_claim_another_identical_owner_message(tmp_path, 
         with pytest.raises(OSError):
             call(apply)
         client.fail_send = False
-        other = {
-            "operation": "send_owner_notification",
-            "idempotency_key": "independent-owner-event",
-            "text": request["text"],
-            "mode": "dry_run",
-        }
-        other_dry = call(other)
-        assert call(other | {"mode": "apply", "contract_token": other_dry["contract_token"]})["verified"]
+        # An independent human outgoing with identical text is not evidence
+        # that the unknown agent handoff succeeded. A second agent send to
+        # this peer is itself forbidden until the original outcome is known.
+        human_outgoing = asyncio.run(client.send_message(84, request["text"]))
+        human_outgoing.sender_id = 900
         before = (config.state_dir / "idempotency.json").read_bytes()
         for retry in (request, apply):
             with pytest.raises(bridge.BridgeError, match="owner_notification_outcome_uncertain"):

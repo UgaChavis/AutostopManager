@@ -2394,9 +2394,9 @@ class DurableWakeDispatcher:
             and current.get("turn_id") is None
             and current.get("thread_id")
         ):
-            fields = {"proof_kind": "start_rejected", "thread_id": current["thread_id"]}
+            fields: dict[str, Any] = {"proof_kind": "start_rejected", "thread_id": current["thread_id"]}
         elif current.get("thread_id") is None and current.get("turn_id") is None:
-            fields: dict[str, Any] = {"proof_kind": "not_started"}
+            fields = {"proof_kind": "not_started"}
         else:
             thread_id, turn_id = current.get("thread_id"), current.get("turn_id")
             if not isinstance(thread_id, str) or not isinstance(turn_id, str):
@@ -2447,10 +2447,12 @@ class DurableWakeDispatcher:
         try:
             await _await_until(self._proof(job, deadline, code), deadline, self.cleanup_tasks)
             current = await self._read_job(job)
+            # Telegram effects alone cannot exclude unknown CRM writes from a
+            # started failed turn. Only a proven unstarted turn may be deferred.
             if (
                 code in {"codex_turn_start_rejected", "codex_turn_failed"}
                 and current.get("state") == "needs_review"
-                and current.get("execution_proof") in {"failed", "not_started"}
+                and current.get("execution_proof") == "not_started"
                 and not any(
                     effect.get("attempted") and (not effect.get("verified") or effect.get("kind") != "ack")
                     for effect in current.get("effects", [])

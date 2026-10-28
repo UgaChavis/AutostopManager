@@ -113,14 +113,15 @@ def test_followup_arriving_before_defer_is_answered_with_original_once(tmp_path)
         try:
             incoming, followup = _message(100), _message(101, text="Synthetic progress question")
             first = monitor.record(incoming)
-            job = _job(monitor)
+            job = _job(monitor, running=False)
+            mapping = inbox.prepare_peer_thread(**guard(job))
+            inbox.bind_peer_thread(**guard(job), creation_key=mapping["creation_key"], thread_id="test-thread")
+            job = inbox.start_intent(**guard(job), thread_id="test-thread")
             second = monitor.record(followup)
             stopped = inbox.finish_execution(
                 **guard(job),
-                proof_kind="terminal",
+                proof_kind="start_rejected",
                 thread_id=job["thread_id"],
-                turn_id=job["turn_id"],
-                terminal_status="failed",
                 local_tasks_done=True,
             )
             inbox.defer_failed_request(**guard(stopped))
@@ -489,7 +490,7 @@ def test_native_contact_service_never_enters_direct_history_or_presend_queue(tmp
             service = tl.MessageService(
                 id=99, peer_id=tl.PeerUser(42), date=datetime.now(UTC), action=tl.MessageActionContactSignUp()
             )
-            assert service.message is None and monitor.record(service) is None
+            assert getattr(service, "message", None) is None and monitor.record(service) is None
 
             class HistoryClient(Client):
                 async def iter_messages(self, *_args, **_kwargs):

@@ -400,7 +400,7 @@ def test_schema3_reopen_preserves_pending_events_unknown_send_and_pause(tmp_path
         assert restored.read_job(job["job_id"]) == before
         assert restored.require_open(event).message_id == 100
         assert restored.status()["execution_paused"] is True
-        assert restored.status()["schema_version"] == 4
+        assert restored.status()["schema_version"] == 5
         with pytest.raises(InboxError, match="inbox_effect_outcome_unknown"):
             restored.result(
                 **guard(job),
@@ -436,28 +436,16 @@ def test_verified_ack_survives_failed_turn_without_closing_or_repeating_request(
                 terminal_status="failed",
                 local_tasks_done=True,
             )
-            inbox.defer_failed_request(**guard(stopped))
+            with pytest.raises(InboxError, match="inbox_failure_recovery_unsafe"):
+                inbox.defer_failed_request(**guard(stopped))
             assert monitor.record(incoming) == first
             assert inbox.claim(instruction_root="/test/snapshot", instruction_revision="a" * 40) is None
             monitor.record(_message(102, text="Есть результат?"))
-            recovered = _job(monitor)
-            assert len(recovered["event_ids"]) == 2 and recovered["effects"] == []
-            assert recovered["prior_acknowledgements"] == [
-                {
-                    "effect_key": ack["receipt_key"],
-                    "job_id": job["job_id"],
-                    "receipt_key": ack["receipt_key"],
-                    "sent_message_id": 101,
-                    "reply_to_message_id": 100,
-                }
-            ]
-            with pytest.raises(InboxError, match="inbox_receipt_unverified"):
-                inbox.result(
-                    **guard(recovered),
-                    outcome="answered",
-                    event_ids=recovered["event_ids"],
-                    receipt_keys=[ack["receipt_key"]],
-                )
+            assert inbox.claim(instruction_root="/test/snapshot", instruction_revision="a" * 40) is None
+            held = inbox.read_job(job["job_id"])
+            assert held["state"] == "needs_review" and held["event_ids"] == [first]
+            assert held["effects"][0]["receipt_key"] == ack["receipt_key"]
+            assert held["effects"][0]["verified"] == 1
             assert client.sent == 1
         finally:
             inbox.close()
