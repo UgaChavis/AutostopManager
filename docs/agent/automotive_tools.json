@@ -5041,16 +5041,16 @@
       },
       "outputs": [
         "Envelope: schema_version/tool_id/ok/outcome/data/evidence/missing_fields/conflicts/warnings/execution; paths ниже относятся к data.",
-        "candidate{raw_number,normalized_number,brand,kind,scope,vehicle_binding,oem_confirmed,fitment_confirmed=false}"
+        "candidate{raw_number,normalized_number,brand,kind,scope,vehicle_binding,caller_evidence_sufficient,conditional_on_caller_evidence,independent_source_verified,oem_confirmed,fitment_confirmed,exact_applicability_confirmed,ready_for_crm_writeback}. `oem_confirmed`, `fitment_confirmed`, `exact_applicability_confirmed`, `independent_source_verified` и `ready_for_crm_writeback` всегда false"
       ],
       "errors": [
         "invalid_input для number/source/scope неверной формы",
-        "partial с missing_fields если нет связанного первичного OEM evidence; kind=unknown/oem_confirmed=false"
+        "partial с missing_fields если условных данных недостаточно, kind=unknown. При структурной достаточности success означает только завершённую условную проверку и kind=oem_candidate; источник не аутентифицирован"
       ],
       "limitations": [
         "Article/cross/OE-reference не подтверждают оригинальный номер конкретного VIN.",
-        "Для подтверждения source: provider/primary_lineage/method/locator/fetched_at(valid ISO с timezone), matching part_number/brand/scope, declares_oem=true и document_kind official_epc/oem_catalog_document/physical_oe_marking.",
-        "exact_identifier requires valid hash binding in vehicle_binding and source.identifier_binding. modification requires the same valid catalog ref in vehicle_binding and source.catalog_ref: either typed TecDoc numeric ID/carType, or a native Elcats/Japancats/SsangYong provider/namespace/entry_id/vehicle_context ref. Preserve the native namespace; OEM confirmation remains separate from fitment.",
+        "Для условной структурной достаточности: provider/primary_lineage/method/locator/fetched_at(valid ISO с timezone), matching part_number/brand/scope, declares_oem=true и document_kind official_epc/oem_catalog_document/physical_oe_marking. Текст source остаётся заявлением caller, а не независимой проверкой.",
+        "exact_identifier requires matching hash binding in vehicle_binding and source.identifier_binding; this digest does not authenticate the source. modification requires the same valid catalog ref in vehicle_binding and source.catalog_ref: either typed TecDoc numeric ID/carType, or a native Elcats/Japancats/SsangYong provider/namespace/entry_id/vehicle_context ref. Preserve the native namespace; neither reference confirms OEM or fitment.",
         "A public catalog row is not primary OEM evidence. Native catalog refs identify the bound modification and do not themselves make a public provider official_epc; primary document/source metadata and all remaining evidence gates still apply.",
         "source.part_number array/object/boolean не связывается с одним номером и не конкатенируется; существующее преобразование numeric scalar, включая integer 1234, сохраняется."
       ],
