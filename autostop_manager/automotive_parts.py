@@ -257,6 +257,84 @@ def _source_part_number(value: Any) -> str:
     return "" if isinstance(value, (bool, list, dict)) else normalize_part_number(str(value or ""))
 
 
+def _asserted_source_status(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    state = value.strip().casefold()
+    if state.startswith(("not_", "unverified", "unconfirmed", "unauthenticated", "unsupported", "unknown")):
+        return False
+    return (
+        state in {"supported", "verified", "confirmed", "authenticated", "ready"}
+        or state.startswith(("verified_", "confirmed_", "authenticated_", "ready_for_"))
+        or state.endswith(("_supported", "_verified", "_confirmed", "_authenticated"))
+    )
+
+
+def _unverified_oem_claims(value: Any, *, depth: int = 0, mark_source: bool = False) -> Any:
+    """Copy caller evidence without presenting reported assertions as verification."""
+    from .automotive_contracts import _CALLER_FALSE_FLAGS
+
+    if depth > 32:
+        raise ValueError("caller_claims_too_deep")
+    if isinstance(value, list):
+        return [_unverified_oem_claims(item, depth=depth + 1) for item in value]
+    if not isinstance(value, dict):
+        return value
+    clean: dict[str, Any] = {}
+    claims: list[dict[str, Any]] = []
+    legacy: dict[str, Any] = {}
+    source_like = mark_source or any(
+        isinstance(key, str) and key.casefold() in {"source_kind", "primary_lineage", "strength"} for key in value
+    )
+    for key, item in value.items():
+        lower = key.casefold() if isinstance(key, str) else ""
+        copied = _unverified_oem_claims(item, depth=depth + 1)
+        if lower.startswith("reported_"):
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+        elif lower == "trust":
+            clean[key] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+        elif lower == "source_kind":
+            clean[key] = "caller"
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+        elif lower == "strength":
+            negative = {"unknown", "unverified", "disputed", "conflict", "rejected", "unsupported"}
+            clean[key] = item if isinstance(item, str) and item.strip().casefold() in negative else "candidate"
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+        elif lower in {"status", "state", "verification", "authentication"} and _asserted_source_status(item):
+            clean[key] = "unverified" if lower in {"verification", "authentication"} else "candidate"
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+        elif (
+            lower in _CALLER_FALSE_FLAGS
+            or lower in {"confirmed", "authenticated", "ready"}
+            or lower.startswith(("ready_for_", "can_"))
+            or lower.endswith(("_confirmed", "_verified", "_authenticated"))
+        ):
+            clean[key] = False
+            claims.append({"field": key, "value": copied, "verification": "caller_supplied_unverified"})
+            if lower in {
+                "source_verified",
+                "independent_source_verified",
+                "source_authenticated",
+                "identifier_verified",
+                "verified",
+            }:
+                legacy["reported_" + lower] = copied
+        else:
+            clean[key] = copied
+    clean.update(legacy)
+    if source_like:
+        clean.update(
+            source_kind="caller",
+            independent=False,
+            bound=False,
+            trust={"state": "caller_supplied_unverified", "binding_authenticates_source": False},
+        )
+    if claims:
+        clean["reported_claims"] = claims
+    return clean
+
+
 def capture_oem_evidence(
     part_number: str,
     source: dict[str, Any],
@@ -271,6 +349,11 @@ def capture_oem_evidence(
         or scope not in {"family", "modification", "exact_identifier"}
     ):
         return invalid("capture_oem_evidence", "number_or_source_or_scope")
+    try:
+        reported_source = _unverified_oem_claims(source, mark_source=True)
+        reported_binding = _unverified_oem_claims(vehicle_binding)
+    except ValueError:
+        return invalid("capture_oem_evidence", "source_or_binding_too_deep")
     missing = source_metadata_errors(source)
     normalized_number = normalize_part_number(part_number)
     if not normalized_number or _source_part_number(source.get("part_number")) != normalized_number:
@@ -306,7 +389,7 @@ def capture_oem_evidence(
         "brand": brand,
         "kind": "oem_candidate" if not missing else "unknown",
         "scope": scope,
-        "vehicle_binding": vehicle_binding,
+        "vehicle_binding": reported_binding,
         "caller_evidence_sufficient": not missing,
         "conditional_on_caller_evidence": True,
         "independent_source_verified": False,
@@ -315,28 +398,6 @@ def capture_oem_evidence(
         "exact_applicability_confirmed": False,
         "ready_for_crm_writeback": False,
     }
-    reported_source = {**source}
-    for flag in (
-        "source_verified",
-        "independent_source_verified",
-        "source_authenticated",
-        "identifier_verified",
-        "verified",
-        "oem_confirmed",
-        "fitment_confirmed",
-        "exact_applicability_confirmed",
-        "ready_for_crm_writeback",
-    ):
-        if flag in reported_source:
-            if flag in {
-                "source_verified",
-                "independent_source_verified",
-                "source_authenticated",
-                "identifier_verified",
-                "verified",
-            }:
-                reported_source["reported_" + flag] = reported_source[flag]
-            reported_source[flag] = False
     reported_source["independent_source_verified"] = False
     reported_source["conditional_on_caller_evidence"] = True
     reported_source["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
