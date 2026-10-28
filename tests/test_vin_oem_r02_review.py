@@ -502,7 +502,8 @@ def test_r02_13_a_container_cannot_bind_one_source_part_number(value, route):
 def test_r02_13_existing_numeric_scalar_number_policy_is_preserved():
     source = {**_primary("family"), "part_number": 1234}
     response = parts.capture_oem_evidence("1234", source, "family", brand="DEMO")
-    assert response["data"]["candidate"]["oem_confirmed"] is True
+    assert response["data"]["candidate"]["caller_evidence_sufficient"] is True
+    assert response["data"]["candidate"]["oem_confirmed"] is False
 
 
 async def _until(predicate):

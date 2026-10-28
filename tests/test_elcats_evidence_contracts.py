@@ -80,7 +80,8 @@ def test_native_refs_keep_provider_namespace_and_independent_primary_evidence(pr
     assert not catalog_ref(ref, namespace="tecdoc", entity_kind="modification")
     source = _primary(ref)
     capture = parts.capture_oem_evidence("DEMO100", source, "modification", ref, "DEMO")
-    assert capture["data"]["candidate"]["oem_confirmed"] is True
+    assert capture["data"]["candidate"]["caller_evidence_sufficient"] is True
+    assert capture["data"]["candidate"]["oem_confirmed"] is False
     assert capture["data"]["candidate"]["fitment_confirmed"] is False
     assessed = parts.assess_part_fitment(_vehicle(ref), PART, {}, [source])
     assert assessed["data"]["state"] == "supported"
@@ -125,9 +126,9 @@ def test_transport_fields_do_not_change_semantic_identity():
     routed = {**ref, "path": "/demo/another-view", "parameters": {"model": "demo", "lang": "en"}}
     assert same_oem_catalog_ref(ref, routed)
     source = _primary(routed)
-    assert parts.capture_oem_evidence("DEMO100", source, "modification", ref, "DEMO")["data"]["candidate"][
-        "oem_confirmed"
-    ]
+    candidate = parts.capture_oem_evidence("DEMO100", source, "modification", ref, "DEMO")["data"]["candidate"]
+    assert candidate["caller_evidence_sufficient"] is True
+    assert candidate["oem_confirmed"] is False
     assert parts.assess_part_fitment(_vehicle(ref), PART, {}, [source])["data"]["state"] == "supported"
     assert not same_oem_catalog_ref(ref, {**routed, "entry_id": "other-brand-entry"})
 
@@ -247,9 +248,9 @@ def test_native_refs_do_not_enter_partsapi_group_and_directory_operations():
     assert oem_catalog_ref(TECDOC_REF)
     assert not oem_catalog_ref({**TECDOC_REF, "id": True})
     primary = _primary(TECDOC_REF)
-    assert parts.capture_oem_evidence("DEMO100", primary, "modification", TECDOC_REF, "DEMO")["data"]["candidate"][
-        "oem_confirmed"
-    ]
+    candidate = parts.capture_oem_evidence("DEMO100", primary, "modification", TECDOC_REF, "DEMO")["data"]["candidate"]
+    assert candidate["caller_evidence_sufficient"] is True
+    assert candidate["oem_confirmed"] is False
     assert parts.assess_part_fitment({"catalog_ref": TECDOC_REF}, PART, {}, [primary])["data"]["state"] == "supported"
 
 
@@ -267,9 +268,9 @@ def test_ready_identifier_digest_does_not_verify_native_catalog_exact_fitment(ve
 def test_independent_primary_exact_identifier_remains_possible_with_explicit_verification():
     ref = _ref()
     source = _primary(ref, scope="exact_identifier", identifier_binding=BINDING, identifier_verified=True)
-    assert parts.capture_oem_evidence("DEMO100", source, "exact_identifier", BINDING, "DEMO")["data"]["candidate"][
-        "oem_confirmed"
-    ]
+    candidate = parts.capture_oem_evidence("DEMO100", source, "exact_identifier", BINDING, "DEMO")["data"]["candidate"]
+    assert candidate["caller_evidence_sufficient"] is True
+    assert candidate["oem_confirmed"] is False
     assert (
         parts.assess_part_fitment(_vehicle(ref), PART, {}, [source], "exact_identifier")["data"]["state"] == "supported"
     )

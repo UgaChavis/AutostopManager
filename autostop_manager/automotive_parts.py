@@ -304,18 +304,49 @@ def capture_oem_evidence(
         "raw_number": part_number,
         "normalized_number": normalized_number,
         "brand": brand,
-        "kind": "oem" if not missing else "unknown",
+        "kind": "oem_candidate" if not missing else "unknown",
         "scope": scope,
         "vehicle_binding": vehicle_binding,
-        "oem_confirmed": not missing,
+        "caller_evidence_sufficient": not missing,
+        "conditional_on_caller_evidence": True,
+        "independent_source_verified": False,
+        "oem_confirmed": False,
         "fitment_confirmed": False,
+        "exact_applicability_confirmed": False,
+        "ready_for_crm_writeback": False,
     }
+    reported_source = {**source}
+    for flag in (
+        "source_verified",
+        "independent_source_verified",
+        "source_authenticated",
+        "identifier_verified",
+        "verified",
+        "oem_confirmed",
+        "fitment_confirmed",
+        "exact_applicability_confirmed",
+        "ready_for_crm_writeback",
+    ):
+        if flag in reported_source:
+            if flag in {
+                "source_verified",
+                "independent_source_verified",
+                "source_authenticated",
+                "identifier_verified",
+                "verified",
+            }:
+                reported_source["reported_" + flag] = reported_source[flag]
+            reported_source[flag] = False
+    reported_source["independent_source_verified"] = False
+    reported_source["conditional_on_caller_evidence"] = True
+    reported_source["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
     return result(
         "capture_oem_evidence",
         "partial" if missing else "success",
         {"candidate": candidate},
-        evidence=[source],
+        evidence=[reported_source],
         missing_fields=missing,
+        warnings=["Source authenticity is not checked; OEM classification is conditional on the supplied evidence."],
     )
 
 

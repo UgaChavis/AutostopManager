@@ -204,7 +204,8 @@ def test_article_and_cross_cannot_become_exact_oem(forbidden_network):
     assert row["data"]["candidate"]["oem_confirmed"] is False
     source.update(document_kind="official_epc", identifier_binding=binding(VIN))
     confirmed = parts.capture_oem_evidence("DEMO-001", source, "exact_identifier", binding(VIN), "DEMO")
-    assert confirmed["data"]["candidate"]["oem_confirmed"] is True
+    assert confirmed["data"]["candidate"]["caller_evidence_sufficient"] is True
+    assert confirmed["data"]["candidate"]["oem_confirmed"] is False
     assert confirmed["data"]["candidate"]["fitment_confirmed"] is False
     source.pop("fetched_at")
     assert (

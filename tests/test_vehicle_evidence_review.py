@@ -113,7 +113,8 @@ def test_public_evidence_route_preserves_valid_modification_reference(route):
     assert result["outcome"] == "success"
     assert result["execution"]["network_calls"] == 0
     if route == "capture":
-        assert result["data"]["candidate"]["oem_confirmed"] is True
+        assert result["data"]["candidate"]["caller_evidence_sufficient"] is True
+        assert result["data"]["candidate"]["oem_confirmed"] is False
         assert result["data"]["candidate"]["fitment_confirmed"] is False
     else:
         assert result["data"]["state"] == "supported"
@@ -440,7 +441,8 @@ def test_primary_oem_evidence_keeps_nonempty_raw_and_canonical_number_binding(re
     assert response["outcome"] == "success"
     assert response["data"]["candidate"]["raw_number"] == requested
     assert response["data"]["candidate"]["normalized_number"] == "OEM123"
-    assert response["data"]["candidate"]["oem_confirmed"] is True
+    assert response["data"]["candidate"]["caller_evidence_sufficient"] is True
+    assert response["data"]["candidate"]["oem_confirmed"] is False
     assert response["data"]["candidate"]["fitment_confirmed"] is False
     assert response["execution"]["network_calls"] == 0
 
