@@ -13,6 +13,35 @@ from .vin_lookup import classify_identifier
 
 SCHEMA_VERSION = "autostop.automotive-result.v1"
 MAX_ROWS = 500
+_IDENTITY_SOURCE_FAILURES = {
+    "no_result": frozenset({"empty", "unsupported", "ambiguous_provider_result"}),
+    "unavailable": frozenset(
+        {
+            "auth_error",
+            "authentication_error",
+            "configuration_error",
+            "configuration_missing",
+            "database_error",
+            "database_missing",
+            "dependency_error",
+            "dependency_missing",
+            "deadline_exceeded",
+            "timeout",
+            "network_error",
+            "parse_error",
+            "adapter_error",
+            "provider_error",
+            "provider_throttled",
+            "provider_http_4xx",
+            "provider_http_5xx",
+            "provider_busy",
+            "provider_executor_unavailable",
+            "provider_circuit_open",
+            "attempt_budget_exhausted",
+            "quota_error",
+        }
+    ),
+}
 PUBLIC_OEM_CATALOG_NAMESPACES = {
     "elcats_catalog": "elcats_epc",
     "japancats_catalog": "japancats_epc",
@@ -74,9 +103,37 @@ def finite_number(value: Any, *, minimum: float = 0) -> float | None:
 
 
 def binding(identifier: str, identifier_type: str = "auto") -> dict[str, Any]:
-    classified = classify_identifier(identifier, identifier_type=identifier_type)
-    digest = hashlib.sha256((classified.kind + ":" + classified.normalized).encode()).hexdigest()
-    return {"identifier_kind": classified.kind, "identifier_sha256": digest, "version": 1}
+    if identifier_type == "wmi":
+        kind, normalized = "wmi", identifier.strip().upper()
+    else:
+        classified = classify_identifier(identifier, identifier_type=identifier_type)
+        kind, normalized = classified.kind, classified.normalized
+    digest = hashlib.sha256((kind + ":" + normalized).encode()).hexdigest()
+    return {"identifier_kind": kind, "identifier_sha256": digest, "version": 1}
+
+
+def identity_source_failure(outcome: Any) -> dict[str, str] | None:
+    """Shared producer reasons; invalid input and identity assertions are excluded.
+
+    This describes a source outcome, never authenticates caller-supplied JSON.
+    Reconciliation must also check request binding, absence of facts and conflicts.
+    """
+    if isinstance(outcome, str):
+        for category, reasons in _IDENTITY_SOURCE_FAILURES.items():
+            if outcome in reasons:
+                return {"class": category, "reason": outcome}
+    return None
+
+
+def identity_source_data(identifier: str, outcome: str, identifier_type: str = "vin") -> dict[str, Any]:
+    """Bind a source attempt only after its producer validates the request."""
+    data: dict[str, Any] = {"input_binding": binding(identifier, identifier_type)}
+    if identifier_type == "wmi":
+        data["wmi"] = identifier.strip().upper()
+    failure = identity_source_failure(outcome)
+    if failure:
+        data["source_failure"] = failure
+    return data
 
 
 def valid_binding(value: Any) -> bool:

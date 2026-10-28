@@ -18,12 +18,17 @@ _CONTEXT_PROFILES = ("vehicle_profile", "vehicle_profile_compact", "crm_vehicle_
 _FIELDS = (
     "make",
     "model",
+    "generation",
     "engine",
     "modification",
     "series",
     "transmission",
+    "transmission_code",
     "transmission_speeds",
     "drivetrain",
+    "transfer_case",
+    "front_differential",
+    "rear_differential",
     "engine_type",
     "fuel_type",
     "displacement_cc",
@@ -414,13 +419,18 @@ def _profile_conflicts(profile: dict[str, Any], values: dict[str, list[Any]]) ->
 
 def _missing_discriminators(profiles: list[dict[str, Any]], values: dict[str, list[Any]]) -> list[str]:
     fields = (
+        "generation",
         "engine",
         "displacement_cc",
         "power_hp",
         "power_kw",
         "production_year",
         "transmission",
+        "transmission_code",
         "drivetrain",
+        "transfer_case",
+        "front_differential",
+        "rear_differential",
         "modification",
         "series",
     )

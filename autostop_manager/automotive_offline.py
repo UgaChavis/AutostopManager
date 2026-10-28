@@ -11,7 +11,7 @@ import subprocess
 import sys
 from typing import Any
 
-from .automotive_contracts import binding, invalid, result
+from .automotive_contracts import binding, identity_source_data, invalid, result
 from .automotive_local_registry import PLATFORM_RULES, PRIMARY_LINEAGE, REGISTRY_VERSION, WMI_HINTS
 
 VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
@@ -50,16 +50,21 @@ def decode_wmi_local(wmi: str) -> dict[str, Any]:
         return result(
             tool_id,
             "unsupported",
-            {"wmi": normalized, "hints": {}, "vehicle_profile": {}},
+            {**identity_source_data(normalized, "unsupported", "wmi"), "hints": {}, "vehicle_profile": {}},
             missing_fields=["manufacturer", "model", "engine", "transmission", "market"],
         )
     # A WMI describes an assembler. Market/type ranges remain hints, never VIN facts.
     profile = {key: hints[key] for key in ("make", "manufacturer", "country") if key in hints}
+    if hints.get("make") == "Volkswagen Group":
+        # A group/assembler identifies neither the marque nor the exact legal
+        # manufacturer. Preserve both labels as hints instead of assertions.
+        profile.pop("make", None)
+        profile.pop("manufacturer", None)
     return result(
         tool_id,
         "partial",
         {
-            "wmi": normalized,
+            **identity_source_data(normalized, "partial", "wmi"),
             "hints": dict(hints),
             "vehicle_profile": profile,
             "field_provenance": dict.fromkeys(profile, "local_wmi_hint"),
@@ -226,9 +231,9 @@ def _worker(command: list[str], payload: dict[str, Any], timeout: float) -> tupl
     return decoded, None
 
 
-def _decoder_error(tool_id: str, reason: str) -> dict[str, Any]:
+def _decoder_error(tool_id: str, reason: str, identifier: str) -> dict[str, Any]:
     outcome = reason if reason in {"dependency_missing", "database_missing", "configuration_missing"} else "parse_error"
-    return result(tool_id, outcome, {}, warnings=[reason])
+    return result(tool_id, outcome, identity_source_data(identifier, outcome), warnings=[reason])
 
 
 def _offline_evidence(provider: str, manifest: dict[str, Any], identifier: str) -> dict[str, Any]:
@@ -252,11 +257,14 @@ def vininfo_decode(identifier: str) -> dict[str, Any]:
         return invalid(tool_id, "identifier")
     root, manifest, error = _runtime("vininfo")
     if error or root is None:
-        return result(tool_id, error or "dependency_missing", {}, missing_fields=["prepared_offline_runtime"])
+        outcome = error or "dependency_missing"
+        return result(
+            tool_id, outcome, identity_source_data(normalized, outcome), missing_fields=["prepared_offline_runtime"]
+        )
     worker = Path(__file__).resolve().parent.parent / "scripts" / "automotive-vininfo-worker.py"
     decoded, error = _worker([sys.executable, "-I", "-B", str(worker), str(root)], {"identifier": normalized}, 10)
     if error:
-        return _decoder_error(tool_id, error)
+        return _decoder_error(tool_id, error, normalized)
     profile = decoded.get("vehicle_profile", {})
     outcome = "partial" if profile.get("manufacturer") or profile.get("model") else "unsupported"
     data = {
@@ -295,21 +303,49 @@ def corgi_decode(identifier: str, model_year: int | None = None, timeout_seconds
         return invalid(tool_id, "timeout_seconds")
     root, manifest, error = _runtime("corgi")
     if error or root is None:
-        return result(tool_id, error or "dependency_missing", {}, missing_fields=["prepared_offline_runtime"])
+        outcome = error or "dependency_missing"
+        return result(
+            tool_id, outcome, identity_source_data(normalized, outcome), missing_fields=["prepared_offline_runtime"]
+        )
     if not (root / "vpic.lite.db").is_file():
-        return result(tool_id, "database_missing", {}, missing_fields=["vpic_database"])
+        return result(
+            tool_id,
+            "database_missing",
+            identity_source_data(normalized, "database_missing"),
+            missing_fields=["vpic_database"],
+        )
     node_metadata = manifest.get("node", {})
     if not isinstance(node_metadata, dict):
-        return result(tool_id, "configuration_missing", {}, warnings=["invalid_node_runtime_metadata"])
+        return result(
+            tool_id,
+            "configuration_missing",
+            identity_source_data(normalized, "configuration_missing"),
+            warnings=["invalid_node_runtime_metadata"],
+        )
     node = node_metadata.get("executable")
     try:
         if not isinstance(node, str) or not Path(node).is_absolute() or not Path(node).is_file():
-            return result(tool_id, "dependency_missing", {}, missing_fields=["node_runtime"])
+            return result(
+                tool_id,
+                "dependency_missing",
+                identity_source_data(normalized, "dependency_missing"),
+                missing_fields=["node_runtime"],
+            )
         node_digest = _sha256(Path(node))
     except (OSError, RuntimeError, ValueError):
-        return result(tool_id, "configuration_missing", {}, warnings=["node_runtime_unreadable"])
+        return result(
+            tool_id,
+            "configuration_missing",
+            identity_source_data(normalized, "configuration_missing"),
+            warnings=["node_runtime_unreadable"],
+        )
     if node_digest != node_metadata.get("sha256"):
-        return result(tool_id, "configuration_missing", {}, warnings=["node_runtime_hash_mismatch"])
+        return result(
+            tool_id,
+            "configuration_missing",
+            identity_source_data(normalized, "configuration_missing"),
+            warnings=["node_runtime_hash_mismatch"],
+        )
     worker = Path(__file__).resolve().parent.parent / "scripts" / "automotive-corgi-worker.mjs"
     decoded, error = _worker(
         [
@@ -325,7 +361,7 @@ def corgi_decode(identifier: str, model_year: int | None = None, timeout_seconds
         timeout_seconds,
     )
     if error:
-        return _decoder_error(tool_id, error)
+        return _decoder_error(tool_id, error, normalized)
     profile = decoded.get("vehicle_profile", {})
     data = {
         **decoded,

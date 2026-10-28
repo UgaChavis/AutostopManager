@@ -20,6 +20,8 @@ from .automotive_contracts import (
     finite_number,
     field_origins,
     identity_errors,
+    identity_source_data,
+    identity_source_failure,
     invalid,
     primary_lineage,
     result,
@@ -190,7 +192,10 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
     else:
         profile, field_errors = _vpic_profile(response)
     bound = response.get("identifier_binding") or {}
-    if bound.get("status") in {"mismatch", "unverified", "missing"}:
+    if bound.get("status") == "mismatch" or (
+        bound.get("status") in {"unverified", "missing"}
+        and (identity_source_failure(outcome) is None or any(value not in (None, "") for value in profile.values()))
+    ):
         outcome = "partial"
     evidence = [
         {
@@ -212,8 +217,8 @@ def _provider_result(tool_id: str, response: dict[str, Any], identifier: str, *,
         if isinstance(coverage, str) and coverage in {"basic", "partial_or_unsupported"}:
             diagnostics["coverage"] = coverage
     data = {
+        **identity_source_data(identifier, str(outcome), "wmi" if wmi else "vin"),
         "vehicle_profile": profile,
-        "input_binding": binding(identifier, "vin") if not wmi else None,
         "wmi": identifier if wmi else None,
         "identifier_binding": bound,
         "diagnostics": diagnostics,
@@ -517,25 +522,46 @@ def _expand_reconciliation_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, "data": data} if isinstance(row.get("data"), dict) else data
 
 
-_SOURCE_FAILURE_OUTCOMES = frozenset(
-    {
-        "auth_error",
-        "authentication_error",
-        "configuration_error",
-        "database_error",
-        "deadline_exceeded",
-        "dependency_error",
-        "empty",
-        "parse_error",
-        "provider_error",
-        "quota_error",
-        "unsupported",
-    }
-)
+def _source_wmi_matches(value: Any, expected_wmi: str | None) -> bool:
+    # Native VIN attempts use null; every explicit WMI must describe this VIN.
+    # A matching digest cannot override a foreign/malformed carrier or bind a WMI to a frame.
+    return value is None or (expected_wmi is not None and isinstance(value, str) and value == expected_wmi)
+
+
+def _source_binding_matches(data: dict[str, Any], expected: dict[str, Any], expected_wmi: str | None) -> bool:
+    if not _source_wmi_matches(data.get("wmi"), expected_wmi):
+        return False
+    return data.get("input_binding") == expected or (
+        expected_wmi is not None
+        and data.get("wmi") == expected_wmi
+        and data.get("input_binding") == binding(expected_wmi, "wmi")
+    )
+
+
+def _safe_empty_provider_binding(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict) or value.get("status") not in (
+        None,
+        "",
+        "missing",
+        "unverified",
+        "exact",
+        "bound",
+        "matched",
+    ):
+        return False
+    if "verified" in value and not isinstance(value["verified"], bool):
+        return False
+    return not (value.get("status") in ("exact", "bound", "matched") and value.get("verified") is False)
 
 
 def _empty_failed_source(
-    envelope: dict[str, Any], data: dict[str, Any], errors: list[dict[str, Any]], expected: dict[str, Any]
+    envelope: dict[str, Any],
+    data: dict[str, Any],
+    errors: list[dict[str, Any]],
+    expected: dict[str, Any],
+    expected_wmi: str | None,
 ) -> bool:
     """An unavailable source with no facts cannot contradict a usable source.
 
@@ -543,9 +569,9 @@ def _empty_failed_source(
     bindings, partial assertions and malformed profiles keep the normal stop.
     """
     if (
-        not isinstance(envelope.get("outcome"), str)
-        or envelope["outcome"] not in _SOURCE_FAILURE_OUTCOMES
-        or data.get("input_binding") != expected
+        identity_source_failure(envelope.get("outcome")) is None
+        or not _source_binding_matches(data, expected, expected_wmi)
+        or ("source_failure" in data and data["source_failure"] != identity_source_failure(envelope.get("outcome")))
         or not any(error.get("code") == "failed_ready_identity" for error in errors)
         or any(
             not isinstance(error.get("code"), str)
@@ -563,15 +589,12 @@ def _empty_failed_source(
             or any(value not in (None, "") for value in profile.values())
             or row.get("variants")
             or row.get("family_candidates")
+            or row.get("candidates")
+            or row.get("hints")
             or candidate_years
             or year_error
-            or (
-                provider_binding is not None
-                and (
-                    not isinstance(provider_binding, dict)
-                    or provider_binding.get("status") not in (None, "", "missing", "unverified")
-                )
-            )
+            or not _source_wmi_matches(row.get("wmi"), expected_wmi)
+            or not _safe_empty_provider_binding(provider_binding)
         ):
             return False
         records: list[Any] = []
@@ -584,7 +607,14 @@ def _empty_failed_source(
         if not isinstance(provenance, dict) or any(not isinstance(items, list) for items in provenance.values()):
             return False
         records.extend(item for items in provenance.values() for item in items)
-        if any(not isinstance(item, dict) or item.get("value") not in (None, "") for item in records):
+        if any(
+            not isinstance(item, dict)
+            or item.get("value") not in (None, "")
+            or not _source_wmi_matches(item.get("wmi"), expected_wmi)
+            or not _safe_empty_provider_binding(item.get("identifier_binding"))
+            or ("input_binding" in item and item["input_binding"] != data.get("input_binding"))
+            for item in records
+        ):
             return False
     return True
 
@@ -598,8 +628,7 @@ def _append_source_failures(target: list[dict[str, Any]], supplied: Any) -> None
             not isinstance(row, dict)
             or type(row.get("result_index")) is not int
             or not 0 <= row["result_index"] < MAX_ROWS
-            or not isinstance(row.get("outcome"), str)
-            or row["outcome"] not in _SOURCE_FAILURE_OUTCOMES
+            or identity_source_failure(row.get("outcome")) is None
         ):
             continue
         diagnostic = {"result_index": row["result_index"], "outcome": row["outcome"]}
@@ -612,6 +641,7 @@ def _record_unusable_identity(
     data: dict[str, Any],
     errors: list[dict[str, Any]],
     expected: dict[str, Any],
+    expected_wmi: str | None,
     index: int,
     *,
     source_failures: list[dict[str, Any]],
@@ -620,7 +650,7 @@ def _record_unusable_identity(
     disputed_fields: set[str],
     warnings: list[str],
 ) -> None:
-    if _empty_failed_source(envelope, data, errors, expected):
+    if _empty_failed_source(envelope, data, errors, expected, expected_wmi):
         _append_source_failures(source_failures, [{"result_index": index, "outcome": envelope["outcome"]}])
         excluded_failure_errors.extend({**item, "result_index": index} for item in errors)
         warnings.append(f"result_{index}_source_unavailable_without_identity_facts")
@@ -654,6 +684,8 @@ def reconcile_vehicle_identity(
             "reconcile_vehicle_identity", "detail" if detail not in {"summary", "full"} else "identifier_or_results"
         )
     expected = binding(identifier, identifier_type)
+    classified = vin_lookup.classify_identifier(prepared["identifier"], identifier_type=identifier_type)
+    expected_wmi = wmi_for_vin(classified.normalized) if classified.kind == "vin" else None
     values: dict[str, list[dict[str, Any]]] = {field: [] for field in FIELDS}
     levels: dict[str, list[str]] = {field: [] for field in FIELDS}
     disputed_fields: set[str] = set()
@@ -680,6 +712,7 @@ def reconcile_vehicle_identity(
                 original_data,
                 upstream_errors,
                 expected,
+                expected_wmi,
                 index,
                 source_failures=source_failures,
                 excluded_failure_errors=excluded_failure_errors,
@@ -866,8 +899,37 @@ def _selected_decoders() -> dict[str, Callable[..., dict[str, Any]]]:
     }
 
 
-def _expired_batch_row(decoder: str) -> dict[str, Any]:
-    return result(decoder, "deadline_exceeded", {}, warnings=["batch_deadline_exceeded"])
+def _batch_failure_data(item: dict[str, Any] | str, decoder: str, outcome: str) -> dict[str, Any]:
+    """Never fabricate a binding for a row the selected decoder would reject."""
+    identifier = item.get("identifier") if isinstance(item, dict) else item
+    if not isinstance(identifier, str):
+        return {}
+    if decoder in {"decode_wmi_vpic", "decode_wmi_local"}:
+        normalized = identifier.strip().upper()
+        lengths = {3} if decoder == "decode_wmi_local" else {3, 6}
+        if (
+            len(normalized) not in lengths
+            or (decoder == "decode_wmi_vpic" and len(identifier) not in lengths)
+            or re.fullmatch(r"[A-HJ-NPR-Z0-9]+", normalized) is None
+        ):
+            return {}
+        return identity_source_data(normalized, outcome, "wmi")
+    kind = "frame_number" if decoder == "decode_frame_local" else "vin"
+    prepared = validate_identity_input(identifier, identifier_type=kind)
+    if not prepared["ok"] or vin_lookup.classify_identifier(prepared["identifier"], identifier_type=kind).kind != kind:
+        return {}
+    if kind == "frame_number" and re.fullmatch(r"[A-Z0-9]{2,10}-?[0-9]{5,8}", identifier.strip().upper()) is None:
+        return {}
+    return identity_source_data(prepared["identifier"], outcome, kind)
+
+
+def _expired_batch_row(decoder: str, item: dict[str, Any] | str) -> dict[str, Any]:
+    return result(
+        decoder,
+        "deadline_exceeded",
+        _batch_failure_data(item, decoder, "deadline_exceeded"),
+        warnings=["batch_deadline_exceeded"],
+    )
 
 
 class _QueuedDecode:
@@ -887,7 +949,7 @@ class _QueuedDecode:
             remaining = self.expires - time.monotonic()
             timed = self.decoder in {"decode_vin_vpic", "decode_wmi_vpic", "corgi_decode"}
             if self.abandoned or remaining <= 0 or (timed and remaining < 0.1):
-                return _expired_batch_row(self.decoder)
+                return _expired_batch_row(self.decoder, self.item)
             if not isinstance(identifier, str):
                 return invalid(self.decoder, "identifier")
             options = {"timeout_seconds": min(8, remaining)} if timed else {}
@@ -899,7 +961,7 @@ class _QueuedDecode:
             row = result(
                 self.decoder,
                 "provider_error",
-                {},
+                _batch_failure_data(self.item, self.decoder, "provider_error"),
                 warnings=[type(exc).__name__],
                 network_calls=int(network),
                 attempts=[{"method": self.decoder, "outcome": "unknown"}] if network else [],
@@ -913,7 +975,7 @@ class _QueuedDecode:
             self.abandoned = True
             if self.completed is not None and self.finished_at is not None and self.finished_at <= self.expires:
                 return self.completed
-            row = _expired_batch_row(self.decoder)
+            row = _expired_batch_row(self.decoder, self.item)
             if self.completed is not None:
                 row["execution"] = dict(self.completed["execution"])
             elif self.started and self.decoder in {"decode_vin_vpic", "decode_wmi_vpic"}:
@@ -957,6 +1019,7 @@ async def _run_batch_read(work: _QueuedDecode) -> dict[str, Any]:
                 error.code if error.code in {"provider_busy", "provider_executor_unavailable"} else "provider_error"
             )
             row.update(ok=False, outcome=outcome, warnings=[error.code])
+            row["data"] = _batch_failure_data(work.item, work.decoder, outcome)
         row.update(
             error=error.code,
             stage=error.stage,
@@ -1016,7 +1079,7 @@ async def decode_vehicle_batch_async(
     for index, item in enumerate(items):
         remaining = expires - time.monotonic()
         if remaining <= 0:
-            row = _expired_batch_row(decoder)
+            row = _expired_batch_row(decoder, item)
         else:
             work = _QueuedDecode(item, decoder, decoders[decoder], expires)
             row = await _run_batch_read(work)
