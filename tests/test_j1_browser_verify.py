@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +97,8 @@ def test_attestation_is_bound_to_the_exact_active_release(monkeypatch: pytest.Mo
 
 def test_marker_reader_rejects_non_0600_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     revision = "a" * 40
+    real_os_functions = (os.open, os.close, os.read, os.fstat)
+    monkeypatch.setattr(j1_browser, "os", SimpleNamespace(**vars(j1_browser.os)))
     monkeypatch.setattr(j1_browser.os, "open", lambda *_args: 7)
     monkeypatch.setattr(j1_browser.os, "close", lambda *_args: None)
     monkeypatch.setattr(j1_browser.os, "read", lambda *_args: j1_browser.attestation_content(revision))
@@ -103,11 +107,14 @@ def test_marker_reader_rejects_non_0600_mode(monkeypatch: pytest.MonkeyPatch) ->
         "fstat",
         lambda _descriptor: type("Info", (), {"st_mode": 0o100644, "st_uid": 0})(),
     )
+    assert (os.open, os.close, os.read, os.fstat) == real_os_functions
     assert j1_browser._attestation_revision("/run/attestation") == ""
 
 
 def test_marker_reader_rejects_extra_lines_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     revision = "a" * 40
+    real_os_functions = (os.open, os.close, os.read, os.fstat)
+    monkeypatch.setattr(j1_browser, "os", SimpleNamespace(**vars(j1_browser.os)))
     monkeypatch.setattr(j1_browser.os, "open", lambda *_args: 7)
     monkeypatch.setattr(j1_browser.os, "close", lambda *_args: None)
     monkeypatch.setattr(
@@ -120,6 +127,7 @@ def test_marker_reader_rejects_extra_lines_without_raising(monkeypatch: pytest.M
         "fstat",
         lambda _descriptor: type("Info", (), {"st_mode": 0o100600, "st_uid": 0})(),
     )
+    assert (os.open, os.close, os.read, os.fstat) == real_os_functions
     assert j1_browser._attestation_revision("/run/attestation") == ""
 
 
