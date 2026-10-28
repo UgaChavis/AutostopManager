@@ -15,6 +15,7 @@ from . import vin_lookup
 from .automotive_contracts import (
     MAX_ROWS,
     binding,
+    caller_supplied_claims,
     context_field_evidence,
     finite_number,
     field_origins,
@@ -309,6 +310,7 @@ def _reconciliation_variants(
         "source_lineage": lineage,
         "result_index": index,
         "outcome": row.get("outcome"),
+        "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
     }
     for key in ("scope", "field_statuses", "field_evidence", "provenance", "field_provenance", "diagnostics"):
         if key in data:
@@ -322,6 +324,7 @@ def _reconciliation_variants(
             return [], "results." + key
         for item in supplied:
             child = {**item, "result_index": index}
+            child["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
             child.setdefault("source_lineage", lineage)
             if "scope" in variant:
                 child.setdefault("scope", variant["scope"])
@@ -343,6 +346,31 @@ def _reconciliation_years(data: dict[str, Any]) -> tuple[list[Any], str | None]:
             return [], "results." + path
         years.extend(item for item in supplied if item not in years)
     return years, None
+
+
+def _caller_supplied_result(row: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return caller_supplied_claims(row)
+    except ValueError:
+        return None
+
+
+def _append_context_observations(
+    values: dict[str, list[dict[str, Any]]], context: dict[str, Any] | None, prepared: dict[str, Any]
+) -> None:
+    origins = {row["field"]: row for row in context_field_evidence(context or {})}
+    for field, value in prepared.items():
+        if field in values and value not in (None, ""):
+            values[field].append(
+                {
+                    "value": value,
+                    "primary_lineage": origins.get(field, {}).get("primary_lineage", "explicit_context"),
+                    "source_kind": "caller",
+                    "strength": "candidate",
+                    "bound": False,
+                    "independent": False,
+                }
+            )
 
 
 def _reconciliation_profile(
@@ -523,7 +551,8 @@ def reconcile_vehicle_identity(
             disputed_fields.update(
                 item["field"]
                 for item in upstream_errors
-                if item.get("code") == "disputed_ready_identity" and item.get("field") in FIELDS
+                if item.get("code") in ("disputed_ready_identity", "ready_identity_evidence_conflict")
+                and item.get("field") in FIELDS
             )
             warnings.append(f"result_{index}_not_usable_as_vehicle_facts")
             continue
@@ -537,6 +566,10 @@ def reconcile_vehicle_identity(
         if data.get("input_binding") != expected and not wmi_matches:
             conflicts.append({"field": "identifier", "code": "result_binding_mismatch", "result_index": index})
             continue
+        row = _caller_supplied_result(row)
+        if row is None:
+            return invalid("reconcile_vehicle_identity", "results.caller_claims_too_deep")
+        data = row["data"] if isinstance(row.get("data"), dict) else row
         supplied_evidence = row.get("evidence") or row.get("field_evidence") or []
         if not isinstance(supplied_evidence, list) or any(not isinstance(item, dict) for item in supplied_evidence):
             return invalid("reconcile_vehicle_identity", "results.evidence")
@@ -561,27 +594,19 @@ def reconcile_vehicle_identity(
                 level = _field_level(row, data, field, origins, wmi=bool(wmi))
                 if level == "missing":
                     continue
-                levels[field].append(level)
+                levels[field].append("candidate" if level == "supported" else level)
                 for origin in origins:
                     values[field].append(
                         {
                             **origin,
                             "value": profile[field],
                             "primary_lineage": primary_lineage(origin),
-                            "independent": origin.get("independent") is True,
+                            "independent": False,
                             "result_index": index,
                         }
                     )
         evidence.extend(supplied_evidence)
-    context_origins = {row["field"]: row for row in context_field_evidence(context or {})}
-    for field, value in prepared["context"].items():
-        if field in values and value not in (None, ""):
-            values[field].append(
-                {
-                    "value": value,
-                    "primary_lineage": context_origins.get(field, {}).get("primary_lineage", "explicit_context"),
-                }
-            )
+    _append_context_observations(values, context, prepared["context"])
     profile, statuses, provenance = {}, {}, {}
     for field, observations in values.items():
         if not observations:
@@ -601,13 +626,7 @@ def reconcile_vehicle_identity(
             statuses[field] = "disputed"
         else:
             profile[field] = observations[0]["value"]
-            statuses[field] = (
-                "supported"
-                if "supported" in levels[field]
-                else "candidate"
-                if "candidate" in levels[field]
-                else "observed"
-            )
+            statuses[field] = "candidate" if "candidate" in levels[field] else "observed"
         provenance[field] = observations
     for field in disputed_fields:
         profile.pop(field, None)
@@ -632,6 +651,7 @@ def reconcile_vehicle_identity(
         "identifier": {"kind": expected["identifier_kind"]},
         "diagnostics": {"model_year": {"candidate_years": year_candidates}} if year_candidates else {},
         "confidence": 0.0,
+        "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
     }
     data["parts_lookup_readiness"] = build_parts_lookup_readiness(data)
     response = result(

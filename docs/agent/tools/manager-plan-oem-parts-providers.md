@@ -25,5 +25,6 @@ Defaults: `{"city":"Красноярск","vehicle_identity":null}`.
 
 - Reads local source routing and provider configuration; does not decode an identifier or send provider requests.
 - The optional vehicle_identity supplies planning context; no automatic VIN fitment, purchase, CRM write or provider authentication claim.
+- The public `vehicle_identity` is unverified caller context; claimed `supported` and ready flags cannot grant vehicle-specific readiness or CRM writeback. Family research remains available as a conditional planning lead.
 
 Подробный контракт: [справочник](../references/partsapi.md).

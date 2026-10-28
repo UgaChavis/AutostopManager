@@ -596,7 +596,8 @@ def build_oem_parts_provider_plan(
     readiness = identity.get("parts_lookup_readiness") or {}
     identity_ready = identity_allows_lookup(identity, scope="vehicle")
     family_ready = identity_allows_lookup(identity, scope="family")
-    writeback_ready = readiness.get("ready_for_crm_writeback") is True and identity_ready
+    # A read-only plan never grants permission for a CRM write.
+    writeback_ready = False
     field_statuses = identity.get("field_statuses") or {}
     query_disputes = {
         item["field"]

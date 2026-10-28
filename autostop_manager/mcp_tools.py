@@ -1193,6 +1193,45 @@ def register_manager_tools(  # noqa: C901
     def drom_get_parts_search_tool(task_id: int, uid: str) -> dict[str, Any]:
         return drom_get_parts_search(task_id=task_id, uid=uid)
 
+    def plan_oem_parts_providers_tool(
+        identifier: str,
+        requested_part: str,
+        vehicle_identity: dict[str, Any] | None = None,
+        city: str = "Красноярск",
+    ) -> dict[str, Any]:
+        from .automotive_contracts import caller_supplied_claims
+
+        if vehicle_identity is None:
+            return build_oem_parts_provider_plan(identifier=identifier, requested_part=requested_part, city=city)
+        try:
+            identity = caller_supplied_claims(vehicle_identity)
+        except ValueError:
+            identity = {"ok": False, "errors": [{"code": "caller_claims_too_deep"}], "vehicle_profile": {}}
+        profile = identity.get("vehicle_profile") if isinstance(identity.get("vehicle_profile"), dict) else {}
+        readiness = identity.get("parts_lookup_readiness")
+        if not isinstance(readiness, dict):
+            readiness = {}
+        supplied_readiness = vehicle_identity.get("parts_lookup_readiness")
+        supplied_family = (
+            supplied_readiness.get("ready_for_family_lookup") if isinstance(supplied_readiness, dict) else None
+        )
+        has_family = bool(profile.get("make") and (profile.get("model") or profile.get("model_family"))) or bool(
+            identity.get("family_candidates")
+        )
+        readiness.update(
+            ready_for_family_lookup=has_family and supplied_family is not False,
+            ready_for_vehicle_lookup=False,
+            ready_for_crm_writeback=False,
+        )
+        identity["parts_lookup_readiness"] = readiness
+        plan = build_oem_parts_provider_plan(
+            identifier=identifier, requested_part=requested_part, vehicle_identity=identity, city=city
+        )
+        plan["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
+        return plan
+
+    # Keep the original public input-schema title and fingerprint.
+    plan_oem_parts_providers_tool.__name__ = build_oem_parts_provider_plan.__name__
     server.tool(
         name="plan_oem_parts_providers",
         description=(
@@ -1201,7 +1240,7 @@ def register_manager_tools(  # noqa: C901
             "profile is supplied. Does not call suppliers or write CRM."
         ),
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
-    )(build_oem_parts_provider_plan)
+    )(plan_oem_parts_providers_tool)
 
     @server.tool(
         name="partsapi_catalog_lookup",

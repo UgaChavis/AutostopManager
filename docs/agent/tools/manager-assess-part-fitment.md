@@ -24,6 +24,7 @@ Defaults: `{"scope":"modification"}`.
 Ошибки и неполнота: invalid_input для vehicle/part/criteria/evidence/scope неверной формы; partial для unknown/conflict; supported/rejected имеют outcome success как завершённая оценка.
 
 - Нет явного запрета не означает supported; family не exact_identifier.
+- Любой `state`, включая `supported`, условен относительно переданных caller evidence: `conditional_on_caller_evidence=true`, `independent_source_verified=false`, `exact_applicability_confirmed=false`, `ready_for_crm_writeback=false`. Pure helper не проверяет подлинность источника.
 - Primary source: fitment_assertion=true, official_epc/manufacturer_fitment_catalog, matching part_number/brand/scope и provider/lineage/method/locator/aware ISO fetched_at.
 - exact_identifier requires matching valid input_binding; modification requires matching typed TecDoc catalog_ref (numeric ID/carType) or matching native Elcats/Japancats/SsangYong refs with their provider/namespace/entry_id/vehicle_context preserved and checked against the vehicle profile. evidence.conditions and inherited/unparsed restrictions are checked with caller criteria; missing/invalid conditions remain unknown.
 - production_date может быть YYYY-MM-DD/месяц YYYY-MM; частичный месяц, пересекающий границу диапазона, остаётся unknown.

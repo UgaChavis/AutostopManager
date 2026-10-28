@@ -1449,7 +1449,7 @@ def lookup_original_parts(
 ) -> dict[str, Any]:
     from .automotive_contracts import ready_identity
 
-    prepared = None
+    supplied_make = None
     if vehicle_identity is not None:
         identity, conflicts = ready_identity(
             vehicle_identity,
@@ -1465,14 +1465,13 @@ def lookup_original_parts(
                 "execution": {"network_calls": 0},
                 "oem_candidates": [],
             }
-        prepared = {"ok": True, "vehicle": identity["vehicle_profile"]}
-    return build_lookup_plan(
+        supplied_make = identity["vehicle_profile"].get("make")
+    plan = build_lookup_plan(
         raw_identifier,
         identifier_type=identifier_type,
         live_vpic=live_vpic and vehicle_identity is None,
-        vpic_result=prepared,
         model_year=model_year,
-        make_hint=make_hint,
+        make_hint=make_hint or supplied_make,
         part_name=part_name,
         part_group=part_group,
         side=side,
@@ -1483,3 +1482,31 @@ def lookup_original_parts(
         captured_supersedes=captured_supersedes,
         captured_note=captured_note,
     )
+    if vehicle_identity is not None:
+        plan["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
+        plan["catalog_vehicle"]["source"] = "caller_supplied_unverified"
+        plan["warnings"].append("The supplied vehicle profile and manual capture are unverified caller claims.")
+        for candidate in plan["oem_candidates"]:
+            if candidate.get("confidence") in {"high", "medium"}:
+                candidate["confidence"] = "low"
+            candidate["conditional_on_caller_evidence"] = True
+            candidate["fitment_confirmed"] = False
+        confidence = plan["fitment_confidence"]
+        confidence.update(level="blocked", score=0)
+        confidence["reasons"].append("Caller-supplied identity is not authenticated provider evidence")
+        missing = "independent vehicle and fitment verification"
+        if missing not in plan["missing_context"]:
+            plan["missing_context"].append(missing)
+        if missing not in confidence["required_evidence"]:
+            confidence["required_evidence"].append(missing)
+        plan["next_actions"] = _next_actions(
+            make=plan["catalog_vehicle"]["make"],
+            part_name=part_name,
+            oem_candidates=plan["oem_candidates"],
+            missing_context=plan["missing_context"],
+            catalog_routes=plan["catalog_routes"],
+        )
+        return _redact_identifier_payload(
+            plan, classify_identifier(raw_identifier, identifier_type=identifier_type).normalized
+        )
+    return plan

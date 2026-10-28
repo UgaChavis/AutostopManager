@@ -275,7 +275,8 @@ def _identity_digest(identity: dict[str, Any]) -> dict[str, Any]:
             "ready_for_oem_candidate_lookup", readiness.get("ready_for_oem_lookup")
         ),
         "ready_for_tecdoc_candidate_lookup": readiness.get("ready_for_tecdoc_candidate_lookup", False),
-        "ready_for_crm_writeback": readiness.get("ready_for_crm_writeback", False),
+        "ready_for_crm_writeback": False,
+        "trust": identity.get("trust") or {},
         "cross_source_agreement": readiness.get("cross_source_agreement") or {},
         "blocking_reasons": readiness.get("blocking_reasons") or [],
         "vehicle_profile": {
@@ -372,7 +373,14 @@ def _assess_partsapi_identity_agreement(
     *,
     independent_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evidence = {"matched_fields": [], "conflicting_fields": [], **_partsapi_identifier_evidence(call)}
+    evidence = {
+        "matched_fields": [],
+        "conflicting_fields": [],
+        "caller_context_independently_verified": False,
+        "comparison_scope": "catalog_candidate_only",
+        "vin_fitment_confirmed": False,
+        **_partsapi_identifier_evidence(call),
+    }
     group_reference = partsapi_is_group_reference(call)
     if call.get("dry_run"):
         return {**evidence, "status": "not_checked"}
@@ -409,6 +417,8 @@ def _assess_partsapi_identity_agreement(
     year: int | None = None
     production_year: int | None = None
     independent_conflict = False
+    identity_trust = identity.get("trust") if isinstance(identity.get("trust"), dict) else {}
+    caller_claims_only = identity_trust.get("state") == "caller_supplied_unverified"
     for field, (profile_value, right) in compare_fields.items():
         field_evidence = [item for item in identity.get("field_evidence") or [] if item.get("field") == field]
         sources = {"CRM context"} if field == "market" else {"CRM context", "NHTSA vPIC"}
@@ -418,14 +428,17 @@ def _assess_partsapi_identity_agreement(
             (
                 item.get("value", profile_value),
                 item.get("source") in sources
-                and (item.get("source") != "NHTSA vPIC" or item.get("source_kind") != "caller"),
+                and (item.get("source") != "NHTSA vPIC" or item.get("source_kind") != "caller")
+                and not (
+                    isinstance(item.get("trust"), dict) and item["trust"].get("state") == "caller_supplied_unverified"
+                ),
             )
             for item in field_evidence
             if item.get("source") in sources or item.get("source_kind") == "caller"
         ]
         # Geographic and platform hints do not establish exact engine/market facts.
         if not field_evidence or (not values and field not in {"engine", "market"}):
-            values = [(profile_value, True)]
+            values = [(profile_value, not caller_claims_only)]
         values = [(value, credit) for value, credit in values if _normalize_compare_value(value)]
         if field == "model_year" and values:
             year = _partsapi_year(values[0][0])
@@ -602,6 +615,9 @@ def _identity_with_tecdoc_selection(identity: dict[str, Any], selection: dict[st
         readiness["cross_source_agreement"] = {
             "status": "matched",
             "source": "PartsAPI getMakes/getModels/getCars",
+            "caller_context_independently_verified": False,
+            "comparison_scope": "catalog_candidate_only",
+            "vin_fitment_confirmed": False,
             "identifier_matches_request": None,
             "requires_exact_identifier_confirmation": True,
             "independent_vehicle_context_required": True,

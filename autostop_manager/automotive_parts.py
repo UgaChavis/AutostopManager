@@ -657,6 +657,15 @@ def assess_part_fitment(
         return invalid("assess_part_fitment", "vehicle_part_criteria_evidence_scope")
     if len(evidence) > MAX_ROWS or any(not isinstance(row, dict) for row in evidence):
         return invalid("assess_part_fitment", "evidence")
+    conditional = {
+        "conditional_on_caller_evidence": True,
+        "independent_source_verified": False,
+        "exact_applicability_confirmed": False,
+        "ready_for_crm_writeback": False,
+    }
+    unverified_warning = (
+        "Evaluation is conditional on supplied evidence; source authenticity is not independently checked."
+    )
     identity_data = vehicle["data"] if isinstance(vehicle.get("data"), dict) else vehicle
     upstream_errors = identity_errors(vehicle, identity_data)
     identity_data, catalog_errors = _vehicle_catalog_context(vehicle, identity_data)
@@ -665,10 +674,11 @@ def assess_part_fitment(
         return result(
             "assess_part_fitment",
             "partial",
-            {"state": "conflict", "scope": scope, "part": part, "checked_conditions": []},
+            {"state": "conflict", "scope": scope, "part": part, "checked_conditions": [], **conditional},
             evidence=evidence,
             conflicts=upstream_errors,
             missing_fields=["usable_vehicle_identity"],
+            warnings=[unverified_warning],
         )
     vehicle = identity_data
     profile: dict[str, Any] = (
@@ -735,8 +745,9 @@ def assess_part_fitment(
     return result(
         "assess_part_fitment",
         "partial" if state in {"unknown", "conflict"} else "success",
-        {"state": state, "scope": scope, "part": part, "checked_conditions": checked},
+        {"state": state, "scope": scope, "part": part, "checked_conditions": checked, **conditional},
         evidence=evidence,
         missing_fields=missing,
         conflicts=conflicts,
+        warnings=[unverified_warning],
     )

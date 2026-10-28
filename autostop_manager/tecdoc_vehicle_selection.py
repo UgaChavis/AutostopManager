@@ -130,9 +130,10 @@ def _independent_values(identity: dict[str, Any], context: dict[str, Any] | None
         if not isinstance(row, dict):
             continue
         source = str(row.get("source") or "")
+        trust = row.get("trust") if isinstance(row.get("trust"), dict) else {}
         # CRM includes supplied client/photo facts. Local VIN patterns and the
         # catalogue being queried cannot establish characteristics of this car.
-        trusted = source.startswith("CRM") or (
+        trusted = (source.startswith("CRM") and trust.get("state") != "caller_supplied_unverified") or (
             source == "NHTSA vPIC"
             and from_identity
             and row.get("source_kind") != "caller"
@@ -539,6 +540,7 @@ def resolve_tecdoc_vehicle(
         "calls": [],
         "requires_exact_identifier_confirmation": True,
         "exact_applicability_confirmed": False,
+        "caller_context_independently_verified": False,
         "identity_source": "independent_vehicle_context",
         "catalogue_route": "getMakes/getModels/getCars",
     }

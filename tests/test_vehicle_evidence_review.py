@@ -386,16 +386,17 @@ def test_reused_identity_malformed_status_mapping_matches_existing_empty_readine
     empty, errors = contracts.ready_identity({"data": {**row, "field_statuses": {}}}, _SYNTHETIC_IDENTIFIER)
     assert errors == [] and empty is not None
     expected = policy.build_parts_lookup_readiness(empty)
-    assert expected == policy.build_parts_lookup_readiness(row)
     assert policy.identity_allows_lookup(accepted) == policy.identity_allows_lookup(empty)
     assert policy.build_parts_lookup_readiness(accepted) == expected
+    assert expected["ready_for_family_lookup"] is True
+    assert expected["ready_for_vehicle_lookup"] is False
     assert expected["ready_for_modification_lookup"] is False
     assert expected["ready_for_crm_writeback"] is False
     assert expected["exact_applicability_confirmed"] is False
 
 
 @pytest.mark.parametrize("shape", ["flat", "structured"])
-def test_reused_identity_supported_status_shapes_keep_modification_readiness(shape):
+def test_reused_identity_supported_status_shapes_remain_unverified_candidates(shape):
     statuses = {
         field: "supported" if shape == "flat" else {"status": "supported"}
         for field in ("model_year", "engine", "transmission", "market")
@@ -404,9 +405,11 @@ def test_reused_identity_supported_status_shapes_keep_modification_readiness(sha
         {"data": {**_ready_policy_row(), "field_statuses": statuses}}, _SYNTHETIC_IDENTIFIER
     )
     assert errors == [] and accepted is not None
-    assert policy.identity_allows_lookup(accepted) is True
+    assert policy.identity_allows_lookup(accepted) is False
     readiness = policy.build_parts_lookup_readiness(accepted)
-    assert readiness["ready_for_modification_lookup"] is True
+    assert readiness["ready_for_family_lookup"] is True
+    assert readiness["ready_for_modification_lookup"] is False
+    assert accepted["trust"]["state"] == "caller_supplied_unverified"
     assert readiness["ready_for_crm_writeback"] is False
     assert readiness["exact_applicability_confirmed"] is False
 

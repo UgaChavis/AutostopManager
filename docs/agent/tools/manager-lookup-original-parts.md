@@ -24,7 +24,7 @@ Defaults: `{"captured_note":null,"captured_oem_number":null,"captured_source":nu
 Ошибки и неполнота: Malformed identifiers/ready identity binding are rejected; a skipped or failed vPIC decode remains visible in warnings and does not supply missing vehicle facts..
 
 - This plans catalogue routes and captures explicitly supplied candidates; a route or OE reference does not verify an original part for the VIN.
-- Bound vehicle_identity is reused without decode; foreign, failed or conflicted identity is rejected before provider calls.
+- `vehicle_identity` is reused without decode as an unverified caller context, never as `decoded_vehicle`; foreign, failed or conflicted identity is rejected before provider calls. The public binding does not authenticate its source or contents.
 - live_vpic=true is the legacy default; live_vpic=false avoids that provider read.
 
 Подробный контракт: [справочник](../references/partsapi.md).

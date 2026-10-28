@@ -6,8 +6,16 @@ default `full`. Summary формируется после полного decode/
 field_statuses, diagnostics, conflicts, readiness и processing, сохраняются.
 `presentation.omitted_fields` явно показывает исключённые поля. Batch-контракт не меняется.
 
-Сверка готовых результатов сохраняет candidate/supported/observed/disputed, силу и
-привязку исходных свидетельств. Дубли одной primary lineage не повышают статус.
+Публичные сериализованные `vehicle_identity` и `results` считаются неподтверждёнными
+заявлениями вызывающей стороны. `input_binding` связывает запрос с идентификатором,
+но его SHA256 не подтверждает происхождение или неизменность полей результата.
+Сверка сохраняет значения, заявленную lineage и противоречия; переданный `supported`
+понижается до `candidate`, а `observed` остаётся `observed`. Независимость, provider
+binding, writeback и точная применимость из переданного JSON не подтверждаются.
+`trust.state=caller_supplied_unverified` показывает эту границу. Свежий decoder внутри
+составного вызова проверяется его обычным provider transport; подтверждённый повторный
+перенос через отдельные вызовы потребовал бы отдельного серверного receipt.
+Дубли одной primary lineage не повышают статус.
 `manufacturer_country` и `country` раздельны; варианты года из diagnostics и явного
 model_year_candidates объединяются только после проверки пригодности и binding.
 

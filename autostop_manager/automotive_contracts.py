@@ -7,6 +7,7 @@ import json
 import math
 import re
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 from .vin_lookup import classify_identifier
@@ -90,6 +91,88 @@ def valid_binding(value: Any) -> bool:
     )
 
 
+_CALLER_FALSE_FLAGS = {
+    "bound",
+    "independent",
+    "verified",
+    "fitment_confirmed",
+    "vin_fitment_confirmed",
+    "oem_confirmed",
+    "exact_applicability_confirmed",
+    "independent_vehicle_confirmation",
+    "provider_identifier_is_vehicle_confirmation",
+    "can_write_final_material_line_now",
+    "can_prepare_manual_writeback",
+    "source_authenticated",
+    "independent_source_verified",
+    "binding_authenticates_source",
+    "exact_fitment_confirmed",
+}
+
+
+@lru_cache(maxsize=1)
+def _vehicle_claim_fields() -> frozenset[str]:
+    from .automotive_identity import FIELDS
+    from .tecdoc_vehicle_selection import _FIELDS
+    from .vehicle_identity import IDENTITY_FIELDS
+
+    return frozenset((*IDENTITY_FIELDS, *_FIELDS, *FIELDS))
+
+
+def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
+    """Copy public JSON as unverified claims; a request digest is not authentication."""
+    if depth > 32:
+        raise ValueError("caller_claims_too_deep")
+    if isinstance(value, list):
+        return [caller_supplied_claims(item, depth=depth + 1) for item in value]
+    if not isinstance(value, dict):
+        return value
+    clean: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "identifier_binding" and isinstance(item, dict):
+            # Keep the caller's reported status for context, but do not reuse it
+            # as an authenticated provider binding.
+            clean["reported_identifier_binding"] = {"status": item.get("status"), "verified": False}
+        elif isinstance(key, str) and (key.startswith("ready_for_") or key in _CALLER_FALSE_FLAGS):
+            clean[key] = False
+        elif key == "source_kind":
+            clean[key] = "caller"
+        elif key == "strength" and item == "supported":
+            clean[key] = "candidate"
+        elif key in {"status", "state"} and item == "supported":
+            clean[key] = "candidate"
+        elif key == "trust":
+            clean[key] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
+        elif key == "confidence_label":
+            clean[key] = "low"
+        elif key == "confidence" and isinstance(item, (float, int)) and not isinstance(item, bool):
+            clean[key] = 0.0
+        elif key == "field_statuses" and isinstance(item, dict):
+            clean[key] = {
+                field: "candidate" if status == "supported" else caller_supplied_claims(status, depth=depth + 1)
+                for field, status in item.items()
+            }
+        elif key == "cross_source_agreement" and isinstance(item, dict):
+            agreement = caller_supplied_claims(item, depth=depth + 1)
+            agreement["reported_status"] = item.get("status")
+            agreement["status"] = "caller_supplied_unverified"
+            agreement["matched_fields"] = []
+            clean[key] = agreement
+        else:
+            clean[key] = caller_supplied_claims(item, depth=depth + 1)
+    field = value.get("field")
+    source_claim = any(key in value for key in ("source", "provider", "primary_lineage")) and (
+        field is None or (isinstance(field, str) and field in _vehicle_claim_fields())
+    )
+    if source_claim:
+        clean.update(source_kind="caller", independent=False, bound=False)
+        if "strength" in value:
+            clean["strength"] = "candidate"
+    if depth == 0 or source_claim:
+        clean["trust"] = {"state": "caller_supplied_unverified", "binding_authenticates_source": False}
+    return clean
+
+
 def ready_identity(
     identity: Any, identifier: str, *, identifier_type: str = "auto", context: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -118,7 +201,47 @@ def ready_identity(
             and not identity_values_agree(field, value, profile[field])
         ):
             conflicts.append({"field": field, "code": "ready_identity_context_mismatch"})
-    return (None, conflicts) if conflicts else (row, [])
+    if conflicts:
+        return None, conflicts
+    try:
+        row = caller_supplied_claims(row)
+    except ValueError:
+        return None, [{"field": "vehicle_identity", "code": "caller_claims_too_deep"}]
+    readiness = row.get("parts_lookup_readiness")
+    if isinstance(readiness, dict):
+        readiness["ready_for_family_lookup"] = bool(
+            profile.get("make") and (profile.get("model") or profile.get("model_family"))
+        )
+    return row, []
+
+
+def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
+    from .vehicle_identity import identity_values_agree
+
+    profile = data.get("vehicle_profile")
+    if not isinstance(profile, dict):
+        return []
+    claims: list[tuple[Any, Any]] = []
+    for row in (envelope,) if data is envelope else (envelope, data):
+        evidence = row.get("field_evidence")
+        if isinstance(evidence, list):
+            claims.extend((item.get("field"), item.get("value")) for item in evidence if isinstance(item, dict))
+        provenance = row.get("provenance")
+        if isinstance(provenance, dict):
+            for field, entries in provenance.items():
+                if isinstance(entries, list):
+                    claims.extend((field, item.get("value")) for item in entries if isinstance(item, dict))
+    conflicts: list[dict[str, Any]] = []
+    for field, claimed in claims:
+        if not isinstance(field, str) or profile.get(field) in (None, "") or claimed in (None, ""):
+            continue
+        if type(profile[field]) is type(claimed) and profile[field] == claimed:
+            continue
+        if not identity_values_agree(field, profile[field], claimed):
+            conflict = {"field": field, "code": "ready_identity_evidence_conflict"}
+            if conflict not in conflicts:
+                conflicts.append(conflict)
+    return conflicts
 
 
 def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -137,6 +260,21 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
             for field, status in statuses.items():
                 if (status.get("status") if isinstance(status, dict) else status) == "disputed":
                     errors.append({"field": field, "code": "disputed_ready_identity"})
+        readiness = row.get("parts_lookup_readiness")
+        agreements = [row.get("cross_source_agreement")]
+        if isinstance(readiness, dict):
+            agreements.append(readiness.get("cross_source_agreement"))
+        if any(
+            isinstance(agreement, dict)
+            and (
+                agreement.get("status") == "conflict"
+                or agreement.get("status") == "identifier_mismatch"
+                or agreement.get("status") == "ambiguous_vehicle_modification"
+                or bool(agreement.get("conflicting_fields"))
+            )
+            for agreement in agreements
+        ):
+            errors.append({"field": "vehicle_identity", "code": "unresolved_identity_agreement"})
         provider_binding = row.get("identifier_binding")
         if provider_binding is not None and (
             not isinstance(provider_binding, dict)
@@ -150,6 +288,7 @@ def identity_errors(envelope: dict[str, Any], data: dict[str, Any]) -> list[dict
         and envelope["input_binding"] != data["input_binding"]
     ):
         errors.append({"field": "identifier", "code": "ready_identity_binding_conflict"})
+    errors.extend(item for item in _reported_identity_field_conflicts(envelope, data) if item not in errors)
     return errors
 
 

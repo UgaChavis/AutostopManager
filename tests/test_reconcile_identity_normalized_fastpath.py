@@ -205,7 +205,8 @@ def test_reconciliation_full_summary_and_reuse_preserve_levels_and_origins(monke
     _same_response(full, expected_full)
     _same_response(summary, expected_summary)
     _same_response(reused, expected_reused)
-    assert set(full["data"]["field_statuses"].values()) == {level}
+    assert set(full["data"]["field_statuses"].values()) == {"candidate" if level == "supported" else level}
+    assert full["data"]["trust"]["state"] == "caller_supplied_unverified"
     assert summary["data"]["provenance"] == full["data"]["provenance"]
     assert summary["data"]["model_year_candidates"] == [2020]
     assert len(full["data"]["variants"]) == len(summary["data"]["variants"]) == 4

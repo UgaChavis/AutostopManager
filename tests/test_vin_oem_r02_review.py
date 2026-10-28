@@ -159,7 +159,8 @@ def test_r02_05_main_e2_vpic_numeric_string_gear_count_survives_reconciliation()
     )
     response = identity.reconcile_vehicle_identity(VIN, [ready])
     assert response["data"]["vehicle_profile"]["transmission_speeds"] == 6
-    assert response["data"]["field_statuses"]["transmission_speeds"] == "supported"
+    assert response["data"]["field_statuses"]["transmission_speeds"] == "candidate"
+    assert response["data"]["trust"]["state"] == "caller_supplied_unverified"
     assert response["data"]["provenance"]["transmission_speeds"]
 
 
@@ -209,7 +210,8 @@ def test_r02_06_supported_options_years_and_numeric_values_remain_usable():
     actual = response["data"]["vehicle_profile"]
     assert actual == {**profile, "model_year": 2015, "options": ["A", "B"]}
     assert {row["field"] for row in response["data"]["variants"][0]["normalization_notes"]} == {"model_year"}
-    assert all(status == "supported" for status in response["data"]["field_statuses"].values())
+    assert all(status == "candidate" for status in response["data"]["field_statuses"].values())
+    assert response["data"]["trust"]["state"] == "caller_supplied_unverified"
 
 
 def _vpic_payload(error="0", returned=None):

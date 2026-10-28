@@ -26,5 +26,6 @@ Defaults: `{"axle":null,"crm_context":null,"drivetrain":null,"dry_run":false,"en
 - Read-only catalogue research; no CRM write and no automatic order.
 - Article candidates and TecDoc modification agreement do not establish the original part for this VIN; current PartsAPI methods do not return authoritative VIN-specific OEM numbers.
 - dry_run=true makes configured requests unverified and skips live calls; live_vpic defaults true outside dry run.
+- Public `vehicle_identity` is unverified caller context: its claimed supported/ready values are not carried as provider confirmation. A fresh provider result obtained within this composed call retains the normal bound-decoder checks.
 
 Подробный контракт: [справочник](../references/partsapi.md).

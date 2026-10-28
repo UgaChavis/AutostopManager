@@ -211,6 +211,8 @@ def test_resolver_uses_group_car_id_without_manual_navigation_or_exact_fitment(m
     assert calls[1]["type_id"] == calls[2]["type_id"] == "123"
     assert result["tecdoc_vehicle"]["car_id"] == "123"
     assert result["tecdoc_vehicle"]["identity_agreement"] == "group_match"
+    assert result["identity"]["cross_source_agreement"]["caller_context_independently_verified"] is False
+    assert result["identity"]["cross_source_agreement"]["comparison_scope"] == "catalog_candidate_only"
     assert result["tecdoc_vehicle"]["identifier_matches_request"] is False
     assert result["tecdoc_vehicle"]["requires_exact_identifier_confirmation"] is True
     assert result["identity"]["vehicle_profile"] == {}

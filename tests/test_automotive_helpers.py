@@ -354,7 +354,9 @@ def test_public_identity_reuse_rejects_foreign_binding_before_any_decode(forbidd
 
     ready = decode_vehicle_identity(VIN, crm_context={"make": "DEMO"}, live_vpic=False, live_wmi=False)
     dossier = lookup_original_parts(VIN, vehicle_identity=ready)
-    assert dossier["decoded_vehicle"]["make"] == "DEMO"
+    assert not dossier["decoded_vehicle"]
+    assert dossier["catalog_vehicle"]["make"] == "DEMO"
+    assert dossier["catalog_vehicle"]["source"] == "caller_supplied_unverified"
     assert lookup_original_parts(OTHER_VIN, vehicle_identity=ready)["error"] == "invalid_ready_identity"
     resolved = resolve_vin_oem_parts(identifier=VIN, requested_part="масляный фильтр", vehicle_identity=ready)
     assert resolved["calls"] == []
@@ -535,6 +537,9 @@ def test_reconciliation_preserves_composite_candidate_levels_origins_years_and_c
         assert origin == {
             **next(row for row in origins if row["field"] == field),
             "primary_lineage": "autostop_local_vehicle_rules",
+            "source_kind": "caller",
+            "independent": False,
+            "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
             "result_index": 0,
         }
     assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
@@ -554,7 +559,8 @@ def test_reconciliation_preserves_declared_observed_without_strength_upgrade(for
         data["wmi"] = VIN[:3]
     merged = identity.reconcile_vehicle_identity(VIN, [result("demo", "partial", data)])
     assert merged["data"]["field_statuses"]["make"] == "observed"
-    assert merged["data"]["provenance"]["make"][0]["strength"] == strength
+    assert merged["data"]["provenance"]["make"][0]["strength"] == "candidate"
+    assert merged["data"]["provenance"]["make"][0]["bound"] is False
     assert not merged["data"]["parts_lookup_readiness"]["exact_applicability_confirmed"]
 
 
@@ -705,7 +711,7 @@ def test_reconciliation_repeated_wmi_primary_source_stays_candidate(forbidden_ne
     assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
 
 
-def test_reconciliation_keeps_supported_origin_and_child_variant_lineage_scope(forbidden_network):
+def test_reconciliation_keeps_claimed_origin_and_child_variant_without_support_upgrade(forbidden_network):
     child = {
         "profile": {"engine": "E2"},
         "source_lineage": "vininfo_local_rules",
@@ -736,9 +742,26 @@ def test_reconciliation_keeps_supported_origin_and_child_variant_lineage_scope(f
         },
     )
     merged = identity.reconcile_vehicle_identity(VIN, [ready])["data"]
-    assert merged["field_statuses"]["engine"] == "supported"
-    assert merged["provenance"]["engine"][0] == {**origin, "result_index": 0}
-    assert merged["variants"].count({**child, "result_index": 0}) == 1
+    assert merged["field_statuses"]["engine"] == "candidate"
+    assert merged["provenance"]["engine"][0] == {
+        **origin,
+        "source_kind": "caller",
+        "strength": "candidate",
+        "bound": False,
+        "independent": False,
+        "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
+        "result_index": 0,
+    }
+    assert (
+        merged["variants"].count(
+            {
+                **child,
+                "result_index": 0,
+                "trust": {"state": "caller_supplied_unverified", "binding_authenticates_source": False},
+            }
+        )
+        == 1
+    )
     assert not merged["parts_lookup_readiness"]["exact_applicability_confirmed"]
 
 
