@@ -239,3 +239,81 @@ def test_article_context_rejects_node_vehicle_type_from_another_catalog(node_typ
     assert validate_catalog_context("articles", {"carId": "13895", "strId": "100259"}, context) == [
         "tree_node_reference_mismatch"
     ]
+
+
+@pytest.mark.parametrize("leaf_level", [1, 3])
+def test_legacy_node_with_two_different_roots_is_not_confirmed(leaf_level):
+    rows = [
+        {
+            "ROOT_NODE_TEXT": "Первая группа",
+            "ROOT_NODE_STR_ID": 1,
+            f"NODE_{leaf_level}_TEXT": "Масляный фильтр",
+            f"NODE_{leaf_level}_STR_ID": 2,
+        },
+        {
+            "ROOT_NODE_TEXT": "Другая группа",
+            "ROOT_NODE_STR_ID": 3,
+            f"NODE_{leaf_level}_TEXT": "Масляный фильтр",
+            f"NODE_{leaf_level}_STR_ID": 2,
+        },
+    ]
+    for ordered in (rows, list(reversed(rows))):
+        assert _resolve(ordered)["data"]["category_queryable"] is False
+        assert _resolve(ordered, selected=2)["data"]["category_queryable"] is False
+
+
+@pytest.mark.parametrize("leaf_level", [1, 3])
+def test_legacy_cycle_is_not_confirmed_even_when_levels_are_missing(leaf_level):
+    rows = [
+        {
+            "ROOT_NODE_TEXT": "Фильтр",
+            "ROOT_NODE_STR_ID": 1,
+            f"NODE_{leaf_level}_TEXT": "Масляный фильтр",
+            f"NODE_{leaf_level}_STR_ID": 2,
+        },
+        {
+            "ROOT_NODE_TEXT": "Масляный фильтр",
+            "ROOT_NODE_STR_ID": 2,
+            f"NODE_{leaf_level}_TEXT": "Фильтр",
+            f"NODE_{leaf_level}_STR_ID": 1,
+        },
+    ]
+    assert _resolve(rows, selected=2)["data"]["category_queryable"] is False
+
+
+@pytest.mark.parametrize("leaf_level", [1, 3])
+def test_legacy_self_link_is_not_confirmed_even_when_levels_are_missing(leaf_level):
+    row = {
+        "ROOT_NODE_TEXT": "Масляный фильтр",
+        "ROOT_NODE_STR_ID": 2,
+        f"NODE_{leaf_level}_TEXT": "Масляный фильтр",
+        f"NODE_{leaf_level}_STR_ID": 2,
+    }
+    assert _resolve([row], selected=2)["data"]["category_queryable"] is False
+
+
+def test_single_legacy_leaf_remains_supported_without_ancestors():
+    row = {"NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 2}
+    assert _resolve([row])["data"]["category"] == "2"
+
+
+def test_partial_and_complete_legacy_paths_with_consistent_ancestors_remain_usable():
+    partial = {"ROOT_NODE_TEXT": "Фильтр", "ROOT_NODE_STR_ID": 1, "NODE_3_TEXT": "Масляный фильтр", "NODE_3_STR_ID": 2}
+    expanded = {**partial, "NODE_1_TEXT": "Промежуточная группа", "NODE_1_STR_ID": 3}
+    assert _resolve([partial, expanded], selected=2)["data"]["category"] == "2"
+
+
+def test_mixed_flat_and_legacy_cycle_is_not_confirmed():
+    flat_root = {"STR_ID": 1, "STR_ID_PARENT": None, "STR_LEVEL": 1, "STR_NODE_NAME": "Фильтр"}
+    rows = [
+        flat_root,
+        {"ROOT_NODE_TEXT": "Фильтр", "ROOT_NODE_STR_ID": 1, "NODE_1_TEXT": "Масляный фильтр", "NODE_1_STR_ID": 2},
+        {"ROOT_NODE_TEXT": "Масляный фильтр", "ROOT_NODE_STR_ID": 2, "NODE_1_TEXT": "Фильтр", "NODE_1_STR_ID": 1},
+    ]
+    assert _resolve(rows, selected=2)["data"]["category_queryable"] is False
+
+
+def test_mixed_flat_root_cannot_have_a_different_legacy_ancestor_across_a_gap():
+    flat_root = {"STR_ID": 1, "STR_ID_PARENT": None, "STR_LEVEL": 1, "STR_NODE_NAME": "Фильтр"}
+    legacy = {"ROOT_NODE_TEXT": "Другая группа", "ROOT_NODE_STR_ID": 3, "NODE_3_TEXT": "Фильтр", "NODE_3_STR_ID": 1}
+    assert _resolve([flat_root, legacy], selected=1, intent="Фильтр")["data"]["category_queryable"] is False

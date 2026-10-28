@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
+from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
 from .automotive_contracts import binding
@@ -776,6 +777,50 @@ def _flat_tree_nodes(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, An
     return flat, parents
 
 
+def _flat_ancestry_matches(flat: dict[str, dict[str, Any]], legacy_ancestors: dict[tuple[str, int], set[str]]) -> bool:
+    """Check known legacy ancestors against the complete flat parent chain."""
+
+    children: dict[str, list[str]] = {node_id: [] for node_id in flat}
+    roots = []
+    for node_id, node in flat.items():
+        parent = node["parent"]
+        if parent is None:
+            roots.append(node_id)
+        else:
+            children[parent].append(node_id)
+    starts: dict[str, int] = {}
+    ends: dict[str, int] = {}
+    clock = 0
+    stack = [(node_id, False) for node_id in roots]
+    while stack:
+        node_id, leaving = stack.pop()
+        if leaving:
+            ends[node_id] = clock
+        else:
+            starts[node_id] = clock
+            stack.append((node_id, True))
+            stack.extend((child, False) for child in children[node_id])
+        clock += 1
+    return all(
+        ancestor in flat and starts[ancestor] < starts[node_id] < ends[ancestor]
+        for (node_id, _depth), ancestors in legacy_ancestors.items()
+        if node_id in flat
+        for ancestor in ancestors
+    )
+
+
+def _catalog_tree_has_cycle(flat: dict[str, dict[str, Any]], legacy_links: dict[str, set[str]]) -> bool:
+    graph = {node_id: set(parent_ids) for node_id, parent_ids in legacy_links.items()}
+    for node_id, node in flat.items():
+        if node["parent"] is not None:
+            graph.setdefault(node_id, set()).add(node["parent"])
+    try:
+        TopologicalSorter(graph).prepare()
+    except CycleError:
+        return True
+    return False
+
+
 def _tree_node_resolution(
     rows: list[dict[str, Any]],
     part_profile: dict[str, Any],
@@ -794,6 +839,8 @@ def _tree_node_resolution(
     all_nodes: dict[str, dict[str, Any]] = {}
     legacy_parents: dict[str, set[str]] = {}
     legacy_titles: dict[str, set[str]] = {}
+    legacy_ancestors: dict[tuple[str, int], set[str]] = {}
+    legacy_links: dict[str, set[str]] = {}
     legacy_nonleaves: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -816,18 +863,28 @@ def _tree_node_resolution(
                     nodes[node_id] = all_nodes[node_id]
         previous_id = None
         previous_depth = -2
+        path: list[tuple[int, str]] = []
         for depth, (text_key, id_key) in enumerate(reversed(levels)):
             node_id = _positive_tecdoc_id(row.get(id_key))
             if node_id and _compact(row.get(text_key)):
+                for ancestor_depth, ancestor_id in path:
+                    legacy_ancestors.setdefault((node_id, ancestor_depth), set()).add(ancestor_id)
+                if previous_id is not None:
+                    legacy_links.setdefault(node_id, set()).add(previous_id)
                 if previous_id is not None and previous_depth == depth - 1:
                     legacy_parents.setdefault(node_id, set()).add(previous_id)
                 previous_id, previous_depth = node_id, depth
+                path.append((depth, node_id))
 
     parsed_flat = _flat_tree_nodes(rows)
     flat, parents = parsed_flat if parsed_flat is not None else ({}, set())
     invalid_flat = (
         parsed_flat is None
         or any(len(titles) > 1 for titles in legacy_titles.values())
+        or any(len(ancestors) > 1 for ancestors in legacy_ancestors.values())
+        or any(len(parents) > 1 for parents in legacy_parents.values())
+        or not _flat_ancestry_matches(flat, legacy_ancestors)
+        or _catalog_tree_has_cycle(flat, legacy_links)
         or any(
             (node_id in legacy_titles and legacy_titles[node_id] != {node["title"].casefold()})
             or (node_id in legacy_parents and legacy_parents[node_id] != {node["parent"]})
