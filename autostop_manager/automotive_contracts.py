@@ -113,23 +113,122 @@ def _reported_identity_hint(value: dict[str, Any]) -> bool:
     """A weak alternative is context, not an assertion against the root profile."""
     from .vehicle_identity import _is_conflict_evidence
 
-    if value.get("reported_conflict_role") == "hint":
-        return True
     if value.get("source_kind") == "local_hint" or value.get("strength") == "candidate":
         return not _is_conflict_evidence({**value, "confidence": finite_number(value.get("confidence")) or 0})
     return False
 
 
-def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
+def _identity_claim_profile(value: dict[str, Any], inherited: dict[str, Any] | None) -> dict[str, Any] | None:
+    return next((value[key] for key in ("vehicle_profile", "profile") if isinstance(value.get(key), dict)), inherited)
+
+
+def _identity_evidence_origins(rows: tuple[dict[str, Any], ...]) -> dict[str, dict[str, Any] | None]:
+    origins: dict[str, dict[str, Any] | None] = {}
+    for row in rows:
+        evidence = row.get("field_evidence")
+        for item in evidence if isinstance(evidence, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("evidence_id"), str):
+                continue
+            ref = item["evidence_id"]
+            if ref not in origins:
+                origins[ref] = item
+            elif origins[ref] != item:
+                # An ambiguous public reference cannot supply weaker metadata.
+                origins[ref] = None
+    return origins
+
+
+def _identity_claim_metadata(
+    value: dict[str, Any], field: Any, origins: dict[str, dict[str, Any] | None]
+) -> dict[str, Any]:
+    from .vehicle_identity_inputs import canonical_identity_field
+
+    ref = value.get("evidence_id")
+    origin = origins.get(ref) if isinstance(ref, str) else None
+    canonical = canonical_identity_field(field)
+    if (
+        origin is None
+        or canonical is None
+        or canonical_identity_field(origin.get("field")) != canonical
+        or ("field" in value and canonical_identity_field(value["field"]) != canonical)
+        or value.get("value") in (None, "")
+        or not _claim_matches_profile({canonical: origin.get("value")}, canonical, value["value"])
+    ):
+        return value
+    # Provenance can omit strength/confidence. Only the same field/value may
+    # borrow its original metadata; explicit metadata on the claim still wins.
+    return {**origin, **value}
+
+
+def _archive_identity_hint(
+    value: dict[str, Any],
+    clean: dict[str, Any],
+    profile: dict[str, Any] | None,
+    inherited_field: str | None,
+    origins: dict[str, dict[str, Any] | None],
+) -> None:
+    from .vehicle_identity_inputs import canonical_identity_field
+
+    field = canonical_identity_field(inherited_field or value.get("field"))
+    if (
+        not profile
+        or field is None
+        or value.get("value") in (None, "")
+        or not any(canonical_identity_field(key) == field for key in profile)
+        or _claim_matches_profile(profile, field, value["value"])
+        or not _reported_identity_hint(_identity_claim_metadata(value, field, origins))
+    ):
+        return
+    # Keep weak alternatives as diagnostics instead of converting them to
+    # fresh caller assertions on the next reuse. Array indexes and evidence
+    # IDs remain valid; a nested report is never a field/value assertion.
+    hint = {key: clean.pop(key) for key in ("field", "value") if key in clean}
+    if hint:
+        clean["reported_hint"] = hint
+
+
+def _caller_claim_item(
+    key: str,
+    value: Any,
+    *,
+    depth: int,
+    profile: dict[str, Any] | None,
+    field: str | None,
+    origins: dict[str, dict[str, Any] | None],
+) -> Any:
+    if key == "provenance" and isinstance(value, dict):
+        return {
+            name: caller_supplied_claims(items, depth=depth, _profile=profile, _field=name, _origins=origins)
+            for name, items in value.items()
+        }
+    return caller_supplied_claims(value, depth=depth, _profile=profile, _field=field, _origins=origins)
+
+
+def caller_supplied_claims(
+    value: Any,
+    *,
+    depth: int = 0,
+    _profile: dict[str, Any] | None = None,
+    _field: str | None = None,
+    _origins: dict[str, dict[str, Any] | None] | None = None,
+) -> Any:
     """Copy public JSON as unverified claims; a request digest is not authentication."""
     if depth > 32:
         raise ValueError("caller_claims_too_deep")
     if isinstance(value, list):
-        return [caller_supplied_claims(item, depth=depth + 1) for item in value]
+        return [
+            caller_supplied_claims(item, depth=depth + 1, _profile=_profile, _field=_field, _origins=_origins)
+            for item in value
+        ]
     if not isinstance(value, dict):
         return value
+    profile = _identity_claim_profile(value, _profile)
+    origins = _identity_evidence_origins((value,)) if "field_evidence" in value else _origins or {}
     clean: dict[str, Any] = {}
     for key, item in value.items():
+        if key == "reported_conflict_role":
+            # A caller-supplied role cannot override the actual assertion.
+            continue
         if key == "identifier_binding" and isinstance(item, dict):
             # Keep the caller's reported status for context, but do not reuse it
             # as an authenticated provider binding.
@@ -154,23 +253,22 @@ def caller_supplied_claims(value: Any, *, depth: int = 0) -> Any:
             clean[key] = 0.0
         elif key == "field_statuses" and isinstance(item, dict):
             clean[key] = {
-                field: "candidate" if status == "supported" else caller_supplied_claims(status, depth=depth + 1)
+                field: "candidate"
+                if status == "supported"
+                else caller_supplied_claims(status, depth=depth + 1, _profile=profile)
                 for field, status in item.items()
             }
         elif key == "cross_source_agreement" and isinstance(item, dict):
-            agreement = caller_supplied_claims(item, depth=depth + 1)
+            agreement = caller_supplied_claims(item, depth=depth + 1, _profile=profile)
             agreement["reported_status"] = item.get("status")
             agreement["status"] = "caller_supplied_unverified"
             agreement["matched_fields"] = []
             clean[key] = agreement
         else:
-            clean[key] = caller_supplied_claims(item, depth=depth + 1)
+            clean[key] = _caller_claim_item(key, item, depth=depth + 1, profile=profile, field=_field, origins=origins)
     source_claim = any(key in value for key in ("source", "provider", "primary_lineage"))
+    _archive_identity_hint(value, clean, profile, _field, origins)
     if source_claim:
-        if _reported_identity_hint(value):
-            # Preserve only the nonblocking role on repeated reuse. This does
-            # not authenticate the claim or restore any provider privileges.
-            clean["reported_conflict_role"] = "hint"
         clean.update(source_kind="caller", independent=False, bound=False)
         if "strength" in value:
             clean["strength"] = "candidate"
@@ -296,20 +394,10 @@ def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str,
     excluded = _variant_only_evidence_refs(envelope, data)
     # Provenance may omit strength/confidence while retaining the evidence ID.
     # Use its original metadata so reuse applies the decoder's conflict policy.
-    origins: dict[str, dict[str, Any]] = {}
-    for row in (envelope, data):
-        evidence = row.get("field_evidence")
-        if isinstance(evidence, list):
-            origins.update(
-                (item["evidence_id"], item)
-                for item in evidence
-                if isinstance(item, dict) and isinstance(item.get("evidence_id"), str)
-            )
+    origins = _identity_evidence_origins((envelope, data))
 
-    def constraint(item: dict[str, Any]) -> bool:
-        ref = item.get("evidence_id")
-        origin = {**(origins.get(ref, {}) if isinstance(ref, str) else {}), **item}
-        return not _reported_identity_hint(origin)
+    def constraint(item: dict[str, Any], field: Any) -> bool:
+        return not _reported_identity_hint(_identity_claim_metadata(item, field, origins))
 
     claims: list[tuple[Any, Any]] = []
     for row in (envelope,) if data is envelope else (envelope, data):
@@ -327,14 +415,16 @@ def _reported_identity_field_conflicts(envelope: dict[str, Any], data: dict[str,
             claims.extend(
                 (item.get("field"), item.get("value"))
                 for index, item in enumerate(evidence)
-                if isinstance(item, dict) and (path, index) not in excluded and constraint(item)
+                if isinstance(item, dict) and (path, index) not in excluded and constraint(item, item.get("field"))
             )
         provenance = row.get("provenance")
         if isinstance(provenance, dict):
             for field, entries in provenance.items():
                 if isinstance(entries, list):
                     claims.extend(
-                        (field, item.get("value")) for item in entries if isinstance(item, dict) and constraint(item)
+                        (field, item.get("value"))
+                        for item in entries
+                        if isinstance(item, dict) and constraint(item, field)
                     )
     conflicts: list[dict[str, Any]] = []
     claims.extend((field, value) for field, value in profile.items())

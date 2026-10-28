@@ -517,6 +517,124 @@ def _expand_reconciliation_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, "data": data} if isinstance(row.get("data"), dict) else data
 
 
+_SOURCE_FAILURE_OUTCOMES = frozenset(
+    {
+        "auth_error",
+        "authentication_error",
+        "configuration_error",
+        "database_error",
+        "deadline_exceeded",
+        "dependency_error",
+        "empty",
+        "parse_error",
+        "provider_error",
+        "quota_error",
+        "unsupported",
+    }
+)
+
+
+def _empty_failed_source(
+    envelope: dict[str, Any], data: dict[str, Any], errors: list[dict[str, Any]], expected: dict[str, Any]
+) -> bool:
+    """An unavailable source with no facts cannot contradict a usable source.
+
+    Only a result bound to this request is eligible. Real conflicts, foreign
+    bindings, partial assertions and malformed profiles keep the normal stop.
+    """
+    if (
+        not isinstance(envelope.get("outcome"), str)
+        or envelope["outcome"] not in _SOURCE_FAILURE_OUTCOMES
+        or data.get("input_binding") != expected
+        or not any(error.get("code") == "failed_ready_identity" for error in errors)
+        or any(
+            not isinstance(error.get("code"), str)
+            or error["code"] not in {"failed_ready_identity", "provider_identifier_unverified"}
+            for error in errors
+        )
+    ):
+        return False
+    for row in (envelope,) if data is envelope else (envelope, data):
+        profile = row.get("vehicle_profile", {})
+        provider_binding = row.get("identifier_binding")
+        candidate_years, year_error = _reconciliation_years(row)
+        if (
+            not isinstance(profile, dict)
+            or any(value not in (None, "") for value in profile.values())
+            or row.get("variants")
+            or row.get("family_candidates")
+            or candidate_years
+            or year_error
+            or (
+                provider_binding is not None
+                and (
+                    not isinstance(provider_binding, dict)
+                    or provider_binding.get("status") not in (None, "", "missing", "unverified")
+                )
+            )
+        ):
+            return False
+        records: list[Any] = []
+        for key in ("field_evidence", "evidence", "source_evidence"):
+            supplied = row.get(key, [])
+            if not isinstance(supplied, list):
+                return False
+            records.extend(supplied)
+        provenance = row.get("provenance", {})
+        if not isinstance(provenance, dict) or any(not isinstance(items, list) for items in provenance.values()):
+            return False
+        records.extend(item for items in provenance.values() for item in items)
+        if any(not isinstance(item, dict) or item.get("value") not in (None, "") for item in records):
+            return False
+    return True
+
+
+def _append_source_failures(target: list[dict[str, Any]], supplied: Any) -> None:
+    """Carry only bounded status diagnostics, never provider payload or facts."""
+    if not isinstance(supplied, list):
+        return
+    for row in supplied[:MAX_ROWS]:
+        if (
+            not isinstance(row, dict)
+            or type(row.get("result_index")) is not int
+            or not 0 <= row["result_index"] < MAX_ROWS
+            or not isinstance(row.get("outcome"), str)
+            or row["outcome"] not in _SOURCE_FAILURE_OUTCOMES
+        ):
+            continue
+        diagnostic = {"result_index": row["result_index"], "outcome": row["outcome"]}
+        if len(target) < MAX_ROWS and diagnostic not in target:
+            target.append(diagnostic)
+
+
+def _record_unusable_identity(
+    envelope: dict[str, Any],
+    data: dict[str, Any],
+    errors: list[dict[str, Any]],
+    expected: dict[str, Any],
+    index: int,
+    *,
+    source_failures: list[dict[str, Any]],
+    excluded_failure_errors: list[dict[str, Any]],
+    conflicts: list[dict[str, Any]],
+    disputed_fields: set[str],
+    warnings: list[str],
+) -> None:
+    if _empty_failed_source(envelope, data, errors, expected):
+        _append_source_failures(source_failures, [{"result_index": index, "outcome": envelope["outcome"]}])
+        excluded_failure_errors.extend({**item, "result_index": index} for item in errors)
+        warnings.append(f"result_{index}_source_unavailable_without_identity_facts")
+        return
+    conflicts.extend({**item, "result_index": index} for item in errors)
+    disputed_fields.update(
+        item["field"]
+        for item in errors
+        if item.get("code") in ("disputed_ready_identity", "ready_identity_evidence_conflict")
+        and item.get("field") in FIELDS
+    )
+    warnings.append(f"result_{index}_not_usable_as_vehicle_facts")
+
+
 def reconcile_vehicle_identity(
     identifier: str,
     results: list[dict[str, Any]],
@@ -543,6 +661,8 @@ def reconcile_vehicle_identity(
     conflicts: list[dict[str, Any]] = []
     variants: list[dict[str, Any]] = []
     evidence: list[dict[str, Any]] = []
+    source_failures: list[dict[str, Any]] = []
+    excluded_failure_errors: list[dict[str, Any]] = []
     year_candidates: list[Any] = []
     for index, row in enumerate(results):
         original = row
@@ -552,16 +672,21 @@ def reconcile_vehicle_identity(
             return invalid("reconcile_vehicle_identity", "results.summary_references")
         data: dict[str, Any] = row["data"] if isinstance(row.get("data"), dict) else row
         original_data = original["data"] if isinstance(original.get("data"), dict) else original
+        _append_source_failures(source_failures, data.get("source_failures"))
         upstream_errors = identity_errors(original, original_data)
         if upstream_errors:
-            conflicts.extend({**item, "result_index": index} for item in upstream_errors)
-            disputed_fields.update(
-                item["field"]
-                for item in upstream_errors
-                if item.get("code") in ("disputed_ready_identity", "ready_identity_evidence_conflict")
-                and item.get("field") in FIELDS
+            _record_unusable_identity(
+                original,
+                original_data,
+                upstream_errors,
+                expected,
+                index,
+                source_failures=source_failures,
+                excluded_failure_errors=excluded_failure_errors,
+                conflicts=conflicts,
+                disputed_fields=disputed_fields,
+                warnings=warnings,
             )
-            warnings.append(f"result_{index}_not_usable_as_vehicle_facts")
             continue
         wmi = data.get("wmi")
         classified = vin_lookup.classify_identifier(prepared["identifier"], identifier_type=identifier_type)
@@ -639,6 +764,9 @@ def reconcile_vehicle_identity(
     for field in disputed_fields:
         profile.pop(field, None)
         statuses[field] = "disputed"
+    if not profile:
+        # Diagnostics alone are not a reusable identity dossier.
+        conflicts.extend(item for item in excluded_failure_errors if item not in conflicts)
     missing = [
         field
         for field in ("make", "model", "engine", "transmission", "market", "production_date")
@@ -655,6 +783,7 @@ def reconcile_vehicle_identity(
         "model_year_candidates": year_candidates,
         "family_candidates": variants,
         "conflicts": conflicts,
+        "source_failures": source_failures,
         "missing_fields": missing,
         "identifier": {"kind": expected["identifier_kind"]},
         "diagnostics": {"model_year": {"candidate_years": year_candidates}} if year_candidates else {},
@@ -664,7 +793,7 @@ def reconcile_vehicle_identity(
     data["parts_lookup_readiness"] = build_parts_lookup_readiness(data)
     response = result(
         "reconcile_vehicle_identity",
-        "partial" if conflicts or missing else "success",
+        "partial" if conflicts or missing or source_failures else "success",
         data,
         conflicts=conflicts,
         missing_fields=missing,
