@@ -129,6 +129,30 @@ def test_missing_preserved_cold_receipt_keeps_old_archives(setup, monkeypatch, e
     assert calls == ["pause", "resume"]
 
 
+@pytest.mark.parametrize("protection_valid", [False, True])
+def test_empty_plan_below_space_goal_requires_valid_protection_but_no_deletion_receipts(
+    setup, monkeypatch, protection_valid
+):
+    policy, _, baseline, calls = setup
+    monkeypatch.setattr(
+        core.inventory,
+        "verify_protected",
+        lambda value: {
+            "ok": protection_valid,
+            "receipts": [],
+            "fingerprint": core.digest(baseline),
+        },
+    )
+    monkeypatch.setattr(core, "secure_delete", lambda *a: pytest.fail("empty plan must not delete"))
+    monkeypatch.setattr(core, "delete_image", lambda *a: pytest.fail("empty plan must not delete images"))
+    result = core.maintain(policy)
+    assert result["ok"] is protection_valid
+    assert not result["target_reached"] and result["deficit_bytes"] == 10_000_000_000
+    assert result["ci_restored"] and result["deleted"] == []
+    assert result["errors"] == ([] if protection_valid else ["preserved_verification_missing"])
+    assert calls == ["pause", "resume"]
+
+
 @pytest.mark.parametrize("recover_pending_ci", [False, True])
 def test_verified_empty_maintenance_does_not_pause_ci_or_verify_unused_archives(setup, monkeypatch, recover_pending_ci):
     policy, _, _, calls = setup

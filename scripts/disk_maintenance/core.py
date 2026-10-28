@@ -641,7 +641,7 @@ def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool)
     proof = inventory.verify_protected(policy)
     if (
         proof.get("ok") is not True
-        or not proof.get("receipts")
+        or (manifest["candidates"] and not proof.get("receipts"))
         or proof.get("fingerprint") != manifest["baseline_fingerprint"]
         or any(receipt.get("ok") is not True for receipt in proof["receipts"])
     ):
