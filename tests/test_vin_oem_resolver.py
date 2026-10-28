@@ -164,6 +164,44 @@ def test_resolver_uses_current_three_method_chain_and_keeps_fitment_manual(monke
     assert SYNTHETIC_VIN not in json.dumps(result, ensure_ascii=False)
 
 
+def test_resolver_uses_flat_provider_tree_without_confirming_fitment(monkeypatch):
+    rows = [
+        {"STR_ID": 100005, "STR_ID_PARENT": None, "STR_LEVEL": 1, "STR_NODE_NAME": "Фильтр"},
+        {"STR_ID": 100259, "STR_ID_PARENT": 100005, "STR_LEVEL": 2, "STR_NODE_NAME": "Масляный фильтр"},
+    ]
+    calls = _install_fakes(monkeypatch, rows=rows)
+    response = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part="масляный фильтр",
+        live_vpic=False,
+        live_partsapi_oem=True,
+    )
+    assert [call["operation"] for call in calls] == ["vin_decode", "search_tree", "articles"]
+    assert calls[2]["category"] == "100259"
+    assert response["status"] == "tecdoc_articles_found_needs_manual_fitment"
+    assert response["article_candidates"][0]["vin_fitment_confirmed"] is False
+    assert response["article_candidates"][0]["oem_number_confirmed"] is False
+    assert response["readiness"]["ready_for_crm_writeback"] is False
+
+
+def test_resolver_does_not_query_articles_for_ambiguous_flat_provider_tree(monkeypatch):
+    rows = [
+        {"STR_ID": 100005, "STR_ID_PARENT": None, "STR_LEVEL": 1, "STR_NODE_NAME": "Фильтр"},
+        {"STR_ID": 100259, "STR_ID_PARENT": 100005, "STR_LEVEL": 2, "STR_NODE_NAME": "Масляный фильтр"},
+        {"STR_ID": 100470, "STR_ID_PARENT": 100005, "STR_LEVEL": 2, "STR_NODE_NAME": "Масляный фильтр"},
+    ]
+    calls = _install_fakes(monkeypatch, rows=rows)
+    response = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part="масляный фильтр",
+        live_vpic=False,
+        live_partsapi_oem=True,
+    )
+    assert [call["operation"] for call in calls] == ["vin_decode", "search_tree"]
+    assert response["status"] == "needs_tecdoc_tree_node"
+    assert response["category_resolution"]["candidate_node_ids"] == ["100259", "100470"]
+
+
 @pytest.mark.parametrize(
     "phrase",
     [

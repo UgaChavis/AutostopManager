@@ -680,6 +680,96 @@ def _manual_action(code: str, message: str | None = None, *, priority: int = 1, 
     return {"code": code, "priority": priority, **({"message": message} if message else {}), **context}
 
 
+def _flat_tree_nodes(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]] | None:
+    """Validate flat provider nodes and their parent links before selecting one."""
+
+    flat: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        flat_identity = any(field in row for field in ("STR_ID", "STR_NODE_NAME"))
+        if not flat_identity:
+            has_legacy_node = any(
+                _positive_tecdoc_id(row.get(id_key)) and _compact(row.get(text_key))
+                for text_key, id_key in (
+                    ("ROOT_NODE_TEXT", "ROOT_NODE_STR_ID"),
+                    ("NODE_1_TEXT", "NODE_1_STR_ID"),
+                    ("NODE_2_TEXT", "NODE_2_STR_ID"),
+                    ("NODE_3_TEXT", "NODE_3_STR_ID"),
+                )
+            )
+            if any(field in row for field in ("STR_ID_PARENT", "STR_LEVEL")) and not has_legacy_node:
+                return None
+            continue
+        node_id = _positive_tecdoc_id(row.get("STR_ID"))
+        name = row.get("STR_NODE_NAME")
+        raw_parent = row.get("STR_ID_PARENT")
+        parent = None if raw_parent is None else _positive_tecdoc_id(raw_parent)
+        raw_level = row.get("STR_LEVEL")
+        level_id = None if raw_level is None else _positive_tecdoc_id(raw_level)
+        raw_path = row.get("STR_PATH")
+        if (
+            node_id is None
+            or not isinstance(name, str)
+            or not _compact(name)
+            or "STR_ID_PARENT" not in row
+            or (raw_parent is not None and parent is None)
+            or (raw_level is not None and level_id is None)
+            or (raw_path is not None and not isinstance(raw_path, str))
+        ):
+            return None
+        node = {
+            "id": node_id,
+            "title": _compact(name),
+            "parent": parent,
+            "level": int(level_id) if level_id is not None else None,
+            "path": _compact(raw_path) if raw_path is not None else None,
+        }
+        previous = flat.get(node_id)
+        if previous is not None:
+            if (
+                previous["title"].casefold() != node["title"].casefold()
+                or previous["parent"] != node["parent"]
+                or (previous["level"] is not None and node["level"] is not None and previous["level"] != node["level"])
+                or (previous["path"] and node["path"] and previous["path"].casefold() != node["path"].casefold())
+            ):
+                return None
+            if previous["level"] is None:
+                previous["level"] = node["level"]
+            if not previous["path"]:
+                previous["path"] = node["path"]
+        else:
+            flat[node_id] = node
+
+    parents: set[str] = set()
+    depths: dict[str, int] = {}
+    for node_id in flat:
+        seen: set[str] = set()
+        chain: list[str] = []
+        cursor_id = node_id
+        while cursor_id not in depths:
+            if cursor_id in seen or cursor_id not in flat:
+                return None
+            seen.add(cursor_id)
+            chain.append(cursor_id)
+            parent_id = flat[cursor_id]["parent"]
+            if parent_id is None:
+                depth = 0
+                break
+            parents.add(parent_id)
+            cursor_id = parent_id
+        else:
+            depth = depths[cursor_id]
+        for current_id in reversed(chain):
+            depth += 1
+            node = flat[current_id]
+            if node["level"] is not None and node["level"] != depth:
+                return None
+            depths[current_id] = depth
+            node["depth"] = 4 - depth
+    return flat, parents
+
+
 def _tree_node_resolution(
     rows: list[dict[str, Any]],
     part_profile: dict[str, Any],
@@ -696,6 +786,8 @@ def _tree_node_resolution(
     )
     nodes: dict[str, dict[str, Any]] = {}
     all_nodes: dict[str, dict[str, Any]] = {}
+    legacy_parents: dict[str, set[str]] = {}
+    legacy_titles: dict[str, set[str]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -703,6 +795,7 @@ def _tree_node_resolution(
             node_id = _positive_tecdoc_id(row.get(id_key))
             title = _compact(row.get(text_key))
             if node_id and title:
+                legacy_titles.setdefault(node_id, set()).add(title.casefold())
                 current = all_nodes.get(node_id)
                 if current is None or depth < current["depth"]:
                     all_nodes[node_id] = {"id": node_id, "title": title, "depth": depth, "source_field": id_key}
@@ -712,6 +805,39 @@ def _tree_node_resolution(
                 ):
                     # Auto-match only the most specific node in this path.
                     nodes[node_id] = all_nodes[node_id]
+        previous_id = None
+        previous_depth = -2
+        for depth, (text_key, id_key) in enumerate(reversed(levels)):
+            node_id = _positive_tecdoc_id(row.get(id_key))
+            if node_id and _compact(row.get(text_key)):
+                if previous_id is not None and previous_depth == depth - 1:
+                    legacy_parents.setdefault(node_id, set()).add(previous_id)
+                previous_id, previous_depth = node_id, depth
+
+    parsed_flat = _flat_tree_nodes(rows)
+    flat, parents = parsed_flat if parsed_flat is not None else ({}, set())
+    invalid_flat = parsed_flat is None or any(
+        (node_id in legacy_titles and legacy_titles[node_id] != {node["title"].casefold()})
+        or (node_id in legacy_parents and legacy_parents[node_id] != {node["parent"]})
+        for node_id, node in flat.items()
+    )
+    if invalid_flat:
+        return {
+            "category": None,
+            "category_kind": "tecdoc_tree_node_id",
+            "category_mode": "unresolved",
+            "category_queryable": False,
+            "category_unresolved": True,
+            "candidate_node_ids": [],
+            "reason": "Flat TecDoc tree has invalid or conflicting nodes.",
+        }
+    for node_id, node in flat.items():
+        all_nodes[node_id] = node
+        if node_id not in parents:
+            nodes[node_id] = node
+    for parent_id in parents:
+        nodes.pop(parent_id, None)
+
     if selected_id not in (None, ""):
         node_id = _positive_tecdoc_id(selected_id)
         selected = all_nodes.get(node_id or "")
@@ -736,7 +862,7 @@ def _tree_node_resolution(
         if any(len(words & reference) >= 2 for reference in specific_words):
             terms.add(_normalize_compare_value(value))
     matches = [node for node in nodes.values() if _normalize_compare_value(node["title"]) in terms]
-    if matches:
+    if matches and not flat:
         deepest = min(node["depth"] for node in matches)
         matches = [node for node in matches if node["depth"] == deepest]
     selected = matches[0] if len(matches) == 1 else None
