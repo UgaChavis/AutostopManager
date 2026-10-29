@@ -428,6 +428,7 @@ def test_pause_after_verified_delivery_finishes_truthfully_without_resend(tmp_pa
 
 def test_human_answer_completion_batches_exact_reads_with_network_rpc_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "_resolve_peer", _resolve)
+    monkeypatch.setattr(bridge, "_require_root_client", lambda _writer: None)
 
     async def scenario():
         config, monitor = _runtime(tmp_path)

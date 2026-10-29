@@ -8,9 +8,11 @@ from datetime import UTC, datetime, timedelta
 import os
 from unittest.mock import AsyncMock
 
+from instruction_bundle_fakes import create_instruction_bundle
 from telegram_wake_fakes import THREAD
 from test_telegram_wake_durable import FakeJobs, bind_test_peer
 
+from autostop_manager import instruction_bundle
 from autostop_manager import telegram_wake as wake
 from autostop_manager.telegram_inbox import TelegramInbox
 
@@ -27,12 +29,17 @@ def claimed_request(tmp_path, monkeypatch, *, remaining=1199):
             return claimed_at + timedelta(seconds=wake.REQUEST_TIMEOUT_SECONDS - remaining)
 
     monkeypatch.setattr(wake, "datetime", Clock)
+    root = create_instruction_bundle(tmp_path / "releases" / "snapshot", "a" * 40)
+    monkeypatch.setattr(wake, "INSTRUCTION_RELEASE_ROOTS", (root.parent,))
+    monkeypatch.setattr(instruction_bundle, "_OWNER_UID", os.geteuid())
     with TelegramInbox(tmp_path / "inbox.sqlite3", clock=lambda: claimed_at) as inbox:
         inbox.duty_set(True)
         inbox.record(123, 1)
-        job = inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40)
+        job = inbox.claim(instruction_root=str(root), instruction_revision="a" * 40)
         assert job is not None
         app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.connected = True
+        app.ready_event.set()
         app.request = AsyncMock(side_effect=AssertionError("synthetic timeout cases must not contact Codex"))
         dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), FakeJobs(inbox))
         yield inbox, job, app, dispatcher
