@@ -82,9 +82,13 @@ def role_objective(role: str) -> str:
     )
 
 
-def verified_instruction_bundle(state: dict[str, Any], item: dict[str, Any] | None) -> VerifiedInstructionBundle:
+def verified_instruction_bundle(
+    state: dict[str, Any], item: dict[str, Any] | None, *, new_dispatch: bool = False
+) -> VerifiedInstructionBundle:
     data = item["data"] if item else {}
-    selected = data if any(data.get(key) is not None for key in ("instruction_root", "instruction_revision")) else state
+    selected = {} if new_dispatch else state
+    if any(data.get(key) is not None for key in ("instruction_root", "instruction_revision")):
+        selected = data
     root, revision = selected.get("instruction_root"), selected.get("instruction_revision")
     if (root is None) != (revision is None):
         raise RoleError("role_instruction_bundle_invalid")
@@ -322,9 +326,7 @@ class RoleExecutor:
             return False
         if not goal or goal.get("status") != desired:
             if desired == "active":
-                verified_instruction_bundle(state, None)
-                if item is not None:
-                    verified_instruction_bundle(state, item)
+                verified_instruction_bundle(state, item, new_dispatch=not allow_activate)
             fresh = self.store.role_state(state["role"])
             if fresh["generation"] != state["generation"] or fresh["revision"] != state["revision"]:
                 return False
@@ -623,7 +625,7 @@ class RoleExecutor:
         turns: list[dict[str, Any]],
     ) -> None:
         # Validate instructions before recording a possibly-executed launch.
-        bundle = verified_instruction_bundle(state, item)
+        bundle = verified_instruction_bundle(state, item, new_dispatch=active is None)
         context = None
         if active:
             if not self._active_bundle_matches(state, active, bundle):
@@ -642,6 +644,7 @@ class RoleExecutor:
             item_id=item["id"] if item else None,
             before_turn_id=turns[0]["id"] if turns else None,
             steer=active is not None,
+            instruction_pin=(bundle.root, bundle.revision),
         )
         prompt = dispatch_prompt(state, dispatch, item, bundle=bundle)
         params = {
