@@ -358,6 +358,38 @@ def _operation_price(
     return median, [prices[0], prices[-1]]
 
 
+def _included_operation_ids(labor: list[dict[str, Any]]) -> set[str] | None:
+    """Keep exclusion semantics, but reject self/cyclic supplied operations."""
+    graph: dict[str, set[str]] = {
+        _operation_key(row, row.get("operation_name") or index): set() for index, row in enumerate(labor)
+    }
+    included: set[str] = set()
+    # Exclusions use relations from every row, including duplicate IDs. The
+    # graph must use the same union; validating only the first duplicate would
+    # still allow a later relation to remove its payable parent silently.
+    for index, row in enumerate(labor):
+        key = _operation_key(row, row.get("operation_name") or index)
+        for operation in row.get("included_operations", []):
+            child = str(operation)
+            included.add(child)
+            if child in graph:
+                graph[key].add(child)
+    incoming = dict.fromkeys(graph, 0)
+    for children in graph.values():
+        for child in children:
+            incoming[child] += 1
+    ready = [key for key, count in incoming.items() if count == 0]
+    visited = 0
+    while ready:
+        key = ready.pop()
+        visited += 1
+        for child in graph[key]:
+            incoming[child] -= 1
+            if incoming[child] == 0:
+                ready.append(child)
+    return included if visited == len(graph) else None
+
+
 def calculate_work_price(
     labor: list[dict[str, Any]],
     policy: dict[str, Any],
@@ -394,12 +426,14 @@ def calculate_work_price(
         not isinstance(unknown_costs, list) or any(not isinstance(row, str) for row in unknown_costs)
     ):
         return invalid("calculate_work_price", "unknown_costs")
+    included = _included_operation_ids(labor)
+    if included is None:
+        return invalid("calculate_work_price", "labor.included_operations")
     prices: list[dict[str, Any]] = []
     exclusions: list[dict[str, Any]] = []
     missing = list(unknown_costs or [])
     seen: set[str] = set()
     operation_matcher = OperationMatcher()
-    included = {str(operation) for row in labor for operation in row.get("included_operations", [])}
     try:
         with localcontext() as context:
             # Normalized binary64 inputs span at most 633 decimal places.

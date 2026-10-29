@@ -173,7 +173,8 @@ class ReadbackClient(MediaClient):
     async def get_messages(self, entity, *, ids=None, limit=None):
         self.reads.append((entity, ids))
         message = await super().get_messages(entity, ids=ids, limit=limit)
-        if ids is not None and message is not None and message.out and self.fail_readback:
+        rows = message if isinstance(message, list) else [message]
+        if ids is not None and any(row is not None and row.out for row in rows) and self.fail_readback:
             raise OSError("synthetic readback loss")
         return message
 

@@ -838,6 +838,19 @@ class TelegramInbox:
             raise InboxError("inbox_peer_unavailable")
         return int(row[0])
 
+    def invalidate_context(self, peer_id: int) -> None:
+        """Invalidate drafts after a bridge-observed edit/deletion; retain no content."""
+        _positive(peer_id, "inbound_peer_invalid")
+        if self._db.execute("SELECT 1 FROM peers WHERE peer_id=?", (peer_id,)).fetchone() is None:
+            return
+        with self._write():
+            self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+
+    def require_current_context(self, job_id: str) -> None:
+        job = self._job_row(job_id)
+        if job["context_revision"] != self._peer_revision(job["peer_id"]):
+            raise InboxError("inbox_context_stale")
+
     def status(self) -> dict[str, Any]:
         counts = dict(self._db.execute("SELECT state,COUNT(*) FROM events GROUP BY state"))
         oldest = self._db.execute("SELECT MIN(received_at) FROM events WHERE state='open'").fetchone()[0]

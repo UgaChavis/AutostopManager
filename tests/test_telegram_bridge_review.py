@@ -136,6 +136,7 @@ def test_complete_read_batch_survives_utf8_and_json_expansion(monkeypatch, confi
     messages = [
         SimpleNamespace(
             id=index + 1,
+            chat_id=42,
             date=datetime(2026, 1, 1, tzinfo=UTC),
             out=False,
             message=text,
@@ -147,8 +148,8 @@ def test_complete_read_batch_survives_utf8_and_json_expansion(monkeypatch, confi
 
     class Client:
         async def get_messages(self, entity, *, limit):
-            assert entity == "synthetic-peer" and limit == count
-            return list(reversed(messages))
+            assert entity == "synthetic-peer" and limit == count + 1
+            return list(reversed(messages))[:limit]
 
     async def resolve(_client, peer):
         assert peer == "42"
@@ -163,6 +164,7 @@ def test_complete_read_batch_survives_utf8_and_json_expansion(monkeypatch, confi
     assert result["ok"] is True
     assert [row["id"] for row in result["messages"]] == list(range(1, count + 1))
     assert all(row["text"] == text for row in result["messages"])
+    assert result["has_more"] is False and result["next_before_message_id"] is None
     assert connection.received == len(response)
 
 

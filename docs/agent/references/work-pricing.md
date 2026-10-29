@@ -18,6 +18,7 @@ operation scope/source, included_operations и overlaps_with. Неизвестн
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
+Самовключение и цикл `included_operations`, в том числе через повторные строки одной операции, дают `invalid_input` с `labor.included_operations`; ошибочный граф не становится нулевой ценой.
 policy.version и basis обязательны; hourly_rate либо сопоставимые public observations являются явной основой.
 policy.coefficient/rounding/currency сохраняются. Unknown expense не ноль и оставляет total неизвестным.
 После действующей числовой нормализации произведения, средние и коэффициент рассчитываются

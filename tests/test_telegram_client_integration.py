@@ -53,9 +53,8 @@ def test_forged_text_readback_cannot_verify_effect_or_finish_client_job(tmp_path
                 dry = await runtime.jobs.request("job_handoff", **request)
             original = runtime.client.get_messages
 
-            async def forged(entity, *, ids=None, limit=None):
-                result = await original(entity, ids=ids, limit=limit)
-                if ids is None or result is None or not result.out:
+            def forge_message(result):
+                if result is None or not result.out:
                     return result
                 values = vars(result).copy()
                 if mismatch == "message_id":
@@ -70,6 +69,14 @@ def test_forged_text_readback_cannot_verify_effect_or_finish_client_job(tmp_path
                     for field in ("id", "chat_id", "out", "is_private"):
                         values.pop(field)
                 return SimpleNamespace(**values)
+
+            async def forged(entity, *, ids=None, limit=None):
+                result = await original(entity, ids=ids, limit=limit)
+                if ids is None:
+                    return result
+                if isinstance(result, list):
+                    return [forge_message(message) for message in result]
+                return forge_message(result)
 
             runtime.client.get_messages = forged
             with pytest.raises(wake.WakeError, match=r"^send_readback_failed$"):

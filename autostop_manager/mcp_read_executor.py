@@ -9,6 +9,7 @@ import inspect
 import time
 from typing import Any
 
+from . import mcp_store_executor
 from .listing_executor import BoundedListingExecutor, ListingExecutionError, read_execution_deadline
 
 # Process-wide budgets retain cancelled admissions until real workers finish.
@@ -41,7 +42,10 @@ BLOCKING_WEB_TOOLS = frozenset(
         "verify_oem_candidates_web",
     }
 )
-BLOCKING_CONTROL_TOOLS = frozenset({"manager_automations", "manager_automation_control"})
+BLOCKING_CONTROL_TOOLS = frozenset(
+    {"manager_automations", "manager_automation_control", "manager_roles", "manager_role_action"}
+)
+BLOCKING_CRM_CARD_TOOLS = frozenset({"parts_store_cards"})
 _WEB_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=90)
 _CONTROL_EXECUTOR = BoundedListingExecutor(max_workers=2, max_waiting_calls=2, timeout_seconds=30)
 BLOCKING_J1_STATUS_TOOLS = frozenset({"j1_research_status"})
@@ -155,6 +159,13 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
         }
     elif tool_name in BLOCKING_CONTROL_TOOLS:
         result = {"ok": False, "error": "automation_control_unavailable"}
+        if tool_name == "manager_role_action":
+            result.update(
+                request_dispatched=None if error.adapter_started else False,
+                outcome_uncertain=error.adapter_started,
+                readback_required=error.adapter_started,
+                readback_verified=False,
+            )
     elif tool_name in {"collect_work_price_evidence", "estimate_repair_work_cost", "verify_oem_candidates_web"}:
         # Once a worker starts, its still-running network/attempt counts are unknown.
         # These failures are constructed before domain validation: no input echo.
@@ -266,5 +277,52 @@ def offload_read(function: Callable[..., Any], tool_name: str = "") -> Callable[
         finally:
             if deadline_token is not None:
                 read_execution_deadline.reset(deadline_token)
+
+    return wrapped
+
+
+def offload_crm_cards(
+    function: Callable[..., Any], workers: mcp_store_executor.StoreWorkers | None = None
+) -> Callable[..., Any]:
+    """Reuse bounded server workers, retaining serialized CRM writes and readback capacity."""
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        arguments = signature.bind(*args, **kwargs)
+        arguments.apply_defaults()
+        read_only = arguments.arguments.get("operation") in {"list", "get"}
+        # Keep the former loop's write order without locking inside an already
+        # started worker. Queued cancellation must prevent adapter invocation.
+        if workers is None:
+            pool = mcp_store_executor._READ_EXECUTOR if read_only else mcp_store_executor._STATEFUL_EXECUTOR
+        else:
+            pool = workers.reads if read_only else workers.stateful
+        context = copy_context()
+        try:
+            return await pool.run(partial(context.run, function, *args, **kwargs))
+        except ListingExecutionError as error:
+            uncertain = not read_only and error.adapter_started
+            return {
+                "ok": False,
+                "status": "uncertain" if uncertain else "blocked",
+                "error": {
+                    "provider_busy": "crm_executor_busy",
+                    "provider_wait_timeout": "crm_executor_wait_timeout",
+                    "provider_executor_unavailable": "crm_executor_unavailable",
+                    "provider_executor_draining": "crm_executor_draining",
+                    "provider_execution_failed": "crm_executor_failed",
+                }[error.code],
+                "column": "parts_store",
+                "outcome_uncertain": uncertain,
+                "request_dispatched": None if error.adapter_started else False,
+                "readback_required": uncertain,
+                "readback_verified": False,
+                "stage": error.stage,
+                "adapter_started": error.adapter_started,
+                "adapter_may_continue": error.adapter_may_continue,
+                "retry_attempted": False,
+                "retryable": False,
+            }
 
     return wrapped
