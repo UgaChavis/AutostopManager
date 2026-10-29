@@ -399,13 +399,285 @@ def test_stop_interrupts_native_goal_continuation_without_dispatch(store):
     asyncio.run(run.tick())
     assert continuation["status"] == "interrupted"
     assert rpc.goals[thread]["status"] == "paused"
-    assert store.role_state()["goal_owned"]  # Ack alone is not the independent stop readback.
+    assert not store.role_state()["goal_owned"]  # The hold path independently reads the goal and terminal turn.
     asyncio.run(run.tick())
     assert not store.role_state()["goal_owned"]
     store.submit_owner_event("off-after-native-stop")
     asyncio.run(run.tick())
     assert store.owner_event_receipt("off-after-native-stop")["status"] == "running"
     assert not store.role_state()["duty_active"]
+
+
+@pytest.mark.parametrize("rejected_method", ["thread/resume", "thread/turns/list", "thread/goal/get"])
+def test_stop_after_rpc_rejection_confirms_owned_execution_without_restarting(store, rejected_method):
+    class RejectRead(FakeRPC):
+        reject = None
+
+        async def request(self, method, params):
+            if method == self.reject:
+                self.reject = None
+                self.calls.append((method, params))
+                raise RoleRpcRejected("role_rpc_rejected")
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = RejectRead()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.reject = rejected_method
+    asyncio.run(run.tick())
+    assert store.role_state()["last_error"] == "role_rpc_rejected"
+    action(store, "stop")
+    # Stopping must not depend on the bundle that would be needed to start.
+    root = Path(store.role_state()["instruction_root"])
+    (root / "docs/agent/modules/F4.md").unlink()
+    before = len(rpc.calls)
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert rpc.turns[thread][0]["status"] == "interrupted"
+    state = store.role_state()
+    assert state["desired_state"] == state["state"] == "off"
+    assert state["last_error"] == "role_rpc_rejected"
+    assert state["goal_applied"] == "paused" and not state["goal_owned"]
+    assert not store.pending_dispatches("M1") and state["active_dispatch_id"] is None
+    assert not any(method in {"thread/inject_items", "turn/start", "turn/steer"} for method, _ in rpc.calls[before:])
+    assert len([method for method, _ in rpc.calls[before:] if method == "thread/goal/get"]) == 2
+    assert len([method for method, _ in rpc.calls[before:] if method == "thread/turns/list"]) == 2
+
+
+@pytest.mark.parametrize("owned,objective", [(False, role_objective("M1")), (True, "Unrelated user goal")])
+def test_rejected_stop_does_not_change_unowned_or_foreign_execution(store, owned, objective):
+    rpc = FakeRPC()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": objective, "status": "active"}
+    rpc.turns[thread] = [{"id": "unrelated-turn", "status": "inProgress", "items": []}]
+    store.runtime_update("M1", goal_owned=owned, goal_applied="active", last_error="role_rpc_rejected")
+    action(store, "stop")
+    asyncio.run(executor(store, rpc).tick())
+    assert rpc.goals[thread]["status"] == "active"
+    assert rpc.turns[thread][0]["status"] == "inProgress"
+    assert store.role_state()["last_error"] == "role_rpc_rejected"
+    assert not any(
+        method in {"thread/goal/set", "turn/interrupt", "thread/inject_items", "turn/start", "turn/steer"}
+        for method, _ in rpc.calls
+    )
+
+
+@pytest.mark.parametrize("failure_stage", ["open", "exit"])
+def test_rejected_stop_retains_original_error_across_connection_failure(store, failure_stage):
+    rpc = FakeRPC()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": role_objective("M1"), "status": "active"}
+    store.runtime_update("M1", goal_owned=True, goal_applied="active", last_error="role_rpc_rejected")
+    action(store, "stop")
+
+    @asynccontextmanager
+    async def failing_factory():
+        if failure_stage == "open":
+            raise ConnectionClosed(None, None)
+        yield rpc
+        raise ConnectionClosed(None, None)
+
+    asyncio.run(RoleExecutor(store, rpc_factory=failing_factory).tick())
+    assert store.role_state()["last_error"] == "role_rpc_rejected"
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert not store.role_state()["goal_owned"]
+    assert store.role_state()["last_error"] == "role_rpc_rejected"
+
+
+def test_rejected_stop_readback_does_not_restore_hold_after_explicit_recovery(store):
+    class RecoverDuringPage(FakeRPC):
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "thread/turns/list" and params.get("cursor"):
+                action(store, "start")
+            return result
+
+    action(store, "start")
+    rpc = RecoverDuringPage()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    rpc.turns[thread][:0] = [{"id": str(uuid4()), "status": "completed", "items": []} for _ in range(30)]
+    store.runtime_update("M1", last_error="role_rpc_rejected")
+    action(store, "stop")
+    asyncio.run(run.tick())
+    state = store.role_state()
+    assert state["duty_active"] and state["last_error"] is None
+    assert state["goal_applied"] is None and state["goal_owned"]
+    assert len(store.pending_dispatches("M1")) == 1
+    assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 1
+
+
+def test_bind_waits_for_independent_stop_confirmation_of_native_continuation(store):
+    class PendingInterrupt(FakeRPC):
+        ignore_interrupt = True
+
+        async def request(self, method, params):
+            if method == "turn/interrupt" and self.ignore_interrupt:
+                self.calls.append((method, params))
+                return {}
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = PendingInterrupt()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    rpc.turns[thread].insert(0, {"id": "native-continuation", "status": "inProgress", "items": []})
+    asyncio.run(run.tick())
+    assert not store.pending_dispatches("M1") and store.role_state()["active_dispatch_id"] is None
+    action(store, "stop")
+    before = store.role_state()
+    replacement = {
+        "thread_id": str(uuid4()),
+        "instruction_root": before["instruction_root"],
+        "instruction_revision": "a" * 40,
+    }
+
+    def assert_old_binding_held():
+        with pytest.raises(RoleError, match="role_bind_requires_idle"):
+            action(store, "bind", payload=replacement)
+        state = store.role_state()
+        assert state["goal_owned"]
+        assert all(state[key] == before[key] for key in ("thread_id", "instruction_root", "instruction_revision"))
+
+    assert_old_binding_held()
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "inProgress"
+    assert_old_binding_held()
+    rpc.ignore_interrupt = False
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "interrupted"
+    assert not store.role_state()["goal_owned"]
+    action(store, "bind", payload=replacement)
+    assert store.role_state()["thread_id"] == replacement["thread_id"]
+
+
+def test_bind_between_native_turns_waits_for_independent_goal_pause(store):
+    class IgnoredPause(FakeRPC):
+        ignore_pause = True
+
+        async def request(self, method, params):
+            if method == "thread/goal/set" and params.get("status") == "paused" and self.ignore_pause:
+                self.calls.append((method, params))
+                return {}
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = IgnoredPause()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    asyncio.run(run.tick())
+    action(store, "stop")
+    replacement = {"thread_id": str(uuid4())}
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "active" and store.role_state()["goal_owned"]
+    with pytest.raises(RoleError, match="role_bind_requires_idle"):
+        action(store, "bind", payload=replacement)
+    assert store.role_state()["thread_id"] == thread
+    rpc.ignore_pause = False
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused" and not store.role_state()["goal_owned"]
+    action(store, "bind", payload=replacement)
+    assert store.role_state()["thread_id"] == replacement["thread_id"]
+
+
+def test_bind_during_goal_activation_waits_for_compensating_stop_readback(store):
+    replacement = {"thread_id": str(uuid4())}
+
+    class StopDuringActivation(FakeRPC):
+        ignore_pause = True
+
+        async def request(self, method, params):
+            if method == "thread/goal/set" and params.get("status") == "paused" and self.ignore_pause:
+                self.calls.append((method, params))
+                return {}
+            result = await super().request(method, params)
+            if method == "thread/goal/set" and params.get("status") == "active":
+                action(store, "stop")
+                with pytest.raises(RoleError, match="role_bind_requires_idle"):
+                    action(store, "bind", payload=replacement)
+            return result
+
+    action(store, "start")
+    rpc = StopDuringActivation()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": role_objective("M1"), "status": "paused"}
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "active" and store.role_state()["goal_owned"]
+    with pytest.raises(RoleError, match="role_bind_requires_idle"):
+        action(store, "bind", payload=replacement)
+    rpc.ignore_pause = False
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused" and not store.role_state()["goal_owned"]
+    action(store, "bind", payload=replacement)
+    assert store.role_state()["thread_id"] == replacement["thread_id"]
+
+
+@pytest.mark.parametrize("missing_document", [False, True], ids=["hash-mismatch", "missing-document"])
+def test_sleep_resume_validates_bundle_before_native_goal_activation(store, missing_document):
+    action(store, "start")
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    action(store, "sleep", payload={"seconds": 3600}, actor="M1")
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    store.runtime_update("M1", next_wake_at="2020-01-01T00:00:00+00:00")
+    document = Path(store.role_state()["instruction_root"]) / "docs/agent/modules/F4.md"
+    if missing_document:
+        document.unlink()
+    else:
+        document.write_text("Changed policy under unchanged revision\n")
+    before = len(rpc.calls)
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["last_error"].startswith("role_instruction_")
+    assert not any(
+        method in {"thread/inject_items", "turn/start", "turn/steer"}
+        or (method == "thread/goal/set" and params.get("status") == "active")
+        for method, params in rpc.calls[before:]
+    )
+    action(store, "stop")
+    asyncio.run(run.tick())
+    assert not store.role_state()["goal_owned"]
+    assert store.role_state()["last_error"].startswith("role_instruction_")
+
+
+def test_sleep_resume_checks_explicit_owner_bundle_before_goal_activation(store):
+    action(store, "start")
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    action(store, "sleep", payload={"seconds": 3600}, actor="M1")
+    asyncio.run(run.tick())
+    store.runtime_update("M1", next_wake_at="2020-01-01T00:00:00+00:00")
+    root = Path(store.role_state()["instruction_root"])
+    store.submit_owner_event(
+        "missing-owner-policy", instruction_root=str(root / "missing"), instruction_revision="b" * 40
+    )
+    before = len(rpc.calls)
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["last_error"].startswith("role_instruction_")
+    assert store.owner_event_receipt("missing-owner-policy")["status"] == "queued"
+    assert not any(
+        method in {"thread/inject_items", "turn/start", "turn/steer"}
+        or (method == "thread/goal/set" and params.get("status") == "active")
+        for method, params in rpc.calls[before:]
+    )
 
 
 def test_restart_reconciles_existing_duty_without_second_launch(store):
