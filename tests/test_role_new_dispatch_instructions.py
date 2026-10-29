@@ -86,6 +86,60 @@ def test_active_duty_keeps_original_policy_until_its_next_dispatch(store, curren
     assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 2
 
 
+@pytest.mark.parametrize("origin", ["duty", "owner"])
+def test_lost_start_recovery_keeps_active_pin_when_current_is_unavailable(store, current_bundle, origin):
+    current, updated = current_bundle
+    bound = current[0]
+    original = updated if origin == "owner" else bound
+    current[0] = original
+    action(store, "start")
+    if origin == "owner":
+        store.submit_owner_event("pinned-lost-start", instruction_root=str(original), instruction_revision="b" * 40)
+    rpc = FakeRPC()
+    rpc.lose_start = True
+    asyncio.run(executor(store, rpc).tick())
+    state = store.role_state()
+    thread = state["thread_id"]
+    dispatch_id = state["active_dispatch_id"]
+    turn = rpc.turns[thread][0]
+    injected = deepcopy(rpc.injected[thread])
+    assert store.pending_dispatches("M1")[0]["status"] == "unknown"
+    assert thread not in rpc.goals and not state["goal_owned"]
+    assert str(original) in policy(rpc, thread)
+    if origin == "owner":
+        # An explicit request owns its pin even if the role's fallback is stale.
+        (bound / "MANIFEST.sha256").unlink()
+
+    current[0] = updated / "missing"
+    recovered = RoleStore(store.path)
+    run = executor(recovered, rpc)
+    asyncio.run(run.tick())
+    asyncio.run(run.tick())
+    state = recovered.role_state()
+    pending = recovered.pending_dispatches("M1")
+    assert turn["status"] == "inProgress"
+    assert state["last_error"] is None and state["state"] == "running"
+    assert state["active_dispatch_id"] == dispatch_id
+    assert (state["instruction_root"], state["instruction_revision"]) == (str(bound), "a" * 40)
+    assert len(pending) == 1 and pending[0]["id"] == dispatch_id
+    assert pending[0]["status"] == "running" and pending[0]["turn_id"] == turn["id"]
+    if origin == "owner":
+        receipt = recovered.owner_event_receipt("pinned-lost-start")
+        assert receipt["status"] == "running"
+        assert (receipt["instruction_root"], receipt["instruction_revision"]) == (str(original), "b" * 40)
+    assert rpc.injected[thread] == injected
+    assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 1
+    assert not any(method in {"turn/interrupt", "turn/steer", "thread/goal/set"} for method, _ in rpc.calls)
+
+    turn["status"] = "completed"
+    asyncio.run(run.tick())
+    state = recovered.role_state()
+    assert state["active_dispatch_id"] is None
+    assert state["state"] == "attention" and state["last_error"] == "role_instruction_bundle_invalid"
+    assert rpc.injected[thread] == injected
+    assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 1
+
+
 def test_explicit_owner_request_keeps_accepted_pin_above_current_bundle(store, current_bundle):
     current, updated = current_bundle
     original = current[0]

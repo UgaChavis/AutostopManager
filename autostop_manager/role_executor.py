@@ -296,6 +296,31 @@ class RoleExecutor:
                     dispatch["id"], "failed", error=hold_error if hold_state is not None else "role_turn_failed"
                 )
 
+    def _goal_instruction_bundle(
+        self, state: dict[str, Any], item: dict[str, Any] | None, *, allow_activate: bool
+    ) -> VerifiedInstructionBundle:
+        if not allow_activate and state["active_dispatch_id"] is not None:
+            # A lost launch reply can leave a dispatched turn without a native
+            # goal. Recover its origin, not current or the next queued request.
+            dispatch = next(
+                (
+                    row
+                    for row in self.store.pending_dispatches(state["role"])
+                    if row["id"] == state["active_dispatch_id"] and row["thread_id"] == state["thread_id"]
+                ),
+                None,
+            )
+            if dispatch is None:
+                raise RoleError("role_instruction_dispatch_invalid")
+            item = None
+            if dispatch["item_id"] is not None:
+                with self.store.connection() as db:
+                    if db is None:
+                        raise RoleError("role_instruction_dispatch_invalid")
+                    item = self.store._item(db, dispatch["item_id"])
+            return verified_instruction_bundle(state, item)
+        return verified_instruction_bundle(state, item, new_dispatch=not allow_activate)
+
     async def _sync_goal(
         self,
         state: dict[str, Any],
@@ -326,7 +351,7 @@ class RoleExecutor:
             return False
         if not goal or goal.get("status") != desired:
             if desired == "active":
-                verified_instruction_bundle(state, item, new_dispatch=not allow_activate)
+                self._goal_instruction_bundle(state, item, allow_activate=allow_activate)
             fresh = self.store.role_state(state["role"])
             if fresh["generation"] != state["generation"] or fresh["revision"] != state["revision"]:
                 return False
