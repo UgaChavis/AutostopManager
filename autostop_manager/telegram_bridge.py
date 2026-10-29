@@ -712,13 +712,15 @@ class DurableInboundMonitor(InboundMonitor):
         for peer, versions in self.context_messages.items():
             if peer_id is not None and peer != peer_id:
                 continue
-            changed = False
-            for identifier in message_ids:
-                if identifier in versions and versions[identifier] is not None:
-                    versions[identifier] = None
-                    changed = True
+            changed = [
+                identifier for identifier in message_ids if identifier in versions and versions[identifier] is not None
+            ]
             if changed:
+                # Commit the fence first. A failed write must leave the old RAM
+                # fingerprints available for a later exact reread to retry it.
                 self.inbox.invalidate_context(peer)
+                for identifier in changed:
+                    versions[identifier] = None
                 self.changed()
 
     async def revalidate_context(
@@ -776,16 +778,16 @@ class DurableInboundMonitor(InboundMonitor):
             collected = list({message.id: message for message in [*collected, *recent]}.values())
         for message in collected:
             if message.id == anchor_id:
-                # The reply source has its own signed contract and established
-                # public errors. A fresh dry-run may renew that binding; apply
-                # must retain it even across the final pre-intent RPC await.
+                # Preserve apply's signed reply-source error. A new dry-run
+                # must first fence a changed, previously read source so the
+                # caller rereads/refreshes the job before preparing its reply.
                 if (
                     not refresh_anchor
                     and message.id in versions
                     and versions[message.id] != self.context_fingerprint(message)
                 ):
                     raise BridgeError("contract_reply_source_changed")
-                self.remember_context(message, invalidate=False)
+                self.remember_context(message, invalidate=refresh_anchor)
         self.observe_packet(collected)
 
     def observe_self_message(self, message: Any, *, native_origins: tuple[set[int], bool] | None = None) -> str | None:
@@ -2709,6 +2711,9 @@ async def _handle_send_photo(
             raise BridgeError("conversation_changed_since_dry_run")
         _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         await _revalidate_job_effect(client, entity, inbound_monitor, effect)
+        idempotency = _load_idempotency(idempotency_path)
+        if idempotency_key in idempotency:
+            raise BridgeError("idempotency_key_conflict")
         _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_photo",
@@ -2891,6 +2896,9 @@ async def _handle_send_document(
             _personal_group_document_reply(config, request, target, inbound_monitor)
         _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         await _revalidate_job_effect(client, entity, inbound_monitor, effect)
+        idempotency = _load_idempotency(idempotency_path)
+        if idempotency_key in idempotency:
+            raise BridgeError("idempotency_key_conflict")
         _mark_job_effect_intent(inbound_monitor, effect)
         entry = {
             "operation": "send_document",
@@ -3313,6 +3321,11 @@ async def _handle_send_text_to_entity(
             _require_personal_group_reply(config, request, target, reply_to_message_id)
         _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
         await _revalidate_job_effect(client, entity, inbound_monitor, job_effect)
+        # Exact readback can commit while context RPCs run. Preserve its latest
+        # receipts and never replace a key that appeared during those awaits.
+        idempotency = _load_idempotency(idempotency_path)
+        if idempotency_key in idempotency:
+            raise BridgeError("idempotency_key_conflict")
         _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
@@ -3433,6 +3446,12 @@ async def _revalidate_job_effect(
 ) -> None:
     if effect is not None and isinstance(monitor, DurableInboundMonitor):
         stored = monitor.inbox.read_effect(str(effect["effect_key"]))
+        if stored["kind"] == "handoff":
+            # The transport entity belongs to the owner, while the draft's
+            # source context and reply anchor still belong to the client.
+            entity, target = await _resolve_peer(client, str(stored["peer_id"]))
+            if target.get("id") != stored["peer_id"] or target.get("kind") != "private":
+                raise BridgeError("inbound_target_mismatch")
         await monitor.revalidate_context(
             client,
             entity,
@@ -4559,8 +4578,12 @@ async def _handle_job_operation(
             effect["verified"] and effect["kind"] in {"result", "handoff"} and effect["receipt_key"] in receipt_keys
             for effect in current_job["effects"]
         )
-        if request.get("outcome") != "no_reply_needed" or not (
-            request.get("reason_code") in {"paused", "human_takeover"} or verified_answer
+        delivered_question = request.get("outcome") == "awaiting_client" and inbox.delivered_clarification_after_pause(
+            current_job["job_id"], receipt_keys
+        )
+        if not delivered_question and (
+            request.get("outcome") != "no_reply_needed"
+            or not (request.get("reason_code") in {"paused", "human_takeover"} or verified_answer)
         ):
             _require_current_guidance(monitor, current_job)
         if inbox.read_job(str(request.get("job_id") or "")).get("manual_recovery"):
@@ -5515,9 +5538,13 @@ def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundM
 
     async def deleted(event: Any) -> None:
         peer_id = getattr(event, "chat_id", None)
+        # Channel-local message IDs do not identify private messages. Only a
+        # genuinely unknown peer may use the account-wide private ID lookup.
+        if peer_id is not None and (type(peer_id) is not int or peer_id <= 0):
+            return
         monitor.deleted(
             list(getattr(event, "deleted_ids", None) or []),
-            peer_id if type(peer_id) is int and peer_id > 0 else None,
+            peer_id,
         )
 
     client.add_event_handler(edited, events.MessageEdited())

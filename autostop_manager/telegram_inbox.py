@@ -1965,6 +1965,17 @@ class TelegramInbox:
             raise InboxError("inbox_client_control_invalid")
         return waiting_control
 
+    def delivered_clarification_after_pause(self, job_id: str, receipt_keys: list[str]) -> bool:
+        """Acknowledge an already-delivered question without lifting client control."""
+        job = self.read_job(job_id)
+        return job["client_control"]["state"] in {"paused", "human_takeover"} and any(
+            effect["kind"] == "clarification"
+            and effect["verified"]
+            and effect["context_revision"] == job["context_revision"]
+            and effect["receipt_key"] in receipt_keys
+            for effect in job["effects"]
+        )
+
     def result(
         self,
         *,
@@ -2021,9 +2032,14 @@ class TelegramInbox:
                 raise InboxError("inbox_reason_invalid")
             if expected[outcome] not in kinds:
                 raise InboxError("inbox_result_receipt_required")
-        if (outcome != "no_reply_needed" or reason_code == "human_answered") and job[
-            "context_revision"
-        ] != self._peer_revision(job["peer_id"]):
+        delivered_question = outcome == "awaiting_client" and self.delivered_clarification_after_pause(
+            job_id, receipt_keys
+        )
+        if (
+            (outcome != "no_reply_needed" or reason_code == "human_answered")
+            and job["context_revision"] != self._peer_revision(job["peer_id"])
+            and not delivered_question
+        ):
             raise InboxError("inbox_context_stale")
         if waiting_control and any(effect["attempted"] and effect["kind"] != "ack" for effect in effects):
             raise InboxError("inbox_control_result_effects_present")
