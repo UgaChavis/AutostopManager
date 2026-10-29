@@ -632,6 +632,7 @@ class RoleStore:
         item_id: str | None,
         before_turn_id: str | None,
         steer: bool = False,
+        instruction_pin: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         with self.connection(write=True) as db:
             state = self._state(db, role)
@@ -670,9 +671,15 @@ class RoleStore:
                 ),
             )
             if not steer:
+                if item_id is not None and any(
+                    item["data"].get(key) is not None for key in ("instruction_root", "instruction_revision")
+                ):
+                    # An accepted request already owns its immutable origin pin.
+                    instruction_pin = None
+                root, pin_revision = instruction_pin or (state["instruction_root"], state["instruction_revision"])
                 db.execute(
-                    "UPDATE role_state SET active_dispatch_id=?,state='running',updated_at=? WHERE role=?",
-                    (dispatch_id, stamp, role),
+                    "UPDATE role_state SET active_dispatch_id=?,state='running',instruction_root=?,instruction_revision=?,updated_at=? WHERE role=?",
+                    (dispatch_id, root, pin_revision, stamp, role),
                 )
             return dict(db.execute("SELECT * FROM role_dispatches WHERE id=?", (dispatch_id,)).fetchone())
 

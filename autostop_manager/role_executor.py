@@ -82,9 +82,13 @@ def role_objective(role: str) -> str:
     )
 
 
-def verified_instruction_bundle(state: dict[str, Any], item: dict[str, Any] | None) -> VerifiedInstructionBundle:
+def verified_instruction_bundle(
+    state: dict[str, Any], item: dict[str, Any] | None, *, new_dispatch: bool = False
+) -> VerifiedInstructionBundle:
     data = item["data"] if item else {}
-    selected = data if any(data.get(key) is not None for key in ("instruction_root", "instruction_revision")) else state
+    selected = {} if new_dispatch else state
+    if any(data.get(key) is not None for key in ("instruction_root", "instruction_revision")):
+        selected = data
     root, revision = selected.get("instruction_root"), selected.get("instruction_revision")
     if (root is None) != (revision is None):
         raise RoleError("role_instruction_bundle_invalid")
@@ -292,6 +296,31 @@ class RoleExecutor:
                     dispatch["id"], "failed", error=hold_error if hold_state is not None else "role_turn_failed"
                 )
 
+    def _goal_instruction_bundle(
+        self, state: dict[str, Any], item: dict[str, Any] | None, *, allow_activate: bool
+    ) -> VerifiedInstructionBundle:
+        if not allow_activate and state["active_dispatch_id"] is not None:
+            # A lost launch reply can leave a dispatched turn without a native
+            # goal. Recover its origin, not current or the next queued request.
+            dispatch = next(
+                (
+                    row
+                    for row in self.store.pending_dispatches(state["role"])
+                    if row["id"] == state["active_dispatch_id"] and row["thread_id"] == state["thread_id"]
+                ),
+                None,
+            )
+            if dispatch is None:
+                raise RoleError("role_instruction_dispatch_invalid")
+            item = None
+            if dispatch["item_id"] is not None:
+                with self.store.connection() as db:
+                    if db is None:
+                        raise RoleError("role_instruction_dispatch_invalid")
+                    item = self.store._item(db, dispatch["item_id"])
+            return verified_instruction_bundle(state, item)
+        return verified_instruction_bundle(state, item, new_dispatch=not allow_activate)
+
     async def _sync_goal(
         self,
         state: dict[str, Any],
@@ -322,9 +351,7 @@ class RoleExecutor:
             return False
         if not goal or goal.get("status") != desired:
             if desired == "active":
-                verified_instruction_bundle(state, None)
-                if item is not None:
-                    verified_instruction_bundle(state, item)
+                self._goal_instruction_bundle(state, item, allow_activate=allow_activate)
             fresh = self.store.role_state(state["role"])
             if fresh["generation"] != state["generation"] or fresh["revision"] != state["revision"]:
                 return False
@@ -623,7 +650,7 @@ class RoleExecutor:
         turns: list[dict[str, Any]],
     ) -> None:
         # Validate instructions before recording a possibly-executed launch.
-        bundle = verified_instruction_bundle(state, item)
+        bundle = verified_instruction_bundle(state, item, new_dispatch=active is None)
         context = None
         if active:
             if not self._active_bundle_matches(state, active, bundle):
@@ -642,6 +669,7 @@ class RoleExecutor:
             item_id=item["id"] if item else None,
             before_turn_id=turns[0]["id"] if turns else None,
             steer=active is not None,
+            instruction_pin=(bundle.root, bundle.revision),
         )
         prompt = dispatch_prompt(state, dispatch, item, bundle=bundle)
         params = {

@@ -24,6 +24,14 @@ from tests.instruction_bundle_fakes import create_instruction_bundle, seal_instr
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(instruction_bundles, "_OWNER_UID", os.getuid())
     root = create_instruction_bundle(tmp_path / "snapshot")
+    resolve = Path.resolve
+
+    def synthetic_current(path, *args, **kwargs):
+        if str(path) == "/opt/autostop-manager-releases/current":
+            return root
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", synthetic_current)
     result = RoleStore(tmp_path / "scheduler" / "registry.sqlite3")
     for role in ("M1", "M2"):
         result.action(
