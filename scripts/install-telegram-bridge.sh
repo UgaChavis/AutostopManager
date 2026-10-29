@@ -181,9 +181,11 @@ validate_bridge_imports() {
   "${venv_root}/bin/python" -I -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])
-from autostop_manager.telegram_bridge import InboundMonitor
+from autostop_manager.telegram_bridge import InboundMonitor, _supported_reconnect_tracking
 InboundMonitor()
-' "${PROJECT_ROOT}"
+if sys.argv[2] == "work" and not _supported_reconnect_tracking():
+    raise SystemExit("work_telegram_reconnect_version_unsupported")
+' "${PROJECT_ROOT}" "${account}"
 }
 
 install_model_manifest() {
