@@ -229,6 +229,26 @@ if not isinstance(w, dict):
 def observed_count(value):
   return value if w.get("ok") is True and type(value) is int and value >= 0 else None
 inbound=bool(s.get("inbound_enabled"))
+health=s.get("intake_health")
+health=health if isinstance(health, dict) else {}
+health_state=health.get("state")
+health_error=health.get("error_code")
+states={"ready", "running", "waiting_thread", "held", "paused", "offline", "connected"}
+codes={"inbound_monitor_full", "inbound_capture_failed", "inbound_storage_unavailable", "history_reconciliation_changed", "history_reconciliation_failed", "history_reconciliation_incomplete", "history_reconciliation_unverified", "intake_held", "intake_offline"}
+if (s.get("ok") is not True or "state" not in health or "error_code" not in health
+    or not isinstance(health_state, str) or health_state not in states
+    or (health_error is not None and not isinstance(health_error, str))
+    or (health_state == "ready" and health_error is not None)
+    or (health_state in {"held", "offline"} and not health_error)):
+  health_state="unknown"
+  health_error=None
+elif health_error is not None and health_error not in codes:
+  health_error="other"
+reconciliation=s.get("intake_reconciliation")
+if s.get("ok") is not True or not isinstance(reconciliation, str) or reconciliation not in {"unknown", "in_progress", "held", "complete"}:
+  reconciliation="unknown"
+elif reconciliation == "complete" and (health_state != "ready" or health_error is not None or s.get("inbound_enabled") is not True or s.get("transport_ready") is not True):
+  reconciliation="unknown"
 connected=bool(w.get("ok") and w.get("connected"))
 ready=bool(w.get("ok") and w.get("enabled") and w.get("ready", connected))
 recovery_state=w.get("recovery_state", "ready" if ready else "unavailable")
@@ -241,6 +261,8 @@ print(json.dumps({
   "ok": bool(s.get("ok")),
   "transport_ready": bool(s.get("transport_ready")),
   "inbound_enabled": inbound,
+  "intake_health": {"state": health_state, "error_code": health_error},
+  "intake_reconciliation": reconciliation,
   "owner_notification_configured": bool(s.get("owner_notification_configured")),
   "wake_active": os.environ["WAKE_ACTIVE"] == "true",
   "wake_connected": connected,

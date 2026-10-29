@@ -27,6 +27,7 @@ from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
@@ -597,10 +598,18 @@ class DurableInboundMonitor(InboundMonitor):
         self.failure_event = asyncio.Event()
         self.failure_code: str | None = None
         self.reconciliation_fence: tuple[int, int, int] | None = None
+        self.reconciliation_fence_transport_generation: int | None = None
+        self.reconciliation_transport_generation = 0
+        self.reconciliation_transport_hook: Callable[[], bool] | None = None
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
         self.reconciliation_signal_revision = 0
+        self.reconciliation_completed_revision: int | None = None
+        self.reconciliation_running = False
         self.reconciliation_transport_retries = 0
+        # Coalesce real private-message callbacks observed while a history
+        # fence is in flight. They can move a dialog above the page cursor.
+        self.reconciliation_external_pending = False
         self.notification_requested = asyncio.Event()
         self.notification_task: asyncio.Task[None] | None = None
         self.self_peer_id: int | None = None
@@ -836,11 +845,28 @@ class DurableInboundMonitor(InboundMonitor):
 
     def request_reconciliation(self) -> None:
         """Give one external recovery signal a finite retry budget."""
+        self.reconciliation_external_pending = False
         self.reconciliation_restarts = 0
         self.reconciliation_stopped = False
         self.reconciliation_signal_revision += 1
         self.reconciliation_transport_retries = 0
         self.reconcile_requested.set()
+
+    def note_reconciliation_update(self, event: Any) -> None:
+        """Retain a real private update without turning it into polling."""
+        if not (
+            self.capture_enabled
+            and bool(getattr(event, "is_private", False))
+            and type(getattr(event, "chat_id", None)) is int
+            and event.chat_id > 0
+            and type(getattr(event, "id", None)) is int
+            and event.id > 0
+        ):
+            return
+        if self.reconciliation_stopped:
+            self.request_reconciliation()
+        elif self.reconciliation_running or self.reconciliation_fence is not None:
+            self.reconciliation_external_pending = True
 
     def changed(self) -> None:
         generation = self.inbox.generation
@@ -892,7 +918,34 @@ class DurableInboundMonitor(InboundMonitor):
             "started_at": self.started_at,
             "retention": "durable_refs",
             "generation": self.generation,
+            "intake_health": self.inbox.health().get("intake"),
+            "intake_reconciliation": self.intake_reconciliation(),
         }
+
+    def reconciliation_transport_hook_current(self) -> bool:
+        try:
+            return self.reconciliation_transport_hook is not None and self.reconciliation_transport_hook() is True
+        except Exception:  # noqa: BLE001 - inability to verify the hook must fail closed.
+            return False
+
+    def intake_reconciliation(self) -> str:
+        """Report process-local sweep evidence; persistent health can predate reconnect."""
+        if not self.capture_enabled or not self.transport_ready:
+            return "unknown"
+        if self.reconciliation_running or self.reconcile_requested.is_set():
+            return "in_progress"
+        health = self.inbox.health().get("intake")
+        if not isinstance(health, dict):
+            return "unknown"
+        if health.get("state") == "held":
+            return "held"
+        if (
+            health == {"state": "ready", "error_code": None}
+            and self.reconciliation_transport_hook_current()
+            and self.reconciliation_completed_revision == self.reconciliation_signal_revision
+        ):
+            return "complete"
+        return "unknown"
 
     def events(self) -> list[dict[str, Any]]:
         return self.inbox.events()
@@ -4364,6 +4417,16 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
                 if isinstance(inbound_monitor, DurableInboundMonitor)
                 else inbound_monitor is not None
             ),
+            "intake_health": (
+                inbound_monitor.inbox.health().get("intake")
+                if isinstance(inbound_monitor, DurableInboundMonitor)
+                else None
+            ),
+            "intake_reconciliation": (
+                inbound_monitor.intake_reconciliation()
+                if isinstance(inbound_monitor, DurableInboundMonitor)
+                else "unknown"
+            ),
             "owner_notification_configured": _owner_peer_id(config) is not None,
             "account": {
                 "id": int(getattr(me, "id", 0) or 0),
@@ -5497,16 +5560,7 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     if isinstance(monitor, DurableInboundMonitor):
         # Subscribers observe a committed locator.  A missed notification is
         # harmless: reconnecting always reads the current durable registry.
-        if (
-            monitor.reconciliation_stopped
-            and monitor.capture_enabled
-            and bool(getattr(event, "is_private", False))
-            and type(getattr(event, "chat_id", None)) is int
-            and event.chat_id > 0
-            and type(getattr(event, "id", None)) is int
-            and event.id > 0
-        ):
-            monitor.request_reconciliation()
+        monitor.note_reconciliation_update(event)
         return
     if event_id is not None and wake_socket:
         try:
@@ -5807,10 +5861,14 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
         monitor.reconcile_requested.clear()
         if monitor.capture_enabled:
             signal_revision = monitor.reconciliation_signal_revision
+            monitor.reconciliation_running = True
             try:
                 await _reconcile_incoming_history(client, monitor)
             except Exception as exc:  # noqa: BLE001 - preserve committed checkpoints and classify only transport errors.
+                # A buffered event must not extend the network error budget.
+                monitor.reconciliation_external_pending = False
                 monitor.reconciliation_fence = None
+                monitor.reconciliation_fence_transport_generation = None
                 monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_failed")
                 monitor.changed()
                 if (
@@ -5825,13 +5883,40 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
                         monitor.reconcile_requested.set()
                     else:
                         monitor.reconciliation_stopped = True
+            finally:
+                monitor.reconciliation_running = False
         progress = await _deliver_incident_notifications(client, config, monitor)
         if progress is not None:
             _schedule_incident_notifications(client, config, monitor, retry_after=progress)
 
 
+def _supported_reconnect_tracking() -> bool:
+    """Only report completion for the observed Telethon private contract."""
+    try:
+        return version("Telethon") in {"1.44.0", "1.45.0"}
+    except Exception:  # noqa: BLE001 - unknown package metadata cannot attest the private contract.
+        return False
+
+
+def _verified_reconnect_start(sender: Any, start: Any) -> bool:
+    """Accept only the installed Telethon sender's original bound method."""
+    try:
+        if not _supported_reconnect_tracking():
+            return False
+        from telethon.network.mtprotosender import MTProtoSender
+
+        return (
+            type(sender) is MTProtoSender
+            and getattr(start, "__self__", None) is sender
+            and getattr(start, "__func__", None) is MTProtoSender._start_reconnect
+        )
+    except Exception:  # noqa: BLE001 - unavailable private contracts remain unverified.
+        return False
+
+
 def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> None:
     """Preserve Telethon's reconnect callback and add one event-driven sweep."""
+    monitor.reconciliation_transport_hook = None
     sender = getattr(client, "_sender", None)
     original = getattr(sender, "_auto_reconnect_callback", None)
     if sender is None or not callable(original):
@@ -5844,6 +5929,22 @@ def _install_reconnect_signal(client: Any, monitor: DurableInboundMonitor) -> No
             monitor.request_reconciliation()
 
     sender._auto_reconnect_callback = reconnect
+    start = getattr(sender, "_start_reconnect", None)
+    if callable(start) and _verified_reconnect_start(sender, start):
+
+        def start_reconnect(error: Any) -> Any:
+            # Invalidate only process-local evidence before Telethon starts
+            # reconnecting; the original callback remains the recovery signal.
+            monitor.reconciliation_transport_generation += 1
+            monitor.reconciliation_completed_revision = None
+            return start(error)
+
+        sender._start_reconnect = start_reconnect
+        monitor.reconciliation_transport_hook = lambda: (
+            getattr(client, "_sender", None) is sender
+            and getattr(sender, "_start_reconnect", None) is start_reconnect
+            and getattr(sender, "_auto_reconnect_callback", None) is reconnect
+        )
 
 
 def _configure_durable_instructions(inbox: TelegramInbox) -> None:
@@ -5922,8 +6023,16 @@ async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) 
 
 
 async def _reconcile_peer_history(
-    client: Any, entity: Any, peer_id: int, monitor: DurableInboundMonitor, budget: int
+    client: Any,
+    entity: Any,
+    peer_id: int,
+    monitor: DurableInboundMonitor,
+    budget: int,
+    *,
+    transport_generation: int | None = None,
 ) -> tuple[int, bool, bool]:
+    if transport_generation is None:
+        transport_generation = monitor.reconciliation_transport_generation
     checkpoint = int(monitor.inbox.checkpoint(peer_id) or 0)
     committed = checkpoint
     consumed = 0
@@ -5961,6 +6070,14 @@ async def _reconcile_peer_history(
                 capacity_blocked = True
                 break
         committed = max(committed, message_id)
+    # A reconnect or lost observer may truncate an otherwise successful
+    # iterator. Keep committed locators, but never advance its checkpoint or
+    # clear a gap without the same verified transport fence.
+    if (
+        monitor.reconciliation_transport_generation != transport_generation
+        or not monitor.reconciliation_transport_hook_current()
+    ):
+        return consumed, False, False
     # Only the successfully committed prefix advances across a partial scan.
     if committed > checkpoint:
         monitor.inbox.advance_checkpoint(peer_id, committed)
@@ -5977,18 +6094,40 @@ async def _reconcile_peer_history(
     return consumed, complete, capacity_blocked
 
 
-async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:
+async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:  # noqa: C901 - explicit recovery fences
     """Bounded, resumable replay from persisted enabled-duty intervals."""
+    signal_revision = monitor.reconciliation_signal_revision
+    transport_generation = monitor.reconciliation_transport_generation
     windows = monitor.inbox.recovery_windows()
     if not windows:
         return
     if monitor.reconciliation_stopped:
         return
+    if not monitor.reconciliation_transport_hook_current():
+        monitor.reconciliation_fence = None
+        monitor.reconciliation_fence_transport_generation = None
+        monitor.inbox.clear_reconciliation_cursor()
+        monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_unverified")
+        monitor.changed()
+        return
+    if (
+        monitor.reconciliation_fence is not None
+        and monitor.reconciliation_fence_transport_generation != transport_generation
+    ):
+        monitor.inbox.clear_reconciliation_cursor()
+        monitor.reconciliation_fence = None
+        monitor.reconciliation_fence_transport_generation = None
     if monitor.reconciliation_fence is None:
         # An offset alone cannot prove that dialogs stayed below it while the
         # process was absent. Replay the prefix from its existing checkpoints.
         monitor.inbox.clear_reconciliation_cursor()
-        monitor.reconciliation_fence = await _reconciliation_state_fence(client)
+        fence = await _reconciliation_state_fence(client)
+        if monitor.reconciliation_transport_generation != transport_generation:
+            monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
+            monitor.changed()
+            return
+        monitor.reconciliation_fence = fence
+        monitor.reconciliation_fence_transport_generation = transport_generation
     # Telegram dates have whole-second precision.  Include the opening second
     # so its ambiguous refs can be held, rather than silently excluding a chat.
     first_start = min(datetime.fromisoformat(window["opened_at"]) for window in windows).replace(microsecond=0)
@@ -6015,27 +6154,67 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
             raise BridgeError("history_message_invalid")
         if latest_date >= first_start:
             consumed, peer_complete, capacity_blocked = await _reconcile_peer_history(
-                client, entity, peer_id, monitor, MAX_RECONCILE_MESSAGES - total_messages
+                client,
+                entity,
+                peer_id,
+                monitor,
+                MAX_RECONCILE_MESSAGES - total_messages,
+                transport_generation=transport_generation,
             )
             total_messages += consumed
             if not peer_complete:
                 complete = False
                 break
         last_cursor = {"peer_id": peer_id, "message_id": latest_id, "received_at": latest_date.isoformat()}
+    final_fence = await _reconciliation_state_fence(client) if complete else None
+    if (
+        monitor.reconciliation_transport_generation != transport_generation
+        or not monitor.reconciliation_transport_hook_current()
+    ):
+        monitor.inbox.clear_reconciliation_cursor()
+        monitor.reconciliation_fence = None
+        monitor.reconciliation_fence_transport_generation = None
+        reason = (
+            "history_reconciliation_changed"
+            if monitor.reconciliation_transport_hook_current()
+            else "history_reconciliation_unverified"
+        )
+        monitor.inbox.set_health(component="intake", state="held", error_code=reason)
+        monitor.changed()
+        return
     if complete:
-        if await _reconciliation_state_fence(client) != monitor.reconciliation_fence:
+        if final_fence != monitor.reconciliation_fence:
             # Telegram orders dialogs by their latest message. Any update can
             # move an unvisited dialog above our cursor, including before its
             # event callback arrives. One full rescan is finite; a second
             # unstable sweep waits for a new external recovery signal.
             monitor.inbox.clear_reconciliation_cursor()
             monitor.reconciliation_fence = None
+            monitor.reconciliation_fence_transport_generation = None
             monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
             if monitor.reconciliation_restarts == 0:
                 monitor.reconciliation_restarts = 1
                 monitor.reconcile_requested.set()
+            elif monitor.reconciliation_external_pending and monitor.capture_enabled:
+                # A real callback, coalesced while the fence was in flight,
+                # supplies one new bounded cycle. Never replenish transport
+                # retries here or spin without another external callback.
+                monitor.reconciliation_external_pending = False
+                monitor.reconciliation_restarts = 0
+                monitor.reconcile_requested.set()
             else:
                 monitor.reconciliation_stopped = True
+            monitor.changed()
+            return
+        if any(window["closed_at"] is not None for window in windows) and not (
+            monitor.reconciliation_transport_hook_current()
+        ):
+            # A stale/unsupported sender hook cannot fence a reconnect. Do
+            # not certify that historical duty windows were recovered.
+            monitor.inbox.clear_reconciliation_cursor()
+            monitor.reconciliation_fence = None
+            monitor.reconciliation_fence_transport_generation = None
+            monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_unverified")
             monitor.changed()
             return
         monitor.inbox.clear_reconciliation_cursor()
@@ -6043,13 +6222,16 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
             if window["closed_at"] is not None:
                 monitor.inbox.mark_window_recovered(window["window_id"])
         monitor.reconciliation_fence = None
+        monitor.reconciliation_fence_transport_generation = None
         monitor.reconciliation_restarts = 0
+        monitor.reconciliation_external_pending = False
     elif last_cursor is not None and last_cursor != prior_cursor:
         monitor.inbox.set_reconciliation_cursor(**last_cursor)
     elif dialogue_count > MAX_RECONCILE_DIALOGS:
         raise BridgeError("reconciliation_cursor_unavailable")
     if capacity_blocked:
         monitor.reconciliation_fence = None
+        monitor.reconciliation_fence_transport_generation = None
     monitor.inbox.set_health(
         component="intake",
         state="ready" if complete else "held",
@@ -6059,6 +6241,12 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
         if capacity_blocked
         else "history_reconciliation_incomplete",
     )
+    if (
+        complete
+        and signal_revision == monitor.reconciliation_signal_revision
+        and not monitor.reconcile_requested.is_set()
+    ):
+        monitor.reconciliation_completed_revision = signal_revision
     monitor.changed()
     # Continue a finite backlog by task notification, never by interval polling.
     # Capacity failures resume only after a job-result/resolve frees room.
