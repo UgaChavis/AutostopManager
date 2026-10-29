@@ -2,26 +2,29 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from copy import deepcopy
 import hashlib
+import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_registry import AutomationError, AutomationStore
+from autostop_manager import instruction_bundle as instruction_bundles
+from autostop_manager.instruction_bundle import load_instruction_bundle
 from autostop_manager.role_coordination import MODEL, PROJECT_DIR, RoleError, RoleStore
-from autostop_manager.role_executor import RoleExecutor, role_objective
+from autostop_manager.role_executor import RoleExecutor, RoleRpcRejected, role_objective
+from tests.instruction_bundle_fakes import create_instruction_bundle
 
 
 @pytest.fixture
-def store(tmp_path):
-    root = tmp_path / "snapshot"
-    (root / "docs/agent/modules").mkdir(parents=True)
-    (root / "REVISION").write_text("a" * 40)
-    (root / "AGENTS.md").write_text("Synthetic role instructions")
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(instruction_bundles, "_OWNER_UID", os.getuid())
+    root = create_instruction_bundle(tmp_path / "snapshot")
     result = RoleStore(tmp_path / "scheduler" / "registry.sqlite3")
     for role in ("M1", "M2"):
-        (root / f"docs/agent/modules/{role}.md").write_text(role)
         result.action(
             "bind",
             role,
@@ -49,12 +52,18 @@ class FakeRPC:
         self.goals = {}
         self.calls = []
         self.lose_start = False
+        self.config = {"skills": {"config": [{"path": "/synthetic/skills/disabled", "enabled": False}]}}
+        self.injected = {}
+        self.injection_error = None
 
     async def request(self, method, params):
         self.calls.append((method, params))
+        if method == "config/read":
+            assert params == {"cwd": PROJECT_DIR, "includeLayers": False}
+            return {"config": deepcopy(self.config)}
         thread = params["threadId"]
         turns = self.turns.setdefault(thread, [])
-        if method == "thread/resume":
+        if method in {"thread/resume", "thread/read"}:
             return {
                 "model": MODEL,
                 "thread": {
@@ -64,6 +73,11 @@ class FakeRPC:
                     "status": {"type": "active" if any(t["status"] == "inProgress" for t in turns) else "idle"},
                 },
             }
+        if method == "thread/inject_items":
+            self.injected.setdefault(thread, []).extend(params["items"])
+            if self.injection_error is not None:
+                raise self.injection_error
+            return {}
         if method == "thread/turns/list":
             offset = int(params.get("cursor") or 0)
             end = offset + params["limit"]
@@ -774,3 +788,180 @@ def test_foreign_goal_and_wrong_model_require_binding_correction(store):
     rpc.request = wrong_model
     asyncio.run(executor(store, rpc).tick())
     assert store.role_state()["last_error"] == "role_model_mismatch"
+
+
+@pytest.mark.parametrize("role", ["M1", "M2"])
+def test_role_turn_uses_exact_verified_policy_and_preserves_managed_settings(store, role):
+    action(store, "start", role)
+    rpc = FakeRPC()
+    original_selectors = [{"path": f"/synthetic/disabled-{index}", "enabled": False} for index in range(27)]
+    rpc.config = {
+        "skills": {"config": deepcopy(original_selectors)},
+        "developer_instructions": "Existing custom developer instructions",
+        "approval_policy": "on-request",
+    }
+    asyncio.run(executor(store, rpc).tick())
+    state = store.role_state(role)
+    bundle = load_instruction_bundle(state["instruction_root"], state["instruction_revision"])
+    context = rpc.injected[state["thread_id"]]
+    assert len(context) == 1 and context[0]["role"] == "developer"
+    text = context[0]["content"][0]["text"]
+    assert bundle.root in text and bundle.sha256 in text
+    assert f'"profile": "{role}"' in text
+    assert bundle.files[f"docs/agent/modules/{role}.md"].decode() in text
+    methods = [method for method, _params in rpc.calls]
+    assert methods.index("thread/inject_items") < methods.index("turn/start")
+    profiles = [params["config"] for method, params in rpc.calls if method == "thread/resume" and "config" in params]
+    assert len(profiles) == 1
+    assert profiles[0]["project_doc_max_bytes"] == 0
+    assert profiles[0]["skills"]["config"][:27] == original_selectors
+    assert all(not item["enabled"] for item in profiles[0]["skills"]["config"])
+    assert rpc.config["skills"]["config"] == original_selectors
+    assert not any(
+        key in params for _method, params in rpc.calls for key in ("baseInstructions", "developerInstructions")
+    )
+
+
+def test_role_owner_turn_uses_original_pin_without_switching_to_bound_bundle(store, tmp_path):
+    original = create_instruction_bundle(tmp_path / "earlier-snapshot", "b" * 40)
+    store.submit_owner_event("old-pinned-owner", instruction_root=str(original), instruction_revision="b" * 40)
+    rpc = FakeRPC()
+    asyncio.run(executor(store, rpc).tick())
+    context = rpc.injected[store.role_state()["thread_id"]][0]["content"][0]["text"]
+    assert str(original) in context
+    assert store.role_state()["instruction_root"] not in context
+    assert store.owner_event_receipt("old-pinned-owner")["status"] == "running"
+
+
+def test_active_role_defers_different_bundle_without_injection_or_steer(store, tmp_path):
+    action(store, "start")
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    other = create_instruction_bundle(tmp_path / "other-snapshot", "b" * 40)
+    store.submit_owner_event("different-owner-pin", instruction_root=str(other), instruction_revision="b" * 40)
+    asyncio.run(run.tick())
+    assert store.owner_event_receipt("different-owner-pin")["status"] == "queued"
+    assert len([method for method, _ in rpc.calls if method == "thread/inject_items"]) == 1
+    assert not any(method == "turn/steer" for method, _ in rpc.calls)
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    asyncio.run(run.tick())
+    assert store.owner_event_receipt("different-owner-pin")["status"] == "running"
+    assert len(rpc.injected[thread]) == 2
+    assert str(other) in rpc.injected[thread][-1]["content"][0]["text"]
+
+
+def test_active_role_without_explicit_origin_pin_defers_after_current_link_changes(store, tmp_path, monkeypatch):
+    import autostop_manager.role_executor as role_executor
+
+    first = Path(store.role_state()["instruction_root"])
+    second = create_instruction_bundle(tmp_path / "next-current", "b" * 40)
+    selected = [first]
+
+    def instruction_path(value):
+        return selected[0] if value == "/opt/autostop-manager-releases/current" else Path(value)
+
+    monkeypatch.setattr(role_executor, "Path", instruction_path)
+    action(store, "bind", payload={"thread_id": store.role_state()["thread_id"]})
+    assert store.role_state()["instruction_root"] is None
+    action(store, "start")
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    assert str(first) in rpc.injected[thread][0]["content"][0]["text"]
+    selected[0] = second
+    store.submit_owner_event("new-current-owner", instruction_root=str(second), instruction_revision="b" * 40)
+    asyncio.run(run.tick())
+    assert store.owner_event_receipt("new-current-owner")["status"] == "queued"
+    assert len(rpc.injected[thread]) == 1
+    assert not any(method == "turn/steer" for method, _ in rpc.calls)
+    assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 1
+    rpc.turns[thread][0]["status"] = "completed"
+    asyncio.run(run.tick())
+    assert store.owner_event_receipt("new-current-owner")["status"] == "running"
+    assert str(second) in rpc.injected[thread][-1]["content"][0]["text"]
+
+
+@pytest.mark.parametrize("failure", ["rejected", "unknown"])
+def test_role_injection_failure_is_durable_hold_without_turn_or_replay(store, failure):
+    store.submit_owner_event("failed-policy-append")
+    rpc = FakeRPC()
+    rpc.injection_error = (
+        RoleRpcRejected("private rejected payload") if failure == "rejected" else TimeoutError("private lost payload")
+    )
+    asyncio.run(executor(store, rpc).tick())
+    code = "role_instruction_injection_" + failure
+    assert store.role_state()["last_error"] == code
+    assert store.role_state()["state"] == "attention"
+    assert store.owner_event_receipt("failed-policy-append")["status"] == "failed"
+    assert not any(method in {"turn/start", "turn/steer"} for method, _ in rpc.calls)
+    calls = len(rpc.calls)
+    # A fresh controller and storage object cannot turn the unknown append into a retry.
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    assert len(rpc.calls) == calls
+    assert len([method for method, _ in rpc.calls if method == "thread/inject_items"]) == 1
+
+
+def test_role_injection_failure_pauses_only_its_owned_native_goal(store):
+    action(store, "start")
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    store.submit_owner_event("pause-after-policy-failure")
+    rpc.injection_error = TimeoutError("private payload")
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["duty_active"]
+    assert store.role_state()["goal_applied"] == "paused"
+    assert store.role_state()["last_error"] == "role_instruction_injection_unknown"
+
+
+@pytest.mark.parametrize("bad_pin", [False, True])
+def test_role_rejects_tampered_or_explicitly_missing_bundle_before_append(store, bad_pin):
+    state = store.role_state()
+    root = Path(state["instruction_root"])
+    if bad_pin:
+        store.submit_owner_event("invalid-pin", instruction_root=str(root / "missing"), instruction_revision="b" * 40)
+    else:
+        (root / "docs/agent/modules/F4.md").write_text("Altered pricing under unchanged REVISION\n")
+        action(store, "start")
+    rpc = FakeRPC()
+    asyncio.run(executor(store, rpc).tick())
+    assert store.role_state()["last_error"].startswith("role_instruction_")
+    assert not any(method in {"thread/inject_items", "turn/start", "turn/steer"} for method, _ in rpc.calls)
+
+
+def test_owner_stop_after_policy_append_prevents_role_turn_start(store):
+    store.submit_owner_event("stopped-after-policy-append")
+
+    class StopAfterAppend(FakeRPC):
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "thread/inject_items":
+                action(store, "stop")
+            return result
+
+    rpc = StopAfterAppend()
+    asyncio.run(executor(store, rpc).tick())
+    assert store.role_state()["last_error"] == "role_instruction_context_changed"
+    assert not any(method == "turn/start" for method, _ in rpc.calls)
+
+
+def test_role_becoming_active_during_preparation_never_receives_injection(store):
+    store.submit_owner_event("manual-turn-before-append")
+
+    class ActiveBeforeAppend(FakeRPC):
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "thread/read":
+                result["thread"]["status"] = {"type": "active"}
+            return result
+
+    rpc = ActiveBeforeAppend()
+    asyncio.run(executor(store, rpc).tick())
+    assert store.role_state()["last_error"] == "role_instruction_thread_changed"
+    assert not any(method in {"thread/inject_items", "turn/start"} for method, _ in rpc.calls)

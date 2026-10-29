@@ -26,6 +26,12 @@ from typing import Any
 from uuid import UUID
 
 from autostop_manager.config import reject_obsolete_runtime_config
+from autostop_manager.instruction_bundle import (
+    InstructionBundleError,
+    VerifiedInstructionBundle,
+    load_instruction_bundle,
+    worker_config_overrides,
+)
 from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN, MAX_INBOUND_MONITOR_EVENTS
 from autostop_manager.mcp_contract import manager_session_schema_evidence
 
@@ -384,40 +390,17 @@ class WakeConfig:
 
 
 def validate_instruction_bundle(root: str, revision: str) -> None:
-    """Pin a root-owned physical release; relative cwd instructions never route jobs."""
+    """Validate the exact release graph, not merely its revision label."""
+    _load_instruction_bundle(root, revision)
+
+
+def _load_instruction_bundle(root: str, revision: str) -> VerifiedInstructionBundle:
     if not isinstance(root, str) or not isinstance(revision, str):
         raise WakeError("wake_instruction_bundle_invalid")
-    path = Path(root)
-    if (
-        not path.is_absolute()
-        or path.resolve() != path
-        or path.parent not in INSTRUCTION_RELEASE_ROOTS
-        or not isinstance(revision, str)
-        or len(revision) != 40
-        or any(c not in "0123456789abcdef" for c in revision)
-    ):
-        raise WakeError("wake_instruction_bundle_invalid")
-    paths = (
-        path,
-        path / "REVISION",
-        path / "AGENTS.md",
-        path / "docs/agent/modules/B2.md",
-        path / "docs/agent/modules/B4.md",
-        path / ".agents/skills/manage-owner-telegram/SKILL.md",
-        path / ".agents/skills/manage-autostop-client/SKILL.md",
-    )
-    for target in paths:
-        try:
-            info = target.lstat()
-        except OSError as exc:
-            raise WakeError("wake_instruction_bundle_invalid") from exc
-        if target.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
-            raise WakeError("wake_instruction_bundle_permissions")
-        valid_type = stat.S_ISDIR(info.st_mode) if target == path else stat.S_ISREG(info.st_mode)
-        if not valid_type:
-            raise WakeError("wake_instruction_bundle_invalid")
-    if (path / "REVISION").read_text().strip() != revision:
-        raise WakeError("wake_instruction_revision_mismatch")
+    try:
+        return load_instruction_bundle(root, revision, allowed_roots=INSTRUCTION_RELEASE_ROOTS)
+    except InstructionBundleError as exc:
+        raise WakeError("wake_" + exc.code) from None
 
 
 class AppServer:
@@ -465,6 +448,83 @@ class AppServer:
         self.cleanup_tasks: set[asyncio.Future[Any]] = set()
         self.collaboration_mode: dict[str, Any] | None = None
         self.turn_collaboration_mode: dict[str, Any] | None = None
+        self.instruction_bundle: VerifiedInstructionBundle | None = None
+        self.instruction_config: dict[str, Any] | None = None
+        self.instruction_delivery_state = "not_prepared"
+        self.turn_start_attempted = False
+
+    async def worker_instruction_config(self) -> dict[str, Any]:
+        """Read selectors without exposing configuration or modifying global settings."""
+        result = await self.request("config/read", {"cwd": self.config.project_dir, "includeLayers": False})
+        config = result.get("config") if isinstance(result, dict) else None
+        if not isinstance(config, dict):
+            raise WakeError("wake_instruction_config_invalid")
+        try:
+            return worker_config_overrides(config, cwd=self.config.project_dir)
+        except InstructionBundleError as exc:
+            raise WakeError("wake_" + exc.code) from None
+
+    def prepare_instructions(self, bundle: VerifiedInstructionBundle, config: dict[str, Any]) -> None:
+        self.instruction_bundle = bundle
+        self.instruction_config = config
+        self.instruction_delivery_state = "prepared"
+
+    def _instruction_item(self) -> dict[str, Any] | None:
+        bundle = self.instruction_bundle
+        if bundle is None:
+            return None
+        current = _load_instruction_bundle(bundle.root, bundle.revision)
+        if current.sha256 != bundle.sha256:
+            raise WakeError("wake_instruction_bundle_mismatch")
+        try:
+            return bundle.developer_item("client")
+        except InstructionBundleError as exc:
+            raise WakeError("wake_" + exc.code) from None
+
+    async def _deliver_instruction_context(
+        self, item: dict[str, Any] | None, generation: int, archive_sequence: int, notification_sequence: int
+    ) -> None:
+        if item is None:
+            return
+        if notification_sequence != self.thread_notification_sequence:
+            self.outcome_unknown = False
+            raise WakeError("codex_thread_context_changed")
+        await self._inject_instructions(item, generation, archive_sequence, notification_sequence)
+        if self.pausing or self.blocked:
+            self.outcome_unknown = False
+            raise WakeError("codex_paused" if self.pausing else "codex_recovery_blocked")
+
+    async def _inject_instructions(
+        self, item: dict[str, Any], generation: int, archive_sequence: int, notification_sequence: int
+    ) -> None:
+        """Append policy once; an unknown append must never fall through to generation."""
+        self.instruction_delivery_state = "unknown"
+        try:
+            result = await self.request("thread/inject_items", {"threadId": self.config.thread_id, "items": [item]})
+        except RPCRejected:
+            self.instruction_delivery_state = "rejected"
+            self.outcome_unknown = False
+            raise WakeError("wake_instruction_delivery_rejected") from None
+        except (OSError, TimeoutError, TransportLost):
+            self.instruction_delivery_state = "unknown"
+            self.block("wake_instruction_delivery_unknown")
+            raise WakeError("wake_instruction_delivery_unknown") from None
+        except asyncio.CancelledError:
+            self.instruction_delivery_state = "unknown"
+            self.block("wake_instruction_delivery_unknown")
+            raise
+        if not isinstance(result, dict):
+            self.instruction_delivery_state = "unknown"
+            self.block("wake_instruction_delivery_unknown")
+            raise WakeError("wake_instruction_delivery_unknown")
+        if generation != self.generation or archive_sequence != self.thread_archive_sequence or not self.connected:
+            self.instruction_delivery_state = "unknown"
+            self.block("wake_instruction_delivery_unknown")
+            raise WakeError("wake_instruction_delivery_unknown")
+        self.instruction_delivery_state = "acknowledged"
+        if notification_sequence != self.thread_notification_sequence:
+            self.outcome_unknown = False
+            raise WakeError("codex_thread_context_changed")
 
     async def connect(self) -> None:
         from websockets.asyncio.client import unix_connect
@@ -795,6 +855,8 @@ class AppServer:
             "cwd": self.config.project_dir,
             "excludeTurns": True,
         }
+        if self.instruction_config is not None:
+            params["config"] = {**params.get("config", {}), **self.instruction_config}
         archive_sequence = self.thread_archive_sequence
         try:
             result = await self.request("thread/resume", params)
@@ -855,7 +917,7 @@ class AppServer:
         self.worker_archived = False
         return str(status["type"])
 
-    def peer_start_params(self) -> dict[str, Any]:
+    def peer_start_params(self, *, instruction_config: dict[str, Any] | None = None) -> dict[str, Any]:
         """Copy execution settings, never messages, items or an old rollout path."""
         settings = self.resumed_settings
         if any(
@@ -870,6 +932,8 @@ class AppServer:
         params.update(cwd=self.config.project_dir, ephemeral=False)
         if settings.get("reasoningEffort") is not None:
             params["config"] = {"model_reasoning_effort": settings["reasoningEffort"]}
+        if instruction_config is not None:
+            params["config"] = {**params.get("config", {}), **instruction_config}
         roots = settings.get("runtimeWorkspaceRoots")
         if roots is not None:
             params["runtimeWorkspaceRoots"] = roots
@@ -1084,6 +1148,7 @@ class AppServer:
 
     async def run_turn(self, text: str) -> None:
         self.last_turn_started = False
+        self.turn_start_attempted = False
         turn_generation = await self._start_turn(text)
         await self._wait_turn(turn_generation)
 
@@ -1094,6 +1159,7 @@ class AppServer:
         bind_turn: Callable[[str], Awaitable[None]],
     ) -> None:
         self.last_turn_started = False
+        self.turn_start_attempted = False
         while True:
             try:
                 generation = await self._start_turn(text, before_start=before_start, bind_turn=bind_turn)
@@ -1133,6 +1199,8 @@ class AppServer:
                         raise TransportLost("codex_disconnected")
                     turn_generation = self.generation
                     turn_archive_sequence = self.thread_archive_sequence
+                    turn_notification_sequence = self.thread_notification_sequence
+                    instruction_item = self._instruction_item()
                     if before_start is not None:
                         await before_start()
                         self.outcome_unknown = True
@@ -1149,6 +1217,9 @@ class AppServer:
                         if self.blocked:
                             raise WakeError(self.recovery_error or "codex_recovery_blocked")
                     self.outcome_unknown = True
+                    await self._deliver_instruction_context(
+                        instruction_item, turn_generation, turn_archive_sequence, turn_notification_sequence
+                    )
                     try:
                         params: dict[str, Any] = {
                             "threadId": self.config.thread_id,
@@ -1170,6 +1241,7 @@ class AppServer:
                                 params["collaborationMode"] = mode | {
                                     "settings": mode["settings"] | {"reasoning_effort": effort}
                                 }
+                        self.turn_start_attempted = True
                         result = await self.request(
                             "turn/start",
                             params,
@@ -1827,7 +1899,7 @@ def _job_status_entity(response: dict[str, Any]) -> dict[str, Any]:
 
 def _shared_backend_failure(code: str | None) -> bool:
     return code is not None and (
-        code.startswith(("wake_shared_backend_", "wake_worker_settings_", "codex_rpc_"))
+        code.startswith(("wake_shared_backend_", "wake_worker_settings_", "wake_instruction_", "codex_rpc_"))
         or code
         in {
             "codex_recovery_failed",
@@ -1904,7 +1976,9 @@ def job_instruction(job: dict[str, Any]) -> str:
         separators=(",", ":"),
     )
     return (
-        "$manage-autostop-client Новое задание рабочего Telegram; режим включён владельцем. "
+        "Новое задание рабочего Telegram; режим включён владельцем. "
+        "Проверенные общие и клиентские правила этого комплекта переданы отдельным developer-сообщением; "
+        "не выбирай другой клиентский скилл по имени или cwd. "
         f"Комплект инструкций этого задания: {root}, ревизия {revision}. "
         f"Прочитай {root}/AGENTS.md, {root}/docs/agent/modules/B2.md, "
         f"{root}/docs/agent/modules/B4.md и {root}/.agents/skills/manage-autostop-client/SKILL.md. "
@@ -2077,7 +2151,18 @@ class DurableWakeDispatcher:
             "trigger": "telegram_event",
             "polling": False,
             "instruction_sha256": hashlib.sha256(job_instruction_template().encode()).hexdigest(),
-            "instruction_revision": self.app.config.instruction_revision,
+            "instruction_protocol_sha256": hashlib.sha256(job_instruction_template().encode()).hexdigest(),
+            "instruction_bundle_sha256": None
+            if self.app.instruction_bundle is None
+            else self.app.instruction_bundle.sha256,
+            "instruction_root": self.app.config.instruction_root
+            if self.app.instruction_bundle is None
+            else self.app.instruction_bundle.root,
+            "instruction_revision": self.app.config.instruction_revision
+            if self.app.instruction_bundle is None
+            else self.app.instruction_bundle.revision,
+            "instruction_delivery_state": self.app.instruction_delivery_state,
+            "instruction_model_context_verified": False,
             "status_fresh": fresh,
             "status_age_seconds": getattr(self.jobs, "status_age", None),
             "request_budget_seconds": REQUEST_TIMEOUT_SECONDS,
@@ -2138,21 +2223,38 @@ class DurableWakeDispatcher:
         self.supervisor = self.bootstrap_supervisor
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle()) if self.enabled else None
 
-    async def _use_thread(self, thread_id: str, *, verify_settings: bool = True) -> None:
+    async def _use_thread(
+        self,
+        thread_id: str,
+        *,
+        verify_settings: bool = True,
+        bundle: VerifiedInstructionBundle | None = None,
+        instruction_config: dict[str, Any] | None = None,
+    ) -> None:
         if (
             self.app is not self.bootstrap_app
             and self.app.config.thread_id == thread_id
             and (self.app.expected_resume_settings is not None) == verify_settings
         ):
+            if bundle is not None and instruction_config is not None:
+                self.app.prepare_instructions(bundle, instruction_config)
+                self.app.config = replace(
+                    self.app.config, instruction_root=bundle.root, instruction_revision=bundle.revision
+                )
             return
         deadline = asyncio.get_running_loop().time() + CONNECT_TIMEOUT
         await self._retire_peer(deadline)
         await _cancel_task_until(self.lifecycle_monitor, deadline, self.cleanup_tasks)
-        app = AppServer(replace(self.bootstrap_app.config, thread_id=thread_id))
+        config = replace(self.bootstrap_app.config, thread_id=thread_id)
+        if bundle is not None:
+            config = replace(config, instruction_root=bundle.root, instruction_revision=bundle.revision)
+        app = AppServer(config)
         if verify_settings:
-            app.resume_overrides = self.bootstrap_app.peer_start_params()
+            app.resume_overrides = self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
             app.resume_overrides.pop("ephemeral")
             app.expected_resume_settings = dict(self.bootstrap_app.resumed_settings)
+        if bundle is not None and instruction_config is not None:
+            app.prepare_instructions(bundle, instruction_config)
         self.app = app
         self.supervisor = asyncio.create_task(app.supervise())
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
@@ -2195,6 +2297,9 @@ class DurableWakeDispatcher:
     async def _select_peer(self, job: dict[str, Any]) -> None:
         if job.get("context_mode") != "peer_v1":
             raise WakeError("wake_legacy_context_requires_review")
+        bundle = _load_instruction_bundle(job["instruction_root"], job["instruction_revision"])
+        await self.bootstrap_app.ensure_ready()
+        instruction_config = await self.bootstrap_app.worker_instruction_config()
         response = await self.jobs.request("job_peer_thread_prepare", **self._guard(job))
         mapping = response.get("peer_thread")
         if not isinstance(mapping, dict):
@@ -2207,7 +2312,9 @@ class DurableWakeDispatcher:
                 if mapping.get("created") is not True:
                     raise WakeError("wake_peer_thread_unknown")
                 await self.bootstrap_app.ensure_ready()
-                result = await self.bootstrap_app.request("thread/start", self.bootstrap_app.peer_start_params())
+                result = await self.bootstrap_app.request(
+                    "thread/start", self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
+                )
                 thread = rpc_entity(result, "thread")
                 thread_id = thread["id"]
                 if thread_id == self.bootstrap_app.config.thread_id:
@@ -2247,7 +2354,7 @@ class DurableWakeDispatcher:
             or not isinstance(mapping.get("thread_id"), str)
         ):
             raise WakeError("wake_peer_thread_unknown")
-        await self._use_thread(mapping["thread_id"])
+        await self._use_thread(mapping["thread_id"], bundle=bundle, instruction_config=instruction_config)
 
     async def _check_bootstrap_idle(self) -> None:
         if self.bootstrap_checked:
@@ -2390,8 +2497,10 @@ class DurableWakeDispatcher:
         ):
             raise WakeError("wake_pause_outcome_unknown")
         if (
-            code == "codex_turn_start_rejected"
-            and not self.app.outcome_unknown
+            (
+                (code == "codex_turn_start_rejected" and not self.app.outcome_unknown)
+                or (self.app.instruction_bundle is not None and not self.app.turn_start_attempted)
+            )
             and self.app.active_turn is None
             and current.get("turn_id") is None
             and current.get("thread_id")
@@ -2445,6 +2554,8 @@ class DurableWakeDispatcher:
         self.app.outcome_unknown = False
 
     async def _finish_request(self, job: dict[str, Any], code: str | None) -> None:
+        if self.app.instruction_delivery_state in {"rejected", "unknown"}:
+            code = "wake_instruction_delivery_" + self.app.instruction_delivery_state
         deadline = asyncio.get_running_loop().time() + FAILED_RECOVERY_TIMEOUT
         try:
             await _await_until(self._proof(job, deadline, code), deadline, self.cleanup_tasks)
@@ -3062,8 +3173,9 @@ async def select_worker(
         # ledger above establish that it is not owned in-flight Telegram work.
         await app.resume(allow_active=True)
         model = app.resumed_model
+        instruction_config = await app.worker_instruction_config()
         if worker_thread_id is None:
-            params: dict[str, Any] = {"cwd": PROJECT_DIR, "ephemeral": False}
+            params: dict[str, Any] = {"cwd": PROJECT_DIR, "ephemeral": False, "config": instruction_config}
             if model is not None:
                 params["model"] = model
             if model is None:
@@ -3077,6 +3189,7 @@ async def select_worker(
             raise WakeError("wake_worker_must_be_separate")
         config = WakeConfig(ident, instruction_root=instruction_root, instruction_revision=instruction_revision)
         app.config = config
+        app.instruction_config = instruction_config
         await app.resume()
         if model is not None and app.resumed_model != model:
             raise WakeError("wake_worker_model_mismatch")

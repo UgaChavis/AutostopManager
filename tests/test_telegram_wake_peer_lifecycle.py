@@ -66,7 +66,9 @@ def test_new_peer_is_bound_and_materialized_before_any_model_turn(tmp_path, bund
             ]
             assert lifecycle == [("thread/archive", peer.config.thread_id), ("thread/unarchive", peer.config.thread_id)]
             assert peer.config.thread_id in server.materialized_threads
-            assert peer.resume_overrides["config"] == {"model_reasoning_effort": "max"}
+            assert peer.resume_overrides["config"]["model_reasoning_effort"] == "max"
+            assert peer.resume_overrides["config"]["project_doc_max_bytes"] == 0
+            assert len(peer.resume_overrides["config"]["skills"]["config"]) == 5
             assert peer.resume_overrides["permissions"] == ":danger-full-access"
             assert "ephemeral" not in peer.resume_overrides
             assert bootstrap.resume_overrides == {} and bootstrap.expected_resume_settings is None
@@ -149,7 +151,7 @@ def test_peer_resume_keeps_overrides_after_reconnect_and_blocks_settings_drift(t
                 if call["method"] == "thread/resume" and call["params"]["threadId"] == peer.config.thread_id
             ]
             assert len(resumes) >= 3
-            assert all(params["config"] == {"model_reasoning_effort": "max"} for params in resumes)
+            assert all(params["config"] == peer.resume_overrides["config"] for params in resumes)
             assert all(params["permissions"] == ":danger-full-access" for params in resumes)
             assert sum(call["method"] == "thread/archive" for call in server.calls) == 1
 

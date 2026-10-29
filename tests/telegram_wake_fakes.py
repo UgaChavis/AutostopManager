@@ -71,6 +71,9 @@ class MockServer:
         self.thread_settings = {}
         self.peer_resume_overrides = {}
         self.archive_observer = None
+        self.effective_config = {"skills": {"config": []}}
+        self.disconnect_injection = False
+        self.injection_response = {}
 
     def _thread_response(self, thread_id):
         status = self.thread_status
@@ -181,6 +184,16 @@ class MockServer:
             self.turn_statuses[str(self.counter)] = status
             await socket.send(json.dumps({"method": "turn/completed", "params": params}))
 
+    async def _instruction_response(self, socket, method):
+        if method == "config/read":
+            return {"config": self.effective_config}, False
+        if method == "thread/inject_items":
+            if self.disconnect_injection:
+                await socket.close()
+                return None, True
+            return self.injection_response, False
+        return {}, False
+
     async def handle(self, socket):
         self.sockets.append(socket)
         self.loaded_by_socket[socket] = False
@@ -200,7 +213,9 @@ class MockServer:
                     json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "private error details"}})
                 )
                 continue
-            result = {}
+            result, stop = await self._instruction_response(socket, method)
+            if stop:
+                return
             thread_id = self._request_thread(msg)
             if not await self._peer_lifecycle(socket, msg, thread_id):
                 continue
