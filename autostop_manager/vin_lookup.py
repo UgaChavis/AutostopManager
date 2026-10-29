@@ -1215,7 +1215,8 @@ def _next_actions(
         actions.append(
             "Keep full EPC evidence outside CRM; the catalog section contains a concise OEM/result, evidence links, "
             "and next-action summary. The timing and complete client card follow "
-            ".agents/skills/manage-autostop-client/SKILL.md."
+            ".agents/skills/manage-autostop-client/SKILL.md from the selected instruction bundle; resolve this path "
+            "against its pinned instruction root, not cwd."
         )
     if missing_context:
         actions.append("Collect missing context before making a purchase recommendation.")
