@@ -1676,6 +1676,14 @@ class TelegramInbox:
         elif proof_kind == "not_started" and slot["phase"] != "claimed":
             raise InboxError("inbox_execution_proof_invalid")
         with self._write():
+            # A restarted wake reaches this proof without reentering peer
+            # creation. Only after its local tasks stop may creating be
+            # fenced for exact reviewed recovery; retain the ID and key.
+            self._db.execute(
+                "UPDATE peer_threads SET state='creation_unknown',revision=revision+1 "
+                "WHERE peer_id=? AND state='creating' AND ?='not_started'",
+                (job["peer_id"], proof_kind),
+            )
             self._db.execute(
                 "UPDATE jobs SET execution_proof=?,proof_at=?,revision=revision+1,updated_at=? WHERE job_id=?",
                 (proof, self._now(), self._now(), job_id),

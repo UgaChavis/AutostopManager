@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
+from test_telegram_wake_durable import FakeJobs
 from test_telegram_wake_durable import bundle as bundle
 from test_telegram_wake_peer_lifecycle import inherited_server, peer_case
 
 from autostop_manager import telegram_wake as wake
 
 
-def test_crash_before_materialization_keeps_exact_unready_thread(tmp_path, bundle):
+@pytest.mark.parametrize("cleanup_pending", [False, True])
+def test_restart_reconciliation_fences_peer_only_after_local_cleanup(tmp_path, bundle, cleanup_pending):
     async def scenario():
         server = inherited_server()
-        async with peer_case(tmp_path, bundle, server) as (_app, dispatcher, inbox, job):
+        async with peer_case(tmp_path, bundle, server) as (app, dispatcher, inbox, job):
 
             async def crash(_thread):
                 raise asyncio.CancelledError
@@ -25,11 +28,33 @@ def test_crash_before_materialization_keeps_exact_unready_thread(tmp_path, bundl
             mapping = inbox.read_peer_thread(job["job_id"])
             assert mapping["state"] == "creating"
             assert mapping["thread_id"] == server.created_threads[0]
-            inbox.recover_on_startup()
-            recovered = inbox.read_peer_thread(job["job_id"])
-            assert recovered["state"] == "creation_unknown"
-            assert recovered["thread_id"] == mapping["thread_id"]
-            assert len(server.created_threads) == 1 and server.counter == 0
+            before_event = inbox.resolve(job["event_ids"][0])
+            later = wake.DurableWakeDispatcher(wake.AppServer(app.config), os.geteuid(), FakeJobs(inbox))
+            pending = asyncio.get_running_loop().create_future()
+            if cleanup_pending:
+                later.cleanup_tasks.add(pending)
+            try:
+                # The real restart path must fence creation through its stop
+                # proof, without the test-only recover_on_startup shortcut.
+                await later._reconcile_active()
+                recovered = inbox.read_peer_thread(job["job_id"])
+                assert recovered == {
+                    **mapping,
+                    "state": "creating" if cleanup_pending else "creation_unknown",
+                    "revision": mapping["revision"] + (not cleanup_pending),
+                }
+                held = inbox.read_job(job["job_id"])
+                assert held["state"] == "needs_review"
+                assert held["execution_proof"] == (None if cleanup_pending else "not_started")
+                assert held["thread_id"] is held["turn_id"] is None and held["effects"] == []
+                assert (inbox.execution_slot() is not None) is cleanup_pending
+                assert inbox.resolve(job["event_ids"][0]) == before_event
+                assert inbox.event_state(job["event_ids"][0]) == "open"
+                assert not inbox.status()["execution_paused"]
+                assert len(server.created_threads) == 1 and server.counter == 0
+            finally:
+                pending.set_result(None)
+                await later.close()
 
     asyncio.run(scenario())
 
