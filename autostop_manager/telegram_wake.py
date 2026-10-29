@@ -2496,6 +2496,33 @@ class DurableWakeDispatcher:
         if global_hold:
             await self._health("held", code)
 
+    async def _record_execution_proof(self, job: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            response = await self.jobs.request(
+                "job_execution_proof", **self._guard(job), local_tasks_done=True, **fields
+            )
+            return _job_entity(response)
+        except (OSError, TimeoutError, TransportLost):
+            # The stop transaction may have committed before its reply was
+            # lost. Read its exact binding instead of holding every peer or
+            # repeating the write. An older manual proof alone is insufficient.
+            proven = await self._read_job(job)
+            slot_response = await self.jobs.request("job_execution_slot")
+            if "job" not in slot_response:
+                raise WakeError("wake_execution_proof_invalid") from None
+            slot = _job_entity(slot_response)
+            expected = fields.get("terminal_status", "not_started")
+            if (
+                proven.get("job_id") != job["job_id"]
+                or proven.get("lease") != job["lease"]
+                or proven.get("thread_id") != job.get("thread_id")
+                or proven.get("turn_id") != job.get("turn_id")
+                or proven.get("execution_proof") != expected
+                or (slot is not None and slot["job_id"] == job["job_id"])
+            ):
+                raise WakeError("wake_execution_proof_invalid") from None
+            return proven
+
     async def _proof(self, job: dict[str, Any], deadline: float, code: str | None = None) -> None:
         self.terminal_stop_pending = True
         await _cancel_task_until(self.execution_task, deadline, self.cleanup_tasks)
@@ -2562,10 +2589,7 @@ class DurableWakeDispatcher:
         }:
             await self._review(current, code or "codex_completed_without_job_result", global_hold=False)
             current = await self._read_job(job)
-        response = await self.jobs.request(
-            "job_execution_proof", **self._guard(current), local_tasks_done=True, **fields
-        )
-        proven = _job_entity(response)
+        proven = await self._record_execution_proof(current, fields)
         if proven is None or proven.get("execution_proof") is None:
             raise WakeError("wake_execution_proof_invalid")
         self.current_job = proven
