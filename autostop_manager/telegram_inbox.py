@@ -1541,9 +1541,12 @@ class TelegramInbox:
         thread_id: str,
         missing_thread_reviewed: bool = False,
         effects_reviewed: bool = False,
+        materialized: bool = False,
     ) -> dict[str, Any]:
         """Replace only an explicitly reviewed missing, never-started peer binding."""
         job = self._lease(job_id, lease, expected_revision)
+        if type(materialized) is not bool:
+            raise InboxError("inbox_peer_thread_state_invalid")
         _token(expected_thread_id, "inbox_thread_invalid")
         _token(thread_id, "inbox_thread_invalid")
         _positive(expected_peer_thread_revision, "inbox_revision_invalid")
@@ -1567,12 +1570,14 @@ class TelegramInbox:
             raise InboxError("inbox_peer_thread_conflict")
         with self._write():
             changed = self._db.execute(
-                "UPDATE peer_threads SET thread_id=?,creation_key=?,revision=revision+1 "
-                "WHERE peer_id=? AND state='ready' AND thread_id=? AND revision=?",
+                "UPDATE peer_threads SET state='ready',thread_id=?,creation_key=?,revision=revision+1 "
+                "WHERE peer_id=? AND (state='ready' OR (state='creation_unknown' AND ?)) "
+                "AND thread_id=? AND revision=?",
                 (
                     thread_id,
                     secrets.token_urlsafe(32),
                     job["peer_id"],
+                    materialized is True,
                     expected_thread_id,
                     expected_peer_thread_revision,
                 ),
@@ -2041,15 +2046,28 @@ class TelegramInbox:
             for effect in job["effects"]
         )
 
-    def _require_answer_coverage(self, job_id: str, effects: list[dict[str, Any]], supplied: set[str]) -> None:
+    def _require_receipt_coverage(
+        self,
+        job_id: str,
+        effects: list[dict[str, Any]],
+        supplied: set[str],
+        *,
+        expected_kind: str | None = None,
+    ) -> None:
+        current = self.read_job(job_id)
         answers = [
             effect
             for effect in effects
-            if effect["verified"] and effect["kind"] in {"result", "handoff"} and effect["receipt_key"] in supplied
+            if effect["verified"]
+            and effect["receipt_key"] in supplied
+            and (
+                effect["kind"] in {"result", "handoff"}
+                if expected_kind is None
+                else effect["kind"] == expected_kind and effect["context_revision"] == current["context_revision"]
+            )
         ]
         if not answers:
             raise InboxError("inbox_result_receipt_required")
-        current = self.read_job(job_id)
         if not any(self._effect_covers_current_content(effect, current) for effect in answers):
             raise InboxError("inbox_context_stale")
 
@@ -2090,22 +2108,16 @@ class TelegramInbox:
             raise InboxError("inbox_receipt_unverified")
         if any(effect["attempted"] and not effect["verified"] for effect in effects):
             raise InboxError("inbox_effect_outcome_unknown")
-        kinds = {
-            effect["kind"]
-            for effect in effects
-            if effect["receipt_key"] in supplied and effect["context_revision"] == job["context_revision"]
-        }
         expected = {"answered": "result", "awaiting_client": "clarification", "handoff": "handoff"}
         waiting_control = False
         if outcome == "no_reply_needed":
             waiting_control = self._validate_no_reply_result(job, event_ids, reason_code, human_message_ids)
             if reason_code == "already_answered":
-                self._require_answer_coverage(job_id, effects, supplied)
+                self._require_receipt_coverage(job_id, effects, supplied)
         else:
             if reason_code is not None:
                 raise InboxError("inbox_reason_invalid")
-            if expected[outcome] not in kinds:
-                raise InboxError("inbox_result_receipt_required")
+            self._require_receipt_coverage(job_id, effects, supplied, expected_kind=expected[outcome])
         delivered_question = outcome == "awaiting_client" and self.delivered_clarification_after_pause(
             job_id, receipt_keys
         )

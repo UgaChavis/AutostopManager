@@ -4864,6 +4864,7 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
             thread_id=str(request.get("thread_id") or ""),
             missing_thread_reviewed=request.get("missing_thread_reviewed") is True,
             effects_reviewed=request.get("effects_reviewed") is True,
+            materialized=request.get("materialized", False),
         )
         monitor.changed()
         return {"ok": True, "peer_thread": mapping}
@@ -6311,6 +6312,7 @@ def build_parser() -> argparse.ArgumentParser:
             job_command.add_argument("--thread-id", required=True)
             job_command.add_argument("--missing-thread-reviewed", action="store_true", required=True)
             job_command.add_argument("--effects-reviewed", action="store_true", required=True)
+            job_command.add_argument("--materialized", action="store_true")
         elif command in {"job-peer-thread-bind", "job-peer-thread-unknown"}:
             job_command.add_argument("--creation-key", required=True)
             if command == "job-peer-thread-bind":
@@ -6484,6 +6486,7 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "expected_thread_id",
         "expected_peer_thread_revision",
         "missing_thread_reviewed",
+        "materialized",
         "instruction_root",
         "instruction_revision",
         "thread_id",

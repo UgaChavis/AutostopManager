@@ -33,6 +33,27 @@ def held(tmp_path):
         yield SimpleNamespace(inbox=inbox, job=job, mapping=mapping, event=event)
 
 
+@pytest.fixture
+def unmaterialized(tmp_path):
+    path = tmp_path / "inbox.sqlite3"
+    with TelegramInbox(path) as inbox:
+        inbox.duty_set(True)
+        event = inbox.record(123, 11)
+        job = inbox.claim(instruction_root="/opt/synthetic-runtime", instruction_revision="a" * 40)
+        mapping = inbox.prepare_peer_thread(**guard(job))
+        inbox.bind_peer_thread(
+            **guard(job), creation_key=mapping["creation_key"], thread_id="old-thread", materialized=False
+        )
+    with TelegramInbox(path) as inbox:
+        inbox.recover_on_startup()
+        job = inbox.read_job(job["job_id"])
+        mapping = inbox.read_peer_thread(job["job_id"])
+        assert mapping["state"] == "creation_unknown" and mapping["thread_id"] == "old-thread"
+        assert job["state"] == "needs_review" and job["execution_proof"] == "not_started"
+        pause(inbox)
+        yield SimpleNamespace(inbox=inbox, job=job, mapping=mapping, event=event)
+
+
 def replacement(case, **overrides):
     arguments = {
         **guard(case.job),
@@ -83,6 +104,118 @@ def test_replacement_requires_separate_retry_before_any_turn(held):
     assert running["state"] == "running" and running["effects"] == []
     assert held.inbox.read_job(held.job["job_id"])["instruction_revision"] == "a" * 40
     assert running["instruction_revision"] == "b" * 40
+
+
+def test_missing_unmaterialized_peer_recovers_after_restart_without_unblocking_early(unmaterialized):
+    case = unmaterialized
+    before_job = case.inbox.read_job(case.job["job_id"])
+    before_event = case.inbox.resolve(case.event)
+    changed = replacement(case, materialized=True)
+    assert changed["state"] == "ready" and changed["thread_id"] == "replacement-thread"
+    assert changed["revision"] == case.mapping["revision"] + 1
+    assert changed["creation_key"] != case.mapping["creation_key"]
+    assert case.inbox.read_job(case.job["job_id"]) == before_job
+    assert case.inbox.resolve(case.event) == before_event
+    assert case.inbox.execution_slot() is None
+    assert case.inbox.claim(instruction_root="/opt/synthetic-runtime", instruction_revision="b" * 40) is None
+    path = case.inbox.path
+    case.inbox.close()
+    with TelegramInbox(path) as reopened:
+        reopened.recover_on_startup()
+        assert reopened.read_peer_thread(case.job["job_id"]) == changed
+        assert reopened.status()["execution_paused"] is True
+        assert reopened.read_job(case.job["job_id"]) == before_job
+        reopened.resolve_job(**guard(case.job), decision="retry_no_effects", effects_reviewed=True)
+        pause(reopened, False)
+        next_job = reopened.claim(instruction_root="/opt/synthetic-runtime", instruction_revision="b" * 40)
+        assert next_job["event_ids"] == [case.event]
+        assert reopened.read_peer_thread(next_job["job_id"]) == changed
+        started = reopened.start_intent(**guard(next_job), thread_id="replacement-thread")
+        assert reopened.bind_turn(**guard(started), turn_id="new-turn")["state"] == "running"
+
+
+@pytest.mark.parametrize(
+    "materialized,code",
+    [
+        (False, "inbox_peer_thread_conflict"),
+        (1, "inbox_peer_thread_state_invalid"),
+        ("true", "inbox_peer_thread_state_invalid"),
+    ],
+)
+def test_unknown_binding_requires_explicit_replacement_materialization(unmaterialized, materialized, code):
+    before = state(unmaterialized.inbox)
+    with pytest.raises(InboxError, match=f"^{code}$"):
+        replacement(unmaterialized, materialized=materialized)
+    assert state(unmaterialized.inbox) == before
+
+
+def test_normal_bind_cannot_replace_unmaterialized_peer(unmaterialized):
+    before = state(unmaterialized.inbox)
+    with pytest.raises(InboxError, match=r"^inbox_peer_thread_conflict$"):
+        unmaterialized.inbox.bind_peer_thread(
+            **guard(unmaterialized.job),
+            creation_key=unmaterialized.mapping["creation_key"],
+            thread_id="replacement-thread",
+            effects_reviewed=True,
+        )
+    assert state(unmaterialized.inbox) == before
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"expected_thread_id": "foreign-thread"},
+        {"expected_peer_thread_revision": 99},
+        {"thread_id": "old-thread"},
+    ],
+)
+def test_unknown_replacement_preserves_exact_cas(unmaterialized, overrides):
+    before = state(unmaterialized.inbox)
+    with pytest.raises(InboxError, match=r"^inbox_peer_thread_conflict$"):
+        replacement(unmaterialized, materialized=True, **overrides)
+    assert state(unmaterialized.inbox) == before
+
+
+def test_creation_in_progress_cannot_be_replaced(unmaterialized):
+    with unmaterialized.inbox._db:
+        unmaterialized.inbox._db.execute("UPDATE peer_threads SET state='creating'")
+    before = state(unmaterialized.inbox)
+    with pytest.raises(InboxError, match=r"^inbox_peer_thread_conflict$"):
+        replacement(unmaterialized, materialized=True)
+    assert state(unmaterialized.inbox) == before
+
+
+@pytest.mark.parametrize("changed_guard", ["pause", "proof", "effect", "slot"])
+def test_unknown_replacement_does_not_bypass_execution_guards(unmaterialized, changed_guard):
+    case = unmaterialized
+    if changed_guard == "pause":
+        pause(case.inbox, False)
+    elif changed_guard == "proof":
+        case.inbox._db.execute("UPDATE jobs SET execution_proof='failed' WHERE job_id=?", (case.job["job_id"],))
+    elif changed_guard == "effect":
+        case.inbox._db.execute(
+            "INSERT INTO effects(effect_key,job_id,kind,context_revision,effect_slot,peer_id,reply_to_message_id,"
+            "attempted,verified,created_at) VALUES ('synthetic-effect',?,'result',1,1,123,11,0,0,?)",
+            (case.job["job_id"], case.inbox._now()),
+        )
+    else:
+        pause(case.inbox, False)
+        case.inbox.record(456, 22)
+        other = case.inbox.claim(instruction_root="/opt/synthetic-runtime", instruction_revision="a" * 40)
+        assert other["peer_id"] == 456
+        pause(case.inbox)
+    before = state(case.inbox)
+    with pytest.raises(InboxError, match=r"^inbox_peer_thread_recovery_required$"):
+        replacement(case, materialized=True)
+    assert state(case.inbox) == before
+
+
+@pytest.mark.parametrize("review", ["missing_thread_reviewed", "effects_reviewed"])
+def test_unknown_replacement_requires_both_explicit_reviews(unmaterialized, review):
+    before = state(unmaterialized.inbox)
+    with pytest.raises(InboxError, match=r"^inbox_peer_thread_recovery_review_required$"):
+        replacement(unmaterialized, materialized=True, **{review: False})
+    assert state(unmaterialized.inbox) == before
 
 
 def test_normal_bind_cannot_replace_ready_peer(held):
@@ -251,7 +384,8 @@ def test_replacement_and_event_locators_survive_reopen(held):
         assert reopened.status()["execution_paused"] is True
 
 
-def test_cli_preserves_both_cas_and_review_fields():
+@pytest.mark.parametrize("materialized", [False, True])
+def test_cli_preserves_both_cas_and_review_fields(materialized):
     parser = bridge.build_parser()
     args = parser.parse_args(
         [
@@ -273,12 +407,14 @@ def test_cli_preserves_both_cas_and_review_fields():
             "--missing-thread-reviewed",
             "--effects-reviewed",
         ]
+        + (["--materialized"] if materialized else [])
     )
     request = bridge._job_cli_request(args)
     assert request["operation"] == "job_peer_thread_replace_missing"
     assert request["expected_thread_id"] == "old-thread"
     assert request["expected_peer_thread_revision"] == 2
     assert request["missing_thread_reviewed"] is True and request["effects_reviewed"] is True
+    assert request["materialized"] is materialized
 
 
 def test_control_router_is_local_and_returns_only_the_binding(held):
@@ -296,3 +432,21 @@ def test_control_router_is_local_and_returns_only_the_binding(held):
     response = bridge._job_execution_control(request, monitor)
     assert response["ok"] is True and response["peer_thread"]["thread_id"] == "replacement-thread"
     assert set(response) == {"ok", "peer_thread"} and changes == [True]
+
+
+def test_control_router_preserves_explicit_materialization_for_unknown_peer(unmaterialized):
+    monitor = SimpleNamespace(inbox=unmaterialized.inbox, changed=lambda: None)
+    request = {
+        "operation": "job_peer_thread_replace_missing",
+        **guard(unmaterialized.job),
+        "expected_thread_id": "old-thread",
+        "expected_peer_thread_revision": unmaterialized.mapping["revision"],
+        "thread_id": "replacement-thread",
+        "missing_thread_reviewed": True,
+        "effects_reviewed": True,
+        "materialized": True,
+    }
+    response = bridge._job_execution_control(request, monitor)
+    assert response["ok"] is True
+    assert response["peer_thread"]["state"] == "ready"
+    assert response["peer_thread"]["thread_id"] == "replacement-thread"
