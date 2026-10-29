@@ -225,7 +225,8 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
                     call["params"]["input"][0]["text"] for call in server.calls if call.get("method") == "turn/start"
                 )
                 assert str(bundle) + "/AGENTS.md" in prompt
-                assert "job-result" in prompt and "ack/result/clarification/handoff" in prompt
+                assert "job-result" in prompt and "kind (ack/result/clarification)." in prompt
+                assert "job-handoff" in prompt
                 assert "role=client" in prompt
             finally:
                 await stop_dispatcher(dispatcher)
