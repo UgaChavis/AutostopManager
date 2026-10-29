@@ -17,7 +17,7 @@ from autostop_manager import instruction_bundle as instruction_bundles
 from autostop_manager.instruction_bundle import load_instruction_bundle
 from autostop_manager.role_coordination import MODEL, PROJECT_DIR, RoleError, RoleStore
 from autostop_manager.role_executor import RoleExecutor, RoleRpcRejected, role_objective
-from tests.instruction_bundle_fakes import create_instruction_bundle
+from tests.instruction_bundle_fakes import create_instruction_bundle, seal_instruction_bundle
 
 
 @pytest.fixture
@@ -673,6 +673,127 @@ def test_sleep_resume_checks_explicit_owner_bundle_before_goal_activation(store)
     assert rpc.goals[thread]["status"] == "paused"
     assert store.role_state()["last_error"].startswith("role_instruction_")
     assert store.owner_event_receipt("missing-owner-policy")["status"] == "queued"
+    assert not any(
+        method in {"thread/inject_items", "turn/start", "turn/steer"}
+        or (method == "thread/goal/set" and params.get("status") == "active")
+        for method, params in rpc.calls[before:]
+    )
+
+
+def _current_role_bundles(store, tmp_path, monkeypatch):
+    old_root = Path(store.role_state()["instruction_root"])
+    new_root = create_instruction_bundle(tmp_path / "new-snapshot", "b" * 40)
+    marker = "POLICY_B: all CRM writes are forbidden; read-only analysis is allowed."
+    document = new_root / "docs/agent/modules/M1.md"
+    document.write_text(document.read_text() + "\n" + marker + "\n")
+    seal_instruction_bundle(new_root)
+    assert load_instruction_bundle(old_root, "a" * 40).sha256 != load_instruction_bundle(new_root, "b" * 40).sha256
+    current = [old_root]
+    resolve = Path.resolve
+
+    def synthetic_current(path, *args, **kwargs):
+        if str(path) == "/opt/autostop-manager-releases/current":
+            return current[0]
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", synthetic_current)
+    thread = store.role_state()["thread_id"]
+    action(store, "bind", payload={"thread_id": thread})
+    return current, new_root, marker, thread
+
+
+def _stopped_role_with_new_policy(store, rpc, tmp_path, monkeypatch):
+    current, new_root, marker, thread = _current_role_bundles(store, tmp_path, monkeypatch)
+    run = executor(store, rpc)
+    action(store, "start")
+    asyncio.run(run.tick())
+    action(store, "stop")
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused" and not store.role_state()["goal_owned"]
+    assert not store.pending_dispatches("M1")
+    current[0] = new_root
+    return run, thread, marker
+
+
+def test_restart_delivers_new_policy_before_native_goal_activation(store, tmp_path, monkeypatch):
+    class EagerNativeGoal(FakeRPC):
+        eager = False
+        policy_seen_before_activation = False
+        marker = ""
+
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if self.eager and method == "thread/goal/set" and params["status"] == "active":
+                thread = params["threadId"]
+                self.policy_seen_before_activation = any(
+                    self.marker in item["content"][0]["text"] for item in self.injected.get(thread, [])
+                )
+                if not any(turn["status"] == "inProgress" for turn in self.turns[thread]):
+                    self.turns[thread].insert(0, {"id": "native-continuation", "status": "inProgress", "items": []})
+            return result
+
+    rpc = EagerNativeGoal()
+    run, thread, marker = _stopped_role_with_new_policy(store, rpc, tmp_path, monkeypatch)
+    rpc.eager = True
+    rpc.marker = marker
+    before = len(rpc.calls)
+    action(store, "start")
+    asyncio.run(run.tick())
+    calls = rpc.calls[before:]
+    injection = next(i for i, (method, _) in enumerate(calls) if method == "thread/inject_items")
+    start = next(i for i, (method, _) in enumerate(calls) if method == "turn/start")
+    activation = next(
+        i for i, (method, params) in enumerate(calls) if method == "thread/goal/set" and params["status"] == "active"
+    )
+    assert injection < start < activation
+    assert rpc.policy_seen_before_activation and rpc.goals[thread]["status"] == "active"
+    assert marker in rpc.injected[thread][-1]["content"][0]["text"]
+    assert rpc.thread_configs[thread] == {"project_doc_max_bytes": 0, "skills.include_instructions": False}
+    assert not any(turn["id"] == "native-continuation" for turn in rpc.turns[thread])
+
+
+@pytest.mark.parametrize(
+    "injection_error",
+    [RoleRpcRejected("role_rpc_rejected"), TimeoutError("synthetic lost policy ack")],
+    ids=["rejected", "unknown"],
+)
+def test_failed_new_policy_keeps_existing_goal_paused_without_blind_replay(
+    store, tmp_path, monkeypatch, injection_error
+):
+    rpc = FakeRPC()
+    run, thread, _ = _stopped_role_with_new_policy(store, rpc, tmp_path, monkeypatch)
+    rpc.injection_error = injection_error
+    before = len(rpc.calls)
+    action(store, "start")
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["last_error"].startswith("role_instruction_injection_")
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    calls = rpc.calls[before:]
+    assert sum(method == "thread/inject_items" for method, _ in calls) == 1
+    assert not any(
+        method in {"turn/start", "turn/steer"} or (method == "thread/goal/set" and params.get("status") == "active")
+        for method, params in calls
+    )
+
+
+def test_pending_new_policy_does_not_rewrite_or_reactivate_inflight_native_turn(store, tmp_path, monkeypatch):
+    current, new_root, _, thread = _current_role_bundles(store, tmp_path, monkeypatch)
+    rpc = FakeRPC()
+    run = executor(store, rpc)
+    action(store, "start")
+    asyncio.run(run.tick())
+    rpc.turns[thread][0]["status"] = "completed"
+    native = {"id": "native-continuation", "status": "inProgress", "items": []}
+    rpc.turns[thread].insert(0, native)
+    action(store, "sleep", payload={"seconds": 3600}, actor="M1")
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    current[0] = new_root
+    store.runtime_update("M1", next_wake_at="2020-01-01T00:00:00+00:00")
+    before = len(rpc.calls)
+    asyncio.run(run.tick())
+    assert native["status"] == "inProgress" and rpc.goals[thread]["status"] == "paused"
     assert not any(
         method in {"thread/inject_items", "turn/start", "turn/steer"}
         or (method == "thread/goal/set" and params.get("status") == "active")

@@ -1147,10 +1147,11 @@ class TelegramInbox:
         ).fetchone()
         return dict(row) if row else {"state": "active", "revision": 0, "guidance_pending": 0, "guidance_count": 0}
 
-    def require_client_send_allowed(self, peer_id: int) -> None:
-        control = self.client_control(peer_id)
-        if control["state"] != "active":
-            raise InboxError("inbox_client_" + control["state"])
+    def require_client_send_allowed(self, peer_id: int, *, include_client_control: bool = True) -> None:
+        if include_client_control:
+            control = self.client_control(peer_id)
+            if control["state"] != "active":
+                raise InboxError("inbox_client_" + control["state"])
         if self._db.execute(
             "SELECT 1 FROM jobs WHERE peer_id=? AND effects_review_required=1 LIMIT 1", (peer_id,)
         ).fetchone():
@@ -2036,7 +2037,7 @@ class TelegramInbox:
             job_id, receipt_keys
         )
         if (
-            (outcome != "no_reply_needed" or reason_code == "human_answered")
+            (outcome != "no_reply_needed" or reason_code not in {"paused", "human_takeover", "already_answered"})
             and job["context_revision"] != self._peer_revision(job["peer_id"])
             and not delivered_question
         ):

@@ -135,6 +135,137 @@ def test_handoff_still_refuses_paused_or_changed_client_context(tmp_path, monkey
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("control", ["pause", "takeover", "context"])
+@pytest.mark.parametrize("late", [False, True], ids=["before-dry-run", "before-apply"])
+def test_handoff_uses_source_control_instead_of_owners_client_case(tmp_path, monkeypatch, control, late):
+    targets(monkeypatch)
+
+    async def scenario():
+        config, monitor = _runtime(tmp_path)
+        source, owner_message = _message(100), _message(50, peer=84)
+        monitor.record(source)
+        monitor.record(owner_message)
+        job = _job(monitor)
+        client = PeerScopedClient([source, owner_message])
+        request = handoff_request(job)
+        try:
+            if late:
+                draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
+            owner_control = monitor.inbox.set_client_control(84, action=control, expected_revision=0)
+            if not late:
+                draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
+            sent = await bridge._handle_operation(client, config, applied(request, draft), inbound_monitor=monitor)
+            replayed = await bridge._handle_operation(client, config, applied(request, draft), inbound_monitor=monitor)
+            proof = await _readback(client, config, monitor, job, draft["idempotency_key"])
+            assert sent["verified"] and replayed["replayed"] and proof["verified"]
+            assert client.sent == 1 and client.messages[sent["message_id"]].chat_id == 84
+            effect = monitor.inbox.read_effect(draft["idempotency_key"])
+            assert effect["kind"] == "handoff" and effect["peer_id"] == 42 and effect["verified"]
+            assert monitor.inbox.client_control(84) == owner_control
+            assert monitor.inbox.client_control(42)["state"] == "active"
+            if control in {"pause", "takeover"}:
+                with pytest.raises(InboxError, match="inbox_client_"):
+                    bridge._require_direct_send_allowed(
+                        config, monitor, {"operation": "send", "bound_handoff": effect}, 84, "unbound-direct"
+                    )
+        finally:
+            monitor.inbox.close()
+
+    asyncio.run(scenario())
+
+
+def test_handoff_keeps_source_guidance_required_with_paused_owner_case(tmp_path, monkeypatch):
+    targets(monkeypatch)
+
+    async def scenario():
+        config, monitor = _runtime(tmp_path)
+        source, owner_message = _message(100), _message(50, peer=84)
+        monitor.record(source)
+        monitor.record(owner_message)
+        job = _job(monitor)
+        client = PeerScopedClient([source, owner_message])
+        try:
+            monitor.inbox.set_client_control(84, action="pause", expected_revision=0)
+            monitor.inbox.set_client_control(42, action="context", expected_revision=0)
+            with pytest.raises(bridge.BridgeError, match="inbox_guidance_unavailable"):
+                await bridge._handle_operation(client, config, handoff_request(job), inbound_monitor=monitor)
+            assert client.sent == 0
+        finally:
+            monitor.inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("hold", ["native_unknown", "inbox_unknown", "review"])
+def test_handoff_preserves_owner_recipient_unknown_and_review_holds(tmp_path, monkeypatch, hold):
+    targets(monkeypatch)
+
+    async def scenario():
+        config, monitor = _runtime(tmp_path)
+        owner_message = _message(50, peer=84)
+        monitor.record(owner_message)
+        owner_job = _job(monitor, running=False)
+        guard = {"job_id": owner_job["job_id"], "lease": owner_job["lease"], "expected_revision": owner_job["revision"]}
+        mapping = monitor.inbox.prepare_peer_thread(**guard)
+        monitor.inbox.bind_peer_thread(**guard, creation_key=mapping["creation_key"], thread_id="owner-client-thread")
+        owner_job = monitor.inbox.start_intent(**guard, thread_id="owner-client-thread")
+        guard["expected_revision"] = owner_job["revision"]
+        owner_job = monitor.inbox.bind_turn(**guard, turn_id="owner-client-turn")
+        guard["expected_revision"] = owner_job["revision"]
+        if hold == "inbox_unknown":
+            key = monitor.inbox.reserve_effect(
+                **guard,
+                kind="result",
+                text_sha256=hashlib.sha256(b"Unknown owner client reply").hexdigest(),
+                peer_id=84,
+                reply_to_message_id=50,
+            )
+            monitor.inbox.mark_effect_intent(key)
+        monitor.inbox.finish_execution(
+            **guard,
+            proof_kind="terminal",
+            local_tasks_done=True,
+            thread_id="owner-client-thread",
+            turn_id="owner-client-turn",
+            terminal_status="failed",
+        )
+        if hold == "review":
+            with monitor.inbox._write():
+                monitor.inbox._db.execute(
+                    "UPDATE jobs SET effects_review_required=1 WHERE job_id=?", (owner_job["job_id"],)
+                )
+        monitor.inbox.set_client_control(84, action="pause", expected_revision=0)
+        source = _message(100)
+        monitor.record(source)
+        job = _job(monitor)
+        client = PeerScopedClient([source, owner_message])
+        if hold == "native_unknown":
+            bridge._save_idempotency(
+                config.state_dir / "idempotency.json",
+                {
+                    "unknown-owner-send": {
+                        "operation": "send_text",
+                        "peer_id": 84,
+                        "message_id": 0,
+                        "readback_verified": False,
+                    },
+                },
+            )
+        expected = {
+            "native_unknown": "send_outcome_uncertain",
+            "inbox_unknown": "inbox_effect_outcome_unknown",
+            "review": "inbox_resolution_review_required",
+        }[hold]
+        try:
+            with pytest.raises((bridge.BridgeError, InboxError), match=expected):
+                await bridge._handle_operation(client, config, handoff_request(job), inbound_monitor=monitor)
+            assert client.sent == 0
+        finally:
+            monitor.inbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_handoff_unknown_send_keeps_original_key_without_second_dispatch(tmp_path, monkeypatch):
     targets(monkeypatch)
 
