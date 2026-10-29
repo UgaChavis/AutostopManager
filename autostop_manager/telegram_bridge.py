@@ -668,7 +668,7 @@ class DurableInboundMonitor(InboundMonitor):
         versions = self.context_messages[peer_id]
         digest = self.context_fingerprint(message)
         if invalidate and message_id in versions and versions[message_id] != digest:
-            self.inbox.invalidate_context(peer_id)
+            self.inbox.invalidate_context(peer_id, message_ids=[message_id])
             self.changed()
         if message_id not in versions and len(versions) >= 1000:
             if self.context_peer == peer_id:
@@ -709,18 +709,27 @@ class DurableInboundMonitor(InboundMonitor):
                 self.remember_context(message)
 
     def deleted(self, message_ids: list[int], peer_id: int | None = None) -> None:
+        changed: dict[int, set[int]] = {}
         for peer, versions in self.context_messages.items():
             if peer_id is not None and peer != peer_id:
                 continue
-            changed = [
-                identifier for identifier in message_ids if identifier in versions and versions[identifier] is not None
-            ]
-            if changed:
-                # Commit the fence first. A failed write must leave the old RAM
-                # fingerprints available for a later exact reread to retry it.
-                self.inbox.invalidate_context(peer)
-                for identifier in changed:
-                    versions[identifier] = None
+            changed[peer] = {identifier for identifier in message_ids if versions.get(identifier) is not None}
+        for locator in self.inbox.open_message_locators(message_ids, peer_id):
+            peer, identifier = locator["peer_id"], locator["message_id"]
+            versions = self.context_messages.get(peer, {})
+            if identifier not in versions or versions[identifier] is not None:
+                changed.setdefault(peer, set()).add(identifier)
+        for peer, identifiers in changed.items():
+            if identifiers:
+                # Commit before tombstoning RAM, including callbacks observed
+                # after restart when the prior fingerprint is unavailable.
+                self.inbox.invalidate_context(peer, message_ids=sorted(identifiers))
+                versions = self.context_messages.get(peer)
+                if versions is None and len(self.context_messages) < 64:
+                    versions = self.context_messages[peer] = {}
+                if versions is not None:
+                    for identifier in identifiers:
+                        versions[identifier] = None
                 self.changed()
 
     async def revalidate_context(
@@ -4868,6 +4877,7 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
                 creation_key=str(request.get("creation_key") or ""),
                 thread_id=str(request.get("thread_id") or ""),
                 effects_reviewed=request.get("effects_reviewed") is True,
+                materialized=request.get("materialized", True),
             )
         else:
             mapping = inbox.mark_peer_thread_unknown(**arguments, creation_key=str(request.get("creation_key") or ""))
@@ -5449,7 +5459,39 @@ async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
         if str(exc) == "inbound_monitor_full":
             print("work_telegram_monitor_full=true", file=sys.stderr, flush=True)
         return
-    except Exception:  # noqa: BLE001 - one malformed provider update must not stop the bridge.
+    except Exception:  # noqa: BLE001 - preserve an intake failure without retaining provider payloads.
+        code = "inbound_capture_failed"
+        if isinstance(monitor, DurableInboundMonitor):
+            try:
+                # Provider attributes may themselves be broken. Keep only a
+                # validated locator when possible, never arbitrary error text.
+                try:
+                    peer_id, message_id = getattr(event, "chat_id", None), getattr(event, "id", None)
+                except Exception:  # noqa: BLE001 - diagnostics cannot trust the malformed update either.
+                    peer_id, message_id = None, None
+                if (
+                    type(peer_id) is int
+                    and 0 < peer_id <= 9223372036854775807
+                    and type(message_id) is int
+                    and 0 < message_id <= 9223372036854775807
+                ):
+                    monitor.inbox.mark_gap(
+                        peer_id=peer_id,
+                        message_id=message_id,
+                        received_at=datetime.now(UTC).isoformat(),
+                        reason_code=code,
+                    )
+                monitor.inbox.set_health("intake", "held", code)
+                monitor.request_reconciliation()
+            except (InboxError, sqlite3.Error, OSError):
+                code = "inbound_storage_unavailable"
+            finally:
+                # The normal daemon failure/reconnect path performs catch-up.
+                # Do not advertise ready after a pre-commit capture failure.
+                monitor.transport_ready = False
+                monitor.failure_code = code
+                monitor.failure_event.set()
+        print(f"work_telegram_inbox_error={code}", file=sys.stderr, flush=True)
         return
     if isinstance(monitor, DurableInboundMonitor):
         # Subscribers observe a committed locator.  A missed notification is
@@ -5571,8 +5613,18 @@ class _DaemonRpcHandlers:
 
 def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundMonitor) -> None:
     async def edited(event: Any) -> None:
-        # An edit is context, never another inbound event.
-        monitor.remember_context(event)
+        # The callback itself proves a change, even after restart when no
+        # previous RAM fingerprint exists. It never creates an inbound event.
+        peer_id, message_id = getattr(event, "chat_id", None), getattr(event, "id", None)
+        if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
+            return
+        if message_id in monitor.context_messages.get(peer_id, {}):
+            # Duplicate callback with the same known fingerprint is a no-op.
+            monitor.remember_context(event)
+            return
+        monitor.inbox.invalidate_context(peer_id, message_ids=[message_id])
+        monitor.remember_context(event, invalidate=False)
+        monitor.changed()
 
     async def deleted(event: Any) -> None:
         peer_id = getattr(event, "chat_id", None)

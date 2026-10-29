@@ -2320,7 +2320,31 @@ class DurableWakeDispatcher:
                     raise WakeError("wake_peer_thread_invalid")
                 with suppress(OSError, TimeoutError, TransportLost):
                     await self.jobs.request(
-                        "job_peer_thread_bind", **self._guard(job), creation_key=key, thread_id=thread_id
+                        "job_peer_thread_bind",
+                        **self._guard(job),
+                        creation_key=key,
+                        thread_id=thread_id,
+                        materialized=False,
+                    )
+                readback = await self.jobs.request("job_peer_thread_read", job_id=job["job_id"])
+                mapping = readback.get("peer_thread")
+                if (
+                    not isinstance(mapping, dict)
+                    or mapping.get("state") != "creating"
+                    or mapping.get("creation_key") != key
+                    or mapping.get("thread_id") != thread_id
+                ):
+                    raise WakeError("wake_peer_thread_unknown")
+                await self._materialize_new_peer(thread)
+                # Retain the exact new thread before materialization, but only
+                # advertise readiness after its durable App Server readback.
+                with suppress(OSError, TimeoutError, TransportLost):
+                    await self.jobs.request(
+                        "job_peer_thread_bind",
+                        **self._guard(job),
+                        creation_key=key,
+                        thread_id=thread_id,
+                        materialized=True,
                     )
                 readback = await self.jobs.request("job_peer_thread_read", job_id=job["job_id"])
                 mapping = readback.get("peer_thread")
@@ -2331,7 +2355,6 @@ class DurableWakeDispatcher:
                     or mapping.get("thread_id") != thread_id
                 ):
                     raise WakeError("wake_peer_thread_unknown")
-                await self._materialize_new_peer(thread)
             except (OSError, TimeoutError, WakeError) as exc:
                 with suppress(OSError, TimeoutError, WakeError):
                     await self.jobs.request("job_peer_thread_unknown", **self._guard(job), creation_key=key)

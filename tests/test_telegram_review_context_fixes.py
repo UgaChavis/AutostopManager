@@ -205,3 +205,41 @@ def test_anchor_dry_run_invalidation_does_not_block_verified_receipt_readback(tm
             monitor.inbox.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("kind", ["edit", "delete", "unknown_peer_delete"])
+def test_exact_callback_after_ram_loss_invalidates_old_verified_answer(tmp_path, kind):
+    from test_telegram_inbox import guard, receipt
+
+    _config, monitor = _runtime(tmp_path)
+    event = monitor.record(_message(100))
+    job = _job(monitor)
+    key = receipt(monitor.inbox, job)
+    monitor.context_messages.clear()  # Same durable receipt, no pre-restart fingerprint.
+    handlers = {}
+    registration = SimpleNamespace(add_event_handler=lambda handler, event: handlers.update({event: handler}))
+    events = SimpleNamespace(MessageEdited=lambda: "edit", MessageDeleted=lambda: "delete")
+    bridge._install_context_handlers(registration, events, monitor)
+    callback = handlers["edit" if kind == "edit" else "delete"]
+    update = (
+        _message(100, text="edited question")
+        if kind == "edit"
+        else SimpleNamespace(chat_id=None if kind == "unknown_peer_delete" else 42, deleted_ids=[100])
+    )
+    try:
+        asyncio.run(callback(update))
+        generation = monitor.inbox.generation
+        asyncio.run(callback(update))
+        assert monitor.inbox.generation == generation
+        with pytest.raises(InboxError, match=r"^inbox_context_stale$"):
+            monitor.inbox.result(
+                **guard(job),
+                outcome="no_reply_needed",
+                reason_code="already_answered",
+                event_ids=[event],
+                receipt_keys=[key],
+            )
+        assert monitor.inbox.event_state(event) == "open"
+        assert monitor.inbox.read_effect(key)["verified"]
+    finally:
+        monitor.inbox.close()

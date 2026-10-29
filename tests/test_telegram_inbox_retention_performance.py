@@ -59,7 +59,7 @@ def intake_work(path, retained, *, reopen):
             inbox._db.set_progress_handler(None, 0)
         assert inbox.require_open(event_id).message_id == 1
         assert inbox.generation == generation + 1
-        assert inbox._meta("schema_version") == "6"
+        assert inbox._meta("schema_version") == "7"
         assert inbox._db.execute("SELECT COUNT(*) FROM events WHERE peer_id=1").fetchone()[0] == retained
         assert inbox._db.execute("SELECT COUNT(*) FROM jobs WHERE state='completed'").fetchone()[0] == retained
         assert inbox.checkpoint(1) == retained
@@ -98,4 +98,4 @@ def test_schema4_existing_retention_index_is_upgraded_to_cover_all_pruned_job_st
         after = [row[3] for row in upgraded._db.execute("EXPLAIN QUERY PLAN " + query, (RECENT,))]
         assert any("SEARCH jobs USING INDEX jobs_retention_updated_at" in detail for detail in after)
         assert not any("SCAN jobs" in detail for detail in after)
-        assert upgraded._meta("schema_version") == "6"
+        assert upgraded._meta("schema_version") == "7"
