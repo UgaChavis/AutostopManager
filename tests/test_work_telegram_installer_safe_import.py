@@ -5,11 +5,48 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_new_work_runtime_and_extras_pin_the_same_verified_telethon():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    for group in ("dev", "telegram"):
+        requirements = [value for value in extras[group] if value.lower().startswith("telethon")]
+        assert requirements == ["telethon==1.44.0"]
+    lock = (ROOT / "deploy/telegram/requirements-py312-linux-x86_64.lock").read_text(encoding="utf-8")
+    assert any(line.startswith("Telethon==1.44.0 --hash=sha256:") for line in lock.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("account", "supported", "expected"),
+    [("work", True, 0), ("work", False, 1), ("personal", False, 0)],
+)
+def test_installer_rejects_unverified_work_reconnect_contract(tmp_path, account, supported, expected):
+    source = (ROOT / "scripts/install-telegram-bridge.sh").read_text(encoding="utf-8")
+    start = source.index("validate_bridge_imports() {")
+    end = source.index("\n}\n", start) + len("\n}")
+    project = tmp_path / "project"
+    module = project / "autostop_manager"
+    module.mkdir(parents=True)
+    (module / "__init__.py").write_text("")
+    (module / "telegram_bridge.py").write_text(
+        f"class InboundMonitor: pass\ndef _supported_reconnect_tracking(): return {supported!r}\n"
+    )
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin/python").symlink_to(sys.executable)
+    script = source[start:end] + "\nvalidate_bridge_imports\n"
+    env = {**os.environ, "venv_root": str(venv), "PROJECT_ROOT": str(project), "account": account}
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=5)
+    assert result.returncode == expected
+    if account == "work" and not supported:
+        assert "work_telegram_reconnect_version_unsupported" in result.stderr
 
 
 def package(root: Path, name: str) -> None:
