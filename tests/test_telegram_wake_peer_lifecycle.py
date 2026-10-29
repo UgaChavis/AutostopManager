@@ -48,7 +48,7 @@ def test_new_peer_is_bound_and_materialized_before_any_model_turn(tmp_path, bund
 
             def check_bound(thread_id):
                 mapping = inbox.read_peer_thread(job["job_id"])
-                assert mapping["state"] == "ready" and mapping["thread_id"] == thread_id
+                assert mapping["state"] == "creating" and mapping["thread_id"] == thread_id
                 assert dispatcher.jobs.calls[-1][0] == "job_peer_thread_read"
                 assert inbox.read_job(job["job_id"])["thread_id"] is None
                 assert server.counter == 0
@@ -56,6 +56,9 @@ def test_new_peer_is_bound_and_materialized_before_any_model_turn(tmp_path, bund
             server.archive_observer = check_bound
             await dispatcher._select_peer(job)
             peer = dispatcher.app
+            assert inbox.read_peer_thread(job["job_id"])["state"] == "ready"
+            binds = [args for operation, args in dispatcher.jobs.calls if operation == "job_peer_thread_bind"]
+            assert [args["materialized"] for args in binds] == [False, True]
             assert peer.resumed_settings == bootstrap.resumed_settings
             assert server.counter == 0
             assert server.created_threads == [peer.config.thread_id]
@@ -220,7 +223,9 @@ def test_materialization_rejection_never_recreates_or_starts_model(tmp_path, bun
             assert dispatcher.execution_error == "wake_shared_backend_rejected"
             assert inbox.status()["execution_paused"]
             assert inbox.read_job(job["job_id"])["execution_proof"] == "not_started"
-            assert inbox.read_peer_thread(job["job_id"])["state"] == "ready"
+            mapping = inbox.read_peer_thread(job["job_id"])
+            assert mapping["state"] == "creation_unknown"
+            assert mapping["thread_id"] == server.created_threads[0]
             assert len(server.created_threads) == 1 and server.counter == 0
             assert sum(call["method"] == method for call in server.calls) == 1
 

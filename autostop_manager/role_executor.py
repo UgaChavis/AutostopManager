@@ -156,6 +156,7 @@ class RoleExecutor:
         self.rpc_factory = rpc_factory
         self.wake_event = asyncio.Event()
         self._instruction_pause_rejections: dict[str, tuple[str, int, int]] = {}
+        self._dispatch_interrupt_rejections: dict[str, tuple[str, str, int, int]] = {}
 
     async def request_reconcile(self, _claim: Any) -> dict[str, Any]:
         """A scheduler job only requests a bounded role pass, never awaits a goal."""
@@ -479,7 +480,10 @@ class RoleExecutor:
 
     async def _reconcile_instruction_hold(self, state: dict[str, Any], rpc: Any) -> None:
         """Freeze our own execution under an instruction hold or an owner's stop."""
-        if state["host_id"] != executor_host_id() or not state["goal_owned"]:
+        if state["host_id"] != executor_host_id():
+            return
+        if not state["goal_owned"]:
+            await self._reconcile_dispatch_hold(state, rpc)
             return
         try:
             resumed = await rpc.request(
@@ -549,6 +553,59 @@ class RoleExecutor:
         except Exception:  # noqa: BLE001 - transport failures must retain the original hold.
             # Retain the original error. The next pass first reads
             # the exact goal/turn state; it cannot repeat policy append or start.
+            return
+
+    async def _reconcile_dispatch_hold(self, state: dict[str, Any], rpc: Any) -> None:
+        """Stop a proven controlled duty turn even before its native goal exists."""
+        dispatches = [
+            dispatch
+            for dispatch in self.store.pending_dispatches(state["role"])
+            if dispatch["id"] == state["active_dispatch_id"]
+            and dispatch["thread_id"] == state["thread_id"]
+            and dispatch["kind"] == "duty"
+            and isinstance(dispatch["turn_id"], str)
+            and dispatch["turn_id"]
+        ]
+        if len(dispatches) != 1 or not self._instruction_hold_current(state):
+            return
+        turn_id = dispatches[0]["turn_id"]
+        try:
+            resumed = await rpc.request(
+                "thread/resume", {"threadId": state["thread_id"], "cwd": PROJECT_DIR, "excludeTurns": True}
+            )
+            thread = resumed.get("thread")
+            if (
+                not isinstance(thread, dict)
+                or thread.get("id") != state["thread_id"]
+                or thread.get("cwd") != PROJECT_DIR
+                or thread.get("ephemeral") is not False
+                or resumed.get("model") != MODEL
+            ):
+                return
+            turns, cursor = await self._turns(rpc, state["thread_id"])
+            if not self._instruction_hold_current(state):
+                return
+            active = next(
+                (turn for turn in turns if turn["id"] == turn_id and turn.get("status") == "inProgress"), None
+            )
+            if active is not None:
+                token = (state["thread_id"], turn_id, state["generation"], state["revision"])
+                if self._dispatch_interrupt_rejections.get(state["role"]) == token:
+                    return
+                try:
+                    await rpc.request("turn/interrupt", {"threadId": state["thread_id"], "turnId": turn_id})
+                except RoleRpcRejected:
+                    self._dispatch_interrupt_rejections[state["role"]] = token
+                    return
+                turns, cursor = await self._turns(rpc, state["thread_id"])
+                if any(turn["id"] == turn_id and turn.get("status") == "inProgress" for turn in turns):
+                    return
+            if self._instruction_hold_current(state):
+                # Do not read or mutate an unowned native goal. A different
+                # active turn is not evidence that this dispatch may touch it.
+                self._dispatch_interrupt_rejections.pop(state["role"], None)
+                await self._reconcile(state["role"], rpc, turns, cursor, hold_state=state)
+        except Exception:  # noqa: BLE001 - unknown interrupt outcomes require an exact turn readback next pass.
             return
 
     def _instruction_hold_current(self, state: dict[str, Any]) -> bool:

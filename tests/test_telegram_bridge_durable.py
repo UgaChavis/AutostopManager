@@ -2239,3 +2239,49 @@ def test_legacy_reply_ledger_is_held_until_exact_readback(source_media_reply, op
     assert "reply_source_media" not in recovered
     assert runtime.monitor.status()["open_events"] == 1
     assert runtime.monitor.inbox.read_job(runtime.job["job_id"])["state"] == "running"
+
+
+def test_unexpected_capture_failure_preserves_gap_and_stops_false_readiness(tmp_path, monkeypatch, capsys):
+    config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+
+    def malformed(*_args, **_kwargs):
+        raise RuntimeError("private provider payload must not be logged")
+
+    monkeypatch.setattr(monitor, "remember_context", malformed)
+    asyncio.run(bridge._capture_incoming_event(monitor, _message(100)))
+    assert monitor.inbox.events() == []
+    assert monitor.inbox.gaps()[0]["peer_id"] == 42
+    assert monitor.inbox.gaps()[0]["message_id"] == 100
+    assert monitor.inbox.gaps()[0]["reason_code"] == "inbound_capture_failed"
+    assert monitor.inbox.health()["intake"] == {"state": "held", "error_code": "inbound_capture_failed"}
+    assert monitor.reconcile_requested.is_set()
+    assert monitor.failure_event.is_set() and not monitor.transport_ready
+    assert monitor.failure_code == "inbound_capture_failed"
+    with pytest.raises(bridge.BridgeError, match=r"^inbound_capture_failed$"):
+        asyncio.run(bridge._await_intake_failure(monitor))
+    errors = capsys.readouterr().err
+    assert errors == "work_telegram_inbox_error=inbound_capture_failed\n"
+    monitor.inbox.close()
+    with TelegramInbox(config.state_dir / "inbound.sqlite3") as restored:
+        assert restored.gaps()[0]["message_id"] == 100
+        assert restored.health()["intake"]["state"] == "held"
+
+
+def test_unexpected_capture_failure_with_broken_locator_is_still_visible(tmp_path, capsys):
+    _config, monitor = _runtime(tmp_path)
+
+    class MalformedEvent:
+        @property
+        def chat_id(self):
+            raise RuntimeError("provider attribute failed")
+
+        @property
+        def out(self):
+            raise RuntimeError("provider attribute failed")
+
+    asyncio.run(bridge._capture_incoming_event(monitor, MalformedEvent()))
+    assert monitor.inbox.gaps() == [] and monitor.failure_event.is_set()
+    assert monitor.inbox.health()["intake"]["error_code"] == "inbound_capture_failed"
+    assert "provider attribute" not in capsys.readouterr().err
+    monitor.inbox.close()

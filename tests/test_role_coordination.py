@@ -446,6 +446,154 @@ def test_stop_after_rpc_rejection_confirms_owned_execution_without_restarting(st
     assert len([method for method, _ in rpc.calls[before:] if method == "thread/turns/list"]) == 2
 
 
+class RejectGoalAfterFirstTurn(FakeRPC):
+    async def request(self, method, params):
+        if method == "thread/goal/get" and self.turns.get(params["threadId"]):
+            self.calls.append((method, params))
+            raise RoleRpcRejected("role_rpc_rejected")
+        return await super().request(method, params)
+
+
+def first_duty_without_goal(store, rpc):
+    action(store, "start")
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    state = store.role_state()
+    assert state["last_error"] == "role_rpc_rejected" and not state["goal_owned"]
+    assert store.pending_dispatches("M1")[0]["status"] == "running"
+    assert not rpc.goals
+    return state["thread_id"], run
+
+
+def test_stop_known_first_duty_turn_without_native_goal_after_rpc_rejection(store):
+    rpc = RejectGoalAfterFirstTurn()
+    thread, _run = first_duty_without_goal(store, rpc)
+    turn = rpc.turns[thread][0]
+    action(store, "stop")
+    before = len(rpc.calls)
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    assert turn["status"] == "interrupted"
+    state = store.role_state()
+    assert state["desired_state"] == state["state"] == "off" and not state["goal_owned"]
+    assert state["last_error"] == "role_rpc_rejected"
+    assert not store.pending_dispatches("M1") and state["active_dispatch_id"] is None
+    assert [params for method, params in rpc.calls[before:] if method == "turn/interrupt"] == [
+        {"threadId": thread, "turnId": turn["id"]}
+    ]
+    assert not any(
+        method in {"thread/goal/get", "thread/goal/set", "thread/inject_items", "turn/start", "turn/steer"}
+        for method, _ in rpc.calls[before:]
+    )
+    assert len([method for method, _ in rpc.calls[before:] if method == "thread/turns/list"]) == 2
+    action(store, "bind", payload={"thread_id": str(uuid4())})
+
+
+def test_first_duty_stop_requires_terminal_turn_readback_before_rebind(store):
+    class PendingInterrupt(RejectGoalAfterFirstTurn):
+        ignore_interrupt = True
+
+        async def request(self, method, params):
+            if method == "turn/interrupt" and self.ignore_interrupt:
+                self.calls.append((method, params))
+                return {}
+            return await super().request(method, params)
+
+    rpc = PendingInterrupt()
+    thread, run = first_duty_without_goal(store, rpc)
+    action(store, "stop")
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "inProgress"
+    assert store.pending_dispatches("M1")
+    with pytest.raises(RoleError, match="role_bind_requires_idle"):
+        action(store, "bind", payload={"thread_id": str(uuid4())})
+    rpc.ignore_interrupt = False
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "interrupted"
+    assert not store.pending_dispatches("M1")
+
+
+def test_first_duty_stop_reads_back_lost_interrupt_without_resending(store):
+    class LostInterrupt(RejectGoalAfterFirstTurn):
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "turn/interrupt":
+                raise TimeoutError("synthetic lost interrupt response")
+            return result
+
+    rpc = LostInterrupt()
+    thread, run = first_duty_without_goal(store, rpc)
+    action(store, "stop")
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "interrupted"
+    assert store.pending_dispatches("M1")
+    asyncio.run(executor(RoleStore(store.path), rpc).tick())
+    assert not store.pending_dispatches("M1")
+    assert len([method for method, _ in rpc.calls if method == "turn/interrupt"]) == 1
+
+
+def test_first_duty_stop_never_interrupts_foreign_turn_or_changes_foreign_goal(store):
+    rpc = RejectGoalAfterFirstTurn()
+    thread, run = first_duty_without_goal(store, rpc)
+    rpc.turns[thread][0]["status"] = "completed"
+    foreign = {"id": "foreign-turn", "status": "inProgress", "items": []}
+    rpc.turns[thread].insert(0, foreign)
+    rpc.goals[thread] = {"objective": "Unrelated user goal", "status": "active"}
+    action(store, "stop")
+    before = len(rpc.calls)
+    asyncio.run(run.tick())
+    assert foreign["status"] == "inProgress" and rpc.goals[thread]["status"] == "active"
+    assert not store.pending_dispatches("M1")
+    assert not any(
+        method in {"thread/goal/set", "turn/interrupt", "thread/inject_items", "turn/start", "turn/steer"}
+        for method, _ in rpc.calls[before:]
+    )
+
+
+def test_first_duty_rejected_interrupt_needs_new_control_revision_to_retry(store):
+    class RejectedInterrupt(RejectGoalAfterFirstTurn):
+        reject_interrupt = True
+
+        async def request(self, method, params):
+            if method == "turn/interrupt" and self.reject_interrupt:
+                self.calls.append((method, params))
+                raise RoleRpcRejected("synthetic rejected interrupt")
+            return await super().request(method, params)
+
+    rpc = RejectedInterrupt()
+    thread, run = first_duty_without_goal(store, rpc)
+    action(store, "stop")
+    asyncio.run(run.tick())
+    asyncio.run(run.tick())
+    assert len([method for method, _ in rpc.calls if method == "turn/interrupt"]) == 1
+    assert store.pending_dispatches("M1")
+    action(store, "stop")
+    rpc.reject_interrupt = False
+    asyncio.run(run.tick())
+    assert rpc.turns[thread][0]["status"] == "interrupted" and not store.pending_dispatches("M1")
+
+
+def test_first_duty_stop_does_not_override_explicit_recovery_during_readback(store):
+    class RecoverDuringRead(RejectGoalAfterFirstTurn):
+        recover = False
+
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "thread/turns/list" and self.recover:
+                self.recover = False
+                action(store, "start")
+            return result
+
+    rpc = RecoverDuringRead()
+    thread, run = first_duty_without_goal(store, rpc)
+    action(store, "stop")
+    rpc.recover = True
+    before = len(rpc.calls)
+    asyncio.run(run.tick())
+    assert store.role_state()["duty_active"] and store.role_state()["last_error"] is None
+    assert rpc.turns[thread][0]["status"] == "inProgress"
+    assert not any(method == "turn/interrupt" for method, _ in rpc.calls[before:])
+
+
 @pytest.mark.parametrize("owned,objective", [(False, role_objective("M1")), (True, "Unrelated user goal")])
 def test_rejected_stop_does_not_change_unowned_or_foreign_execution(store, owned, objective):
     rpc = FakeRPC()

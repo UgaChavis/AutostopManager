@@ -22,8 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 6
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6)
+INBOX_SCHEMA_VERSION = 7
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
 WORKER_PROTOCOL_VERSION = 2
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
@@ -301,6 +301,14 @@ class TelegramInbox:
             self._db.execute(
                 "CREATE INDEX IF NOT EXISTS jobs_effects_review_peer ON jobs(peer_id) WHERE effects_review_required=1"
             )
+            event_columns = {row[1] for row in self._db.execute("PRAGMA table_info(events)")}
+            if "content_revision" not in event_columns:
+                self._db.execute("ALTER TABLE events ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("UPDATE events SET content_revision=context_revision")
+            effect_columns = {row[1] for row in self._db.execute("PRAGMA table_info(effects)")}
+            if "event_coverage_sha256" not in effect_columns:
+                # Never infer legacy receipt coverage from a possibly refreshed job.
+                self._db.execute("ALTER TABLE effects ADD COLUMN event_coverage_sha256 TEXT")
             control_columns = {row[1] for row in self._db.execute("PRAGMA table_info(client_controls)")}
             if "guidance_count" not in control_columns:
                 self._db.execute("ALTER TABLE client_controls ADD COLUMN guidance_count INTEGER NOT NULL DEFAULT 0")
@@ -651,12 +659,15 @@ class TelegramInbox:
                     "AND execution_proof='not_started')",
                     (peer_id, peer_id),
                 )
-                self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+                self._db.execute(
+                    "UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?",
+                    (peer_id,),
+                )
                 context = self._peer_revision(peer_id)
                 self._db.execute(
-                    "INSERT INTO events(sequence,peer_id,message_id,received_at,state,context_revision) "
-                    "VALUES (?,?,?,?,'open',?)",
-                    (sequence, peer_id, message_id, timestamp, context),
+                    "INSERT INTO events(sequence,peer_id,message_id,received_at,state,context_revision,content_revision) "
+                    "VALUES (?,?,?,?,'open',?,?)",
+                    (sequence, peer_id, message_id, timestamp, context, context),
                 )
                 owner_epoch = self._db.execute(
                     "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (peer_id,)
@@ -758,11 +769,14 @@ class TelegramInbox:
         with self._write():
             for sequence, peer, message, at in prepared:
                 self._db.execute("INSERT OR IGNORE INTO peers(peer_id) VALUES (?)", (peer,))
-                self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer,))
                 self._db.execute(
-                    "INSERT INTO events(sequence,peer_id,message_id,received_at,state,context_revision) "
-                    "VALUES (?,?,?,?,'open',?)",
-                    (sequence, peer, message, at, self._peer_revision(peer)),
+                    "UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?",
+                    (peer,),
+                )
+                self._db.execute(
+                    "INSERT INTO events(sequence,peer_id,message_id,received_at,state,context_revision,content_revision) "
+                    "VALUES (?,?,?,?,'open',?,?)",
+                    (sequence, peer, message, at, self._peer_revision(peer), self._peer_revision(peer)),
                 )
             remaining = sorted(prepared, key=lambda item: (item[3], item[0]))
             while remaining:
@@ -838,13 +852,54 @@ class TelegramInbox:
             raise InboxError("inbox_peer_unavailable")
         return int(row[0])
 
-    def invalidate_context(self, peer_id: int) -> None:
+    def _event_coverage_sha256(self, event_ids: list[str]) -> str:
+        versions = [f"{event_id}\0{self._event_row(event_id)['content_revision']}\n" for event_id in sorted(event_ids)]
+        return hashlib.sha256("".join(versions).encode("ascii")).hexdigest()
+
+    def _effect_covers_current_content(self, effect: dict[str, Any], job: dict[str, Any]) -> bool:
+        return effect["event_coverage_sha256"] == self._event_coverage_sha256(job["event_ids"])
+
+    def _invalidate_peer_content(self, peer_id: int, message_ids: list[int] | None = None) -> None:
+        # New, unattached input does not change earlier event coverage. Exact
+        # edit/deletion callbacks invalidate only the matching incoming locators.
+        self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+        query = "UPDATE events SET content_revision=? WHERE peer_id=? AND state='open'"
+        params: list[Any] = [self._peer_revision(peer_id), peer_id]
+        if message_ids is not None:
+            query += " AND message_id IN (" + ",".join("?" for _ in message_ids) + ")"
+            params.extend(message_ids)
+        self._db.execute(query, params)
+
+    def open_message_locators(self, message_ids: list[int], peer_id: int | None = None) -> list[dict[str, int]]:
+        """Match a deletion callback to exact durable private locators, without content."""
+        if peer_id is not None:
+            _positive(peer_id, "inbound_peer_invalid")
+        for message_id in message_ids:
+            _positive(message_id, "inbound_message_invalid")
+        identifiers = sorted(set(message_ids))
+        found: list[dict[str, int]] = []
+        for offset in range(0, len(identifiers), 200):
+            chunk = identifiers[offset : offset + 200]
+            query = "SELECT peer_id,message_id FROM events WHERE state='open' AND message_id IN ("
+            query += ",".join("?" for _ in chunk) + ")"
+            params = chunk + ([peer_id] if peer_id is not None else [])
+            if peer_id is not None:
+                query += " AND peer_id=?"
+            found.extend(dict(row) for row in self._db.execute(query, params))
+        return found
+
+    def invalidate_context(self, peer_id: int, *, message_ids: list[int] | None = None) -> None:
         """Invalidate drafts after a bridge-observed edit/deletion; retain no content."""
         _positive(peer_id, "inbound_peer_invalid")
+        if message_ids is not None:
+            if not isinstance(message_ids, list) or not message_ids:
+                raise InboxError("inbound_message_invalid")
+            for message_id in message_ids:
+                _positive(message_id, "inbound_message_invalid")
         if self._db.execute("SELECT 1 FROM peers WHERE peer_id=?", (peer_id,)).fetchone() is None:
             return
         with self._write():
-            self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+            self._invalidate_peer_content(peer_id, message_ids)
 
     def require_current_context(self, job_id: str) -> None:
         job = self._job_row(job_id)
@@ -1431,8 +1486,11 @@ class TelegramInbox:
         creation_key: str,
         thread_id: str,
         effects_reviewed: bool = False,
+        materialized: bool = True,
     ) -> dict[str, Any]:
         job = self._lease(job_id, lease, expected_revision)
+        if type(materialized) is not bool:
+            raise InboxError("inbox_peer_thread_state_invalid")
         _token(creation_key, "inbox_peer_thread_key_invalid")
         _token(thread_id, "inbox_thread_invalid")
         existing = self.read_peer_thread(job_id)
@@ -1442,6 +1500,8 @@ class TelegramInbox:
             if existing["thread_id"] != thread_id:
                 raise InboxError("inbox_peer_thread_conflict")
             return existing
+        if existing["thread_id"] not in {None, thread_id}:
+            raise InboxError("inbox_peer_thread_conflict")
         if effects_reviewed is True:
             if (
                 self._meta("execution_paused") != "1"
@@ -1459,12 +1519,14 @@ class TelegramInbox:
             if job["state"] != "claimed" or existing["state"] != "creating":
                 raise InboxError("inbox_peer_thread_unknown")
             self._require_execution(job)
-        if self._db.execute("SELECT 1 FROM peer_threads WHERE thread_id=?", (thread_id,)).fetchone():
+        if self._db.execute(
+            "SELECT 1 FROM peer_threads WHERE thread_id=? AND peer_id<>?", (thread_id, job["peer_id"])
+        ).fetchone():
             raise InboxError("inbox_peer_thread_conflict")
         with self._write():
             self._db.execute(
-                "UPDATE peer_threads SET state='ready',thread_id=?,revision=revision+1 WHERE peer_id=?",
-                (thread_id, job["peer_id"]),
+                "UPDATE peer_threads SET state=?,thread_id=?,revision=revision+1 WHERE peer_id=?",
+                ("ready" if materialized else "creating", thread_id, job["peer_id"]),
             )
         return self.read_peer_thread(job_id) or {}
 
@@ -1479,9 +1541,12 @@ class TelegramInbox:
         thread_id: str,
         missing_thread_reviewed: bool = False,
         effects_reviewed: bool = False,
+        materialized: bool = False,
     ) -> dict[str, Any]:
         """Replace only an explicitly reviewed missing, never-started peer binding."""
         job = self._lease(job_id, lease, expected_revision)
+        if type(materialized) is not bool:
+            raise InboxError("inbox_peer_thread_state_invalid")
         _token(expected_thread_id, "inbox_thread_invalid")
         _token(thread_id, "inbox_thread_invalid")
         _positive(expected_peer_thread_revision, "inbox_revision_invalid")
@@ -1505,12 +1570,14 @@ class TelegramInbox:
             raise InboxError("inbox_peer_thread_conflict")
         with self._write():
             changed = self._db.execute(
-                "UPDATE peer_threads SET thread_id=?,creation_key=?,revision=revision+1 "
-                "WHERE peer_id=? AND state='ready' AND thread_id=? AND revision=?",
+                "UPDATE peer_threads SET state='ready',thread_id=?,creation_key=?,revision=revision+1 "
+                "WHERE peer_id=? AND (state='ready' OR (state='creation_unknown' AND ?)) "
+                "AND thread_id=? AND revision=?",
                 (
                     thread_id,
                     secrets.token_urlsafe(32),
                     job["peer_id"],
+                    materialized is True,
                     expected_thread_id,
                     expected_peer_thread_revision,
                 ),
@@ -1609,6 +1676,14 @@ class TelegramInbox:
         elif proof_kind == "not_started" and slot["phase"] != "claimed":
             raise InboxError("inbox_execution_proof_invalid")
         with self._write():
+            # A restarted wake reaches this proof without reentering peer
+            # creation. Only after its local tasks stop may creating be
+            # fenced for exact reviewed recovery; retain the ID and key.
+            self._db.execute(
+                "UPDATE peer_threads SET state='creation_unknown',revision=revision+1 "
+                "WHERE peer_id=? AND state='creating' AND ?='not_started'",
+                (job["peer_id"], proof_kind),
+            )
             self._db.execute(
                 "UPDATE jobs SET execution_proof=?,proof_at=?,revision=revision+1,updated_at=? WHERE job_id=?",
                 (proof, self._now(), self._now(), job_id),
@@ -1870,7 +1945,7 @@ class TelegramInbox:
         with self._write():
             self._db.execute(
                 "INSERT INTO effects(effect_key,job_id,kind,context_revision,effect_slot,text_sha256,peer_id,"
-                "reply_to_message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                "reply_to_message_id,created_at,event_coverage_sha256) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     key,
                     job_id,
@@ -1881,6 +1956,7 @@ class TelegramInbox:
                     peer_id,
                     reply_to_message_id,
                     self._now(),
+                    self._event_coverage_sha256(self.read_job(job_id)["event_ids"]),
                 ),
             )
         return key
@@ -1974,8 +2050,34 @@ class TelegramInbox:
             and effect["verified"]
             and effect["context_revision"] == job["context_revision"]
             and effect["receipt_key"] in receipt_keys
+            and self._effect_covers_current_content(effect, job)
             for effect in job["effects"]
         )
+
+    def _require_receipt_coverage(
+        self,
+        job_id: str,
+        effects: list[dict[str, Any]],
+        supplied: set[str],
+        *,
+        expected_kind: str | None = None,
+    ) -> None:
+        current = self.read_job(job_id)
+        answers = [
+            effect
+            for effect in effects
+            if effect["verified"]
+            and effect["receipt_key"] in supplied
+            and (
+                effect["kind"] in {"result", "handoff"}
+                if expected_kind is None
+                else effect["kind"] == expected_kind and effect["context_revision"] == current["context_revision"]
+            )
+        ]
+        if not answers:
+            raise InboxError("inbox_result_receipt_required")
+        if not any(self._effect_covers_current_content(effect, current) for effect in answers):
+            raise InboxError("inbox_context_stale")
 
     def result(
         self,
@@ -2014,25 +2116,16 @@ class TelegramInbox:
             raise InboxError("inbox_receipt_unverified")
         if any(effect["attempted"] and not effect["verified"] for effect in effects):
             raise InboxError("inbox_effect_outcome_unknown")
-        kinds = {
-            effect["kind"]
-            for effect in effects
-            if effect["receipt_key"] in supplied and effect["context_revision"] == job["context_revision"]
-        }
         expected = {"answered": "result", "awaiting_client": "clarification", "handoff": "handoff"}
         waiting_control = False
         if outcome == "no_reply_needed":
             waiting_control = self._validate_no_reply_result(job, event_ids, reason_code, human_message_ids)
-            if reason_code == "already_answered" and not any(
-                effect["verified"] and effect["kind"] in {"result", "handoff"} and effect["receipt_key"] in supplied
-                for effect in effects
-            ):
-                raise InboxError("inbox_result_receipt_required")
+            if reason_code == "already_answered":
+                self._require_receipt_coverage(job_id, effects, supplied)
         else:
             if reason_code is not None:
                 raise InboxError("inbox_reason_invalid")
-            if expected[outcome] not in kinds:
-                raise InboxError("inbox_result_receipt_required")
+            self._require_receipt_coverage(job_id, effects, supplied, expected_kind=expected[outcome])
         delivered_question = outcome == "awaiting_client" and self.delivered_clarification_after_pause(
             job_id, receipt_keys
         )
