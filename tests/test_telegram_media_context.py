@@ -184,6 +184,9 @@ def test_native_monitored_voice_wrapper_cleans_exact_media_without_inventing_tex
         return _operation(client_context, payload)
 
     monkeypatch.setattr(voice, "_request", request)
+    # This test exercises the isolated media lifecycle; the root gate has its
+    # own coverage and hosted CI runs this synthetic fixture as a regular user.
+    monkeypatch.setattr(voice, "_require_root", lambda: None)
     monkeypatch.setattr(voice, "_media_runner_path", lambda: runner)
     monkeypatch.setattr(voice, "account_inbox_dir", lambda account: inbox if account == "work" else None)
     if expected is None:

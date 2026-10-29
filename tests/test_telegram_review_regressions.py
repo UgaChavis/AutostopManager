@@ -380,8 +380,8 @@ def test_pause_after_verified_delivery_finishes_truthfully_without_resend(tmp_pa
                     "text": "Synthetic verified human handoff",
                     "mode": "dry_run",
                 }
-                dry = await bridge._handle_job_operation(client, config, request, monitor)
-                receipt = await bridge._handle_job_operation(
+                dry = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
+                receipt = await bridge._handle_operation(
                     client,
                     config,
                     request
@@ -390,7 +390,7 @@ def test_pause_after_verified_delivery_finishes_truthfully_without_resend(tmp_pa
                         "contract_token": dry["contract_token"],
                         "idempotency_key": dry["idempotency_key"],
                     },
-                    monitor,
+                    inbound_monitor=monitor,
                 )
             assert receipt["verified"] is True and client.sent == 1
             inbox.set_client_control(42, action="pause", expected_revision=0)
@@ -428,6 +428,7 @@ def test_pause_after_verified_delivery_finishes_truthfully_without_resend(tmp_pa
 
 def test_human_answer_completion_batches_exact_reads_with_network_rpc_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "_resolve_peer", _resolve)
+    monkeypatch.setattr(bridge, "_require_root_client", lambda _writer: None)
 
     async def scenario():
         config, monitor = _runtime(tmp_path)

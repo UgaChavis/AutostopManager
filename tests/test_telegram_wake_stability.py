@@ -12,9 +12,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from autostop_manager import instruction_bundle
 from autostop_manager import telegram_wake as wake
 from autostop_manager.telegram_inbox import TelegramInbox
 from test_telegram_wake_durable import FakeJobs, bind_test_peer
+from instruction_bundle_fakes import create_instruction_bundle
 from telegram_wake_fakes import THREAD
 
 
@@ -230,13 +232,17 @@ def test_bridge_heartbeat_refreshes_liveness_without_reclaiming(tmp_path, monkey
 @pytest.mark.parametrize(
     "failure", ["bind_reply", "start_reply", "shared_rejection", "peer_protocol", "bootstrap_protocol"]
 )
-def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, failure):
+def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, monkeypatch, failure):
+    root = create_instruction_bundle(tmp_path / "releases" / "snapshot", "a" * 40)
+    monkeypatch.setattr(wake, "INSTRUCTION_RELEASE_ROOTS", (root.parent,))
+    monkeypatch.setattr(instruction_bundle, "_OWNER_UID", os.geteuid())
+
     async def scenario():
         with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
             inbox.duty_set(True)
             inbox.record(123, 1)
             inbox.record(124, 2)
-            job = inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40)
+            job = inbox.claim(instruction_root=str(root), instruction_revision="a" * 40)
 
             class Jobs(FakeJobs):
                 async def request(self, operation, **arguments):
@@ -280,9 +286,16 @@ def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, 
                 dispatcher._use_thread.side_effect = wake.WakeError("codex_rpc_frame_invalid")
             if failure == "bind_reply":
                 await dispatcher._select_peer(job)
-                dispatcher._use_thread.assert_awaited_once_with(ident)
+                assert dispatcher._use_thread.await_count == 1
+                assert dispatcher._use_thread.await_args.args == (ident,)
+                bundle = dispatcher._use_thread.await_args.kwargs["bundle"]
+                assert (bundle.root, bundle.revision) == (str(root), "a" * 40)
+                assert dispatcher._use_thread.await_args.kwargs["instruction_config"] == {
+                    "project_doc_max_bytes": 0,
+                    "skills.include_instructions": False,
+                }
                 assert inbox.read_peer_thread(job["job_id"])["thread_id"] == ident
-                assert [name for name, _args in jobs.calls].count("job_peer_thread_read") == 1
+                assert [name for name, _args in jobs.calls].count("job_peer_thread_read") == 2
             elif failure == "start_reply":
                 with pytest.raises(wake.WakeError, match="wake_peer_thread_unknown"):
                     await dispatcher._select_peer(job)
@@ -298,9 +311,16 @@ def test_peer_creation_unknowns_use_exact_readback_and_never_recreate(tmp_path, 
                 assert inbox.status()["execution_paused"] is True
                 assert inbox.execution_slot() is None
                 assert inbox.read_job(job["job_id"])["execution_proof"] == "not_started"
-                assert inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40) is None
+                assert inbox.claim(instruction_root=str(root), instruction_revision="a" * 40) is None
                 if failure == "peer_protocol":
-                    dispatcher._use_thread.assert_awaited_once_with(ident)
+                    assert dispatcher._use_thread.await_count == 1
+                    assert dispatcher._use_thread.await_args.args == (ident,)
+                    bundle = dispatcher._use_thread.await_args.kwargs["bundle"]
+                    assert (bundle.root, bundle.revision) == (str(root), "a" * 40)
+                    assert dispatcher._use_thread.await_args.kwargs["instruction_config"] == {
+                        "project_doc_max_bytes": 0,
+                        "skills.include_instructions": False,
+                    }
                 else:
                     dispatcher._use_thread.assert_not_awaited()
             if failure == "bootstrap_protocol":

@@ -204,6 +204,8 @@ def _runtime(tmp_path, *, max_events=10000):
     inbox = TelegramInbox(state / "inbound.sqlite3", max_open_events=max_events)
     inbox.duty_set(True, at=(datetime.now(UTC) - timedelta(hours=1)).isoformat())
     monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+    # These offline clients model a verified, stable transport observer.
+    monitor.reconciliation_transport_hook = lambda: True
     config = bridge.TelegramConfig(
         123456, "a" * 32, state_dir=state, session_path=state / "account", socket_path=tmp_path / "bridge.sock"
     )
@@ -1290,6 +1292,7 @@ def test_retention_keeps_answered_input_deduplicated_before_startup_catchup(tmp_
     path = config.state_dir / "inbound.sqlite3"
     with TelegramInbox(path, clock=lambda: future) as inbox:
         monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+        monitor.reconciliation_transport_hook = lambda: True
         assert inbox.event_state(old_event_id) == "reply_verified"
         fresh = _message(200, peer=43, at=future)
         client.messages[200] = fresh
@@ -1396,6 +1399,7 @@ def test_history_duty_opening_second_is_held_without_replay(tmp_path):
     inbox.configure_instructions("/test/snapshot", REVISION)
     inbox.duty_set(True, at=at.isoformat())
     monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+    monitor.reconciliation_transport_hook = lambda: True
     client = Client([_message(100, at=at.replace(microsecond=0))])
     asyncio.run(bridge._reconcile_incoming_history(client, monitor))
     assert monitor.status()["open_events"] == 1
@@ -1481,6 +1485,7 @@ def test_restart_discards_unfenced_cursor_preserving_peer_checkpoints(tmp_path, 
     client.messages[300] = _message(300, peer=44, out=True, at=now - timedelta(minutes=1))
     client.update_revision += 1
     restarted = bridge.DurableInboundMonitor(TelegramInbox(config.state_dir / "inbound.sqlite3"), enabled=True)
+    restarted.reconciliation_transport_hook = lambda: True
     asyncio.run(bridge._reconcile_incoming_history(client, restarted))
     assert client.dialog_calls[1][0] == 44
     assert restarted.inbox.resolve(restarted.inbox.events()[0]["event_id"]).message_id == 100
