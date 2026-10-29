@@ -292,7 +292,13 @@ class RoleExecutor:
                 )
 
     async def _sync_goal(
-        self, state: dict[str, Any], rpc: Any, *, allow_create: bool, item: dict[str, Any] | None = None
+        self,
+        state: dict[str, Any],
+        rpc: Any,
+        *,
+        allow_create: bool,
+        item: dict[str, Any] | None = None,
+        allow_activate: bool = False,
     ) -> bool:
         result = await rpc.request("thread/goal/get", {"threadId": state["thread_id"]})
         goal = result.get("goal")
@@ -321,6 +327,12 @@ class RoleExecutor:
             fresh = self.store.role_state(state["role"])
             if fresh["generation"] != state["generation"] or fresh["revision"] != state["revision"]:
                 return False
+            if desired == "active" and not allow_activate:
+                # Keep the goal paused until a controlled dispatch delivers its
+                # profile and policy. Stop must still own this existing goal.
+                if goal:
+                    self.store.runtime_update(state["role"], goal_owned=True)
+                return True
             params = {
                 "threadId": state["thread_id"],
                 "status": desired,
@@ -634,4 +646,6 @@ class RoleExecutor:
             self.store.mark_dispatch(dispatch["id"], "unknown", error="role_launch_unknown")
             return
         if state["duty_active"]:
-            await self._sync_goal(self.store.role_state(state["role"]), rpc, allow_create=True, item=item)
+            await self._sync_goal(
+                self.store.role_state(state["role"]), rpc, allow_create=True, item=item, allow_activate=True
+            )
