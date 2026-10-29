@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from websockets.exceptions import ConnectionClosed
 
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_registry import AutomationError, AutomationStore
@@ -926,6 +927,84 @@ def test_role_injection_failure_pauses_only_its_owned_native_goal(store):
     assert store.role_state()["duty_active"]
     assert store.role_state()["goal_applied"] == "paused"
     assert store.role_state()["last_error"] == "role_instruction_injection_unknown"
+
+
+@pytest.mark.parametrize(
+    "transport_error",
+    [ConnectionClosed(None, None), RuntimeError("synthetic private transport payload")],
+    ids=["websocket-closed", "runtime-error"],
+)
+def test_instruction_hold_survives_transport_failure_during_readback(store, transport_error):
+    class ReadbackFault(FakeRPC):
+        fail_readback = False
+
+        async def request(self, method, params):
+            if method == "thread/inject_items" and self.injection_error is not None:
+                self.fail_readback = True
+            if method == "thread/goal/get" and self.fail_readback:
+                self.fail_readback = False
+                self.calls.append((method, params))
+                raise transport_error
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = ReadbackFault()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    store.submit_owner_event("transport-after-unknown-append")
+    rpc.injection_error = TimeoutError("synthetic lost append")
+    asyncio.run(run.tick())
+    code = "role_instruction_injection_unknown"
+    assert store.role_state()["last_error"] == code
+    assert rpc.goals[thread]["status"] == "active"
+    generation_methods = {"thread/inject_items", "turn/start", "turn/steer"}
+    generation_calls = [call for call in rpc.calls if call[0] in generation_methods]
+    assert [method for method, _ in generation_calls] == ["thread/inject_items", "turn/start", "thread/inject_items"]
+    # The persisted hold also survives a later reconnect/readback failure.
+    rpc.fail_readback = True
+    asyncio.run(run.tick())
+    assert store.role_state()["last_error"] == code
+    assert [call for call in rpc.calls if call[0] in generation_methods] == generation_calls
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["goal_applied"] == "paused"
+    assert store.role_state()["last_error"] == code
+    assert [call for call in rpc.calls if call[0] in generation_methods] == generation_calls
+
+
+@pytest.mark.parametrize("failure_stage", ["open", "exit"])
+@pytest.mark.parametrize(
+    "transport_error",
+    [ConnectionClosed(None, None), RuntimeError("synthetic private connection payload")],
+    ids=["websocket-closed", "runtime-error"],
+)
+def test_instruction_hold_survives_rpc_factory_failure_for_each_role(store, failure_stage, transport_error):
+    rpc = FakeRPC()
+    codes = {"M1": "role_instruction_injection_unknown", "M2": "role_instruction_injection_rejected"}
+    for role, code in codes.items():
+        action(store, "start", role)
+        thread = store.role_state(role)["thread_id"]
+        rpc.goals[thread] = {"objective": role_objective(role), "status": "active"}
+        store.runtime_update(role, goal_owned=True, goal_applied="active", state="attention", last_error=code)
+
+    @asynccontextmanager
+    async def failing_factory():
+        if failure_stage == "open":
+            raise transport_error
+        yield rpc
+        raise transport_error
+
+    asyncio.run(RoleExecutor(store, rpc_factory=failing_factory).tick())
+    assert {role: store.role_state(role)["last_error"] for role in codes} == codes
+    asyncio.run(executor(store, rpc).tick())
+    for role, code in codes.items():
+        state = store.role_state(role)
+        assert state["last_error"] == code
+        assert state["goal_applied"] == "paused"
+        assert rpc.goals[state["thread_id"]]["status"] == "paused"
+    assert not any(method in {"thread/inject_items", "turn/start", "turn/steer"} for method, _ in rpc.calls)
 
 
 @pytest.mark.parametrize("pause_failure,stop", [("rejected", True), ("lost", True), ("lost", False)])

@@ -186,7 +186,8 @@ class RoleExecutor:
                         self.store.runtime_update(role, last_error="role_reconcile_unavailable")
         except Exception:  # noqa: BLE001 - no RPC payloads, source text or credentials in durable diagnostics.
             for role in candidates:
-                self.store.runtime_update(role, last_error="role_transport_unavailable")
+                if not str(self.store.role_state(role)["last_error"] or "").startswith("role_instruction_"):
+                    self.store.runtime_update(role, last_error="role_transport_unavailable")
         finally:
             os.close(fd)
             self.store.project_automation_jobs()
@@ -488,7 +489,7 @@ class RoleExecutor:
                     return
             if self._instruction_hold_current(state):
                 self.store.runtime_update(state["role"], goal_owned=state["duty_active"], goal_applied="paused")
-        except (RoleError, OSError, TimeoutError):
+        except Exception:  # noqa: BLE001 - all transport failures must retain the instruction hold.
             # Retain the original instruction hold. The next pass first reads
             # the exact goal/turn state; it cannot repeat policy append or start.
             return
