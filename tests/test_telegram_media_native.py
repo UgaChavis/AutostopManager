@@ -103,6 +103,11 @@ def media_case(tmp_path, monkeypatch):
         source = tl.Message(id=100, peer_id=tl.PeerUser(42), date=datetime.now(UTC), out=False, message="request")
 
         async def get_messages(self, _entity, *, ids=None, limit=None):
+            if isinstance(ids, list):
+                messages = {self.source.id: self.source}
+                if self.outgoing is not None:
+                    messages[self.outgoing.id] = self.outgoing
+                return [messages.get(identifier) for identifier in ids]
             if ids is not None:
                 return self.outgoing if ids == 200 else self.source
             return ([self.outgoing, self.source] if self.outgoing is not None else [self.source])[:limit]

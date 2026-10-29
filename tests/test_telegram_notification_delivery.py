@@ -164,6 +164,9 @@ def test_daemon_stays_live_for_healthy_lane_but_stops_for_actual_failed_executor
                 async def is_user_authorized(self):
                     return True
 
+                async def get_me(self):
+                    return SimpleNamespace(id=900001)
+
                 async def disconnect(self):
                     type(self).disconnected_count += 1
                     if not self.disconnected.done():
@@ -174,7 +177,13 @@ def test_daemon_stays_live_for_healthy_lane_but_stops_for_actual_failed_executor
             monkeypatch.setattr(bridge, "WORK_OWNER_CONFIG_PATH", owner_path)
             monkeypatch.setattr(bridge, "_load_telethon", lambda: (Transport, object(), object()))
             monkeypatch.setattr(
-                bridge, "_load_telegram_events", lambda: SimpleNamespace(NewMessage=lambda **_kwargs: object())
+                bridge,
+                "_load_telegram_events",
+                lambda: SimpleNamespace(
+                    NewMessage=lambda **_kwargs: object(),
+                    MessageEdited=lambda: object(),
+                    MessageDeleted=lambda: object(),
+                ),
             )
             monkeypatch.setattr(bridge, "_load_reconciliation_state_request", object)
             monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: None)

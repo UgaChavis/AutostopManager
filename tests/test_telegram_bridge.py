@@ -3216,16 +3216,17 @@ def test_read_only_bridge_operations_are_bounded_and_redacted(monkeypatch, tmp_p
             yield SimpleNamespace(entity=entity, unread_count=3)
 
         async def get_messages(self, _entity, *, limit):
-            assert limit == 2
+            assert limit == 3  # requested page plus one lookahead message
             return [
                 SimpleNamespace(
                     id=2,
+                    chat_id=20,
                     date=datetime(2026, 8, 16, tzinfo=UTC),
                     out=True,
                     message="vpn://secret",
                     media=SimpleNamespace(),
                 ),
-                SimpleNamespace(id=1, date=None, out=False, message="hello", media=None),
+                SimpleNamespace(id=1, chat_id=20, date=None, out=False, message="hello", media=None),
             ]
 
     async def resolve(_client, _peer):

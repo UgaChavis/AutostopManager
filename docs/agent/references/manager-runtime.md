@@ -63,6 +63,16 @@ Busy/timeout возвращают безопасные `error`, `stage`, `adapte
 остановку потока; его слот удерживается до реального завершения. Статические
 правила и сверка готовых данных остаются локальными вызовами.
 
+`manager_roles` и `manager_role_action` используют существующий control pool:
+два workers, два ожидающих вызова и 30 секунд ожидания; CAS и ключи действий
+проверяет прежний backend. Начавшееся действие при timeout требует readback.
+`parts_store_cards` использует существующие Store pools: `list/get` — reads,
+`create/append_note` — один stateful worker. Отказы имеют коды `crm_executor_*`;
+начатая запись возвращает `status=uncertain`, `outcome_uncertain=true` и
+`readback_required=true`. Отмена до старта не вызывает CRM; после старта слот
+удерживается до завершения, без автоматического повтора. Это способ исполнения
+существующих CRM callbacks, с прежними полномочиями и сигнатурами.
+
 Все десять Store entrypoints выполняются вне MCP event loop через
 [Store executor](../../../autostop_manager/mcp_store_executor.py).
 Runtime/search/entity/photo, analytics и owner capabilities используют отдельные
@@ -137,7 +147,8 @@ cleanup удерживает слот после timeout; `provider_transport_bu
 
 ### Завершение Store перед остановкой Manager
 
-Native HTTP-приложение имеет собственные Store pools и три отслеживаемых HTTP
+Native HTTP-приложение имеет собственные Store pools, также обслуживающие
+CRM callback `parts_store_cards`, и три отслеживаемых HTTP
 слота. Управление не добавляет MCP tools и не меняет manifest:
 
 - `GET /internal/store-workers` возвращает `store_worker_lifecycle_v1`,
@@ -170,7 +181,7 @@ native MCP, а не отдельная аутентификация root.
 `store_drain_timeout` с pending counts при незавершении. Uvicorn до него уже ждёт
 HTTP handlers; этот hook не заменяет pre-stop handshake и не гарантирует завершение
 в `TimeoutStopSec=20s`. Thread/DNS принудительно не прерываются. `drained` описывает
-только Store execution: это не успех бизнес-записи, не `readback_verified` и не
+Store execution и CRM callbacks в этих pools: это не успех бизнес-записи, не `readback_verified` и не
 готовность всего Manager/CRM к выпуску. Подключение handshake к поддерживаемому
 release controller выполняется отдельным изменением по [deployment](deployment.md).
 

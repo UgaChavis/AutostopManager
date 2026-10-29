@@ -50,6 +50,9 @@ class Client:
     async def is_user_authorized(self):
         return True
 
+    async def get_me(self):
+        return SimpleNamespace(id=900001)
+
     async def disconnect(self):
         if self.runtime.receipt_required:
             assert self.runtime.receipt_saved.is_set()
@@ -143,7 +146,13 @@ def daemon_runtime(tmp_path, monkeypatch):
         monkeypatch.setenv(bridge.WORK_DURABLE_ENVIRONMENT, "1")
         monkeypatch.setattr(bridge, "WORK_OWNER_CONFIG_PATH", config.owner_config_path)
         monkeypatch.setattr(bridge, "_load_telethon", lambda: (lambda *_args, **_kw: Client(runtime), None, None))
-        monkeypatch.setattr(bridge, "_load_telegram_events", lambda: SimpleNamespace(NewMessage=lambda **_kw: object()))
+        monkeypatch.setattr(
+            bridge,
+            "_load_telegram_events",
+            lambda: SimpleNamespace(
+                NewMessage=lambda **_kw: object(), MessageEdited=lambda: object(), MessageDeleted=lambda: object()
+            ),
+        )
         monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: None)
         # These IPC lifecycle tests do not exercise peer authorization or a
         # root-owned installed instruction bundle. Production guards stay intact.
@@ -198,7 +207,7 @@ def test_shutdown_closes_healthy_subscription_and_only_owned_handlers(daemon_run
         async with daemon_runtime() as runtime:
             reader, writer = await runtime.open_peer({"operation": "job_subscribe", "heartbeat": True})
             frame = json.loads(await asyncio.wait_for(reader.readline(), 2))
-            assert frame == {"ok": True, "generation": 0, "heartbeat": False}
+            assert frame == {"ok": True, "generation": 1, "heartbeat": False}
             assert len(runtime.monitor.subscribers) == 1
             unrelated = asyncio.create_task(asyncio.Event().wait())
             try:

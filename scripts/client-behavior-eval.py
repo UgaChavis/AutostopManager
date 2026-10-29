@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
 from decimal import Decimal
@@ -104,7 +105,7 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         if action == "crm.write":
             alternatives.update({"crm.create", "crm.update"})
         elif action == "reply.result":
-            alternatives.add("reply.clarification")
+            alternatives.update({"reply.clarification", "reply.handoff"})
         if not alternatives.intersection(actions):
             if unknown:
                 manual.append("required action may use noncanonical label, review semantics: " + action)
@@ -118,6 +119,8 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     kinds = [reply.get("kind") for reply in replies]
     if "max_ack" in checks and kinds.count("ack") > checks["max_ack"]:
         failures.append("duplicate or unnecessary acknowledgement")
+    if "max_client_replies" in checks and len(replies) > checks["max_client_replies"]:
+        failures.append("unnecessary reply after the dialogue was already answered or closed")
     if checks.get("ack_before_research"):
         research = [index for index, action in enumerate(actions) if action == "evidence.research"]
         if not research or "reply.ack" not in actions:
@@ -219,6 +222,7 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         failures.append("internal tool or card information exposed to client")
     automated = {
         "max_ack",
+        "max_client_replies",
         "ack_before_research",
         "media_before_ack",
         "late_events_covered",
@@ -254,8 +258,7 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     }
 
 
-def read_results(path: Path) -> list[dict[str, Any]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def parse_results(data: Any) -> list[dict[str, Any]]:
     if isinstance(data, dict):
         if isinstance(data.get("results"), list):
             data = data["results"]
@@ -264,6 +267,112 @@ def read_results(path: Path) -> list[dict[str, Any]]:
     if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
         raise ValueError("results must be a JSON list of case observations")
     return data
+
+
+def read_results(path: Path) -> list[dict[str, Any]]:
+    return parse_results(json.loads(path.read_bytes()))
+
+
+def instruction_hashes(fixture: dict[str, Any], root: Path) -> dict[str, str]:
+    """Bind an expert review to the same literal local policies as model_input."""
+    root = root.resolve()
+    hashes: dict[str, str] = {}
+    for relative in fixture["instruction_paths"]:
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("instruction must remain inside the selected root")
+        hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def accept_review(
+    fixture: dict[str, Any],
+    reports: list[dict[str, Any]],
+    review: Any,
+    *,
+    results_sha256: str,
+    fixture_sha256: str,
+    policies_sha256: dict[str, str],
+) -> dict[str, Any]:
+    """Check supplied synthetic observations and attestation; never assert a model ran."""
+    cases = {case["id"]: case for case in fixture["cases"]}
+    failures: list[str] = []
+    if not isinstance(review, dict):
+        review = {}
+    if review.get("schema") != "autostopmanager.client-expert-review.v1":
+        failures.append("expert review schema missing or invalid")
+    if review.get("synthetic_only") is not True or review.get("independent") is not True:
+        failures.append("synthetic independent expert attestation required")
+    subject, reviewer = review.get("subject_id"), review.get("reviewer_id")
+    if (
+        not isinstance(subject, str)
+        or not subject.strip()
+        or not isinstance(reviewer, str)
+        or not reviewer.strip()
+        or subject.strip().casefold() == reviewer.strip().casefold()
+    ):
+        failures.append("distinct nonempty subject and reviewer IDs required")
+    artifacts = review.get("artifacts")
+    expected_artifacts = {
+        "results_sha256": results_sha256,
+        "fixture_sha256": fixture_sha256,
+        "instructions_sha256": policies_sha256,
+    }
+    if artifacts != expected_artifacts:
+        failures.append("expert review is not bound to these exact results, fixture and instructions")
+    rules = review.get("global_rules")
+    if (
+        not isinstance(rules, dict)
+        or set(rules) != set(fixture["global_rules"])
+        or any(value is not True for value in rules.values())
+    ):
+        failures.append("all global rules require explicit expert acceptance")
+    scores = {report["case_id"]: report for report in reports}
+    if set(scores) != set(cases) or any(not report["hard_pass"] for report in reports):
+        failures.append("all cases must pass policy checks before expert acceptance")
+    rows = review.get("cases")
+    if not isinstance(rows, list):
+        rows = []
+    seen: set[str] = set()
+    dimensions = set(fixture["expert_quality_rubric"]["dimensions"])
+    for row in rows:
+        identifier = row.get("case_id") if isinstance(row, dict) else None
+        if not isinstance(identifier, str) or identifier not in cases or identifier in seen:
+            failures.append("unknown, duplicate or invalid expert case")
+            continue
+        seen.add(identifier)
+        grades = row.get("scores")
+        if (
+            not isinstance(grades, dict)
+            or set(grades) != dimensions
+            or any(type(grade) is not int or not 2 <= grade <= 3 for grade in grades.values())
+        ):
+            failures.append(identifier + ": every rubric dimension requires an integer grade 2 or 3")
+        assertions = row.get("hard_assertions")
+        if (
+            not isinstance(assertions, dict)
+            or set(assertions) != set(cases[identifier]["hard_assertions"])
+            or any(value is not True for value in assertions.values())
+        ):
+            failures.append(identifier + ": every hard assertion requires explicit expert acceptance")
+        if row.get("manual_review_passed") is not True:
+            failures.append(identifier + ": semantic/manual review incomplete")
+        rationale = row.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            failures.append(identifier + ": expert rationale missing")
+    missing = sorted(set(cases) - seen)
+    if missing:
+        failures.append("expert cases missing: " + ", ".join(missing))
+    return {
+        "evaluation_kind": fixture["evaluation_kind"],
+        "acceptance_kind": "supplied_synthetic_observations_and_expert_attestation",
+        "runtime_or_delivery_proof": False,
+        "subject_execution_verified": False,
+        "reviewer_identity_or_independence_verified": False,
+        "expert_accepted": not failures,
+        "failures": sorted(set(failures)),
+        "reviewed_cases": len(seen),
+    }
 
 
 def main() -> int:
@@ -277,8 +386,13 @@ def main() -> int:
     prompt.add_argument("--instruction-root", type=Path, default=ROOT)
     score = sub.add_parser("score")
     score.add_argument("--results", type=Path, required=True)
+    accept = sub.add_parser("accept")
+    accept.add_argument("--results", type=Path, required=True)
+    accept.add_argument("--review", type=Path, required=True)
+    accept.add_argument("--instruction-root", type=Path, default=ROOT)
     args = parser.parse_args()
-    fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
+    fixture_bytes = args.fixture.read_bytes()
+    fixture = json.loads(fixture_bytes)
     validate_fixture(fixture)
     cases = {case["id"]: case for case in fixture["cases"]}
     if args.command == "validate":
@@ -300,13 +414,25 @@ def main() -> int:
     else:
         reports = []
         seen: set[str] = set()
-        for observation in read_results(args.results):
+        results_bytes = args.results.read_bytes()
+        for observation in parse_results(json.loads(results_bytes)):
             identifier = observation.get("case_id")
             if identifier not in cases or identifier in seen:
                 raise ValueError("unknown or duplicate observation case id")
             seen.add(identifier)
             reports.append(score_case(fixture, cases[identifier], observation))
         missing = sorted(set(cases) - seen)
+        if args.command == "accept":
+            result = accept_review(
+                fixture,
+                reports,
+                json.loads(args.review.read_text(encoding="utf-8")),
+                results_sha256=hashlib.sha256(results_bytes).hexdigest(),
+                fixture_sha256=hashlib.sha256(fixture_bytes).hexdigest(),
+                policies_sha256=instruction_hashes(fixture, args.instruction_root),
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["expert_accepted"] else 1
         result = {
             "evaluation_kind": fixture["evaluation_kind"],
             "runtime_or_delivery_proof": False,

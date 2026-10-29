@@ -8,6 +8,7 @@ from copy import deepcopy
 import itertools
 import io
 import json
+import hashlib
 import socket
 import threading
 import time
@@ -836,7 +837,11 @@ def test_r02_08_actual_wmi_endpoint_roundtrip_retains_the_public_family_key(low_
         decoded = identity.decode_wmi_vpic(wmi)
     assert calls == [1]
     assert decoded["data"]["wmi"] == wmi
-    assert decoded["data"]["input_binding"] is None
+    assert decoded["data"]["input_binding"] == {
+        "identifier_kind": "wmi",
+        "identifier_sha256": hashlib.sha256(("wmi:" + wmi.strip().upper()).encode()).hexdigest(),
+        "version": 1,
+    }
     assert decoded["data"]["identifier_binding"] == {"status": "exact", "verified": True}
     response = identity.reconcile_vehicle_identity(identifier, [decoded])
     assert response["data"]["vehicle_profile"]["manufacturer"] == "Synthetic maker"
@@ -1065,7 +1070,12 @@ def test_r02_v3_native_wmi_keeps_nullable_family_shape_without_promoting_unknown
     assert json.loads(content[0].text) == response
     assert calls == [1] and response["execution"]["network_calls"] == 1
     data = response["data"]
-    assert data["wmi"] == wmi and data["input_binding"] is None
+    assert data["wmi"] == wmi
+    assert data["input_binding"] == {
+        "identifier_kind": "wmi",
+        "identifier_sha256": hashlib.sha256(("wmi:" + wmi.strip().upper()).encode()).hexdigest(),
+        "version": 1,
+    }
     assert set(data["vehicle_profile"]) == {"manufacturer", "make", "country", "vehicle_type"}
     assert data["vehicle_profile"]["country"] is None
     assert "PRIVATE_UNCONFIRMED_VARIANT" not in json.dumps(response)

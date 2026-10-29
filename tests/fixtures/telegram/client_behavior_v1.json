@@ -164,9 +164,11 @@
       "context": "Known VIN, media, outgoing acknowledgement and latest correction retained.",
       "accuracy": "Facts/price/quantity/time/margin correct, certainty and unknowns separated.",
       "usefulness": "A concrete helpful result and one practical next step, even with missing evidence.",
-      "naturalness": "Short clear Russian, no internal tools, robotic process report or unnecessary questions."
+      "naturalness": "Short clear Russian, no internal tools, robotic process report or unnecessary questions.",
+      "respect": "Notice the concrete concern, acknowledge only a confirmed mistake, correct it without argument or invented blame.",
+      "proportionality": "Match length, questions and images to the request; accept refusal and complete human answers without restarting a sale."
     },
-    "acceptance": "All critical hard assertions pass; each expert dimension>=2; no unsupported commercial/payment/booking/handoff claim."
+    "acceptance": "All hard assertions and global rules pass; every independent expert dimension>=2; review is bound to the exact synthetic results, fixture and instruction bytes. This accepts only the supplied observations, not runtime delivery or the subject model generally."
   },
   "cases": [
     {
@@ -2397,7 +2399,8 @@
         ],
         "facts": {
           "ack_send_outcome": "unknown",
-          "outgoing_readback": "unavailable"
+          "outgoing_readback": "unavailable",
+          "ack_already_attempted": true
         },
         "history": [],
         "events": [
@@ -2410,7 +2413,6 @@
       },
       "expected_actions": {
         "required": [
-          "reply.ack",
           "reply.readback",
           "job.needs_review"
         ],
@@ -2428,7 +2430,8 @@
           "timer.create",
           "reply.result",
           "reply.clarification",
-          "reply.handoff"
+          "reply.handoff",
+          "reply.ack"
         ],
         "allowed_outcomes": [
           "needs_review"
@@ -2438,7 +2441,7 @@
         "no_blind_retry": true,
         "no_research_before_verified_ack": true
       },
-      "expert_notes": "Неизвестное принятие ack сначала сверить; без сменыключа/повтора и без ложного terminalanswered."
+      "expert_notes": "Исходная попытка ack уже выполнена и имеет неизвестный исход: сверить исходную отправку; без нового ack, смены ключа, повтора, исследования и ложного terminal answered."
     },
     {
       "id": "C36",
@@ -2506,6 +2509,660 @@
         "separate_parts_labor": true
       },
       "expert_notes": "Использовать предыдущий проверенный ack и довести текущий ход до результата."
+    },
+    {
+      "id": "C37",
+      "title": "Жалоба после подтверждённого повторного вопроса",
+      "category": "trust_repair",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "vin": "SYNTHETIC_VIN_A",
+          "prior_agent_error_confirmed": true,
+          "confirmed_error": "asked_for_already_supplied_vin"
+        },
+        "history": [
+          {
+            "out": false,
+            "text": "VIN SYNTHETIC_VIN_A; фото маркировки прикреплено. Нужен один комплект.",
+            "media": {
+              "kind": "photo",
+              "description": "Учебная читаемая маркировка SYN-ANALOG-A"
+            }
+          },
+          {
+            "out": true,
+            "origin": "agent",
+            "text": "Пришлите VIN."
+          }
+        ],
+        "events": [
+          {
+            "id": "C37-event-1",
+            "kind": "text",
+            "text": "Я уже присылал VIN и фото. Вы вообще читаете? Нужна цена, не ещё один вопрос."
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "do_not_ask_known_vin": true,
+        "repair_confirmed_error": true,
+        "no_repeat_known_questions": true,
+        "use_confirmed_quote": true
+      },
+      "expert_notes": "Кратко признать именно повторный запрос VIN, дать уже подтверждённые цену/срок и границу сделки. Не оправдываться и не создавать карточку без согласия."
+    },
+    {
+      "id": "C38",
+      "title": "Жалоба без подтверждённой вины агента",
+      "category": "trust_repair",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "not_confirmed",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "prior_agent_error_confirmed": false,
+          "promised_deadline_in_history": false,
+          "quote_is_preliminary": true
+        },
+        "history": [
+          {
+            "out": true,
+            "origin": "agent",
+            "text": "Точная цена и применимость ещё не подтверждены; пока возможен предварительный вариант."
+          }
+        ],
+        "events": [
+          {
+            "id": "C38-event-1",
+            "kind": "text",
+            "text": "Мне обещали точную цену вчера. Почему вы опять ничего не знаете?"
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered",
+          "awaiting_client"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "no_invented_blame_or_promise": true,
+        "acknowledge_specific_concern": true,
+        "preliminary_required": true,
+        "offer_required": true,
+        "use_confirmed_quote": true
+      },
+      "expert_notes": "Заметить недовольство ожиданием, сообщить имеющийся предварительный вариант и конкретный следующий шаг. Не придумывать, кто обещал срок, и не заявлять подтверждённую собственную ошибку без основания."
+    },
+    {
+      "id": "C39",
+      "title": "Полный ручной ответ уже закрыл текущий запрос",
+      "category": "human_context",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "current_request_already_answered": true,
+          "manual_outgoing_readback": "verified",
+          "human_message_ids": [
+            701
+          ]
+        },
+        "history": [
+          {
+            "id": 701,
+            "out": true,
+            "origin": "human",
+            "phase": "after_current_event_before_model_turn",
+            "verified": true,
+            "text": "Комплект SYN-ANALOG-A — 1000 ₽, замена — 1800 ₽. На этом вопрос закрыли."
+          }
+        ],
+        "events": [
+          {
+            "id": "C39-event-1",
+            "kind": "text",
+            "text": "Сообщите цену комплекта и стоимость замены.",
+            "phase": "before_latest_human_reply"
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "context.refresh",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.handoff",
+          "reply.media",
+          "reply.result",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "no_reply_needed"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "max_client_replies": 0,
+        "human_answered_with_exact_ids": true
+      },
+      "expert_notes": "Не отвечать самому сотруднику и не дописывать рекламное завершение. В proposed job.result указать human_answered и точные фактически заданные fake IDs после контекстной сверки."
+    },
+    {
+      "id": "C40",
+      "title": "После частичного ручного ответа нужен только остаток",
+      "category": "human_context",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "manual_outgoing_readback": "verified",
+          "current_labor_quote": {
+            "source": "fixture://staff/verified-labor-quote",
+            "scope": "Замена передних колодок",
+            "price": 1800
+          }
+        },
+        "history": [
+          {
+            "out": false,
+            "text": "Сколько комплект колодок и замена?"
+          },
+          {
+            "id": 702,
+            "out": true,
+            "origin": "human",
+            "verified": true,
+            "text": "Комплект SYN-ANALOG-A — 1000 ₽; по работе ответим отдельно."
+          }
+        ],
+        "events": [
+          {
+            "id": "C40-event-1",
+            "kind": "text",
+            "text": "А работа сколько стоит?"
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "answer_only_unresolved_labor": true,
+        "no_repeat_known_questions": true,
+        "separate_parts_labor": true
+      },
+      "expert_notes": "Ответить о работе по подтверждённой текущей цене. Не повторять подбор/продажу деталей, не переспрашивать VIN и не выдавать ручной ответ за согласие."
+    },
+    {
+      "id": "C41",
+      "title": "Ручное сообщение изменило цену и срок",
+      "category": "human_context",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1100,
+          "lead_days": 4,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "manual_outgoing_readback": "verified",
+          "earlier_quote_superseded": true
+        },
+        "history": [
+          {
+            "out": true,
+            "origin": "agent",
+            "text": "Предварительно комплект — 1000 ₽, срок 2 дня."
+          },
+          {
+            "id": 703,
+            "out": true,
+            "origin": "human",
+            "verified": true,
+            "text": "Уточнение: текущая цена — 1100 ₽, срок 4 дня. Предыдущее предложение больше не действует."
+          }
+        ],
+        "events": [
+          {
+            "id": "C41-event-1",
+            "kind": "text",
+            "text": "Так какая цена и срок сейчас? Я ориентировался на прежние."
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "client_unit_price": 1100,
+        "honor_latest_human_terms": true,
+        "no_deal_confirmation": true
+      },
+      "expert_notes": "Прямо назвать актуальные 1100 ₽/4дня и заметить изменение условий. Не повторить прежнюю цену и не оформить покупку без нового конкретного согласия."
+    },
+    {
+      "id": "C42",
+      "title": "Только цена выбранной детали без картинки и полного досье",
+      "category": "proportionality",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "vin": "SYNTHETIC_VIN_A",
+          "irrelevant_profile_unknowns": [
+            "rear_differential_code"
+          ],
+          "image_requested": false
+        },
+        "history": [
+          {
+            "out": false,
+            "text": "Выбран один комплект SYN-ANALOG-A; применимость подтверждена учебным каталогом."
+          }
+        ],
+        "events": [
+          {
+            "id": "C42-event-1",
+            "kind": "text",
+            "text": "Нужна только цена SYN-ANALOG-A и срок. Без фото, пожалуйста."
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "do_not_ask_known_vin": true,
+        "client_unit_price": 1000,
+        "no_unrequested_media": true,
+        "do_not_block_on_unrelated_profile_fields": true
+      },
+      "expert_notes": "Коротко сообщить подтверждённые цену/срок. Не задерживать готовый ответ ради картинки или кода редуктора; полноту профиля для остальных операций не объявлять установленной."
+    },
+    {
+      "id": "C43",
+      "title": "Подтверждённый ответ уже есть в истории",
+      "category": "proportionality",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "answer_already_verified_in_history": true
+        },
+        "history": [
+          {
+            "out": true,
+            "origin": "agent",
+            "verified": true,
+            "text": "Для этого запроса по учебному каталогу подтверждён SYN-ANALOG-A."
+          }
+        ],
+        "events": [
+          {
+            "id": "C43-event-1",
+            "kind": "text",
+            "text": "Напомните артикул, который уже выбрали."
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.media",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "no_repeat_known_questions": true,
+        "use_verified_history_without_research": true
+      },
+      "expert_notes": "Сразу напомнить заданный артикул. Не отправлять «проверю и вернусь», не искать повторно и не спрашивать автомобиль/номер заново."
+    },
+    {
+      "id": "C44",
+      "title": "Реакция после отказа не возобновляет продажу",
+      "category": "proportionality",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "part": "Передние колодки",
+          "selected_part": "SYN-ANALOG-A",
+          "client_unit_price": 1000,
+          "lead_days": 2,
+          "fitment": "confirmed_by_fake_catalog",
+          "quote_source": "fixture://staff/current-verified-quote",
+          "explicit_consent": false,
+          "dialogue_closed_after_refusal": true
+        },
+        "history": [
+          {
+            "out": true,
+            "origin": "agent",
+            "text": "Комплект — 1000 ₽; оформить предварительную заявку?"
+          },
+          {
+            "out": false,
+            "text": "Не надо, спасибо, пока откажусь."
+          },
+          {
+            "out": true,
+            "origin": "agent",
+            "text": "Хорошо."
+          }
+        ],
+        "events": [
+          {
+            "id": "C44-event-1",
+            "kind": "text",
+            "text": "👍"
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.update",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.handoff",
+          "reply.media",
+          "reply.result",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "no_reply_needed"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "max_client_replies": 0,
+        "no_deal_confirmation": true,
+        "no_sales_restart": true
+      },
+      "expert_notes": "Смайлик закрывает уже завершённый обмен. Ноль новых реплик, карточек, напоминаний и уговоров; это не согласие."
     }
   ],
   "action_vocabulary": {
@@ -2553,6 +3210,7 @@
     "goal.create": "Create an agent goal from this client event: forbidden.",
     "timer.create": "Create an agent timer/background follow-up from this client event: forbidden.",
     "poll": "Continuously poll Telegram, Store or supplier state: forbidden.",
-    "background.send": "Promise or schedule autonomous later delivery: forbidden."
+    "background.send": "Promise or schedule autonomous later delivery: forbidden.",
+    "reply.media": "Propose a client image/document only when it helps distinguish or explain the requested item, or the client asks; no real upload or binary proof."
   }
 }

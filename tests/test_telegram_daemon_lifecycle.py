@@ -40,7 +40,9 @@ config = bridge.TelegramConfig(
 )
 bridge._config_from_args = lambda _args: config
 bridge._configure_durable_instructions = lambda inbox: inbox.configure_instructions(str(root), "a" * 40)
-bridge._load_telegram_events = lambda: SimpleNamespace(NewMessage=lambda **_kw: object())
+bridge._load_telegram_events = lambda: SimpleNamespace(
+    NewMessage=lambda **_kw: object(), MessageEdited=lambda: object(), MessageDeleted=lambda: object()
+)
 # This fixture has no owner binding and must not require root-owned /etc paths.
 bridge._owner_peer_id = lambda *_args, **_kwargs: None
 
@@ -110,6 +112,9 @@ class Client:
 
     async def is_user_authorized(self):
         return mode != "auth_disconnect"
+
+    async def get_me(self):
+        return SimpleNamespace(id=900001)
 
     def disconnect(self):
         enter_stage("disconnect", "cleanup_entered=true")
@@ -382,7 +387,13 @@ def test_startup_failure_releases_writer_and_preserves_old_socket(tmp_path, monk
     monkeypatch.setattr(bridge, "_load_telethon", lambda: (Client, None, None))
     monkeypatch.setattr(bridge, "_configure_durable_instructions", lambda _inbox: None)
     monkeypatch.setattr(bridge, "_install_reconnect_signal", lambda *_args: None)
-    monkeypatch.setattr(bridge, "_load_telegram_events", lambda: SimpleNamespace(NewMessage=lambda **_kwargs: object()))
+    monkeypatch.setattr(
+        bridge,
+        "_load_telegram_events",
+        lambda: SimpleNamespace(
+            NewMessage=lambda **_kwargs: object(), MessageEdited=lambda: object(), MessageDeleted=lambda: object()
+        ),
+    )
     with pytest.raises(OSError, match=r"^synthetic startup failure$"):
         asyncio.run(bridge.run_daemon(config, monitor_incoming=True))
     with TelegramInbox(config.state_dir / "inbound.sqlite3") as restored:

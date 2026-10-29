@@ -173,7 +173,8 @@ class ReadbackClient(MediaClient):
     async def get_messages(self, entity, *, ids=None, limit=None):
         self.reads.append((entity, ids))
         message = await super().get_messages(entity, ids=ids, limit=limit)
-        if ids is not None and message is not None and message.out and self.fail_readback:
+        rows = message if isinstance(message, list) else [message]
+        if ids is not None and any(row is not None and row.out for row in rows) and self.fail_readback:
             raise OSError("synthetic readback loss")
         return message
 
@@ -663,6 +664,21 @@ def test_job_media_contract_binds_reply_source(tmp_path, monkeypatch, operation,
         for effect in monitor.inbox.read_job(job["job_id"])["effects"]
     )
 
+    if change == "source":
+        with pytest.raises(InboxError, match=r"^inbox_context_stale$"):
+            call(request)
+        read = call({"operation": "monitor_read", "event_id": job["event_ids"][0]})
+        assert read["message"]["text"] == source.message
+        job = call(
+            {
+                "operation": "job_refresh",
+                "job_id": job["job_id"],
+                "lease": job["lease"],
+                "expected_revision": job["revision"],
+                "event_ids": job["event_ids"],
+            }
+        )["job"]
+        request |= {"revision": job["revision"]}
     refreshed = call(request)
     apply = request | {
         "mode": "apply",
@@ -674,18 +690,22 @@ def test_job_media_contract_binds_reply_source(tmp_path, monkeypatch, operation,
     assert sent["verified"] and replay["replayed"] and client.sent == 1
     assert client.messages[sent["message_id"]].reply_to_msg_id == request["reply_to_message_id"]
     assert monitor.inbox.read_effect(refreshed["idempotency_key"])["verified"] == 1
+    ledger_path = config.state_dir / "idempotency.json"
+    ledger_before = ledger_path.read_bytes()
     client.messages[request["reply_to_message_id"]].message = "Edited again after verified send"
-    refreshed = call(request)
-    with pytest.raises(bridge.BridgeError, match="idempotency_key_conflict"):
-        call(
-            request
-            | {
-                "mode": "apply",
-                "contract_token": refreshed["contract_token"],
-                "idempotency_key": refreshed["idempotency_key"],
-            }
-        )
-    assert client.sent == 1
+    with pytest.raises(InboxError, match=r"^inbox_context_stale$"):
+        call(request)
+    proof = call(
+        {
+            "operation": "job_effect_readback",
+            "job_id": job["job_id"],
+            "lease": job["lease"],
+            "expected_revision": job["revision"],
+            "effect_key": sent["receipt_key"],
+        }
+    )
+    assert proof["verified"] is True and proof["receipt_key"] == sent["receipt_key"]
+    assert client.sent == 1 and ledger_path.read_bytes() == ledger_before
     monitor.inbox.close()
 
 
@@ -2101,10 +2121,18 @@ def test_reply_media_reference_rotation_preserves_caption_and_replay(source_medi
     ledger_path = runtime.config.state_dir / "idempotency.json"
     ledger_before = ledger_path.read_bytes()
     runtime.identity.id = 1002
-    refreshed = runtime.call(runtime.payload)
-    assert refreshed["idempotency_key"] == dry["idempotency_key"]
-    with pytest.raises(bridge.BridgeError, match=r"^idempotency_key_conflict$"):
-        runtime.call(apply | {"contract_token": refreshed["contract_token"]})
+    with pytest.raises(InboxError, match=r"^inbox_context_stale$"):
+        runtime.call(runtime.payload)
+    proof = runtime.call(
+        {
+            "operation": "job_effect_readback",
+            "job_id": runtime.job["job_id"],
+            "lease": runtime.job["lease"],
+            "expected_revision": runtime.job["revision"],
+            "effect_key": sent["receipt_key"],
+        }
+    )
+    assert proof["verified"] is True and proof["receipt_key"] == sent["receipt_key"]
     assert runtime.client.sent == 1 and ledger_path.read_bytes() == ledger_before
 
 

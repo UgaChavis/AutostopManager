@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import hashlib
 
 import pytest
 
@@ -27,7 +28,11 @@ def native_fixture(monkeypatch, payload, wmi="1FD"):
     row = automotive_identity.decode_wmi_vpic(wmi)
     assert len(calls) == row["execution"]["network_calls"] == len(row["execution"]["attempts"]) == 1
     assert "/DecodeWMI/" in calls[0][0]
-    assert row["data"]["input_binding"] is None
+    assert row["data"]["input_binding"] == {
+        "identifier_kind": "wmi",
+        "identifier_sha256": hashlib.sha256(("wmi:" + wmi.strip().upper()).encode()).hexdigest(),
+        "version": 1,
+    }
     assert set(row["data"]["vehicle_profile"]) == {"manufacturer", "make", "country", "vehicle_type"}
     assert row["evidence"][0]["identifier_binding"] == row["data"]["identifier_binding"]
     return row
