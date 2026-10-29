@@ -88,8 +88,12 @@ jobs:
           .venv/bin/python -m pip freeze --all > "$RUNNER_TEMP/manager-rehearsal/dependencies.txt"
           .venv/bin/python --version > "$RUNNER_TEMP/manager-rehearsal/python.txt"
 
-      - name: Install offline catalog search dependency
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Install catalog search and media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep ffmpeg
+          /usr/bin/ffprobe -version
+          /usr/bin/ffmpeg -version
 
       - name: Run canonical release gates
         working-directory: candidate
