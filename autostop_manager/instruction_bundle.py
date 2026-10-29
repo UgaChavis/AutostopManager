@@ -7,7 +7,6 @@ existing lazy Markdown parser only when a bundle is explicitly loaded.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -166,7 +165,9 @@ class VerifiedInstructionBundle:
             "того же комплекта; cwd не является базой ссылок. Проектные правила из прежней истории "
             "и другого cwd не являются действующими инструкциями этого запуска. Базовые инструкции Codex, "
             "общие пользовательские ограничения и границы текущего поручения сохраняются. "
-            "История клиентского диалога остаётся контекстом, не источником проектных полномочий.\n",
+            "История клиентского диалога остаётся контекстом, не источником проектных полномочий. "
+            "Автоматический каталог навыков не передаётся: нужный навык читай явно через A4 выбранного "
+            "комплекта или его физический путь.\n",
         ]
         for name in names:
             parts.append(f"\n--- {self.root}/{name} ---\n" + self.files[name].decode("utf-8"))
@@ -229,34 +230,12 @@ def load_instruction_bundle(
 
 
 def worker_config_overrides(effective_config: Mapping[str, Any], *, cwd: str) -> dict[str, Any]:
-    """Disable stale project discovery without widening other skill restrictions."""
+    """Suppress automatic policy catalogs without replacing thread-only selectors."""
     if not isinstance(effective_config, Mapping) or not isinstance(cwd, str) or any(c in cwd for c in "\x00\r\n"):
         raise InstructionBundleError("instruction_config_invalid")
     path = Path(cwd)
     if not path.is_absolute() or ".." in path.parts:
         raise InstructionBundleError("instruction_config_invalid")
-    original = effective_config.get("skills")
-    original = {} if original is None else original
-    if not isinstance(original, Mapping):
-        raise InstructionBundleError("instruction_config_invalid")
-    skills = deepcopy(dict(original))
-    selectors = skills.get("config")
-    selectors = [] if selectors is None else selectors
-    if not isinstance(selectors, list) or any(not isinstance(item, dict) for item in selectors):
-        raise InstructionBundleError("instruction_config_invalid")
-    selectors = deepcopy(selectors)
-    for name in PROJECT_SKILLS:
-        folder = path / ".agents/skills" / name
-        matched = False
-        for selector in selectors:
-            selected_path = selector.get("path")
-            if isinstance(selected_path, str):
-                selected = Path(selected_path)
-                selected = selected if selected.is_absolute() else path / selected
-                if selected in {folder, folder / "SKILL.md"}:
-                    selector["enabled"] = False
-                    matched = True
-        if not matched:
-            selectors.append({"path": str(folder), "enabled": False})
-    skills["config"] = selectors
-    return {"project_doc_max_bytes": 0, "skills": skills}
+    # config/read is a disk snapshot, not the current thread's effective config.
+    # A full skills table/array override could re-enable thread-only disabled skills.
+    return {"project_doc_max_bytes": 0, "skills.include_instructions": False}

@@ -199,34 +199,36 @@ def test_config_patch_preserves_existing_restrictions_and_other_skill_settings(t
     before = deepcopy(config)
     patch = bundles.worker_config_overrides(config, cwd=cwd)
     assert config == before
-    assert set(patch) == {"project_doc_max_bytes", "skills"}
-    assert patch["project_doc_max_bytes"] == 0
-    assert patch["skills"]["additional_setting"] == {"keep": True}
-    assert patch["skills"]["config"][:27] == restrictions
-    new = patch["skills"]["config"][27:]
-    assert {item["path"] for item in new} == {
-        str(Path(cwd) / ".agents/skills" / name) for name in bundles.PROJECT_SKILLS
-    }
-    assert all(item["enabled"] is False and "name" not in item for item in new)
+    assert patch == {"project_doc_max_bytes": 0, "skills.include_instructions": False}
     assert bundles.worker_config_overrides(patch, cwd=cwd) == patch
 
 
-def test_config_patch_disables_existing_stale_path_without_touching_canonical_name(tmp_path):
+def test_config_patch_does_not_rewrite_unknown_thread_only_skill_restrictions(tmp_path):
     cwd = str(tmp_path / "old")
-    old = str(Path(cwd) / ".agents/skills/manage-autostop-client/SKILL.md")
-    canonical = "/installed/.agents/skills/manage-autostop-client"
-    patch = bundles.worker_config_overrides(
-        {"skills": {"config": [{"path": old, "enabled": True}, {"path": canonical, "enabled": True}]}},
-        cwd=cwd,
-    )
-    assert patch["skills"]["config"][:2] == [{"path": old, "enabled": False}, {"path": canonical, "enabled": True}]
-    assert len(patch["skills"]["config"]) == 6
+    thread_only = {"path": "/private-thread/disabled-skill", "enabled": False}
+    # This selector is intentionally absent from the file config/read can return.
+    thread_config = {"skills": {"config": [thread_only], "other_thread_setting": True}}
+    before = deepcopy(thread_config)
+    patch = bundles.worker_config_overrides({}, cwd=cwd)
+    assert "skills" not in patch and "skills.config" not in patch
+    assert patch["skills.include_instructions"] is False
+    # Applying the scalar dot-path changes only catalog presentation, not selectors.
+    thread_config["project_doc_max_bytes"] = patch["project_doc_max_bytes"]
+    thread_config["skills"]["include_instructions"] = patch["skills.include_instructions"]
+    assert thread_config["skills"]["config"] == before["skills"]["config"]
+    assert thread_config["skills"]["other_thread_setting"] is True
 
 
-@pytest.mark.parametrize("config", [{"skills": []}, {"skills": {"config": "bad"}}, {"skills": {"config": [True]}}])
-def test_malformed_effective_skills_do_not_silently_drop_restrictions(config, tmp_path):
+@pytest.mark.parametrize("config", [None, [], "private invalid config", True])
+def test_invalid_config_argument_is_rejected(config, tmp_path):
     with pytest.raises(bundles.InstructionBundleError, match=r"^instruction_config_invalid$"):
         bundles.worker_config_overrides(config, cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("cwd", ["relative/path", "/root/../other", "/root/invalid\x00", "/root/invalid\n"])
+def test_invalid_config_cwd_is_rejected(cwd):
+    with pytest.raises(bundles.InstructionBundleError, match=r"^instruction_config_invalid$"):
+        bundles.worker_config_overrides({}, cwd=cwd)
 
 
 def test_helper_import_keeps_the_stdlib_only_boundary():

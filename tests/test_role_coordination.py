@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from websockets.exceptions import ConnectionClosed
 
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_registry import AutomationError, AutomationStore
@@ -53,6 +54,7 @@ class FakeRPC:
         self.calls = []
         self.lose_start = False
         self.config = {"skills": {"config": [{"path": "/synthetic/skills/disabled", "enabled": False}]}}
+        self.thread_configs = {}
         self.injected = {}
         self.injection_error = None
 
@@ -64,6 +66,8 @@ class FakeRPC:
         thread = params["threadId"]
         turns = self.turns.setdefault(thread, [])
         if method in {"thread/resume", "thread/read"}:
+            if method == "thread/resume":
+                self.thread_configs.setdefault(thread, {}).update(params.get("config", {}))
             return {
                 "model": MODEL,
                 "thread": {
@@ -800,6 +804,9 @@ def test_role_turn_uses_exact_verified_policy_and_preserves_managed_settings(sto
         "developer_instructions": "Existing custom developer instructions",
         "approval_policy": "on-request",
     }
+    thread = store.role_state(role)["thread_id"]
+    thread_selectors = [{"path": "/thread-only/disabled-skill", "enabled": False}]
+    rpc.thread_configs[thread] = {"skills": {"config": deepcopy(thread_selectors), "max_context_tokens": 123}}
     asyncio.run(executor(store, rpc).tick())
     state = store.role_state(role)
     bundle = load_instruction_bundle(state["instruction_root"], state["instruction_revision"])
@@ -814,8 +821,10 @@ def test_role_turn_uses_exact_verified_policy_and_preserves_managed_settings(sto
     profiles = [params["config"] for method, params in rpc.calls if method == "thread/resume" and "config" in params]
     assert len(profiles) == 1
     assert profiles[0]["project_doc_max_bytes"] == 0
-    assert profiles[0]["skills"]["config"][:27] == original_selectors
-    assert all(not item["enabled"] for item in profiles[0]["skills"]["config"])
+    assert profiles[0]["skills.include_instructions"] is False
+    assert "skills" not in profiles[0] and "skills.config" not in profiles[0]
+    assert rpc.thread_configs[thread]["skills"]["config"] == thread_selectors
+    assert rpc.thread_configs[thread]["skills"]["max_context_tokens"] == 123
     assert rpc.config["skills"]["config"] == original_selectors
     assert not any(
         key in params for _method, params in rpc.calls for key in ("baseInstructions", "developerInstructions")
@@ -918,6 +927,226 @@ def test_role_injection_failure_pauses_only_its_owned_native_goal(store):
     assert store.role_state()["duty_active"]
     assert store.role_state()["goal_applied"] == "paused"
     assert store.role_state()["last_error"] == "role_instruction_injection_unknown"
+
+
+@pytest.mark.parametrize(
+    "transport_error",
+    [ConnectionClosed(None, None), RuntimeError("synthetic private transport payload")],
+    ids=["websocket-closed", "runtime-error"],
+)
+def test_instruction_hold_survives_transport_failure_during_readback(store, transport_error):
+    class ReadbackFault(FakeRPC):
+        fail_readback = False
+
+        async def request(self, method, params):
+            if method == "thread/inject_items" and self.injection_error is not None:
+                self.fail_readback = True
+            if method == "thread/goal/get" and self.fail_readback:
+                self.fail_readback = False
+                self.calls.append((method, params))
+                raise transport_error
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = ReadbackFault()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    store.submit_owner_event("transport-after-unknown-append")
+    rpc.injection_error = TimeoutError("synthetic lost append")
+    asyncio.run(run.tick())
+    code = "role_instruction_injection_unknown"
+    assert store.role_state()["last_error"] == code
+    assert rpc.goals[thread]["status"] == "active"
+    generation_methods = {"thread/inject_items", "turn/start", "turn/steer"}
+    generation_calls = [call for call in rpc.calls if call[0] in generation_methods]
+    assert [method for method, _ in generation_calls] == ["thread/inject_items", "turn/start", "thread/inject_items"]
+    # The persisted hold also survives a later reconnect/readback failure.
+    rpc.fail_readback = True
+    asyncio.run(run.tick())
+    assert store.role_state()["last_error"] == code
+    assert [call for call in rpc.calls if call[0] in generation_methods] == generation_calls
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["goal_applied"] == "paused"
+    assert store.role_state()["last_error"] == code
+    assert [call for call in rpc.calls if call[0] in generation_methods] == generation_calls
+
+
+@pytest.mark.parametrize("failure_stage", ["open", "exit"])
+@pytest.mark.parametrize(
+    "transport_error",
+    [ConnectionClosed(None, None), RuntimeError("synthetic private connection payload")],
+    ids=["websocket-closed", "runtime-error"],
+)
+def test_instruction_hold_survives_rpc_factory_failure_for_each_role(store, failure_stage, transport_error):
+    rpc = FakeRPC()
+    codes = {"M1": "role_instruction_injection_unknown", "M2": "role_instruction_injection_rejected"}
+    for role, code in codes.items():
+        action(store, "start", role)
+        thread = store.role_state(role)["thread_id"]
+        rpc.goals[thread] = {"objective": role_objective(role), "status": "active"}
+        store.runtime_update(role, goal_owned=True, goal_applied="active", state="attention", last_error=code)
+
+    @asynccontextmanager
+    async def failing_factory():
+        if failure_stage == "open":
+            raise transport_error
+        yield rpc
+        raise transport_error
+
+    asyncio.run(RoleExecutor(store, rpc_factory=failing_factory).tick())
+    assert {role: store.role_state(role)["last_error"] for role in codes} == codes
+    asyncio.run(executor(store, rpc).tick())
+    for role, code in codes.items():
+        state = store.role_state(role)
+        assert state["last_error"] == code
+        assert state["goal_applied"] == "paused"
+        assert rpc.goals[state["thread_id"]]["status"] == "paused"
+    assert not any(method in {"thread/inject_items", "turn/start", "turn/steer"} for method, _ in rpc.calls)
+
+
+@pytest.mark.parametrize("pause_failure,stop", [("rejected", True), ("lost", True), ("lost", False)])
+def test_instruction_hold_reconciles_owned_goal_without_policy_replay(store, pause_failure, stop):
+    class PauseFault(FakeRPC):
+        pause_attempts = 0
+        fail_pause = True
+
+        async def request(self, method, params):
+            if method == "thread/goal/set" and params.get("status") == "paused":
+                self.pause_attempts += 1
+                if self.fail_pause:
+                    self.fail_pause = False
+                    if pause_failure == "rejected":
+                        raise RoleRpcRejected("synthetic rejected pause")
+                    await super().request(method, params)
+                    raise TimeoutError("synthetic lost pause response")
+            return await super().request(method, params)
+
+    action(store, "start")
+    rpc = PauseFault()
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread][0]["status"] = "completed"
+    store.submit_owner_event("held-owner-policy")
+    rpc.injection_error = TimeoutError("synthetic lost append")
+    asyncio.run(run.tick())
+    code = "role_instruction_injection_unknown"
+    assert store.role_state()["last_error"] == code
+    assert store.role_state()["goal_applied"] == "active"
+    assert rpc.pause_attempts == 1
+    if pause_failure == "rejected":
+        # Keep observing the exact goal after a known refusal; do not blindly
+        # repeat that write before the owner's new stop revision.
+        asyncio.run(run.tick())
+        assert rpc.pause_attempts == 1
+        assert rpc.goals[thread]["status"] == "active"
+        continuation = {"id": "owned-native-continuation", "status": "inProgress", "items": []}
+        rpc.turns[thread].insert(0, continuation)
+    if stop:
+        action(store, "stop")
+    # Exercise persistence on the unknown-response path, without resending its
+    # already-applied pause or any policy message.
+    if pause_failure == "lost":
+        run = executor(RoleStore(store.path), rpc)
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert store.role_state()["goal_applied"] == "paused"
+    assert store.role_state()["last_error"] == code
+    assert store.role_state()["duty_active"] is not stop
+    assert store.role_state()["goal_owned"] is not stop
+    assert rpc.pause_attempts == (2 if pause_failure == "rejected" else 1)
+    assert len([method for method, _ in rpc.calls if method == "turn/start"]) == 1
+    assert len([method for method, _ in rpc.calls if method == "thread/inject_items"]) == 2
+    assert not any(method == "turn/steer" for method, _ in rpc.calls)
+    if pause_failure == "rejected":
+        assert continuation["status"] == "interrupted"
+    asyncio.run(run.tick())
+    assert rpc.goals[thread]["status"] == "paused"
+    assert len([method for method, _ in rpc.calls if method == "thread/inject_items"]) == 2
+
+
+def test_instruction_hold_does_not_pause_or_interrupt_a_foreign_goal(store):
+    rpc = FakeRPC()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": "Unrelated user goal", "status": "active"}
+    rpc.turns[thread] = [{"id": "foreign-turn", "status": "inProgress", "items": []}]
+    store.runtime_update(
+        "M1", goal_owned=True, goal_applied="active", state="attention", last_error="role_instruction_injection_unknown"
+    )
+    asyncio.run(executor(store, rpc).tick())
+    assert rpc.goals[thread]["status"] == "active"
+    assert rpc.turns[thread][0]["status"] == "inProgress"
+    assert store.role_state()["last_error"] == "role_instruction_injection_unknown"
+    assert not any(
+        method in {"thread/goal/set", "turn/interrupt", "thread/inject_items", "turn/start", "turn/steer"}
+        for method, _ in rpc.calls
+    )
+
+
+def test_instruction_hold_requires_pause_readback_before_marking_applied(store):
+    class IgnoredPause(FakeRPC):
+        async def request(self, method, params):
+            if method == "thread/goal/set" and params.get("status") == "paused":
+                self.calls.append((method, params))
+                return {}
+            return await super().request(method, params)
+
+    rpc = IgnoredPause()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": role_objective("M1"), "status": "active"}
+    store.runtime_update(
+        "M1", goal_owned=True, goal_applied="active", state="attention", last_error="role_instruction_injection_unknown"
+    )
+    asyncio.run(executor(store, rpc).tick())
+    assert rpc.goals[thread]["status"] == "active"
+    assert store.role_state()["goal_applied"] == "active"
+    assert len([method for method, _ in rpc.calls if method == "thread/goal/get"]) == 2
+    assert not any(method in {"thread/inject_items", "turn/start", "turn/steer"} for method, _ in rpc.calls)
+
+
+def test_instruction_hold_does_not_claim_stopped_while_goal_is_missing_and_turn_is_active(store):
+    rpc = FakeRPC()
+    thread = store.role_state()["thread_id"]
+    rpc.turns[thread] = [{"id": "unproven-active-turn", "status": "inProgress", "items": []}]
+    store.runtime_update(
+        "M1", goal_owned=True, goal_applied="active", state="attention", last_error="role_instruction_injection_unknown"
+    )
+    run = executor(store, rpc)
+    asyncio.run(run.tick())
+    assert store.role_state()["goal_owned"] is True
+    assert store.role_state()["goal_applied"] == "active"
+    assert not any(method in {"thread/goal/set", "turn/interrupt"} for method, _ in rpc.calls)
+    rpc.turns[thread][0]["status"] = "completed"
+    asyncio.run(run.tick())
+    assert store.role_state()["goal_owned"] is False
+    assert store.role_state()["goal_applied"] == "paused"
+    assert store.role_state()["last_error"] == "role_instruction_injection_unknown"
+
+
+def test_instruction_hold_does_not_override_new_explicit_recovery(store):
+    class RecoverDuringRead(FakeRPC):
+        async def request(self, method, params):
+            result = await super().request(method, params)
+            if method == "thread/goal/get":
+                action(store, "start")
+            return result
+
+    rpc = RecoverDuringRead()
+    thread = store.role_state()["thread_id"]
+    rpc.goals[thread] = {"objective": role_objective("M1"), "status": "active"}
+    store.runtime_update(
+        "M1", goal_owned=True, goal_applied="active", state="attention", last_error="role_instruction_injection_unknown"
+    )
+    asyncio.run(executor(store, rpc).tick())
+    assert store.role_state()["last_error"] is None
+    assert rpc.goals[thread]["status"] == "active"
+    assert not any(
+        method in {"thread/goal/set", "turn/interrupt", "thread/inject_items", "turn/start", "turn/steer"}
+        for method, _ in rpc.calls
+    )
 
 
 @pytest.mark.parametrize("bad_pin", [False, True])

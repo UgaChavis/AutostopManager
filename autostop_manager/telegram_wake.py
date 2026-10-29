@@ -454,13 +454,9 @@ class AppServer:
         self.turn_start_attempted = False
 
     async def worker_instruction_config(self) -> dict[str, Any]:
-        """Read selectors without exposing configuration or modifying global settings."""
-        result = await self.request("config/read", {"cwd": self.config.project_dir, "includeLayers": False})
-        config = result.get("config") if isinstance(result, dict) else None
-        if not isinstance(config, dict):
-            raise WakeError("wake_instruction_config_invalid")
+        """Suppress automatic project guidance without replacing unknown thread selectors."""
         try:
-            return worker_config_overrides(config, cwd=self.config.project_dir)
+            return worker_config_overrides({}, cwd=self.config.project_dir)
         except InstructionBundleError as exc:
             raise WakeError("wake_" + exc.code) from None
 

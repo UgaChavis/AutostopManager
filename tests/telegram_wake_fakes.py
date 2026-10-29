@@ -69,6 +69,7 @@ class MockServer:
         self.materialized_threads = {THREAD}
         self.archived_threads = set()
         self.thread_settings = {}
+        self.thread_configs = {}
         self.peer_resume_overrides = {}
         self.archive_observer = None
         self.effective_config = {"skills": {"config": []}}
@@ -108,6 +109,7 @@ class MockServer:
         return result
 
     def _resume_peer_settings(self, thread_id, params):
+        self.thread_configs.setdefault(thread_id, {}).update(params.get("config", {}))
         settings = self.thread_settings.setdefault(thread_id, {})
         settings.update(
             reasoningEffort=params.get("config", {}).get("model_reasoning_effort"),

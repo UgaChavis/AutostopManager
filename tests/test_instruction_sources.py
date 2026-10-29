@@ -112,7 +112,8 @@ def test_source_check_reads_only_metadata_and_preserves_raw_discovery_limits(run
     assert result["raw_project_skill_differences"] == 2
     assert result["prepared_profile"] == {
         "project_doc_max_bytes": 0,
-        "existing_disabled_selectors_preserved": True,
+        "automatic_skill_catalog_included": False,
+        "skills_config_overridden": False,
         "applied_to_thread_verified": False,
     }
     assert result["metadata"] == {"scope": "configured_bootstrap", "cwd_matches_config": True, "turns_read": 0}
