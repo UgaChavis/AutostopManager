@@ -36,12 +36,22 @@ def skill(path, name):
     return write(path, f"---\nname: {name}\ndescription: Task {name}\n---\n\n# {name}\n")
 
 
-def installed_package(codex, package, *, version="1", marketplace="openai-curated-remote", skills="./skills/"):
+def installed_package(
+    codex,
+    package,
+    *,
+    version="1",
+    marketplace="openai-curated-remote",
+    skills="./skills/",
+    manifest_path=".codex-plugin/plugin.json",
+):
     root = codex / "plugins/cache" / marketplace / package / version
     info = {"name": package, "version": version}
-    if skills is not None:
+    if manifest_path == "plugin.json":
+        info["$schema"] = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    elif skills is not None:
         info["skills"] = skills
-    write(root / ".codex-plugin/plugin.json", json.dumps(info))
+    write(root / manifest_path, json.dumps(info))
     if marketplace == "openai-curated-remote":
         write(
             root.parent / ".codex-remote-plugin-install.json",
@@ -352,6 +362,132 @@ def test_catalogs_manifest_skills_path_and_default_enabled_metadata(tmp_path):
         catalogs.installed_skill_root("github", tmp_path, {"plugins": {"github@openai-curated-remote": {}}})
         == retained.parent.parent
     )
+
+
+@pytest.mark.parametrize("manifest_path", [".codex-plugin/plugin.json", "plugin.json"])
+def test_catalogs_resolve_skills_from_both_manifest_layouts_read_only(tmp_path, manifest_path):
+    root = installed_package(tmp_path, "github", manifest_path=manifest_path)
+    retained = skill(root / "skills/current/SKILL.md", "current")
+    skill(root / "other-skills/undeclared/SKILL.md", "undeclared")
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [retained]
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_catalogs_standard_root_manifest_without_optional_skills_never_falls_back(tmp_path):
+    installed_package(tmp_path, "github", version="2", skills=None, manifest_path="plugin.json")
+    stale = installed_package(tmp_path, "github", marketplace="openai-curated")
+    skill(stale / "skills/old/SKILL.md", "old")
+    write(tmp_path / "config.toml", '[plugins."github@openai-curated"]\nenabled=true\n')
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    assert catalogs.selected_skills(tmp_path / "project", tmp_path) == []
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_catalogs_standard_root_manifest_allows_fixed_skills_alias_within_version(tmp_path):
+    version = installed_package(tmp_path, "github", skills=None, manifest_path="plugin.json")
+    retained = skill(version / "shared-skills/current/SKILL.md", "current")
+    (version / "skills").symlink_to(retained.parent.parent, target_is_directory=True)
+
+    assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [retained]
+
+
+@pytest.mark.parametrize("manifest_path", [".codex-plugin/plugin.json", "plugin.json"])
+def test_catalogs_reject_wrong_package_identity_in_either_manifest_layout(tmp_path, manifest_path):
+    root = installed_package(tmp_path, "github", manifest_path=manifest_path)
+    write(root / manifest_path, json.dumps({"name": "other", "skills": "./skills"}))
+
+    with pytest.raises(ValueError, match="Invalid installed package manifest"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+def test_catalogs_reject_duplicate_manifest_layouts_in_one_version(tmp_path):
+    root = installed_package(tmp_path, "github")
+    write(root / "plugin.json", (root / ".codex-plugin/plugin.json").read_text())
+
+    with pytest.raises(ValueError, match="Specify current package version"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "layouts",
+    [
+        ("plugin.json", "plugin.json"),
+        (".codex-plugin/plugin.json", "plugin.json"),
+        ("plugin.json", ".codex-plugin/plugin.json"),
+    ],
+)
+def test_catalogs_reject_multiple_versions_across_manifest_layouts(tmp_path, layouts):
+    for version, layout in zip(("1", "2"), layouts, strict=True):
+        installed_package(tmp_path, "github", version=version, manifest_path=layout)
+
+    with pytest.raises(ValueError, match="Specify current package version"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["file", "outside", "sibling", "broken"])
+def test_catalogs_root_manifest_rejects_invalid_fixed_skills_directory(tmp_path, kind):
+    version = installed_package(tmp_path, "github", skills=None, manifest_path="plugin.json")
+    root = version / "skills"
+    if kind == "file":
+        root.write_text("not a directory")
+    else:
+        destination = version / "missing" if kind == "broken" else tmp_path / "outside"
+        if kind == "sibling":
+            destination = version.parent / "other/skills"
+        if kind != "broken":
+            skill(destination / "current/SKILL.md", "current")
+        root.symlink_to(destination, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="Missing or outside-package skills"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize("schema", [None, "", "https://example.invalid/plugin.schema.json"])
+def test_catalogs_root_manifest_rejects_unknown_schema(tmp_path, schema):
+    version = installed_package(tmp_path, "github", manifest_path="plugin.json")
+    info = {"name": "github", "$schema": schema}
+    write(version / "plugin.json", json.dumps(info))
+
+    with pytest.raises(ValueError, match="Invalid installed package schema"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+@pytest.mark.parametrize("override", ["./other-skills", "../../outside", True])
+def test_catalogs_standard_root_manifest_ignores_top_level_skills_override(tmp_path, override):
+    version = installed_package(tmp_path, "github", manifest_path="plugin.json")
+    manifest = version / "plugin.json"
+    info = json.loads(manifest.read_text())
+    info["skills"] = override
+    write(manifest, json.dumps(info))
+    retained = skill(version / "skills/current/SKILL.md", "current")
+    skill(version / "other-skills/undeclared/SKILL.md", "undeclared")
+
+    assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [retained]
+
+
+@pytest.mark.parametrize("manifest_path", [".codex-plugin/plugin.json", "plugin.json"])
+@pytest.mark.parametrize("sibling_version", [False, True])
+def test_catalogs_manifest_alias_cannot_escape_selected_version(tmp_path, manifest_path, sibling_version):
+    version = installed_package(tmp_path, "github", manifest_path=manifest_path)
+    destination = version.parent / "other/manifest-data.json" if sibling_version else tmp_path / "outside.json"
+    manifest = version / manifest_path
+    write(destination, manifest.read_text())
+    manifest.unlink()
+    manifest.symlink_to(destination)
+
+    with pytest.raises(ValueError, match="Outside-package manifest"):
+        catalogs.selected_skills(tmp_path / "project", tmp_path)
+
+
+def test_catalogs_disabled_root_manifest_package_does_not_read_invalid_manifest(tmp_path):
+    version = installed_package(tmp_path, "github", manifest_path="plugin.json")
+    write(version / "plugin.json", "invalid json")
+    write(tmp_path / "config.toml", '[plugins."github@openai-curated-remote"]\nenabled=false\n')
+
+    assert catalogs.selected_skills(tmp_path / "project", tmp_path) == []
 
 
 @pytest.mark.parametrize("selector", [None, True, "enabled", {"enabled": "false"}, {"enabled": 0}])

@@ -27,6 +27,7 @@ from autostop_manager.instruction_inventory import (  # noqa: E402
 from autostop_manager.markdown_links import markdown_section_body  # noqa: E402
 
 CODEX = Path("/root/.codex")
+AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 PACKAGES = (
     "gmail",
     "windsor-ai",
@@ -117,23 +118,38 @@ def _installed_skill_location(package, codex, config):
         return None
 
     cache = caches / marketplace / package
-    manifests = sorted(cache.glob("*/.codex-plugin/plugin.json"))
+    manifests = [
+        (manifest, manifest.parent.parent) for manifest in sorted(cache.glob("*/.codex-plugin/plugin.json"))
+    ] + [(manifest, manifest.parent) for manifest in sorted(cache.glob("*/plugin.json"))]
     if len(manifests) != 1:
         raise ValueError("Specify current package version: " + str(cache))
-    manifest = manifests[0]
-    if not manifest.resolve().is_relative_to(cache.resolve()):
+    manifest, version = manifests[0]
+    root_manifest = manifest.parent == version
+    version = version.resolve()
+    if not version.is_relative_to(cache.resolve()) or not manifest.resolve().is_relative_to(version):
         raise ValueError("Outside-package manifest: " + str(manifest))
     info = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(info, dict) or info.get("name") != package:
         raise ValueError("Invalid installed package manifest: " + str(manifest))
-    skill_path = info.get("skills")
+    if root_manifest:
+        if info.get("$schema") != AGENT_PLUGIN_SCHEMA:
+            raise ValueError("Invalid installed package schema: " + str(manifest))
+        # Agent Plugins 1.0 uses fixed skills/, not a manifest override:
+        # https://agent-plugins.org/specification#61-fixed-locations
+        skill_path = "skills"
+    else:
+        skill_path = info.get("skills")
     if skill_path is None:
         return None
     if not isinstance(skill_path, str) or not skill_path.strip():
         raise ValueError("Invalid installed package skills: " + str(manifest))
-    version = manifest.parent.parent.resolve()
-    root = (version / skill_path).resolve()
-    if not root.is_relative_to(version) or not root.is_dir():
+    declared_root = version / skill_path
+    root = declared_root.resolve()
+    if not root.is_relative_to(version):
+        raise ValueError("Missing or outside-package skills: " + str(manifest))
+    if root_manifest and not declared_root.exists() and not declared_root.is_symlink():
+        return None
+    if not root.is_dir():
         raise ValueError("Missing or outside-package skills: " + str(manifest))
     return root, version
 
