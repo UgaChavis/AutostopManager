@@ -186,7 +186,11 @@ class RoleExecutor:
                         self.store.runtime_update(role, last_error="role_reconcile_unavailable")
         except Exception:  # noqa: BLE001 - no RPC payloads, source text or credentials in durable diagnostics.
             for role in candidates:
-                if not str(self.store.role_state(role)["last_error"] or "").startswith("role_instruction_"):
+                error = self.store.role_state(role)["last_error"]
+                if not (
+                    str(error or "").startswith("role_instruction_")
+                    or error in {"role_rpc_rejected", "role_turn_rejected"}
+                ):
                     self.store.runtime_update(role, last_error="role_transport_unavailable")
         finally:
             os.close(fd)
@@ -225,24 +229,43 @@ class RoleExecutor:
             raise RoleError("role_turn_cursor_invalid")
         return turns, next_cursor
 
-    async def _reconcile(self, role: str, rpc: Any, turns: list[dict[str, Any]], next_cursor: str | None) -> None:
+    async def _reconcile(
+        self,
+        role: str,
+        rpc: Any,
+        turns: list[dict[str, Any]],
+        next_cursor: str | None,
+        *,
+        hold_state: dict[str, Any] | None = None,
+    ) -> None:
+        hold_error = hold_state["last_error"] if hold_state is not None else None
         pending = self.store.pending_dispatches(role)
         for dispatch in pending:
+            if hold_state is not None and not self._instruction_hold_current(hold_state):
+                return
             match = next((turn for turn in turns if turn["id"] == dispatch["turn_id"]), None)
             if dispatch["turn_id"] and match is None:
                 cursor = dispatch.get("scan_cursor") or next_cursor
                 page, more = await self._turns(rpc, dispatch["thread_id"], cursor=cursor) if cursor else ([], None)
+                if hold_state is not None and not self._instruction_hold_current(hold_state):
+                    return
                 match = next((turn for turn in page if turn["id"] == dispatch["turn_id"]), None)
                 if match is None:
                     if more:
                         self.store.advance_dispatch_scan(dispatch["id"], more)
                     else:
-                        self.store.mark_dispatch(dispatch["id"], "unknown", error="role_turn_missing")
+                        self.store.mark_dispatch(
+                            dispatch["id"],
+                            "unknown",
+                            error=hold_error if hold_state is not None else "role_turn_missing",
+                        )
                     continue
             if not dispatch["turn_id"]:
                 full, more = await self._turns(
                     rpc, dispatch["thread_id"], full=True, cursor=dispatch.get("scan_cursor")
                 )
+                if hold_state is not None and not self._instruction_hold_current(hold_state):
+                    return
                 found = [
                     turn
                     for turn in full
@@ -253,18 +276,24 @@ class RoleExecutor:
                 ]
                 if len(found) == 1:
                     match = found[0]
-                    self.store.mark_dispatch(dispatch["id"], "running", turn_id=match["id"])
+                    self.store.mark_dispatch(dispatch["id"], "running", turn_id=match["id"], error=hold_error)
                 else:
                     if more and not any(turn["id"] == dispatch["before_turn_id"] for turn in full):
                         self.store.advance_dispatch_scan(dispatch["id"], more)
-                    self.store.mark_dispatch(dispatch["id"], "unknown", error="role_launch_unknown")
+                    self.store.mark_dispatch(
+                        dispatch["id"], "unknown", error=hold_error if hold_state is not None else "role_launch_unknown"
+                    )
                     continue
             if match and match.get("status") == "completed":
-                self.store.mark_dispatch(dispatch["id"], "completed")
+                self.store.mark_dispatch(dispatch["id"], "completed", error=hold_error)
             elif match and match.get("status") in {"failed", "interrupted"}:
-                self.store.mark_dispatch(dispatch["id"], "failed", error="role_turn_failed")
+                self.store.mark_dispatch(
+                    dispatch["id"], "failed", error=hold_error if hold_state is not None else "role_turn_failed"
+                )
 
-    async def _sync_goal(self, state: dict[str, Any], rpc: Any, *, allow_create: bool) -> bool:
+    async def _sync_goal(
+        self, state: dict[str, Any], rpc: Any, *, allow_create: bool, item: dict[str, Any] | None = None
+    ) -> bool:
         result = await rpc.request("thread/goal/get", {"threadId": state["thread_id"]})
         goal = result.get("goal")
         if goal is not None and not isinstance(goal, dict):
@@ -285,6 +314,10 @@ class RoleExecutor:
             self.store.runtime_update(state["role"], state="attention", last_error="role_goal_manually_stopped")
             return False
         if not goal or goal.get("status") != desired:
+            if desired == "active":
+                verified_instruction_bundle(state, None)
+                if item is not None:
+                    verified_instruction_bundle(state, item)
             fresh = self.store.role_state(state["role"])
             if fresh["generation"] != state["generation"] or fresh["revision"] != state["revision"]:
                 return False
@@ -295,13 +328,14 @@ class RoleExecutor:
             }
             if not goal:
                 params["objective"] = role_objective(state["role"])
+            if desired == "active":
+                self.store.runtime_update(state["role"], goal_owned=True)
             await rpc.request("thread/goal/set", params)
             fresh = self.store.role_state(state["role"])
             if desired == "active" and (fresh["generation"] != state["generation"] or not fresh["duty_active"]):
                 await rpc.request(
                     "thread/goal/set", {"threadId": state["thread_id"], "status": "paused", "origin": "user"}
                 )
-                self.store.runtime_update(state["role"], goal_owned=False, goal_applied="paused")
                 return False
         self.store.runtime_update(
             state["role"], goal_owned=state["duty_active"] or state["goal_owned"], goal_applied=desired
@@ -310,7 +344,9 @@ class RoleExecutor:
 
     async def _role_tick(self, role: str, rpc: Any) -> None:
         state, _, owner = self.store.dispatch_state(role)
-        if str(state["last_error"] or "").startswith("role_instruction_"):
+        if str(state["last_error"] or "").startswith("role_instruction_") or (
+            not state["duty_active"] and state["last_error"] in {"role_rpc_rejected", "role_turn_rejected"}
+        ):
             await self._reconcile_instruction_hold(state, rpc)
             return
         if state["last_error"] in {
@@ -341,13 +377,14 @@ class RoleExecutor:
         await self._reconcile(role, rpc, turns, cursor)
         state, dispatch, owner = self.store.dispatch_state(role)
         active = next((turn for turn in turns if turn.get("status") == "inProgress"), None)
-        goal_ready = await self._sync_goal(state, rpc, allow_create=bool(dispatch))
+        if not state["duty_active"] and state["goal_owned"]:
+            await self._reconcile_instruction_hold(state, rpc)
+            return
+        goal_ready = await self._sync_goal(state, rpc, allow_create=bool(dispatch), item=owner)
         # Native goal continuations may have no controller dispatch row.
         if not state["duty_active"] and (state["goal_owned"] or (dispatch and dispatch["kind"] == "duty")) and active:
             await rpc.request("turn/interrupt", {"threadId": state["thread_id"], "turnId": active["id"]})
             return
-        if not state["duty_active"] and state["goal_owned"] and not active:
-            self.store.runtime_update(role, goal_owned=False)
         if not goal_ready:
             if owner and self.store.role_state(role)["last_error"] == "role_goal_manually_stopped":
                 await self._dispatch({**state, "duty_active": False}, owner, rpc, active, turns)
@@ -429,7 +466,7 @@ class RoleExecutor:
             await self._reconcile_instruction_hold(current, rpc)
 
     async def _reconcile_instruction_hold(self, state: dict[str, Any], rpc: Any) -> None:
-        """Freeze only our own native execution; never activate or redispatch under a hold."""
+        """Freeze our own execution under an instruction hold or an owner's stop."""
         if state["host_id"] != executor_host_id() or not state["goal_owned"]:
             return
         try:
@@ -448,12 +485,16 @@ class RoleExecutor:
             if not self._instruction_hold_current(state):
                 return
             if goal is None:
-                turns, _ = await self._turns(rpc, state["thread_id"])
+                turns, cursor = await self._turns(rpc, state["thread_id"])
                 if any(turn.get("status") == "inProgress" for turn in turns) or not self._instruction_hold_current(
                     state
                 ):
                     return
-                self.store.runtime_update(state["role"], goal_owned=False, goal_applied="paused")
+                await self._reconcile(state["role"], rpc, turns, cursor, hold_state=state)
+                if self._instruction_hold_current(state):
+                    self.store.runtime_update(
+                        state["role"], state=state["state"], goal_owned=False, goal_applied="paused"
+                    )
                 return
             if not isinstance(goal, dict) or goal.get("objective") != role_objective(state["role"]):
                 return
@@ -478,27 +519,31 @@ class RoleExecutor:
                 ):
                     return
             self._instruction_pause_rejections.pop(state["role"], None)
-            turns, _ = await self._turns(rpc, state["thread_id"])
+            turns, cursor = await self._turns(rpc, state["thread_id"])
             if not self._instruction_hold_current(state):
                 return
             active = next((turn for turn in turns if turn.get("status") == "inProgress"), None)
             if active is not None:
                 await rpc.request("turn/interrupt", {"threadId": state["thread_id"], "turnId": active["id"]})
-                turns, _ = await self._turns(rpc, state["thread_id"])
+                turns, cursor = await self._turns(rpc, state["thread_id"])
                 if any(turn.get("status") == "inProgress" for turn in turns):
                     return
             if self._instruction_hold_current(state):
-                self.store.runtime_update(state["role"], goal_owned=state["duty_active"], goal_applied="paused")
-        except Exception:  # noqa: BLE001 - all transport failures must retain the instruction hold.
-            # Retain the original instruction hold. The next pass first reads
+                await self._reconcile(state["role"], rpc, turns, cursor, hold_state=state)
+                if self._instruction_hold_current(state):
+                    self.store.runtime_update(
+                        state["role"], state=state["state"], goal_owned=state["duty_active"], goal_applied="paused"
+                    )
+        except Exception:  # noqa: BLE001 - transport failures must retain the original hold.
+            # Retain the original error. The next pass first reads
             # the exact goal/turn state; it cannot repeat policy append or start.
             return
 
     def _instruction_hold_current(self, state: dict[str, Any]) -> bool:
         fresh = self.store.role_state(state["role"])
-        return all(fresh[key] == state[key] for key in ("thread_id", "generation", "revision")) and str(
-            fresh["last_error"] or ""
-        ).startswith("role_instruction_")
+        return all(fresh[key] == state[key] for key in ("thread_id", "generation", "revision", "last_error")) and (
+            str(fresh["last_error"] or "").startswith("role_instruction_") or not fresh["duty_active"]
+        )
 
     async def _dispatch(
         self,
@@ -589,4 +634,4 @@ class RoleExecutor:
             self.store.mark_dispatch(dispatch["id"], "unknown", error="role_launch_unknown")
             return
         if state["duty_active"]:
-            await self._sync_goal(self.store.role_state(state["role"]), rpc, allow_create=True)
+            await self._sync_goal(self.store.role_state(state["role"]), rpc, allow_create=True, item=item)

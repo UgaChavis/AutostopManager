@@ -369,7 +369,13 @@ class RoleStore:
                 "SELECT 1 FROM role_dispatches WHERE role=? AND status IN ('starting','running','unknown') LIMIT 1",
                 (role,),
             ).fetchone()
-            if actor != "owner" or pending or state["active_dispatch_id"] or state["desired_state"] != "off":
+            if (
+                actor != "owner"
+                or pending
+                or state["active_dispatch_id"]
+                or state["desired_state"] != "off"
+                or state["goal_owned"]
+            ):
                 raise RoleError("role_bind_requires_idle")
             thread = str(UUID(text_field(p.get("thread_id"), maximum=50)))
             host = p.get("host_id", executor_host_id())
