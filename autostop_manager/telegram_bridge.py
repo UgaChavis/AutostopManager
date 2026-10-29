@@ -2324,7 +2324,13 @@ def _require_native_outcome_known(monitor: DurableInboundMonitor, peer_id: int) 
 
 
 def _require_direct_send_allowed(
-    config: TelegramConfig, monitor: InboundMonitor | None, request: dict[str, Any], peer_id: int, key: str
+    config: TelegramConfig,
+    monitor: InboundMonitor | None,
+    request: dict[str, Any],
+    peer_id: int,
+    key: str,
+    *,
+    bound_handoff: dict[str, Any] | None = None,
 ) -> None:
     if not isinstance(monitor, DurableInboundMonitor) or request.get("job_id"):
         return
@@ -2332,9 +2338,32 @@ def _require_direct_send_allowed(
     # checks below and never gain authority for a second transport write.
     if key and key in _load_idempotency(config.state_dir / "idempotency.json"):
         return
-    monitor.inbox.require_client_send_allowed(peer_id)
+    if bound_handoff is not None:
+        stored = monitor.inbox.read_effect(str(bound_handoff.get("effect_key") or ""))
+        job = monitor.inbox.read_job(stored["job_id"])
+        authority = _EFFECT_AUTHORITY.get()
+        if (
+            request.get("operation") != "send_owner_notification"
+            or stored["kind"] != "handoff"
+            or stored["effect_key"] != key
+            or stored["job_id"] != bound_handoff.get("job_id")
+            or stored["peer_id"] != job["peer_id"]
+            or peer_id != _owner_peer_id(config, required=True)
+            or authority is None
+            or authority.inbox is not monitor.inbox
+            or dict(authority.snapshot).get("job_id") != job["job_id"]
+        ):
+            raise BridgeError("job_handoff_binding_invalid")
+        _check_effect_authority()
+        monitor.inbox.require_client_send_allowed(job["peer_id"])
+        _require_current_guidance(monitor, job)
+    # The recipient's client pause/guidance belongs to their own case. Its
+    # unknown/review holds and native outgoing ledger still guard this send.
+    monitor.inbox.require_client_send_allowed(peer_id, include_client_control=bound_handoff is None)
     if _native_outgoing_origin(config, peer_id, -1) == "unresolved":
         raise BridgeError("send_outcome_uncertain")
+    if bound_handoff is not None:
+        return
     control = monitor.inbox.client_control(peer_id)
     if control["guidance_pending"]:
         if not _guidance_available(monitor, peer_id, control):
@@ -3253,8 +3282,15 @@ async def _handle_send_text_to_entity(
         ).digest()
         contract_peer_id = int.from_bytes(binding[:8], "big") or 1
     text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    bound_handoff = (
+        bound_effect
+        if owner_notification and idempotency_operation == "send_owner_notification" and contract_target_role == "owner"
+        else None
+    )
     if mode == "dry_run":
-        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
+        _require_direct_send_allowed(
+            config, inbound_monitor, request, target["id"], idempotency_key, bound_handoff=bound_handoff
+        )
         _check_effect_authority()
         response = {
             "ok": True,
@@ -3319,7 +3355,9 @@ async def _handle_send_text_to_entity(
             raise BridgeError("conversation_changed_since_dry_run")
         if group_reply:
             _require_personal_group_reply(config, request, target, reply_to_message_id)
-        _require_direct_send_allowed(config, inbound_monitor, request, target["id"], idempotency_key)
+        _require_direct_send_allowed(
+            config, inbound_monitor, request, target["id"], idempotency_key, bound_handoff=bound_handoff
+        )
         await _revalidate_job_effect(client, entity, inbound_monitor, job_effect)
         # Exact readback can commit while context RPCs run. Preserve its latest
         # receipts and never replace a key that appeared during those awaits.
