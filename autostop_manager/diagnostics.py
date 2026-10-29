@@ -483,13 +483,10 @@ async def _audit_instruction_sources() -> dict[str, Any]:
             if not isinstance(effective_config, dict):
                 raise ValueError("instruction_config_invalid")
             profile = worker_config_overrides(effective_config, cwd=config.project_dir)
-            old_selectors = (effective_config.get("skills") or {}).get("config") or []
-            new_selectors = profile["skills"]["config"]
             result["prepared_profile"] = {
                 "project_doc_max_bytes": profile["project_doc_max_bytes"],
-                "existing_disabled_selectors_preserved": all(
-                    selector in new_selectors for selector in old_selectors if selector.get("enabled") is False
-                ),
+                "automatic_skill_catalog_included": profile["skills.include_instructions"],
+                "skills_config_overridden": False,
                 "applied_to_thread_verified": False,
             }
             result["warnings"] = ["raw_discovery_excludes_thread_overrides", "model_context_unverified"]

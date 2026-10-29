@@ -68,7 +68,8 @@ def test_new_peer_is_bound_and_materialized_before_any_model_turn(tmp_path, bund
             assert peer.config.thread_id in server.materialized_threads
             assert peer.resume_overrides["config"]["model_reasoning_effort"] == "max"
             assert peer.resume_overrides["config"]["project_doc_max_bytes"] == 0
-            assert len(peer.resume_overrides["config"]["skills"]["config"]) == 5
+            assert peer.resume_overrides["config"]["skills.include_instructions"] is False
+            assert "skills" not in peer.resume_overrides["config"]
             assert peer.resume_overrides["permissions"] == ":danger-full-access"
             assert "ephemeral" not in peer.resume_overrides
             assert bootstrap.resume_overrides == {} and bootstrap.expected_resume_settings is None

@@ -651,7 +651,7 @@ def test_selected_worker_config_is_atomic_pinned_and_keeps_owner_thread(
             return {}
 
         async def worker_instruction_config(self):
-            return {"project_doc_max_bytes": 0, "skills": {"config": []}}
+            return {"project_doc_max_bytes": 0, "skills.include_instructions": False}
 
         async def close(self):
             pass
@@ -705,7 +705,7 @@ def test_selected_worker_config_is_atomic_pinned_and_keeps_owner_thread(
                 "cwd": wake.PROJECT_DIR,
                 "ephemeral": False,
                 "model": "existing-model",
-                "config": {"project_doc_max_bytes": 0, "skills": {"config": []}},
+                "config": {"project_doc_max_bytes": 0, "skills.include_instructions": False},
             },
         ) in calls
         assert not any(call[0] in {"thread/archive", "turn/interrupt", "turn/start"} for call in calls)

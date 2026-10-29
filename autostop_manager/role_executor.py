@@ -155,6 +155,7 @@ class RoleExecutor:
         self.store = store or RoleStore()
         self.rpc_factory = rpc_factory
         self.wake_event = asyncio.Event()
+        self._instruction_pause_rejections: dict[str, tuple[str, int, int]] = {}
 
     async def request_reconcile(self, _claim: Any) -> dict[str, Any]:
         """A scheduler job only requests a bounded role pass, never awaits a goal."""
@@ -308,7 +309,10 @@ class RoleExecutor:
 
     async def _role_tick(self, role: str, rpc: Any) -> None:
         state, _, owner = self.store.dispatch_state(role)
-        if str(state["last_error"] or "").startswith("role_instruction_") or state["last_error"] in {
+        if str(state["last_error"] or "").startswith("role_instruction_"):
+            await self._reconcile_instruction_hold(state, rpc)
+            return
+        if state["last_error"] in {
             "role_rpc_rejected",
             "role_turn_rejected",
             "role_host_mismatch",
@@ -397,12 +401,8 @@ class RoleExecutor:
 
     async def _prepare_instruction_profile(self, state: dict[str, Any], rpc: Any) -> bool:
         """Apply only managed discovery overrides; no base/developer replacement."""
-        response = await rpc.request("config/read", {"cwd": PROJECT_DIR, "includeLayers": False})
-        config = response.get("config")
-        if not isinstance(config, dict):
-            raise RoleError("role_instruction_config_unavailable")
         try:
-            overrides = worker_config_overrides(config, cwd=PROJECT_DIR)
+            overrides = worker_config_overrides({}, cwd=PROJECT_DIR)
         except InstructionBundleError as exc:
             raise RoleError("role_" + exc.code) from None
         response = await rpc.request(
@@ -423,16 +423,81 @@ class RoleExecutor:
     async def _instruction_failure(self, state: dict[str, Any], dispatch_id: str, rpc: Any, code: str) -> None:
         self.store.mark_dispatch(dispatch_id, "failed", error=code)
         self.store.runtime_update(state["role"], state="attention", last_error=code)
-        # Hold the controller and its own native continuation until explicit recovery.
         current = self.store.role_state(state["role"])
-        if current["thread_id"] == state["thread_id"] and current["goal_owned"] and current["goal_applied"] == "active":
-            try:
-                await rpc.request(
-                    "thread/goal/set", {"threadId": state["thread_id"], "status": "paused", "origin": "automatic"}
-                )
-                self.store.runtime_update(state["role"], goal_applied="paused")
-            except Exception:  # noqa: BLE001 - keep the original fixed hold; never repeat the injection.
-                pass
+        if current["thread_id"] == state["thread_id"]:
+            await self._reconcile_instruction_hold(current, rpc)
+
+    async def _reconcile_instruction_hold(self, state: dict[str, Any], rpc: Any) -> None:
+        """Freeze only our own native execution; never activate or redispatch under a hold."""
+        if state["host_id"] != executor_host_id() or not state["goal_owned"]:
+            return
+        try:
+            resumed = await rpc.request(
+                "thread/resume", {"threadId": state["thread_id"], "cwd": PROJECT_DIR, "excludeTurns": True}
+            )
+            thread = resumed.get("thread")
+            if (
+                not isinstance(thread, dict)
+                or thread.get("id") != state["thread_id"]
+                or thread.get("cwd") != PROJECT_DIR
+                or thread.get("ephemeral") is not False
+            ):
+                return
+            goal = (await rpc.request("thread/goal/get", {"threadId": state["thread_id"]})).get("goal")
+            if not self._instruction_hold_current(state):
+                return
+            if goal is None:
+                turns, _ = await self._turns(rpc, state["thread_id"])
+                if any(turn.get("status") == "inProgress" for turn in turns) or not self._instruction_hold_current(
+                    state
+                ):
+                    return
+                self.store.runtime_update(state["role"], goal_owned=False, goal_applied="paused")
+                return
+            if not isinstance(goal, dict) or goal.get("objective") != role_objective(state["role"]):
+                return
+            if goal.get("status") not in {"paused", "complete"}:
+                token = (state["thread_id"], state["generation"], state["revision"])
+                if self._instruction_pause_rejections.get(state["role"]) == token:
+                    return
+                try:
+                    await rpc.request(
+                        "thread/goal/set", {"threadId": state["thread_id"], "status": "paused", "origin": "automatic"}
+                    )
+                except RoleRpcRejected:
+                    # A known refusal needs a new explicit control revision;
+                    # ordinary ticks still read back, but do not blindly write.
+                    self._instruction_pause_rejections[state["role"]] = token
+                    return
+                goal = (await rpc.request("thread/goal/get", {"threadId": state["thread_id"]})).get("goal")
+                if (
+                    not isinstance(goal, dict)
+                    or goal.get("objective") != role_objective(state["role"])
+                    or goal.get("status") not in {"paused", "complete"}
+                ):
+                    return
+            self._instruction_pause_rejections.pop(state["role"], None)
+            turns, _ = await self._turns(rpc, state["thread_id"])
+            if not self._instruction_hold_current(state):
+                return
+            active = next((turn for turn in turns if turn.get("status") == "inProgress"), None)
+            if active is not None:
+                await rpc.request("turn/interrupt", {"threadId": state["thread_id"], "turnId": active["id"]})
+                turns, _ = await self._turns(rpc, state["thread_id"])
+                if any(turn.get("status") == "inProgress" for turn in turns):
+                    return
+            if self._instruction_hold_current(state):
+                self.store.runtime_update(state["role"], goal_owned=state["duty_active"], goal_applied="paused")
+        except (RoleError, OSError, TimeoutError):
+            # Retain the original instruction hold. The next pass first reads
+            # the exact goal/turn state; it cannot repeat policy append or start.
+            return
+
+    def _instruction_hold_current(self, state: dict[str, Any]) -> bool:
+        fresh = self.store.role_state(state["role"])
+        return all(fresh[key] == state[key] for key in ("thread_id", "generation", "revision")) and str(
+            fresh["last_error"] or ""
+        ).startswith("role_instruction_")
 
     async def _dispatch(
         self,

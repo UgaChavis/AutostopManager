@@ -65,12 +65,9 @@ def restrictions():
 
 
 def assert_worker_config(config, pinned):
-    _root, cwd = pinned
     assert config["project_doc_max_bytes"] == 0
-    assert config["skills"]["config"][:27] == restrictions()
-    assert config["skills"]["config"][27:] == [
-        {"path": f"{cwd}/.agents/skills/{name}", "enabled": False} for name in bundles.PROJECT_SKILLS
-    ]
+    assert config["skills.include_instructions"] is False
+    assert "skills" not in config and "skills.config" not in config
 
 
 def test_canonical_policy_precedes_generation_and_preserves_execution_settings(tmp_path, pinned):
@@ -91,7 +88,7 @@ def test_canonical_policy_precedes_generation_and_preserves_execution_settings(t
         async with running(tmp_path, pinned, server) as (_inbox, _jobs, dispatcher):
             await until(lambda: dispatcher.completed == 1)
             methods = [call["method"] for call in server.calls]
-            assert methods.index("config/read") < methods.index("thread/start")
+            assert "config/read" not in methods
             assert methods.index("thread/inject_items") < methods.index("turn/start")
             injection = next(call["params"] for call in server.calls if call["method"] == "thread/inject_items")
             turn = next(call["params"] for call in server.calls if call["method"] == "turn/start")
@@ -279,21 +276,28 @@ def test_delivery_failure_persists_review_and_never_starts_or_replays(tmp_path, 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("problem", ["rejected", "invalid-config", "invalid-skills"])
-def test_config_read_failure_prevents_peer_creation_and_generation(tmp_path, pinned, problem):
+def test_existing_peer_keeps_thread_only_skill_restrictions_without_reading_file_defaults(tmp_path, pinned):
     async def scenario():
-        server = MockServer(peer_threads=True)
-        if problem == "rejected":
-            server.reject_method = "config/read"
-        elif problem == "invalid-config":
-            server.effective_config = None
-        else:
-            server.effective_config = {"skills": {"config": "invalid-selectors"}}
-        async with running(tmp_path, pinned, server) as (inbox, _jobs, dispatcher):
-            await until(lambda: inbox.status()["execution_paused"] and not dispatcher.active)
-            assert inbox.status()["needs_review_jobs"] == 1
-            assert inbox.active_jobs()[0]["execution_proof"] == "not_started"
-            assert server.created_threads == [] and server.counter == 0
-            assert not any(call["method"] in {"thread/inject_items", "turn/start"} for call in server.calls)
+        server = MockServer(peer_threads=True, strict_peer_lifecycle=True)
+        server.reject_method = "config/read"
+        async with running(tmp_path, pinned, server) as (inbox, jobs, dispatcher):
+            await until(lambda: dispatcher.completed == 1)
+            peer = dispatcher.app.config.thread_id
+            private_selectors = [{"path": "/thread-only/restricted-skill", "enabled": False}]
+            server.thread_configs[peer] = {
+                "skills": {"config": deepcopy(private_selectors), "max_context_tokens": 123},
+                "unrelated": "preserved",
+            }
+            server.effective_config = {"skills": {"config": []}}
+            assert inbox.record(123, 2) is not None
+            jobs.changed.set()
+            await until(lambda: dispatcher.completed == 2)
+            assert server.thread_configs[peer]["skills"]["config"] == private_selectors
+            assert server.thread_configs[peer]["skills"]["max_context_tokens"] == 123
+            assert server.thread_configs[peer]["unrelated"] == "preserved"
+            assert "config/read" not in [call["method"] for call in server.calls]
+            for call in server.calls:
+                if call["method"] in {"thread/start", "thread/resume"} and "config" in call["params"]:
+                    assert_worker_config(call["params"]["config"], pinned)
 
     asyncio.run(scenario())
