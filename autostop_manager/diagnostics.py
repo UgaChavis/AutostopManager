@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -353,7 +355,182 @@ def watchdog_status() -> dict[str, Any]:
     return {"ok": all(checks.values()), "desired_state": "absent", "checks": checks}
 
 
-def diagnose(*, integrations: bool = False, full: bool = False, check_external_links: bool = True) -> dict[str, Any]:
+def _discovered_instruction_skills(result: Any, *, cwd: str, bundle: Any) -> tuple[list[dict[str, Any]], int]:
+    """Keep only bounded known project paths; never open arbitrary RPC paths."""
+    from .instruction_bundle import PROJECT_SKILLS
+
+    if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+        raise ValueError("instruction_discovery_invalid")
+    discovered = []
+    mismatches = 0
+    seen = set()
+    for row in result["data"]:
+        if not isinstance(row, dict) or not isinstance(row.get("skills"), list) or row.get("errors"):
+            raise ValueError("instruction_discovery_invalid")
+        scope = "worker_cwd" if row.get("cwd") == cwd else "selected_bundle"
+        expected_root = Path(cwd) if scope == "worker_cwd" else Path(bundle.root)
+        if row.get("cwd") not in {cwd, bundle.root}:
+            raise ValueError("instruction_discovery_invalid")
+        seen.add(row["cwd"])
+        for skill in row["skills"]:
+            if not isinstance(skill, dict) or skill.get("name") not in PROJECT_SKILLS:
+                continue
+            name = skill["name"]
+            relative = f".agents/skills/{name}/SKILL.md"
+            expected = expected_root / relative
+            path = skill.get("path")
+            digest = None
+            safe_path = None
+            if path == str(expected) and expected.resolve().is_relative_to(expected_root.resolve()):
+                safe_path = path
+                try:
+                    if not expected.is_symlink():
+                        digest = hashlib.sha256(read_instruction_bytes(expected)).hexdigest()
+                except (OSError, RuntimeError, ValueError):
+                    pass
+            content = bundle.files.get(relative)
+            expected_digest = hashlib.sha256(content).hexdigest() if content is not None else None
+            matches = digest == expected_digest if digest is not None and expected_digest is not None else None
+            if scope == "worker_cwd" and matches is False:
+                mismatches += 1
+            discovered.append(
+                {
+                    "scope": scope,
+                    "name": name,
+                    "path": safe_path,
+                    "enabled_in_raw_discovery": skill.get("enabled", True) is not False,
+                    "sha256": digest,
+                    "matches_selected_bundle": matches,
+                }
+            )
+    if seen != {cwd, bundle.root}:
+        raise ValueError("instruction_discovery_invalid")
+    return discovered, mismatches
+
+
+async def _audit_instruction_sources() -> dict[str, Any]:
+    """Read the service's declared bundle and discovery, without resuming a thread."""
+    from .instruction_bundle import InstructionBundleError, load_instruction_bundle, worker_config_overrides
+    from .telegram_wake import INSTRUCTION_RELEASE_ROOTS, AppServer, WakeConfig, local_request
+
+    result: dict[str, Any] = {
+        "ok": False,
+        "scope": "installed_instruction_sources",
+        "read_only": True,
+        "instruction_model_context_verified": False,
+        "warnings": [],
+    }
+    app = None
+    try:
+        async with asyncio.timeout(15):
+            config = WakeConfig.load()
+            status = await local_request({"operation": "status"})
+            if not isinstance(status, dict) or status.get("ok") is not True:
+                raise ValueError("instruction_runtime_status_invalid")
+            root = status.get("instruction_root") or config.instruction_root
+            revision = status.get("instruction_revision") or config.instruction_revision
+            source = "worker_status" if status.get("instruction_root") else "wake_config"
+            if root is None:
+                root = str(Path("/opt/autostop-manager-releases/current").resolve())
+                revision = None
+                source = "installed_current"
+            bundle = load_instruction_bundle(root, revision, allowed_roots=INSTRUCTION_RELEASE_ROOTS)
+            declared_hash = status.get("instruction_bundle_sha256")
+            if declared_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", str(declared_hash)):
+                raise ValueError("instruction_runtime_status_invalid")
+            hash_matches = declared_hash == bundle.sha256 if declared_hash is not None else None
+            state = status.get("instruction_delivery_state", "unverified")
+            if state not in {"not_prepared", "prepared", "acknowledged", "rejected", "unknown", "unverified"}:
+                raise ValueError("instruction_runtime_status_invalid")
+            result["bundle"] = {
+                "root": bundle.root,
+                "revision": bundle.revision,
+                "sha256": bundle.sha256,
+                "source": source,
+                "manifest_verified": True,
+                "documents": len(bundle.files),
+            }
+            protocol = status.get("instruction_protocol_sha256", status.get("instruction_sha256"))
+            result["delivery"] = {
+                "state": state,
+                "declared_bundle_sha256": declared_hash,
+                "bundle_hash_matches": hash_matches,
+                "protocol_sha256": protocol
+                if isinstance(protocol, str) and re.fullmatch(r"[0-9a-f]{64}", protocol)
+                else None,
+                "model_context_verified": False,
+            }
+            app = AppServer(config)
+            await app.connect()
+            metadata = await app.request("thread/read", {"threadId": config.thread_id, "includeTurns": False})
+            thread = metadata.get("thread") if isinstance(metadata, dict) else None
+            if (
+                not isinstance(thread, dict)
+                or thread.get("id") != config.thread_id
+                or thread.get("cwd") != config.project_dir
+                or thread.get("turns") not in (None, [])
+            ):
+                raise ValueError("instruction_thread_metadata_invalid")
+            result["metadata"] = {"scope": "configured_bootstrap", "cwd_matches_config": True, "turns_read": 0}
+            discovery = await app.request(
+                "skills/list", {"cwds": [config.project_dir, bundle.root], "forceReload": False}
+            )
+            skills, differences = _discovered_instruction_skills(discovery, cwd=config.project_dir, bundle=bundle)
+            result["raw_skill_discovery"] = skills
+            result["raw_project_skill_differences"] = differences
+            effective = await app.request("config/read", {"cwd": config.project_dir, "includeLayers": False})
+            effective_config = effective.get("config") if isinstance(effective, dict) else None
+            if not isinstance(effective_config, dict):
+                raise ValueError("instruction_config_invalid")
+            profile = worker_config_overrides(effective_config, cwd=config.project_dir)
+            old_selectors = (effective_config.get("skills") or {}).get("config") or []
+            new_selectors = profile["skills"]["config"]
+            result["prepared_profile"] = {
+                "project_doc_max_bytes": profile["project_doc_max_bytes"],
+                "existing_disabled_selectors_preserved": all(
+                    selector in new_selectors for selector in old_selectors if selector.get("enabled") is False
+                ),
+                "applied_to_thread_verified": False,
+            }
+            result["warnings"] = ["raw_discovery_excludes_thread_overrides", "model_context_unverified"]
+            if hash_matches is False:
+                result["warnings"].append("instruction_declared_bundle_mismatch")
+            if state in {"rejected", "unknown"}:
+                result["warnings"].append("instruction_delivery_unverified")
+            result["ok"] = hash_matches is not False and state not in {"rejected", "unknown"}
+    except InstructionBundleError as exc:
+        result["warnings"].append(exc.code)
+    except (OSError, RuntimeError, TimeoutError, TypeError, ValueError):
+        result["warnings"].append("instruction_sources_unavailable")
+    finally:
+        if app is not None:
+            try:
+                await app.close()
+            except (OSError, RuntimeError, TimeoutError):
+                result["ok"] = False
+                result["warnings"].append("instruction_sources_cleanup_failed")
+    return result
+
+
+def audit_instruction_sources() -> dict[str, Any]:
+    """Explicit host-only diagnostic; regular and project-only doctor never call it."""
+    return asyncio.run(_audit_instruction_sources())
+
+
+def diagnose(
+    *,
+    integrations: bool = False,
+    full: bool = False,
+    check_external_links: bool = True,
+    instruction_sources: bool = False,
+) -> dict[str, Any]:
+    if instruction_sources and not check_external_links:
+        return {
+            "ok": False,
+            "checks": {"scope": {"ok": False, "warnings": ["instruction_sources_requires_host_scope"]}},
+            "external_links_checked": False,
+            "warnings": ["scope"],
+        }
     from mcp.server.fastmcp import FastMCP
 
     from .mcp_contract import validate_manager_mcp_surface
@@ -364,6 +541,8 @@ def diagnose(*, integrations: bool = False, full: bool = False, check_external_l
     schemas = {name: tool.parameters for name, tool in server._tool_manager._tools.items()}
     documentation = audit_documentation() if check_external_links else audit_documentation(check_external_links=False)
     checks = {"documentation": documentation, "mcp": validate_manager_mcp_surface(schemas)}
+    if instruction_sources:
+        checks["instruction_sources"] = audit_instruction_sources()
     if integrations:
         from .integration_audit import build_integration_audit
 

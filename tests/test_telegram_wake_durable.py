@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from instruction_bundle_fakes import create_instruction_bundle
 from telegram_wake_fakes import THREAD, MockServer, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
 from websockets.asyncio.server import unix_serve
@@ -51,18 +52,7 @@ def bundle(tmp_path, monkeypatch):
     if os.geteuid() != 0:
         pytest.skip("production instruction bundles are root-owned")
     releases = tmp_path / "releases"
-    root = releases / "snapshot"
-    for relative in (
-        "AGENTS.md",
-        "docs/agent/modules/B2.md",
-        "docs/agent/modules/B4.md",
-        ".agents/skills/manage-owner-telegram/SKILL.md",
-        ".agents/skills/manage-autostop-client/SKILL.md",
-    ):
-        target = root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("test instructions\n")
-    (root / "REVISION").write_text(REVISION + "\n")
+    root = create_instruction_bundle(releases / "snapshot", REVISION)
     monkeypatch.setattr(wake, "INSTRUCTION_RELEASE_ROOTS", (releases,))
     return root
 
@@ -425,7 +415,7 @@ def test_immutable_bundle_symlink_or_revision_mismatch_fails(bundle):
 
 def test_instruction_bundle_without_full_client_skill_is_rejected(bundle):
     (bundle / ".agents/skills/manage-autostop-client/SKILL.md").unlink()
-    with pytest.raises(wake.WakeError, match=r"^wake_instruction_bundle_invalid$"):
+    with pytest.raises(wake.WakeError, match=r"^wake_instruction_inventory_invalid$"):
         wake.validate_instruction_bundle(str(bundle), REVISION)
 
 
@@ -433,7 +423,7 @@ def test_instruction_bundle_rejects_directory_in_place_of_client_skill(bundle):
     target = bundle / ".agents/skills/manage-autostop-client/SKILL.md"
     target.unlink()
     target.mkdir()
-    with pytest.raises(wake.WakeError, match=r"^wake_instruction_bundle_invalid$"):
+    with pytest.raises(wake.WakeError, match=r"^wake_instruction_inventory_invalid$"):
         wake.validate_instruction_bundle(str(bundle), REVISION)
 
 
@@ -660,6 +650,9 @@ def test_selected_worker_config_is_atomic_pinned_and_keeps_owner_thread(
                 return {"thread": {"id": selected}}
             return {}
 
+        async def worker_instruction_config(self):
+            return {"project_doc_max_bytes": 0, "skills": {"config": []}}
+
         async def close(self):
             pass
 
@@ -706,7 +699,15 @@ def test_selected_worker_config_is_atomic_pinned_and_keeps_owner_thread(
         assert not config_path.with_name("wake.json.worker-selection").exists()
         assert ("resume", THREAD, True) in calls
         assert ("resume", selected, False) in calls
-        assert ("thread/start", {"cwd": wake.PROJECT_DIR, "ephemeral": False, "model": "existing-model"}) in calls
+        assert (
+            "thread/start",
+            {
+                "cwd": wake.PROJECT_DIR,
+                "ephemeral": False,
+                "model": "existing-model",
+                "config": {"project_doc_max_bytes": 0, "skills": {"config": []}},
+            },
+        ) in calls
         assert not any(call[0] in {"thread/archive", "turn/interrupt", "turn/start"} for call in calls)
 
     asyncio.run(scenario())

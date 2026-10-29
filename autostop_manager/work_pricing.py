@@ -1590,7 +1590,7 @@ def estimate_repair_work_cost(
             "card_text_rule": (
                 "В разделе расчёта работ кратко укажи работу, AutoStop цену, уверенность и что проверить. "
                 "Момент оформления и полный состав клиентской карточки определяет "
-                ".agents/skills/manage-autostop-client/SKILL.md."
+                ".agents/skills/manage-autostop-client/SKILL.md из выбранного комплекта инструкций, не из cwd."
             ),
         },
         "formula": {
@@ -1637,5 +1637,9 @@ def estimate_repair_work_cost(
         },
         "playbook": ".agents/skills/manage-autostop-store/SKILL.md",
         "source_catalog": "docs/agent/automotive_sources/automotive_repair_sources_catalog.json",
+        "instruction_reference_rule": (
+            "Пути playbook, source_catalog и клиентского скилла относятся к выбранному корню инструкций: "
+            "для рабочего Telegram — к закреплённым за заданием root/revision; cwd не меняет этот выбор."
+        ),
     }
     return _replace_identifiers(response, identifiers, "[REDACTED_IDENTIFIER]", normalize_whitespace=False)

@@ -50,8 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Local checks; live integrations require an explicit flag")
     doctor.add_argument("--integrations", action="store_true")
     doctor.add_argument("--full", action="store_true")
-    doctor.add_argument(
+    doctor_scope = doctor.add_mutually_exclusive_group()
+    doctor_scope.add_argument(
         "--project-only", action="store_true", help="Validate project links; skip host Codex file availability"
+    )
+    doctor_scope.add_argument(
+        "--instruction-sources",
+        action="store_true",
+        help="Read installed instruction sources and Codex metadata; never start a model turn",
     )
     sub.add_parser("store-conductor-release-gate", help="Read-only legacy Store-state release gate")
     status = sub.add_parser("store-checkpoint-status")
@@ -96,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         result = audit_documentation(check_external_links=False) if args.project_only else audit_documentation()
     elif args.command == "doctor":
         options = {"check_external_links": False} if args.project_only else {}
+        if args.instruction_sources:
+            options["instruction_sources"] = True
         result = diagnose(integrations=args.integrations, full=args.full, **options)
     elif args.command == "mcp-probe":
         result = probe_manager_mcp(

@@ -13,6 +13,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .instruction_bundle import (
+    InstructionBundleError,
+    VerifiedInstructionBundle,
+    load_instruction_bundle,
+    worker_config_overrides,
+)
 from .role_coordination import MODEL, PROJECT_DIR, ROLES, RoleError, RoleStore, executor_host_id, now
 
 
@@ -76,24 +82,35 @@ def role_objective(role: str) -> str:
     )
 
 
-def instruction_bundle(state: dict[str, Any], item: dict[str, Any] | None) -> tuple[str, str]:
+def verified_instruction_bundle(state: dict[str, Any], item: dict[str, Any] | None) -> VerifiedInstructionBundle:
     data = item["data"] if item else {}
-    root = data.get("instruction_root") or state.get("instruction_root")
-    revision = data.get("instruction_revision") or state.get("instruction_revision")
-    path = Path(root) if root else Path("/opt/autostop-manager-releases/current").resolve()
-    if not path.is_absolute() or not path.is_dir() or path.is_symlink():
-        raise RoleError("role_instruction_unavailable")
-    installed = (path / "REVISION").read_text().strip()
-    if revision and revision != installed:
-        raise RoleError("role_instruction_revision_mismatch")
-    for name in ("AGENTS.md", f"docs/agent/modules/{state['role']}.md"):
-        if not (path / name).is_file():
-            raise RoleError("role_instruction_unavailable")
-    return str(path), installed
+    selected = data if any(data.get(key) is not None for key in ("instruction_root", "instruction_revision")) else state
+    root, revision = selected.get("instruction_root"), selected.get("instruction_revision")
+    if (root is None) != (revision is None):
+        raise RoleError("role_instruction_bundle_invalid")
+    try:
+        path = Path(root) if root is not None else Path("/opt/autostop-manager-releases/current").resolve(strict=True)
+        return load_instruction_bundle(path, revision)
+    except InstructionBundleError as exc:
+        raise RoleError("role_" + exc.code) from None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise RoleError("role_instruction_bundle_invalid") from None
 
 
-def dispatch_prompt(state: dict[str, Any], dispatch: dict[str, Any], item: dict[str, Any] | None) -> str:
-    root, revision = instruction_bundle(state, item)
+def instruction_bundle(state: dict[str, Any], item: dict[str, Any] | None) -> tuple[str, str]:
+    bundle = verified_instruction_bundle(state, item)
+    return bundle.root, bundle.revision
+
+
+def dispatch_prompt(
+    state: dict[str, Any],
+    dispatch: dict[str, Any],
+    item: dict[str, Any] | None,
+    *,
+    bundle: VerifiedInstructionBundle | None = None,
+) -> str:
+    selected = bundle if bundle is not None else verified_instruction_bundle(state, item)
+    root, revision = selected.root, selected.revision
     role = state["role"]
     text = (
         f"AutoStop {role}; dispatch_id={dispatch['id']}. Физический корень инструкций {root}, REVISION {revision}. "
@@ -291,7 +308,7 @@ class RoleExecutor:
 
     async def _role_tick(self, role: str, rpc: Any) -> None:
         state, _, owner = self.store.dispatch_state(role)
-        if state["last_error"] in {
+        if str(state["last_error"] or "").startswith("role_instruction_") or state["last_error"] in {
             "role_rpc_rejected",
             "role_turn_rejected",
             "role_host_mismatch",
@@ -343,6 +360,80 @@ class RoleExecutor:
             return
         await self._dispatch(state, None, rpc, None, turns)
 
+    def _active_bundle_matches(
+        self, state: dict[str, Any], active: dict[str, Any], bundle: VerifiedInstructionBundle
+    ) -> bool:
+        """Never steer a new policy into an in-flight or unowned native turn."""
+        dispatches = [
+            dispatch
+            for dispatch in self.store.pending_dispatches(state["role"])
+            if dispatch["thread_id"] == state["thread_id"] and dispatch["turn_id"] == active["id"]
+        ]
+        if not dispatches:
+            return False
+        for dispatch in dispatches:
+            item = None
+            if dispatch["item_id"]:
+                with self.store.connection() as db:
+                    if db is None:
+                        return False
+                    row = db.execute("SELECT * FROM role_items WHERE id=?", (dispatch["item_id"],)).fetchone()
+                if row is None:
+                    return False
+                item = {**dict(row), "data": json.loads(row["data"])}
+            origin = item["data"] if item else {}
+            if not any(origin.get(key) is not None for key in ("instruction_root", "instruction_revision")):
+                origin = state
+            if any(origin.get(key) is None for key in ("instruction_root", "instruction_revision")):
+                # A current-link fallback may have changed since this active turn started.
+                return False
+            try:
+                previous = verified_instruction_bundle(state, item)
+            except RoleError:
+                return False
+            if (previous.root, previous.revision, previous.sha256) != (bundle.root, bundle.revision, bundle.sha256):
+                return False
+        return True
+
+    async def _prepare_instruction_profile(self, state: dict[str, Any], rpc: Any) -> bool:
+        """Apply only managed discovery overrides; no base/developer replacement."""
+        response = await rpc.request("config/read", {"cwd": PROJECT_DIR, "includeLayers": False})
+        config = response.get("config")
+        if not isinstance(config, dict):
+            raise RoleError("role_instruction_config_unavailable")
+        try:
+            overrides = worker_config_overrides(config, cwd=PROJECT_DIR)
+        except InstructionBundleError as exc:
+            raise RoleError("role_" + exc.code) from None
+        response = await rpc.request(
+            "thread/resume",
+            {"threadId": state["thread_id"], "cwd": PROJECT_DIR, "excludeTurns": True, "config": overrides},
+        )
+        thread = response.get("thread")
+        if (
+            not isinstance(thread, dict)
+            or thread.get("id") != state["thread_id"]
+            or thread.get("cwd") != PROJECT_DIR
+            or thread.get("ephemeral") is not False
+            or response.get("model") != MODEL
+        ):
+            raise RoleError("role_instruction_thread_mismatch")
+        return thread.get("status") == {"type": "idle"}
+
+    async def _instruction_failure(self, state: dict[str, Any], dispatch_id: str, rpc: Any, code: str) -> None:
+        self.store.mark_dispatch(dispatch_id, "failed", error=code)
+        self.store.runtime_update(state["role"], state="attention", last_error=code)
+        # Hold the controller and its own native continuation until explicit recovery.
+        current = self.store.role_state(state["role"])
+        if current["thread_id"] == state["thread_id"] and current["goal_owned"] and current["goal_applied"] == "active":
+            try:
+                await rpc.request(
+                    "thread/goal/set", {"threadId": state["thread_id"], "status": "paused", "origin": "automatic"}
+                )
+                self.store.runtime_update(state["role"], goal_applied="paused")
+            except Exception:  # noqa: BLE001 - keep the original fixed hold; never repeat the injection.
+                pass
+
     async def _dispatch(
         self,
         state: dict[str, Any],
@@ -352,7 +443,18 @@ class RoleExecutor:
         turns: list[dict[str, Any]],
     ) -> None:
         # Validate instructions before recording a possibly-executed launch.
-        instruction_bundle(state, item)
+        bundle = verified_instruction_bundle(state, item)
+        context = None
+        if active:
+            if not self._active_bundle_matches(state, active, bundle):
+                return
+        else:
+            try:
+                context = bundle.developer_item(state["role"])
+            except InstructionBundleError as exc:
+                raise RoleError("role_" + exc.code) from None
+            if not await self._prepare_instruction_profile(state, rpc):
+                return
         dispatch = self.store.prepare_dispatch(
             state["role"],
             revision=state["revision"],
@@ -361,7 +463,7 @@ class RoleExecutor:
             before_turn_id=turns[0]["id"] if turns else None,
             steer=active is not None,
         )
-        prompt = dispatch_prompt(state, dispatch, item)
+        prompt = dispatch_prompt(state, dispatch, item, bundle=bundle)
         params = {
             "threadId": state["thread_id"],
             "input": [{"type": "text", "text": prompt}],
@@ -373,6 +475,41 @@ class RoleExecutor:
         else:
             params.update(model=MODEL, cwd=PROJECT_DIR)
             method = "turn/start"
+            try:
+                readback = await rpc.request("thread/read", {"threadId": state["thread_id"], "includeTurns": False})
+                thread = readback.get("thread")
+                if (
+                    not isinstance(thread, dict)
+                    or thread.get("id") != state["thread_id"]
+                    or thread.get("cwd") != PROJECT_DIR
+                    or thread.get("ephemeral") is not False
+                    or thread.get("status") != {"type": "idle"}
+                ):
+                    raise RoleError("role_instruction_thread_changed")
+                await rpc.request("thread/inject_items", {"threadId": state["thread_id"], "items": [context]})
+            except RoleRpcRejected:
+                await self._instruction_failure(state, dispatch["id"], rpc, "role_instruction_injection_rejected")
+                return
+            except RoleError as exc:
+                code = (
+                    "role_instruction_thread_changed"
+                    if str(exc) == "role_instruction_thread_changed"
+                    else "role_instruction_injection_unknown"
+                )
+                await self._instruction_failure(state, dispatch["id"], rpc, code)
+                return
+            except Exception:  # noqa: BLE001 - append has no replay key; an unknown outcome holds this exact role.
+                await self._instruction_failure(state, dispatch["id"], rpc, "role_instruction_injection_unknown")
+                return
+            fresh = self.store.role_state(state["role"])
+            if (
+                fresh["revision"] != state["revision"]
+                or fresh["generation"] != state["generation"]
+                or fresh["thread_id"] != state["thread_id"]
+                or self.store.maintenance_held()
+            ):
+                await self._instruction_failure(state, dispatch["id"], rpc, "role_instruction_context_changed")
+                return
         try:
             result = await rpc.request(method, params)
             turn_id = result.get("turnId") if active else (result.get("turn") or {}).get("id")
