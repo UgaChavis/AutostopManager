@@ -724,12 +724,12 @@ class DurableInboundMonitor(InboundMonitor):
                 # Commit before tombstoning RAM, including callbacks observed
                 # after restart when the prior fingerprint is unavailable.
                 self.inbox.invalidate_context(peer, message_ids=sorted(identifiers))
-                versions = self.context_messages.get(peer)
-                if versions is None and len(self.context_messages) < 64:
-                    versions = self.context_messages[peer] = {}
-                if versions is not None:
+                peer_versions = self.context_messages.get(peer)
+                if peer_versions is None and len(self.context_messages) < 64:
+                    peer_versions = self.context_messages[peer] = {}
+                if peer_versions is not None:
                     for identifier in identifiers:
-                        versions[identifier] = None
+                        peer_versions[identifier] = None
                 self.changed()
 
     async def revalidate_context(
