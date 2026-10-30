@@ -92,7 +92,7 @@ def _safe_source_from_url(url: str) -> str:
     except ValueError:
         return "public_web_search"
     if parsed.netloc:
-        return parsed.netloc.removeprefix("www.")
+        return parsed.netloc[4:] if parsed.netloc[:4].casefold() == "www." else parsed.netloc
     return "public_web_search"
 
 
