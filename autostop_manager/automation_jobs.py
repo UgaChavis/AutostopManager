@@ -6,17 +6,23 @@ checkpoint/delivery references in Manager SQLite and never logs payloads.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import math
 import re
+import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 from urllib.parse import quote, unquote
 
+import anyio
 import httpx
 
 from .automation_registry import AutomationError, AutomationStore, canonical_json
+from .bounded_http_read import TrackedTransportAdmission
 from .config import AutomationCrmConnectionConfig, get_work_telegram_socket_path
 from .telegram_bridge import BridgeError, send_local_request
 
@@ -24,6 +30,7 @@ from .telegram_bridge import BridgeError, send_local_request
 CRM_DIGEST_CONSUMER_ID = "manager.crm_digest_v1"
 CRM_DIGEST_PAGE_LIMIT = 25
 MAX_CRM_RESPONSE_BYTES = 256 * 1024
+_CRM_HTTP_ADMISSION = TrackedTransportAdmission(2)
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DIGEST_ID = re.compile(r"digest-[0-9a-f]{32}\Z")
 _ACTION = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -63,6 +70,25 @@ class OwnerNotifier(Protocol):
     def lookup(self, *, idempotency_key: str, text_sha256: str) -> dict[str, Any]: ...
 
 
+class _CrmHttpAttempt:
+    def __init__(self, deadline: float) -> None:
+        self.deadline = deadline
+        self.dispatched = False
+        self.abandoned = False
+        self.lock = threading.Lock()
+
+    def begin_dispatch(self) -> None:
+        with self.lock:
+            if self.abandoned or time.monotonic() >= self.deadline:
+                raise TimeoutError("automation_crm_deadline")
+            self.dispatched = True
+
+    def abandon(self) -> bool:
+        with self.lock:
+            self.abandoned = True
+            return self.dispatched
+
+
 class HttpCrmDigestSource:
     """Narrow direct HTTP client for six durable CRM change-feed routes."""
 
@@ -74,13 +100,22 @@ class HttpCrmDigestSource:
         "ack": "crm_change_feed_ack_v1",
     }
 
-    def __init__(self, config: AutomationCrmConnectionConfig, *, timeout_seconds: float = 10) -> None:
+    def __init__(
+        self,
+        config: AutomationCrmConnectionConfig,
+        *,
+        timeout_seconds: float = 10,
+        admission: TrackedTransportAdmission | None = None,
+    ) -> None:
         if not config.configured or config.error_code or not config.api_url or not config.bearer_token:
             raise AutomationJobError(config.error_code or "automation_crm_not_configured")
         self.config = config
         self.timeout_seconds = timeout_seconds
+        self._admission = _CRM_HTTP_ADMISSION if admission is None else admission
 
-    def _post(self, operation: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    async def _read_response(
+        self, operation: str, payload: Mapping[str, Any], attempt: _CrmHttpAttempt
+    ) -> tuple[int, bytearray]:
         path = {
             "readiness": "/api/change_feed/readiness",
             "register": "/api/change_feed/register",
@@ -88,8 +123,11 @@ class HttpCrmDigestSource:
             "summarize": "/api/change_feed/summarize",
             "ack": "/api/change_feed/ack",
         }[operation]
-        try:
-            with httpx.Client(
+        remaining = attempt.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("automation_crm_deadline")
+        with anyio.fail_after(remaining):
+            async with httpx.AsyncClient(
                 base_url=self.config.api_url,
                 headers={
                     "Authorization": f"Bearer {self.config.bearer_token}",
@@ -97,21 +135,73 @@ class HttpCrmDigestSource:
                 },
                 follow_redirects=False,
                 trust_env=False,
-                timeout=self.timeout_seconds,
+                timeout=remaining,
             ) as client:
-                with client.stream("POST", path, json=dict(payload)) as response:
+                request = client.build_request("POST", path, json=dict(payload))
+                attempt.begin_dispatch()
+                response = await client.send(request, stream=True, follow_redirects=False)
+                try:
                     content = bytearray()
-                    for chunk in response.iter_bytes():
+                    async for chunk in response.aiter_bytes():
                         if len(content) + len(chunk) > MAX_CRM_RESPONSE_BYTES:
                             raise AutomationJobError("automation_crm_response_too_large")
                         content.extend(chunk)
-                    status_code = response.status_code
+                    return response.status_code, content
+                finally:
+                    await response.aclose()
+
+    def _post(self, operation: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        timeout = self.timeout_seconds
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("invalid_crm_http_deadline")
+        attempt = _CrmHttpAttempt(time.monotonic() + timeout)
+        admission = self._admission
+        completed = threading.Event()
+        outcome: list[tuple[int, bytearray] | BaseException] = []
+
+        def worker() -> None:
+            try:
+                outcome.append(asyncio.run(self._read_response(operation, payload, attempt)))
+            except BaseException as exc:  # noqa: BLE001 - return the original failure to the synchronous caller.
+                outcome.append(exc)
+            finally:
+                # asyncio.run also drains the DNS executor; caller timeout must
+                # not free capacity while that worker still owns resources.
+                admission.release()
+                completed.set()
+
+        if not admission.acquire(blocking=False):
+            raise AutomationJobError("automation_crm_transport_failed")
+        try:
+            thread = threading.Thread(target=worker, name="autostop-crm-http", daemon=True)
+        except BaseException as exc:
+            admission.release()
+            if isinstance(exc, RuntimeError):
+                raise AutomationJobError("automation_crm_transport_failed") from exc
+            raise
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            admission.release()
+            raise AutomationJobError("automation_crm_transport_failed") from exc
+        try:
+            if not completed.wait(max(0, attempt.deadline - time.monotonic())) or time.monotonic() >= attempt.deadline:
+                raise TimeoutError("automation_crm_deadline")
+            response_outcome = outcome[0]
+            if isinstance(response_outcome, BaseException):
+                raise response_outcome
+            status_code, content = response_outcome
         except AutomationJobError:
             raise
-        except (httpx.HTTPError, OSError) as exc:
+        except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
             raise AutomationJobError(
                 "automation_crm_transport_failed",
-                outcome_uncertain=operation in {"register", "ack"},
+                outcome_uncertain=attempt.abandon() and operation in {"register", "ack"},
             ) from exc
         try:
             envelope = json.loads(content)

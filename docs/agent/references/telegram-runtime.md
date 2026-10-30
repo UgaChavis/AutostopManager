@@ -155,6 +155,15 @@ Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` 
 Кабинеты используют socket-операции `role_read` (чтение через `manager_roles`) и `role_action` (изменение через `manager_role_action` с actor/key/revision). Исторический `role_owner_submit` принимает только system actor; рабочий Telegram не создаёт через него новых поручений. Тексты не повышают полномочия. Полный контракт — [кабинеты M1/M2](manager-roles.md).
 
 - `crm_digest_v1` — allowlisted singleton template, по умолчанию OFF. Он читает CRM change feed за окно и может отправить owner сводку через work Telegram. Расписание/timezone читай из `status.jobs[].schedule`, не из имени или старого снимка. Не включай ради smoke; справка конструктора сама не запускает job.
+  HTTP к CRM ограничен одним deadline на заголовки и декодированное тело: 10 секунд для операций, 2 секунды для readiness.
+  Сохраняются запрет redirect, `trust_env=false` и лимит тела 256 KiB. До dispatch timeout/capacity failure не означает внешний эффект;
+  после начала `register`/`ack` timeout имеет неизвестный исход, автоматического повтора HTTP нет. Два transport slots удерживаются
+  до реальной очистки, включая DNS; deadline ожидания не доказывает завершение системного DNS. У каждого production daemon отдельные
+  admissions по одному слоту для scheduler и readiness. Shutdown сразу закрывает readiness admission; текущий claim завершает стадии,
+  включая точный ACK, затем закрывается scheduler admission. Оба транспорта должны закончить cleanup до `stopped` и закрытия control.
+  Навсегда зависший DNS оставит процесс в
+  `stopping`: системный `TimeoutStopSec=30s` может завершить его принудительно, что не является успешным drain. Direct source использует
+  отдельный default pool. Controller heartbeat не продлевает lease задания; fencing и точный pending ACK сохраняются для штатного readback.
 - `m1_duty_v1` и `m2_duty_v1` — singleton jobs короткого пробуждения кабинетов, первоначально OFF. Центр показывает проекцию RoleStore: `source_role`, `control_mode=read_only`, ON/OFF, следующий запуск и ошибку. Управление — через `manager_role_action`; generic preview возвращает locked, generic изменения отклоняются. Отдельный ограниченный loop выполняет dispatch/reconcile, постоянная цель не занимает последовательную очередь scheduler.
 - `database_backup` и `app_watchdog` — system timers с `control_mode=read_only`: G1 показывает drift, не меняет их.
 - `managed_pc_health`, `managed_pc_fleet_health`, `managed_pc_pending_cleanup` имеют `control_mode=managed`; изменение требует своего текущего scope/revision.
