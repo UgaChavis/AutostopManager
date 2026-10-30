@@ -128,13 +128,16 @@ async def _fetch(
     error_maximum: int = ERROR_BODY_LIMIT,
     on_error_headers: Callable[[int, Message], None] | None = None,
     response_maximum: Callable[[Message], int] | None = None,
+    on_response_headers: Callable[[int, Message], None] | None = None,
 ) -> BufferedResponse:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("provider_total_deadline_exceeded")
 
     async def remember_rejection(response: httpx.Response) -> None:
-        if on_error_headers is not None and not 200 <= response.status_code < 300:
+        if on_response_headers is not None:
+            on_response_headers(response.status_code, _response_headers(response))
+        if on_error_headers is not None and not follow_redirects and not 200 <= response.status_code < 300:
             headers = _response_headers(response)
             on_error_headers(response.status_code, headers)
             if 300 <= response.status_code < 400:
@@ -152,7 +155,7 @@ async def _fetch(
                 max_redirects=10,
                 headers={"Accept-Encoding": "identity"},
             ) as client:
-                if on_error_headers is not None and not follow_redirects:
+                if (on_error_headers is not None and not follow_redirects) or on_response_headers is not None:
                     # HTTPX parses Location even when it will not follow it.
                     # Reject redirects before their parsing can lose dispatch/status.
                     client.event_hooks["response"].append(remember_rejection)
@@ -204,6 +207,19 @@ async def _fetch(
         raise URLError("provider_network_error") from exc
 
 
+def _validate_response_options(
+    response_maximum: Callable[[Message], int] | None,
+    on_response_headers: Callable[[int, Message], None] | None,
+    wait_for_cleanup: bool,
+) -> None:
+    if response_maximum is not None and not callable(response_maximum):
+        raise ValueError("invalid_response_size_selector")
+    if on_response_headers is not None and not callable(on_response_headers):
+        raise ValueError("invalid_response_header_observer")
+    if not isinstance(wait_for_cleanup, bool):
+        raise ValueError("invalid_cleanup_wait")
+
+
 def urlopen(
     request: Request,
     *,
@@ -216,6 +232,8 @@ def urlopen(
     deadline: float | None = None,
     preserve_error_status: bool = False,
     response_maximum: Callable[[Message], int] | None = None,
+    on_response_headers: Callable[[int, Message], None] | None = None,
+    wait_for_cleanup: bool = False,
 ) -> BufferedResponse:
     """Urllib-compatible buffered response; its read() never waits on a socket.
 
@@ -227,6 +245,9 @@ def urlopen(
     may isolate transport capacity and retain a known HTTP error status when its
     body cannot be completed; the original provider defaults remain unchanged.
     A response header selector may lower, never increase, the success body limit.
+    A header observer retains status before a body failure. Cleanup-sensitive
+    owners may wait for the real worker to finish, including uninterruptible DNS;
+    that opt-in cleanup wait can outlive the HTTP deadline.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("invalid_http_deadline")
@@ -234,8 +255,7 @@ def urlopen(
         raise ValueError("invalid_response_size_limit")
     if isinstance(error_maximum, bool) or not isinstance(error_maximum, int) or error_maximum <= 0:
         raise ValueError("invalid_error_response_size_limit")
-    if response_maximum is not None and not callable(response_maximum):
-        raise ValueError("invalid_response_size_selector")
+    _validate_response_options(response_maximum, on_response_headers, wait_for_cleanup)
     if deadline is not None and (
         isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)
     ):
@@ -278,6 +298,7 @@ def urlopen(
                         error_maximum=error_maximum,
                         on_error_headers=remember_error_headers if preserve_error_status else None,
                         response_maximum=response_maximum,
+                        on_response_headers=on_response_headers,
                     )
                 )
                 outcome.append((True, response))
@@ -302,6 +323,10 @@ def urlopen(
         admission.release()
         raise URLError("provider_transport_unavailable") from None
     if not completed.wait(max(0, deadline - time.monotonic())) or time.monotonic() >= deadline:
+        if wait_for_cleanup:
+            # Keep the owning adapter alive until asyncio.run has drained DNS
+            # and closed its stream. Caller cancellation must not release it.
+            worker_thread.join()
         if preserve_error_status and (error := incomplete_http_error()) is not None:
             raise error
         raise TimeoutError("provider_total_deadline_exceeded")
