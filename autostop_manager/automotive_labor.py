@@ -105,6 +105,28 @@ def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | N
     }
 
 
+def _bind_included_operations(rows: list[dict[str, Any]], normalized: list[dict[str, Any]]) -> bool:
+    """Retain supplied IDs and bind only unambiguous implicit operation names."""
+    known_ids = {row["operation_id"] for row in normalized}
+    implicit_names: dict[str, list[str]] = {}
+    for original, ready in zip(rows, normalized, strict=True):
+        name = ready["operation_name"]
+        if original.get("operation_id") in (None, "") and isinstance(name, str) and name.strip():
+            implicit_names.setdefault(name, []).append(ready["operation_id"])
+    for row in normalized:
+        references: list[str | int] = []
+        for reference in row["included_operations"]:
+            key = str(reference)
+            targets = implicit_names.get(key, []) if key not in known_ids else []
+            if len(targets) > 1:
+                return False
+            # Unknown references may describe work outside this batch. Keep
+            # them literally; neither invent a target nor discard the evidence.
+            references.append(targets[0] if targets else reference)
+        row["included_operations"] = references
+    return True
+
+
 def normalize_labor_time(
     rows: list[dict[str, Any]], unit: str | None = None, source: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -117,6 +139,8 @@ def normalize_labor_time(
         if not _labor_structure_valid(row) or (operation is not None and not isinstance(operation, str)):
             return invalid("normalize_labor_time", "rows.structure")
     normalized = [_labor_row(row, unit, source, index) for index, row in enumerate(rows)]
+    if not _bind_included_operations(rows, normalized):
+        return invalid("normalize_labor_time", "rows.included_operations")
     missing = [f"rows[{index}].{field}" for index, row in enumerate(normalized) for field in row["missing_fields"]]
     overlaps = [
         {
