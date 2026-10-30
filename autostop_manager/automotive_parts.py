@@ -630,6 +630,8 @@ def _criterion(field: str, expected: Any, actual: Any, *, pr_codes_complete: boo
         if "from" not in expected and "to" not in expected:
             return "unknown"
         return _range_criterion(field, expected, actual)
+    if field == "production_date":
+        return _date_range_criterion({"from": expected, "to": expected}, actual)
     return _identity_criterion(field, expected, actual)
 
 
