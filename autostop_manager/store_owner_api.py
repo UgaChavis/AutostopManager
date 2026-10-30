@@ -1514,7 +1514,12 @@ def _validated_query(value: dict[str, Any] | None, *, capability: OwnerCapabilit
                 components=capability.schema_components,
                 error_code="store_owner_query_schema_invalid",
             )
-    normalized = {name: query[name] for name in sorted(query)}
+    # Optional null means the parameter is absent. Normalize before both plan
+    # hashing and dispatch; urlencode would otherwise send the string "None".
+    # A required null has no supported query representation and cannot be omitted.
+    if any(query[name] is None for name in capability.required_query_parameters):
+        raise ValueError("store_owner_query_null_unrepresentable")
+    normalized = {name: query[name] for name in sorted(query) if query[name] is not None}
     if len(urlencode(normalized, doseq=True).encode("utf-8")) > MAX_QUERY_BYTES:
         raise ValueError("store_owner_query_too_large")
     return normalized
