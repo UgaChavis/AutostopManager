@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from itertools import permutations
+import socket
+import sqlite3
+import subprocess
 
 import pytest
 
 from autostop_manager import work_pricing as pricing, work_pricing_research as research
+from autostop_manager.work_operation_matching import OperationMatcher
 
 ROUTES = ["manual", "ready", "combined"]
 RACK = "замена рулевой рейки"
@@ -20,6 +24,12 @@ def offline_only(monkeypatch, tmp_path):
     monkeypatch.setattr(pricing, "_load_labor_experience", denied)
     monkeypatch.setattr(research, "urlopen", denied)
     monkeypatch.setattr(research, "_ddg_search", denied)
+    monkeypatch.setattr(socket.socket, "connect", denied)
+    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    monkeypatch.setattr(socket, "create_connection", denied)
+    monkeypatch.setattr(socket, "getaddrinfo", denied)
+    monkeypatch.setattr(sqlite3, "connect", denied)
+    monkeypatch.setattr(subprocess, "Popen", denied)
     monkeypatch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
     monkeypatch.setenv("AUTOSTOP_MANAGER_DB", str(tmp_path / "manager.sqlite3"))
     monkeypatch.setenv("AUTOSTOP_AUTOMOTIVE_OFFLINE_RUNTIME", str(tmp_path / "unavailable-runtime"))
@@ -447,11 +457,60 @@ def test_dsg_family_keeps_compatibility_with_explicit_variants(route, reverse, v
 
 @pytest.mark.parametrize("route", ROUTES)
 @pytest.mark.parametrize("reverse", [False, True])
-@pytest.mark.parametrize("first,second", [("0AM", "02E"), ("DSG6", "DSG7"), ("DSG6 0AM", "DSG7 0AM")])
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("0AM", "02E"),
+        ("DSG6", "DSG7"),
+        ("DSG6 0AM", "DSG7 0AM"),
+        ("DSG7", "0D9"),
+        ("DSG6", "0CW"),
+        ("DSG6", "0GC"),
+        ("0CW", "0GC"),
+        ("DSG", "DSG7 0D9"),
+        ("DSG", "DSG6 0CW"),
+        ("DSG", "DSG6 0GC"),
+    ],
+)
 def test_explicit_transmission_identifiers_are_never_erased_by_the_family_alias(route, reverse, first, second):
     names = (f"замена мехатроника {first}", f"замена мехатроника {second}")
     requested, observed = names[::-1] if reverse else names
     assert_unmatched(estimate(requested, route=route, **evidence(observed)))
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("gears,code", [("DSG6", "0D9"), ("DSG7", "0CW"), ("DSG7", "0GC")])
+def test_known_gearbox_keeps_compatible_gear_count_prices_and_hours(route, reverse, gears, code):
+    names = (f"замена мехатроника {gears}", f"замена мехатроника {code}")
+    requested, observed = names[::-1] if reverse else names
+    selected = estimate(requested, route=route, **evidence(observed))["operation_estimates"][0]
+    assert selected["sample"]["valid_count"] == 3
+    assert selected["market_average_rub"] == 4500
+    assert selected["labor_time_analysis"]["valid_count"] == 2
+    assert selected["labor_time_analysis"]["average_hours"] == 2.5
+    assert selected["autostop_price_rub"] is not None
+
+
+@pytest.mark.parametrize(
+    "variant,qualifiers",
+    [
+        ("DSG", ()),
+        ("DSG6", (("gears", "dsg6"),)),
+        ("DSG7", (("gears", "dsg7"),)),
+        ("0D9", (("gearbox", "0d9"),)),
+        ("0CW", (("gearbox", "0cw"),)),
+        ("0GC", (("gearbox", "0gc"),)),
+        ("DSG6 0D9", (("gearbox", "0d9"), ("gears", "dsg6"))),
+        ("DSG6 0CW", (("gearbox", "0cw"), ("gears", "dsg6"))),
+    ],
+)
+def test_gear_count_compatibility_does_not_change_explicit_identity_keys(variant, qualifiers):
+    matcher = OperationMatcher()
+    operation = f"замена мехатроника {variant}"
+    assert matcher.identity(operation) == repr((("замена", "мехатроник", "dsg"), qualifiers))
+    # Exact identity keeps its existing behavior, including unvalidated input labels.
+    assert matcher.matches(operation, operation)
 
 
 @pytest.mark.parametrize("route", ROUTES)

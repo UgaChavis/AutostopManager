@@ -184,6 +184,32 @@ def test_known_qualification_matching_still_uses_only_compatible_work(requested,
         assert_unknown(response)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "gears,code,other", [("DSG6", "0D9", "DSG7"), ("DSG7", "0CW", "DSG6"), ("DSG7", "0GC", "DSG6")]
+)
+def test_gearbox_qualification_rejects_conflicts_without_broadening_pure_name_binding(reverse, gears, code, other):
+    for first, second, bound in (
+        ("DSG", f"{gears} {code}", True),
+        (gears, f"{gears} {code}", True),
+        (code, f"{gears} {code}", True),
+        ("DSG", f"{other} {code}", False),
+        (other, f"{other} {code}", False),
+        (code, f"{other} {code}", False),
+        (gears, code, False),  # Separate axes remain insufficient for the pure subset contract.
+        (other, code, False),
+    ):
+        names = (f"замена мехатроника {first}", f"замена мехатроника {second}")
+        requested, observed = names[::-1] if reverse else names
+        response = calculate(
+            [{"operation_id": "unbound", "operation_name": requested}], [quote({"operation_name": observed})]
+        )
+        if bound:
+            assert response["outcome"] == "success" and response["data"]["total"] == 5000
+        else:
+            assert_unknown(response)
+
+
 @pytest.mark.parametrize(
     "fields,total,bounds",
     [
