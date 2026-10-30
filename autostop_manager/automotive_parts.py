@@ -429,7 +429,7 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
                 isinstance(item.get(key), dict)
                 and bool(normalize_part_number(row[key]["number"]))
                 and _source_part_number(item[key].get("number")) == normalize_part_number(row[key]["number"])
-                and bool(row[key].get("brand"))
+                and bool(str(row[key].get("brand") or "").strip())
                 and str(item[key].get("brand") or "").casefold() == str(row[key]["brand"]).casefold()
                 for key in ("from", "to")
             )

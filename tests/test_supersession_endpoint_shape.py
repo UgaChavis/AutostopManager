@@ -172,3 +172,107 @@ def test_other_relation_kinds_keep_supplied_evidence_without_supersession_confir
     assert response["outcome"] == "success"
     assert response["data"]["relations"][0]["type"] == kind
     assert response["missing_fields"] == response["conflicts"] == []
+
+
+@pytest.mark.parametrize("direction", ["from_to", "to_from"])
+@pytest.mark.parametrize("endpoint", ["from", "to"])
+@pytest.mark.parametrize("brand", [" ", "\t\r\n", "\u00a0", "\u2003\u202f", " \t\u00a0 "])
+def test_blank_brand_cannot_prove_a_supersession_endpoint(compare, direction, endpoint, brand):
+    row = _edge(direction=direction)
+    row[endpoint]["brand"] = brand
+    row["evidence"][0][endpoint]["brand"] = brand
+
+    response = compare([row])
+
+    assert response["outcome"] == "partial"
+    assert response["data"]["relations"][0]["type"] == "unverified_supersession"
+    assert response["missing_fields"] == ["relations[0].supersession_direction_and_primary_evidence"]
+    assert response["conflicts"] == []
+
+
+@pytest.mark.parametrize(
+    "brand,verified",
+    [
+        (None, False),
+        ("", False),
+        (False, False),
+        (0, False),
+        ([], False),
+        ({}, False),
+        (True, True),
+        (555, True),
+        (["DEMO"], True),
+        ({"name": "DEMO"}, True),
+    ],
+)
+def test_brand_presence_keeps_other_legacy_truthiness_and_conversion(compare, brand, verified):
+    row = _edge()
+    row["from"]["brand"] = brand
+    row["evidence"][0]["from"]["brand"] = brand
+    response = compare([row])
+    assert response["outcome"] == ("success" if verified else "partial")
+    assert response["data"]["relations"][0]["type"] == ("supersession" if verified else "unverified_supersession")
+    assert response["conflicts"] == []
+
+
+@pytest.mark.parametrize(
+    "brand,source_brand,verified",
+    [
+        ("DEMO", "demo", True),
+        (" DEMO ", " demo ", True),
+        ("DEMO", " DEMO ", False),
+        (" DEMO ", "DEMO", False),
+        ("ß", "SS", True),
+    ],
+)
+def test_nonblank_brand_comparison_does_not_add_trimming_or_change_casefold(compare, brand, source_brand, verified):
+    row = _edge()
+    row["from"]["brand"] = brand
+    row["evidence"][0]["from"]["brand"] = source_brand
+    response = compare([row])
+    assert response["outcome"] == ("success" if verified else "partial")
+    assert response["data"]["relations"][0]["type"] == ("supersession" if verified else "unverified_supersession")
+
+
+@pytest.mark.parametrize("direction", ["from_to", "to_from"])
+@pytest.mark.parametrize("blank_origin", [True, False])
+def test_blank_brand_edges_cannot_create_replacement_branches(compare, direction, blank_origin):
+    rows = [
+        _edge("ORIGIN1", target, direction) if direction == "from_to" else _edge(target, "ORIGIN1", direction)
+        for target in ("FIRST2", "SECOND3")
+    ]
+    endpoint = "from" if (direction == "from_to") == blank_origin else "to"
+    for row in rows:
+        row[endpoint]["brand"] = " \u00a0 "
+        row["evidence"][0][endpoint]["brand"] = " \u00a0 "
+    response = compare(rows)
+    assert response["outcome"] == "partial"
+    assert [row["type"] for row in response["data"]["relations"]] == ["unverified_supersession"] * 2
+    assert response["missing_fields"] == [
+        f"relations[{index}].supersession_direction_and_primary_evidence" for index in range(2)
+    ]
+    assert response["conflicts"] == []
+
+
+@pytest.mark.parametrize("kind", ["cross", "analog", "oe_reference"])
+def test_blank_brand_keeps_other_relation_kinds_unchanged(compare, kind):
+    row = _edge()
+    row["type"] = kind
+    row["from"]["brand"] = row["evidence"][0]["from"]["brand"] = " "
+    response = compare([row])
+    assert response["outcome"] == "success"
+    assert response["data"]["relations"][0]["type"] == kind
+    assert response["missing_fields"] == response["conflicts"] == []
+
+
+@pytest.mark.parametrize("valid_first", [True, False])
+def test_blank_source_brand_does_not_hide_another_valid_document(compare, valid_first):
+    row = _edge()
+    valid = row["evidence"][0]
+    blank = deepcopy(valid)
+    blank["from"]["brand"] = " "
+    row["evidence"] = [valid, blank] if valid_first else [blank, valid]
+    response = compare([row])
+    assert response["outcome"] == "success"
+    assert response["data"]["relations"][0]["type"] == "supersession"
+    assert response["missing_fields"] == response["conflicts"] == []
