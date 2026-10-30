@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 import json
+from time import monotonic
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 from zoneinfo import ZoneInfo
 
 from .config import normalize_store_api_url
+from .store_api import _open_response
 
 
 STORE_ANALYTICS_FORMAT = "store_analytics_report_v1"
@@ -66,15 +68,16 @@ _FORBIDDEN_RESPONSE_KEYS = frozenset(
 )
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        del req, fp, code, msg, headers, newurl
+def urlopen(request: Request, timeout: float, *, maximum: int = STORE_ANALYTICS_MAX_RESPONSE_BYTES):
+    """Use the owning Store transport's total deadline, capacity and no-redirect policy."""
 
-
-def urlopen(request: Request, timeout: float):
-    """Open without redirects so Authorization never crosses an origin boundary."""
-
-    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+    return _open_response(
+        request,
+        timeout=timeout,
+        deadline=monotonic() + timeout,
+        maximum=maximum,
+        error_maximum=4096,
+    )
 
 
 def get_store_analytics_report(
@@ -122,8 +125,9 @@ def get_store_analytics_report(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=max(0.1, min(float(timeout), 30.0))) as response:
-            raw = response.read(max(1024, int(max_response_bytes)) + 1)
+        maximum = max(1024, int(max_response_bytes))
+        with urlopen(request, timeout=max(0.1, min(float(timeout), 30.0)), maximum=maximum) as response:
+            raw = response.read(maximum + 1)
     except HTTPError as exc:
         return _error(f"store_analytics_http_{int(exc.code)}")
     except (TimeoutError, URLError, OSError):

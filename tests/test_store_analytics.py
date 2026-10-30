@@ -78,7 +78,7 @@ class _Response:
 def test_report_posts_bounded_custom_period_and_returns_only_aggregates(monkeypatch):
     captured = {}
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, *, maximum):
         captured.update(
             {
                 "url": request.full_url,
@@ -137,7 +137,7 @@ def test_report_posts_bounded_custom_period_and_returns_only_aggregates(monkeypa
 def test_natural_queries_select_period_and_return_structured_metrics(monkeypatch, query, expected_period):
     captured = {}
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, *, maximum):
         captured["body"] = json.loads(request.data.decode("utf-8"))
         return _Response(_payload())
 
