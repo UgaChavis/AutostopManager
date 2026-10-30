@@ -43,9 +43,30 @@ _REVERSED_FRACTION_PREFIX = re.compile(
     r"\s*/\s*(?:\d+(?:[.,]\d+)?[-−]?\s*/\s*)*"
     r"\d+(?:[.,]\d+)?[-−]?(?![\w/−-])(?![.,][\d/−-])"
 )
+_GROUPED_QUANTITY_TAIL = re.compile(r"\d{3}(?:[.,]\d+)?")
+_REVERSED_GROUPED_QUANTITY_PREFIX = re.compile(
+    r"[ \u00a0\u202f]+(?:\d{3}[ \u00a0\u202f]+)*\d{1,3}[-−]?(?![\w−-])(?![.,][\d−-])"
+)
+
+
+def _labeled_grouped_quantity(raw: str, quantity: re.Match[str]) -> bool:
+    """Require an existing quantity label; bare numeric SKUs remain ambiguous."""
+    if not _GROUPED_QUANTITY_TAIL.fullmatch(quantity[1]):
+        return False
+    prefix = raw[: quantity.start()]
+    grouped = _REVERSED_GROUPED_QUANTITY_PREFIX.match(prefix[::-1])
+    if grouped is None:
+        return False
+    before_number = prefix[: -grouped.end()]
+    label = re.search(r"[\w.-]+$", before_number.rstrip().rstrip(":=").rstrip())
+    return label is not None and _QUANTITY_LABEL.fullmatch(before_number[label.start() :]) is not None
 
 
 def _quantity_only_clause(raw: str) -> bool:
+    if _QUANTITY_LABEL.match(raw):
+        quantity = _REQUEST_QUANTITY.search(raw)
+        if quantity and not raw[quantity.end() :].strip() and _labeled_grouped_quantity(raw, quantity):
+            return True
     clause = _QUANTITY_LABEL.sub("", raw).strip()
     # The intent guard's broad RU unit prefixes can also name parts (штуцер).
     # EN annotations retain their raw/unknown fields without adding conversion.
@@ -92,8 +113,17 @@ def _quantity(raw: str) -> tuple[float | None, str | None]:
     unit = match[2].casefold().rstrip(".")
     # Keep the unit; a range endpoint or fraction denominator is not an exact count.
     prefix = raw[: match.start()]
-    non_scalar = _QUANTITY_RANGE_PREFIX.search(prefix) or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
-    quantity = None if non_scalar else finite_number(match[1])
+    range_prefix = _QUANTITY_RANGE_PREFIX.search(prefix)
+    if (
+        range_prefix
+        and re.fullmatch(r"[0-9]+\s+[-−–—]\s+", range_prefix[0])
+        and re.search(r"(?<!\w)артикул\s+$", prefix[: range_prefix.start()], re.I)
+    ):
+        # Only an explicitly labelled article and a spaced separator disambiguate
+        # this numeric token. A supplied part_number alone does not prove it.
+        range_prefix = None
+    non_scalar = range_prefix or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
+    quantity = None if non_scalar or _labeled_grouped_quantity(raw, match) else finite_number(match[1])
     return quantity, "set" if unit.startswith("комп") else "pair" if unit.startswith(
         "пар"
     ) else "liter" if unit.startswith("л") else "piece"

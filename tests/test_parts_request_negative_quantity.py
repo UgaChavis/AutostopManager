@@ -443,3 +443,113 @@ def test_fraction_keeps_the_next_items_quantity(call, separator):
     items = response["data"]["items"]
     assert [item["raw"] for item in items] == [first, second]
     assert [item["quantity"] for item in items] == [None, 2]
+
+
+GROUPED_LABELS = ["количество ", "кол-во: ", "quantity=", "qty=", "COUNT: "]
+
+
+@pytest.mark.parametrize("label", GROUPED_LABELS)
+@pytest.mark.parametrize("space", [" ", "\u00a0", "\u202f"])
+def test_labeled_grouped_quantity_never_becomes_the_final_group(call, label, space):
+    raw = f"масляный фильтр {label}1{space}000 шт"
+    response = call(text=raw)
+    assert response["outcome"] == "partial"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw
+    assert (item["quantity"], item["unit"], item["quantity_status"]) == (None, "piece", "unknown")
+    assert item["missing_fields"] == ["quantity"]
+
+
+@pytest.mark.parametrize("label", GROUPED_LABELS)
+def test_labeled_grouped_quantity_only_clause_stays_with_its_item(call, label):
+    raw = f"масляный фильтр,{label}1 000 шт"
+    response = call(text=raw)
+    assert response["outcome"] == "partial"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["intent"]["intent_id"] == "oil_filter"
+    assert item["quantity"] is None and item["unit"] == "piece" and item["missing_fields"] == ["quantity"]
+
+
+@pytest.mark.parametrize("number", ["12 345 678", "1 000,5", "999 999.25", "-1 000", "0 000"])
+def test_labeled_grouped_quantity_keeps_all_raw_digits(call, number):
+    raw = f"масляный фильтр количество: {number} шт"
+    response = call(text=raw)
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["quantity"] is None and item["quantity_status"] == "unknown"
+
+
+@pytest.mark.parametrize("shape", ["string", "object"])
+@pytest.mark.parametrize("unit,normalized", [("шт", "piece"), ("комплект", "set"), ("пары", "pair"), ("л", "liter")])
+def test_labeled_grouped_quantity_explicit_items_preserve_units_and_sku(call, shape, unit, normalized):
+    raw = f"масляный фильтр кол-во: 12 000 {unit}"
+    supplied = raw if shape == "string" else {"raw": raw, "item_id": "grouped", "part_number": "125", "brand": "DEMO"}
+    response = call(items=[supplied])
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert (item["raw"], item["quantity"], item["unit"], item["quantity_status"]) == (raw, None, normalized, "unknown")
+    if shape == "object":
+        assert (item["item_id"], item["raw_part_number"], item["normalized_part_number"], item["brand"]) == (
+            "grouped",
+            "125",
+            "125",
+            "DEMO",
+        )
+
+
+@pytest.mark.parametrize(
+    "raw,quantity",
+    [
+        ("масляный фильтр 1 000 шт", 0),
+        ("масляный фильтр 125 250 шт", 250),
+        ("масляный фильтр артикул 125 250 шт", 250),
+        ("масляный фильтр AB-125 250 шт", 250),
+        ("масляный фильтр 125 2 шт", 2),
+        ("масляный фильтр количество 1000 шт", 1000),
+        ("масляный фильтр количество 1,5 шт", 1.5),
+        ("масляный фильтр total_quantity 1 000 шт", 0),
+    ],
+)
+def test_grouped_quantity_guard_preserves_unlabeled_skus_and_existing_scalar_counts(call, raw, quantity):
+    response = call(items=[{"raw": raw, "part_number": "125", "item_id": "sku"}])
+    assert response["outcome"] == "success"
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["quantity"] == quantity
+    assert item["raw_part_number"] == "125" and item["item_id"] == "sku"
+
+
+@pytest.mark.parametrize(
+    "quantity,outcome,value",
+    [(None, "partial", None), (0, "success", 0), (1000, "success", 1000), ("1 000", "invalid_input", None)],
+)
+def test_labeled_grouped_quantity_explicit_override_keeps_priority(call, quantity, outcome, value):
+    row = {"raw": "масляный фильтр количество 1 000 шт", "quantity": quantity, "item_id": "override"}
+    response = call(items=[row])
+    assert response["outcome"] == outcome
+    item = response["data"]["items"][0]
+    assert (item["raw"], item["quantity"], item["unit"], item["item_id"]) == (row["raw"], value, "piece", "override")
+
+
+@pytest.mark.parametrize("separator", ["; ", "\n"])
+def test_labeled_grouped_quantity_annotation_never_crosses_hard_boundaries(call, separator):
+    first, second = "масляный фильтр", "количество 1 000 шт"
+    items = call(text=first + separator + second)["data"]["items"]
+    assert [item["raw"] for item in items] == [first, second]
+    assert [item["quantity"] for item in items] == [None, None]
+    assert items[1]["intent"]["intent_id"] == "unknown"
+
+
+@pytest.mark.parametrize("first", ["масляный фильтр", "масляный фильтр 1 шт"])
+def test_labeled_grouped_quantity_does_not_attach_a_new_named_position(call, first):
+    second = "количество 1 000 шт неизвестная прокладка"
+    items = call(text=first + ", " + second)["data"]["items"]
+    assert [item["raw"] for item in items] == [first, second]
+    assert items[1]["quantity"] is None and items[1]["intent"]["intent_id"] == "unknown"
+
+
+def test_labeled_grouped_quantity_does_not_replace_an_existing_count(call):
+    items = call(text="масляный фильтр 1 шт, количество 1 000 шт")["data"]["items"]
+    assert [item["raw"] for item in items] == ["масляный фильтр 1 шт", "количество 1 000 шт"]
+    assert [item["quantity"] for item in items] == [1, None]
