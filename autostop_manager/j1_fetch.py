@@ -189,6 +189,7 @@ def public_url(value: str) -> str:
     if not raw or len(raw) > 2048:
         return ""
     try:
+        raw.encode("utf-8")  # Literal surrogates are invalid URL text, unlike escaped octets.
         parsed = urlsplit(raw)
         host = parsed.hostname
         port = parsed.port
@@ -952,8 +953,12 @@ def _discovery_url_key(url: str) -> str:
     """Deduplicate same public result across engines without dropping meaning."""
 
     try:
+        url.encode("utf-8")
         parsed = urlsplit(url)
-        parameters = parse_qsl(parsed.query, keep_blank_values=True)
+        # Legacy URL query bytes must not collapse to the same replacement character.
+        parameters = parse_qsl(parsed.query, keep_blank_values=True, errors="surrogateescape")
+    except UnicodeError:
+        return ""
     except ValueError:
         return url.casefold()
     kept = [
@@ -967,7 +972,9 @@ def _discovery_url_key(url: str) -> str:
         (parsed.scheme == "http" and parsed.port == 80) or (parsed.scheme == "https" and parsed.port == 443)
     ):
         host += f":{parsed.port}"
-    return urlunsplit((parsed.scheme.casefold(), host, parsed.path or "/", urlencode(kept, doseq=True), ""))
+    return urlunsplit(
+        (parsed.scheme.casefold(), host, parsed.path or "/", urlencode(kept, doseq=True, errors="surrogateescape"), "")
+    )
 
 
 def _merge_snippets(left: str, right: str) -> str:
