@@ -67,6 +67,9 @@ def safe_catalog_url(url: str) -> str:
             or "\\" in url
             or any(ord(char) < 32 for char in url)
             or len(url) > 4096
+            # HTTPX removes literal dot segments after route/robots checks.
+            # Reject encoded variants too, without rewriting opaque URL data.
+            or any(segment in {".", ".."} for segment in unquote(parsed.path).replace("\\", "/").split("/"))
         )
         tokens = re.split(r"[?&=/]", unquote(parsed.path + "?" + parsed.query))
         private = any(
