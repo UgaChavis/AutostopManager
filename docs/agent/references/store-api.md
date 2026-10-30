@@ -57,6 +57,11 @@ Native MCP выполняет Store HTTP вне event loop с отдельной
 Он учитывает реальные adapter/HTTP workers после ухода caller; завершённый drain
 не заменяет проверку бизнес-результата неопределённой записи.
 
+Aggregate-only отчёт `get_store_analytics_report` использует те же HTTP-слоты
+своего Store worker и один deadline на соединение, заголовки и тело. Он отправляет
+один POST без повторов и redirects, сохраняет HTTP-статус ошибки и отдельный лимит
+ответа 256 KiB; служебный drain учитывает очистку его transport worker.
+
 `StoreApiClient` использует один HTTP deadline на вызов JSON API или загрузки фото:
 соединение, заголовки и тело делят `timeout`, а GET-повторы получают только остаток
 этого времени. Лимит — до трёх попыток для временных сетевых ошибок и HTTP 5xx;
@@ -71,11 +76,6 @@ Store имеет три отдельных HTTP worker-слота. `store_transp
 `outcome_uncertain=false` и не ухудшают circuit. Caller прекращает ожидание по
 deadline; слот удерживается до фактического завершения worker, включая очистку и
 ожидание системного DNS. Лимиты тела JSON и JPEG проверяются отдельно.
-
-Aggregate-only отчёт `get_store_analytics_report` использует те же HTTP-слоты
-своего Store worker и один deadline на соединение, заголовки и тело. Он отправляет
-один POST без повторов и redirects, сохраняет HTTP-статус ошибки и отдельный лимит
-ответа 256 KiB; служебный drain учитывает очистку его transport worker.
 
 Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно. Задай `runtime_python` точным проверенным Python из текущего `ExecStart` Manager:
 
