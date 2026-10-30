@@ -455,12 +455,20 @@ class StoreQuoteConductor:
         run = self._run_from_started(started)
         if run is None:
             return _error("store_quote_conductor_run_invalid")
-        if started.get("active_target_deduplicated"):
+        # A repeated start must not reset a persisted phase or its CAS version.
+        # Only an exact-key replay of an uninitialized planned run may finish
+        # the checkpoint left missing by an interrupted first start.
+        if started.get("active_target_deduplicated") or (
+            started.get("deduplicated") and (run.get("status") != "planned" or run.get("checkpoint") != {})
+        ):
+            technical = {"deduplicated": True}
+            if started.get("active_target_deduplicated"):
+                technical["active_target_deduplicated"] = True
             return _envelope(
                 ok=True,
                 status=str(run.get("status") or "planned"),
                 run=run,
-                technical={"active_target_deduplicated": True},
+                technical=technical,
             )
         checkpoint = self._checkpoint(
             run,
