@@ -36,6 +36,7 @@ _REQUEST_QUANTITY = re.compile(
     r"(?<![\w−-])(?<![\d−-][.,])(\d+(?:[.,]\d+)?)\s*(шт(?:ук[аи]?)?\.?|комплект(?:а|ов)?|компл\.?|пар[аы]?|л(?:итр(?:а|ов)?)?)(?!\w)",
     re.I,
 )
+_QUANTITY_RANGE_PREFIX = re.compile(r"(?<![\w−-])(?<![\d−-][.,])[-−]?\d+(?:[.,]\d+)?\s*[-−–—]\s*$")
 
 
 def _quantity_only_clause(raw: str) -> bool:
@@ -83,7 +84,9 @@ def _quantity(raw: str) -> tuple[float | None, str | None]:
     if not match:
         return None, None
     unit = match[2].casefold().rstrip(".")
-    return finite_number(match[1]), "set" if unit.startswith("комп") else "pair" if unit.startswith(
+    # Keep the parsed unit, but do not turn a range endpoint into an exact count.
+    quantity = None if _QUANTITY_RANGE_PREFIX.search(raw[: match.start()]) else finite_number(match[1])
+    return quantity, "set" if unit.startswith("комп") else "pair" if unit.startswith(
         "пар"
     ) else "liter" if unit.startswith("л") else "piece"
 

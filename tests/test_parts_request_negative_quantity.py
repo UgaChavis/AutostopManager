@@ -256,3 +256,94 @@ def test_english_units_remain_raw_unknown_without_new_conversion(call, unit):
     item = response["data"]["items"][0]
     assert item["raw"] == raw
     assert item["quantity"] is None and item["unit"] is None and item["quantity_status"] == "unknown"
+
+
+@pytest.mark.parametrize("separator", ["-", "−", "–", "—"])
+@pytest.mark.parametrize("padding", ["", " ", "\u00a0"])
+@pytest.mark.parametrize("lower,upper", [("2", "3"), ("0.5", "1.5"), ("0,5", "1,5")])
+def test_quantity_range_does_not_become_its_upper_bound(call, separator, padding, lower, upper):
+    raw = f"масляный фильтр {lower}{padding}{separator}{padding}{upper} шт"
+    response = call(text=raw)
+
+    assert response["ok"] is True and response["outcome"] == "partial"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["intent"]["intent_id"] == "oil_filter"
+    assert item["quantity"] is None and item["quantity_status"] == "unknown"
+    assert "quantity" in item["missing_fields"]
+
+
+@pytest.mark.parametrize("bounds", ["-2–3", "−0.5—1.5"])
+def test_invalid_negative_lower_bound_does_not_make_the_upper_bound_exact(call, bounds):
+    response = call(text=f"масляный фильтр {bounds} шт")
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert item["quantity"] is None and item["quantity_status"] == "unknown"
+
+
+@pytest.mark.parametrize("shape", ["string", "object"])
+@pytest.mark.parametrize(
+    "unit,normalized_unit", [("шт", "piece"), ("комплект", "set"), ("пары", "pair"), ("л", "liter")]
+)
+def test_explicit_raw_items_keep_range_unknown_for_each_existing_unit(call, shape, unit, normalized_unit):
+    raw = f"масляный фильтр 2 — 3 {unit}"
+    supplied = raw if shape == "string" else {"raw": raw, "item_id": "synthetic-range"}
+    response = call(items=[supplied])
+
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["quantity"] is None and item["quantity_status"] == "unknown"
+    assert item["unit"] == normalized_unit and item["missing_fields"] == ["quantity"]
+    if shape == "object":
+        assert item["item_id"] == "synthetic-range"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "масляный фильтр AB-12 – 3 шт",
+        "масляный фильтр SKU12.5 — 3 шт",
+        "масляный фильтр SKU12,5 - 3 шт",
+        "масляный фильтр: 3 шт",
+        "1. масляный фильтр — 3 шт",
+        "— масляный фильтр 3 шт",
+    ],
+)
+def test_item_markers_and_part_number_delimiters_are_not_quantity_ranges(call, raw):
+    response = call(text=raw)
+
+    assert response["outcome"] == "success"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw
+    assert (item["quantity"], item["unit"], item["quantity_status"]) == (3, "piece", "known")
+
+
+@pytest.mark.parametrize("quantity", [None, 0, 5])
+@pytest.mark.parametrize("supplied_unit", [True, False])
+def test_explicit_quantity_still_overrides_raw_range(call, quantity, supplied_unit):
+    row = {"item_id": "explicit-range", "raw": "масляный фильтр 2–3 шт", "quantity": quantity, "unit": "piece"}
+    if not supplied_unit:
+        del row["unit"]
+    response = call(items=[row])
+
+    assert response["outcome"] == ("partial" if quantity is None else "success")
+    item = response["data"]["items"][0]
+    assert (item["item_id"], item["raw"], item["quantity"], item["unit"]) == (
+        row["item_id"],
+        row["raw"],
+        quantity,
+        "piece",
+    )
+
+
+@pytest.mark.parametrize("separator", ["; ", ", ", " и ", "\n"])
+def test_unknown_range_does_not_consume_the_next_items_quantity(call, separator):
+    first, second = "масляный фильтр 2–3 шт", "салонный фильтр — 4 шт"
+    response = call(text=first + separator + second)
+
+    assert response["outcome"] == "partial"
+    items = response["data"]["items"]
+    assert [item["raw"] for item in items] == [first, second]
+    assert [item["quantity"] for item in items] == [None, 4]
+    assert [item["quantity_status"] for item in items] == ["unknown", "known"]
