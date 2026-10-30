@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -1531,7 +1532,7 @@ def _message_media_metadata(message: Any) -> dict[str, Any]:
         supplied_suffix = Path(file_name).suffix.casefold()
         if supplied_suffix == suffix:
             suffix = supplied_suffix
-    duration_seconds = 0
+    duration_seconds: int | float = 0
     voice = False
     video = False
     width = 0
@@ -1547,10 +1548,15 @@ def _message_media_metadata(message: Any) -> dict[str, Any]:
             voice = bool(getattr(attribute, "voice", False))
         elif attribute_type == "DocumentAttributeVideo":
             try:
-                duration_seconds = int(getattr(attribute, "duration", None) or 0)
+                duration_seconds = float(getattr(attribute, "duration", None) or 0)
+                if not math.isfinite(duration_seconds):
+                    duration_seconds = 0
+                elif duration_seconds.is_integer():
+                    # Keep existing whole-second metadata/fingerprint bytes stable.
+                    duration_seconds = int(duration_seconds)
                 width = int(getattr(attribute, "w", None) or 0)
                 height = int(getattr(attribute, "h", None) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 duration_seconds = 0
                 width = 0
                 height = 0
