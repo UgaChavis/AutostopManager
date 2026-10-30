@@ -23,26 +23,27 @@ READINESS = {
 }
 
 
-class Body(httpx.SyncByteStream):
+class Body(httpx.AsyncByteStream):
     def __init__(self, chunks, *, read_error=None):
         self.chunks = chunks
         self.read_error = read_error
         self.closed = False
 
-    def __iter__(self):
-        yield from self.chunks
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
         if self.read_error is not None:
             raise self.read_error
 
-    def close(self):
+    async def aclose(self):
         self.closed = True
 
 
 class Transport(httpx.MockTransport):
     closed = False
 
-    def close(self):
-        super().close()
+    async def aclose(self):
+        await super().aclose()
         self.closed = True
 
 
@@ -72,7 +73,7 @@ class ResponseHarness:
             return response
 
         self.transport = Transport(handle)
-        real_client = httpx.Client
+        real_client = httpx.AsyncClient
 
         def client(**kwargs):
             result = real_client(transport=self.transport, **kwargs)
@@ -80,7 +81,7 @@ class ResponseHarness:
             return result
 
         monkeypatch.setattr(automation_jobs, "bytearray", ObservedBuffer, raising=False)
-        monkeypatch.setattr(automation_jobs.httpx, "Client", client)
+        monkeypatch.setattr(automation_jobs.httpx, "AsyncClient", client)
         self.source = automation_jobs.HttpCrmDigestSource(
             AutomationCrmConnectionConfig(
                 configured=True,
