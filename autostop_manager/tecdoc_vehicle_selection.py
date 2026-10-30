@@ -74,6 +74,19 @@ def _engine_description(value: Any) -> bool:
     return bool(re.search(r"\d[.,]\d|\b(?:TDI|FSI|TFSI|HDI|DIESEL|PETROL)\b", str(value), re.I))
 
 
+def _engine_description_remainder(value: Any) -> str:
+    """Retain everything not explained by the supported volume/fuel description."""
+    if not _engine_description(value):
+        return ""
+    text = re.sub(r"\b\d+[.,]\d+(?:\s*L)?\b", " ", str(value), flags=re.I)
+    text = re.sub(r"\b(?:TDI|FSI|TFSI|HDI|DIESEL|PETROL)\b", " ", text, flags=re.I)
+    return text.strip(" \t\r\n()[]{}")
+
+
+def _unresolved_engine_description(profile: dict[str, Any], known: list[Any]) -> bool:
+    return any(_engine_description_remainder(value) and _engine_comparison(value, profile) is None for value in known)
+
+
 def _engine_comparison(left: Any, profile: dict[str, Any]) -> bool | None:
     right = profile.get("engine_code") or profile.get("engine")
     if not _engine_description(left):
@@ -100,6 +113,19 @@ def _engine_comparison(left: Any, profile: dict[str, Any]) -> bool | None:
         elif any(re.search(r"\b(?:TDI|HDI|DIESEL|FSI|TFSI|PETROL)\b", text, re.I) for text in descriptors):
             pattern = r"\b(?:TDI|HDI|DIESEL)\b" if diesel else r"\b(?:FSI|TFSI|PETROL)\b"
             compared.append(any(re.search(pattern, text, re.I) for text in descriptors))
+    if False in compared:
+        return False
+    remainder = _engine_description_remainder(left)
+    if remainder:
+        # A residual token is not proof of an exact code. Only a supplied
+        # catalogue code can confirm it; unknown prose must keep enrichment.
+        if not re.fullmatch(r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*", remainder, flags=re.I):
+            return None
+        if not _present(right) or _engine_description(right):
+            return None
+        if not any(identity_values_agree("engine", remainder, code.strip()) for code in re.split(r"[,;/]", str(right))):
+            return None
+        return True
     return all(compared) if compared else None
 
 
@@ -771,6 +797,8 @@ def resolve_tecdoc_vehicle(
         for field, known in values.items()
         if known and field not in matched and field not in {"model_year", "production_year", "production_date"}
     ]
+    if _unresolved_engine_description(selected, constraints["engine"]) and "engine" not in unmatched:
+        unmatched.append("engine")
     if not technical or unmatched:
         return {
             **result,

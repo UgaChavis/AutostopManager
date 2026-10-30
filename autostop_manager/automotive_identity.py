@@ -837,7 +837,12 @@ def reconcile_vehicle_identity(
 
 
 def compare_vehicle_modifications(context: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    from .tecdoc_vehicle_selection import _FIELDS, _missing_discriminators, _profile_conflicts
+    from .tecdoc_vehicle_selection import (
+        _FIELDS,
+        _missing_discriminators,
+        _profile_conflicts,
+        _unresolved_engine_description,
+    )
 
     if not isinstance(context, dict) or not isinstance(candidates, list) or len(candidates) > MAX_ROWS:
         return invalid("compare_vehicle_modifications", "context_or_candidates")
@@ -867,13 +872,15 @@ def compare_vehicle_modifications(context: dict[str, Any], candidates: list[dict
         comparisons.append({"candidate": row, "conflicts": conflicts})
     alternatives = [row["candidate"] for row in comparisons if not row["conflicts"]]
     missing = _missing_discriminators(alternatives, values) if len(alternatives) > 1 else []
+    if any(_unresolved_engine_description(row, values["engine"]) for row in alternatives) and "engine" not in missing:
+        missing.append("engine")
     return result(
         "compare_vehicle_modifications",
         "partial" if missing else "success",
         {
             "comparisons": comparisons,
             "alternatives": alternatives,
-            "selected": alternatives[0] if len(alternatives) == 1 else None,
+            "selected": alternatives[0] if len(alternatives) == 1 and not missing else None,
         },
         missing_fields=missing,
         conflicts=[conflict for row in comparisons for conflict in row["conflicts"]],
