@@ -253,12 +253,22 @@ def _pdf_locators(path: Path, line_numbers: set[int], deadline: float) -> dict[i
             if line_number % 2048 == 0 and time.monotonic() >= deadline:
                 raise TimeoutError
             marker = _PAGE_MARKER.search(raw)
-            page = int(marker.group(1)) if marker else page + raw.count("\f")
-            if raw.count("\f"):
+            breaks = raw.count("\f")
+            if marker:
+                page = int(marker.group(1))
                 previous = ""
-            compact = " ".join(raw.replace("\f", " ").split())
             if line_number in line_numbers:
-                locators[line_number] = (page, previous)
+                content = raw.strip()
+                # The bounded rg result has a line number, not the original
+                # match offset. Multiple text-bearing pages cannot be bound.
+                if marker or "\f" not in content:
+                    leading_breaks = 0 if marker else raw.count("\f", 0, raw.find(content))
+                    locators[line_number] = (page + leading_breaks, "" if leading_breaks else previous)
+            if not marker:
+                page += breaks
+            if breaks:
+                previous = ""
+            compact = " ".join(raw.rsplit("\f", 1)[-1].split())
             if compact and not marker:
                 # Preserve suffix100-of-prefix360 raw offsets, with both VIN
                 # boundaries still available. Stored same-page context is safe.
@@ -374,7 +384,10 @@ def _format_matches(
             previous = ""
             extraction_method = None
         else:
-            page, previous = pdf_locators.get(line_number, (0, ""))
+            if line_number not in pdf_locators:
+                warnings.append("catalog_locator_unavailable")
+                continue
+            page, previous = pdf_locators[line_number]
             locator = {"page": page}
             snippet = content
             extraction_method = "ocr" if page in ocr_pages else "text"
