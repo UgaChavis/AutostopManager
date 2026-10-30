@@ -21,6 +21,8 @@ Codex → native Manager MCP (`:41931/mcp`) → adapter → loopback `AUTOSTOP_S
 | `store_quote_conductor` → owner Admin V2 | `start/status/evidence/draft/publish/reopen/order/handoff/decline`; quote/run/revision | Status читает; остальные шаги могут писать/публиковать. |
 | `store_owner_api` → `/api/v1` | Текущий operation_id, typed path/query/body, mode, target/revision/contract/proof | GET читает; prepare проверяет input, dry_run — metadata, apply — запись. High-risk нужен dry-run proof/readback. |
 
+Owner query проверяется по текущему OpenAPI до нормализации. Допустимый `null` необязательного параметра означает отсутствие параметра: он исключается до query/plan hash, dry-run и отправки. Обязательный `null` возвращает `store_owner_query_null_unrepresentable` до отправки; строка `"None"`, `false`, `0`, значения списков и JSON body сохраняют прежнюю семантику. При изменении подготовленного плана нельзя переиспользовать старый write proof или считать изменённый URL повтором неизвестного исхода.
+
 Фото запрашивается только для точного разрешённого quote с scoped quote credential.
 `expected_photo_sha256` — SHA-256 исходного вложения из свежего чтения quote; Store использует его как guard текущего фото.
 Manager возвращает этот SHA в `summary.attachment.sha256`, а SHA полученных preview-байтов вычисляет отдельно
