@@ -162,6 +162,7 @@ class AutomationControlService:
                 live.get("inspection_ok")
                 and (
                     actual_state != expected_actual
+                    or (state.get("desired_state") is not None and state.get("desired_state") != desired_state)
                     or (
                         desired_period is not None
                         and state.get("period_minutes") is not None
