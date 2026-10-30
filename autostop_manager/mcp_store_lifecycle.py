@@ -71,6 +71,14 @@ class StoreFastMCP(FastMCP):
 
     def _mcp_snapshot(self) -> dict[str, Any]:
         snapshot = self.mcp_observation.status()
+        if snapshot["identity"] == "unknown":
+            # Executor/transport locks may also have been held across fork.
+            snapshot["worker_observations"] = {
+                "complete": False,
+                "atomic": False,
+                "error_code": "identity_unconfirmed",
+            }
+            return snapshot
         try:
             snapshot["worker_observations"] = worker_observations(self.store_workers)
         except Exception:  # noqa: BLE001 - observation failure cannot become a false proof.
@@ -131,7 +139,6 @@ class StoreFastMCP(FastMCP):
             # FastMCP's own lifespan is per request in stateless mode. Keep its
             # session manager unchanged and attach shutdown to the outer app.
             async with original_lifespan(application) as state:
-                self.mcp_observation.bind_process()
                 try:
                     yield state
                 finally:

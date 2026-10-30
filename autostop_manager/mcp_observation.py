@@ -23,28 +23,38 @@ class MCPObservation:
         self._lock = threading.Lock()
         self._active: set[object] = set()
 
-    def bind_process(self) -> None:
-        """After a pre-fork server setup, give each child its own state."""
-        if self._pid != os.getpid():
-            self._initialize()
-
-    def acquire(self) -> object:
+    def acquire(self) -> tuple[int, object] | None:
+        pid = os.getpid()
+        if self._pid != pid:
+            # A pre-fork lock may be permanently held by a vanished thread.
+            # An inherited observation remains unknown; let the request run.
+            return None
         with self._lock:
             token = object()
             self._active.add(token)
-            return token
+            return pid, token
 
-    def release(self, token: object) -> None:
+    def release(self, admission: tuple[int, object] | None) -> None:
+        if admission is None:
+            return
+        pid, token = admission
+        if self._pid != pid or os.getpid() != pid:
+            return
         with self._lock:
             self._active.remove(token)
 
     def status(self) -> dict[str, Any]:
-        with self._lock:
-            active = len(self._active)
+        pid = os.getpid()
+        bound = self._pid == pid
+        active = None
+        if bound:
+            with self._lock:
+                active = len(self._active)
         return {
             "format": "manager_mcp_observation_v1",
-            "instance_id": self.instance_id,
-            "pid": self._pid,
+            "instance_id": self.instance_id if bound else None,
+            "identity": "process_local" if bound else "unknown",
+            "pid": pid,
             "http_scopes_active": active,
             "admission_control": "unavailable",
             # HTTP scopes can end before MCP sessions, workers or their

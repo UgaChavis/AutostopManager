@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import select
+import signal
 import sys
 import threading
 
@@ -45,6 +49,7 @@ def test_scope_count_is_thread_safe_and_cannot_be_released_twice():
         observation.release(first)
     status = observation.status()
     assert status["http_scopes_active"] == 0
+    assert status["identity"] == "process_local"
     assert status["admission_control"] == "unavailable"
     assert status["service_drained"] is None
     assert status["safe_to_stop"] is False
@@ -153,6 +158,140 @@ def test_unavailable_worker_snapshot_stays_unknown(monkeypatch):
         manager.store_workers.close()
 
 
+def _fork_result(callback, locks=()):
+    """Run only synthetic ASGI calls; kill the child if an inherited lock hangs."""
+    for lock in locks:
+        lock.acquire()
+    read_fd, write_fd = os.pipe()
+    try:
+        child = os.fork()
+    except BaseException:
+        for lock in reversed(locks):
+            lock.release()
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+    if child == 0:
+        os.close(read_fd)
+        try:
+            try:
+                result = callback()
+            except BaseException as error:  # noqa: BLE001 - report isolated child failures to the parent.
+                result = {"exception": type(error).__name__}
+            os.write(write_fd, json.dumps(result).encode())
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    for lock in reversed(locks):
+        lock.release()
+    try:
+        if not select.select([read_fd], [], [], 5)[0]:
+            os.kill(child, signal.SIGKILL)
+            os.waitpid(child, 0)
+            pytest.fail("child blocked on a lock inherited across fork")
+        result = json.loads(os.read(read_fd, 4096))
+        _, status = os.waitpid(child, 0)
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        assert "exception" not in result, result
+        return result
+    finally:
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires Unix fork")
+def test_inherited_locks_do_not_block_requests_or_report_stale_identity():
+    manager = StoreFastMCP("synthetic", json_response=True, stateless_http=True)
+
+    @manager.custom_route("/synthetic-status", methods=["GET"])
+    async def synthetic(_request):
+        return JSONResponse({"ok": True})
+
+    app = manager.streamable_http_app()
+    parent_token = manager.mcp_observation.acquire()
+    parent_instance = manager.mcp_observation.instance_id
+
+    def child_scenario():
+        # This token was acquired before fork and must not touch the inherited lock.
+        manager.mcp_observation.release(parent_token)
+
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:41931"
+            ) as client:
+                status, normal = await asyncio.gather(
+                    client.get("/internal/mcp-observation"), client.get("/synthetic-status")
+                )
+                return {
+                    "pid": os.getpid(),
+                    "code": status.status_code,
+                    "snapshot": status.json(),
+                    "normal": normal.json(),
+                }
+
+        return asyncio.run(run())
+
+    try:
+        result = _fork_result(
+            child_scenario,
+            (manager.mcp_observation._lock, manager.store_workers.reads._lock, listing_executor._EXECUTOR._lock),
+        )
+        assert result["code"] == 200 and result["normal"] == {"ok": True}
+        status = result["snapshot"]
+        assert status["pid"] == result["pid"] != os.getpid()
+        assert status["identity"] == "unknown" and status["instance_id"] is None
+        assert status["http_scopes_active"] is None
+        assert status["worker_observations"]["error_code"] == "identity_unconfirmed"
+        assert status["service_drained"] is None and status["safe_to_stop"] is False
+        assert manager.mcp_observation.status()["instance_id"] == parent_instance
+        assert manager.mcp_observation.status()["http_scopes_active"] == 1
+    finally:
+        manager.mcp_observation.release(parent_token)
+        manager.store_workers.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires Unix fork")
+def test_late_lifespan_cannot_make_inherited_counter_look_confirmed():
+    manager = StoreFastMCP("synthetic", json_response=True, stateless_http=True)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    @manager.custom_route("/synthetic-hold", methods=["GET"])
+    async def held(_request):
+        started.set()
+        await release.wait()
+        return JSONResponse({"ok": True})
+
+    app = manager.streamable_http_app()
+
+    def child_scenario():
+        async def run():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:41931"
+            ) as client:
+                task = asyncio.create_task(client.get("/synthetic-hold"))
+                await asyncio.wait_for(started.wait(), 2)
+                before = (await client.get("/internal/mcp-observation")).json()
+                async with app.router.lifespan_context(app):
+                    during = (await client.get("/internal/mcp-observation")).json()
+                    release.set()
+                    normal = await asyncio.wait_for(task, 2)
+                after = (await client.get("/internal/mcp-observation")).json()
+                return {"snapshots": [before, during, after], "normal": normal.json()}
+
+        return asyncio.run(run())
+
+    try:
+        result = _fork_result(child_scenario)
+        assert result["normal"] == {"ok": True}
+        for status in result["snapshots"]:
+            assert status["identity"] == "unknown" and status["instance_id"] is None
+            assert status["http_scopes_active"] is None
+            assert status["worker_observations"]["error_code"] == "identity_unconfirmed"
+            assert status["safe_to_stop"] is False
+    finally:
+        manager.store_workers.close()
+
+
 def test_observation_does_not_import_missing_executor_module(monkeypatch):
     module_name = "autostop_manager.mcp_drom_executor"
     monkeypatch.delitem(sys.modules, module_name, raising=False)
@@ -178,6 +317,7 @@ def test_observation_at_root_path_is_read_only_and_does_not_change_store():
                 assert response.headers["cache-control"] == "no-store"
                 status = response.json()
                 assert status["format"] == "manager_mcp_observation_v1"
+                assert status["identity"] == "process_local"
                 assert status["http_scopes_active"] == 1
                 assert status["admission_control"] == "unavailable"
                 assert status["service_drained"] is None and status["safe_to_stop"] is False
