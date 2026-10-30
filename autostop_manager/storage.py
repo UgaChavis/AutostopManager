@@ -416,9 +416,17 @@ def _verification_failure_paths(value: Any, *, prefix: str = "", technical_conte
             )
     elif isinstance(value, list):
         for index, nested in enumerate(value):
-            failures.extend(
-                _verification_failure_paths(nested, prefix=f"{prefix}[{index}]", technical_context=technical_context)
-            )
+            path = f"{prefix}[{index}]"
+            if technical_context and (
+                nested is False
+                or (
+                    isinstance(nested, str)
+                    and nested.strip().casefold().replace(" ", "_") in _VERIFICATION_FAILURE_STRINGS
+                )
+            ):
+                failures.append(path)
+                continue
+            failures.extend(_verification_failure_paths(nested, prefix=path, technical_context=technical_context))
     return failures
 
 
