@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 import json
+import math
 from time import monotonic
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -349,6 +350,8 @@ def _comparison(value: Any) -> dict[str, dict[str, int | float | None]]:
 def _number(value: Any) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("analytics metric must be numeric")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("analytics metric must be finite")
     return value
 
 
