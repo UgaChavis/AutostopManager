@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from .instruction_bundle import (
@@ -169,8 +170,16 @@ class RoleExecutor:
 
     async def tick(self) -> None:
         """One small reconciliation, protected across daemon/process instances."""
-        self.store.project_automation_jobs()
-        candidates = [role for role in ROLES if self._needed(role)]
+        try:
+            self.store.project_automation_jobs()
+            candidates = [role for role in ROLES if self._needed(role)]
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            if code is None or code & 0xFF not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise
+            # Store contexts have rolled back/closed. No dispatch lock or RPC was
+            # acquired, so only this preflight can safely wait for the next pass.
+            return
         if not candidates:
             return
         self.store.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

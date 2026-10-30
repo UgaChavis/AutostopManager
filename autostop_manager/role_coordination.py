@@ -157,30 +157,32 @@ class RoleStore:
             if self.path.parent.is_symlink():
                 raise RoleError("role_storage_invalid")
             db = sqlite3.connect(self.path, timeout=5)
-            os.chmod(self.path, 0o600)
-            db.executescript(SCHEMA)
-            columns = {row[1] for row in db.execute("PRAGMA table_info(role_state)")}
-            if "host_id" not in columns:
-                db.execute("ALTER TABLE role_state ADD COLUMN host_id TEXT")
-                db.execute("UPDATE role_state SET host_id=? WHERE host_id IS NULL", (executor_host_id(),))
-            dispatch_columns = {row[1] for row in db.execute("PRAGMA table_info(role_dispatches)")}
-            if "scan_cursor" not in dispatch_columns:
-                db.execute("ALTER TABLE role_dispatches ADD COLUMN scan_cursor TEXT")
-            for role in ROLES:
-                db.execute(
-                    "INSERT OR IGNORE INTO role_state(role,host_id,model) VALUES (?,?,?)",
-                    (role, executor_host_id(), MODEL),
-                )
-            db.commit()
-            db.execute("BEGIN IMMEDIATE")
         else:
             if not self.path.exists():
                 yield None
                 return
             db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-            db.execute("PRAGMA query_only=ON")
-        db.row_factory = sqlite3.Row
         try:
+            if write:
+                os.chmod(self.path, 0o600)
+                db.executescript(SCHEMA)
+                columns = {row[1] for row in db.execute("PRAGMA table_info(role_state)")}
+                if "host_id" not in columns:
+                    db.execute("ALTER TABLE role_state ADD COLUMN host_id TEXT")
+                    db.execute("UPDATE role_state SET host_id=? WHERE host_id IS NULL", (executor_host_id(),))
+                dispatch_columns = {row[1] for row in db.execute("PRAGMA table_info(role_dispatches)")}
+                if "scan_cursor" not in dispatch_columns:
+                    db.execute("ALTER TABLE role_dispatches ADD COLUMN scan_cursor TEXT")
+                for role in ROLES:
+                    db.execute(
+                        "INSERT OR IGNORE INTO role_state(role,host_id,model) VALUES (?,?,?)",
+                        (role, executor_host_id(), MODEL),
+                    )
+                db.commit()
+                db.execute("BEGIN IMMEDIATE")
+            else:
+                db.execute("PRAGMA query_only=ON")
+            db.row_factory = sqlite3.Row
             yield db
             if write:
                 db.commit()
