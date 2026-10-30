@@ -226,11 +226,15 @@ def parts_store_cards(  # noqa: C901 - one bounded CRUD action router
             return _failure("crm_create_unverified", uncertain=True)
         readback = gateway.invoke("get_card", {"card_id": created_id})
         actual = _card(readback) if readback.get("ok") is True else None
+        # CRM canonicalizes this display field; keep the original write body
+        # unchanged so its idempotency binding remains stable.
+        expected_vehicle = " ".join(arguments["vehicle"].split())
         if (
             actual is None
             or actual.get("id") != created_id
             or actual.get("column") != PARTS_STORE_COLUMN
             or actual.get("title") != arguments["title"]
+            or actual.get("vehicle") != expected_vehicle
             or actual.get("description") != arguments["description"]
         ):
             return _failure("crm_create_unverified", uncertain=True)
