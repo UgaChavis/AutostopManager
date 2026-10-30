@@ -134,7 +134,7 @@ def lookup_nhtsa_recalls(
             )
         except (TypeError, ValueError, OverflowError):
             raise ValueError("NHTSA recall response contains an invalid Count") from None
-    except (HTTPError, URLError, TimeoutError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         return {
             "ok": False,
             "source_id": "nhtsa_datasets_apis",
