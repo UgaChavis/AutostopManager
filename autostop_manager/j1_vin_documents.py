@@ -27,6 +27,8 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+from .j1_text import decode_http_text
+
 MAX_PDF_BYTES = 24 * 1024 * 1024
 MAX_HTML_BYTES = 2 * 1024 * 1024
 MAX_PAGES = 1000
@@ -562,12 +564,7 @@ def _html_content(body: bytes, content_type: str, timeout_seconds: float | None 
     if not budget:
         return _failure("html", "html_text", "document_timeout")
     deadline = time.monotonic() + budget
-    charset_match = re.search(r"charset\s*=\s*[\"']?([\w.-]+)", content_type, re.I)
-    charset = charset_match.group(1) if charset_match else "utf-8"
-    try:
-        decoded = body.decode(charset, "replace")
-    except LookupError:
-        decoded = body.decode("utf-8", "replace")
+    decoded = decode_http_text(body, content_type)
     parser = _VisibleHTML(
         xhtml=content_type.split(";", 1)[0].strip().lower() == "application/xhtml+xml", deadline=deadline
     )

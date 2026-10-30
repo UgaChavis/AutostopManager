@@ -7,8 +7,6 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
-from email.parser import HeaderParser
-from email.policy import HTTP
 import html
 from html.parser import HTMLParser
 import http.client
@@ -31,6 +29,7 @@ from urllib.parse import parse_qs, parse_qsl, quote_plus, unquote, urlencode, ur
 from urllib.robotparser import RobotFileParser
 
 from .j1_sources import classify_source, discovery_domain
+from .j1_text import decode_http_text
 
 USER_AGENT = "AutoStop-J1/1.0 (+public research; respects robots.txt)"
 MAX_HTML_BYTES = 2_000_000
@@ -493,12 +492,7 @@ class _PageText(HTMLParser):
 
 
 def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
-    content_type = HeaderParser(policy=HTTP).parsestr(f"Content-Type: {headers.get('content-type', '')}\n\n")
-    charset = content_type.get_content_charset() or "utf-8"
-    try:
-        decoded = body.decode(charset, "replace")
-    except LookupError:
-        decoded = body.decode("utf-8", "replace")
+    decoded = decode_http_text(body, headers.get("content-type", ""))
     media_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     parser = _PageText(xhtml=media_type == "application/xhtml+xml")
     parser.feed(decoded)
@@ -581,7 +575,8 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
             title, text = _html_to_text(body, headers)
             kind, method = "html", "html_text"
         else:
-            title, text, kind, method = "", redact_sensitive(body.decode("utf-8", "replace")), "text", "plain_text"
+            title, kind, method = "", "text", "plain_text"
+            text = redact_sensitive(decode_http_text(body, headers.get("content-type", "")))
         return {"ok": True, "kind": kind, "title": title, "text": text, "extraction_method": method}
     return {"ok": False, "error": "unsupported_media"}
 
