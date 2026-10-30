@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -315,6 +316,213 @@ def test_cleanup_failure_is_observed_when_parent_cancel_races_completion(monkeyp
             assert harness.close_calls == 1
             assert harness.child_done.is_set()
         finally:
+            await harness.settle(running)
+
+    asyncio.run(scenario())
+
+
+class RoleWorker:
+    def __init__(self, error=None, *, blocking=False):
+        self.error = error
+        self.blocking = blocking
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.done = asyncio.Event()
+        self.release = asyncio.Event()
+        self.wake_event = asyncio.Event()
+        self.store = SimpleNamespace(initialize=lambda: None)
+
+    async def tick(self):
+        self.calls += 1
+        self.started.set()
+        try:
+            if self.blocking:
+                await self.release.wait()
+            if self.error is not None:
+                raise self.error
+        finally:
+            self.done.set()
+            self.wake_event.set()
+
+
+@pytest.mark.parametrize("role_cancelled", [False, True])
+@pytest.mark.parametrize("scheduler_phase", [None, "child", "child_cancel"])
+def test_failed_role_still_drains_scheduler_before_close(monkeypatch, role_cancelled, scheduler_phase):
+    async def scenario():
+        harness = Harness(monkeypatch, scheduler_phase, blocking_child=True)
+        error = asyncio.CancelledError("role cancelled") if role_cancelled else RuntimeError("role failed")
+        role = RoleWorker(error)
+        harness.daemon.role_executor = role
+        running = asyncio.create_task(harness.daemon.run())
+        try:
+            await asyncio.wait_for(role.done.wait(), 2)
+            await asyncio.wait_for(harness.child_started.wait(), 2)
+            harness.daemon.stopping.set()
+            await asyncio.wait_for(harness.stopping_notified.wait(), 2)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert not running.done()
+            assert harness.active and harness.close_calls == 0
+            assert not harness.child_task.done()
+            harness.release_child.set()
+            with pytest.raises(type(error)) as caught:
+                await running
+            if not role_cancelled:
+                assert caught.value is error
+            assert role.calls == 1
+            assert harness.child_task.done()
+            assert harness.events.index("child_done") < harness.events.index("close_begin")
+            assert harness.close_calls == 1 and not harness.active
+            assert "stopped" not in harness.events
+        finally:
+            await harness.settle(running)
+
+    asyncio.run(scenario())
+
+
+def test_first_role_failure_survives_close_failure(monkeypatch):
+    async def scenario():
+        harness = Harness(monkeypatch, "close", blocking_child=True)
+        error = RuntimeError("original role failure")
+        role = RoleWorker(error)
+        harness.daemon.role_executor = role
+        running = asyncio.create_task(harness.daemon.run())
+        try:
+            await asyncio.wait_for(role.done.wait(), 2)
+            harness.daemon.stopping.set()
+            harness.release_child.set()
+            with pytest.raises(RuntimeError) as caught:
+                await running
+            assert caught.value is error
+            assert harness.child_task.done()
+            assert harness.close_calls == 1
+            assert role.calls == 1
+            assert "stopped" not in harness.events
+        finally:
+            await harness.settle(running)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("blocking_close", [False, True])
+def test_repeated_parent_cancel_preserves_role_failure_and_drains(monkeypatch, blocking_close):
+    async def scenario():
+        harness = Harness(monkeypatch, blocking_child=True, blocking_close=blocking_close)
+        error = RuntimeError("original role failure")
+        role = RoleWorker(error)
+        harness.daemon.role_executor = role
+        running = asyncio.create_task(harness.daemon.run())
+        try:
+            await asyncio.wait_for(role.done.wait(), 2)
+            await asyncio.wait_for(harness.child_started.wait(), 2)
+            running.cancel("begin shutdown")
+            await asyncio.wait_for(harness.stopping_notified.wait(), 2)
+            running.cancel("during drain")
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert not running.done()
+            assert not harness.child_task.done()
+            assert not harness.child_cancelled and harness.close_calls == 0
+            harness.release_child.set()
+            if blocking_close:
+                await asyncio.wait_for(harness.close_started.wait(), 2)
+                running.cancel("during close")
+                await asyncio.sleep(0)
+                assert not running.done() and not harness.close_cancelled
+                harness.release_close.set()
+            with pytest.raises(RuntimeError) as caught:
+                await running
+            assert caught.value is error
+            assert role.calls == 1
+            assert_drained_and_closed(harness)
+            assert "stopped" not in harness.events
+        finally:
+            await harness.settle(running)
+
+    asyncio.run(scenario())
+
+
+def test_active_role_and_scheduler_both_drain_on_parent_cancel(monkeypatch):
+    async def scenario():
+        harness = Harness(monkeypatch, blocking_child=True)
+        role = RoleWorker(blocking=True)
+        harness.daemon.role_executor = role
+        running = asyncio.create_task(harness.daemon.run())
+        try:
+            await asyncio.wait_for(role.started.wait(), 2)
+            await asyncio.wait_for(harness.child_started.wait(), 2)
+            running.cancel("begin shutdown")
+            await asyncio.wait_for(harness.stopping_notified.wait(), 2)
+            running.cancel("again")
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert not role.done.is_set() and not harness.child_task.done()
+            assert harness.close_calls == 0
+            role.release.set()
+            await asyncio.wait_for(role.done.wait(), 2)
+            assert not running.done() and harness.close_calls == 0
+            harness.release_child.set()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+            assert role.calls == 1
+            assert_drained_and_closed(harness)
+        finally:
+            role.release.set()
+            await harness.settle(running)
+
+    asyncio.run(scenario())
+
+
+def test_failed_role_waits_for_running_thread_claim_and_result(monkeypatch):
+    async def scenario():
+        real_to_thread = asyncio.to_thread
+        harness = Harness(monkeypatch)
+        error = RuntimeError("original role failure")
+        role = RoleWorker(error)
+        harness.daemon.role_executor = role
+        thread_started, release_thread, thread_finished = (threading.Event() for _ in range(3))
+
+        def claim():
+            thread_started.set()
+            assert release_thread.wait(timeout=5), "test did not release its synthetic claim"
+            thread_finished.set()
+            return {"result_code": "ok"}
+
+        async def scheduler():
+            harness.child_task = asyncio.current_task()
+            harness.events.append("child_begin")
+            harness.child_started.set()
+            try:
+                result = await real_to_thread(claim)
+                assert result == {"result_code": "ok"}
+                harness.events.append("claim_result_recorded")
+            finally:
+                harness.events.append("child_done")
+                harness.child_done.set()
+
+        monkeypatch.setattr(harness.daemon, "scheduler_loop", scheduler)
+        running = asyncio.create_task(harness.daemon.run())
+        try:
+            await asyncio.wait_for(role.done.wait(), 2)
+            assert await real_to_thread(thread_started.wait, 2)
+            running.cancel("begin shutdown")
+            await asyncio.wait_for(harness.stopping_notified.wait(), 2)
+            running.cancel("during claim")
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert not thread_finished.is_set()
+            assert not harness.child_task.done() and not running.done()
+            assert harness.close_calls == 0
+            release_thread.set()
+            with pytest.raises(RuntimeError) as caught:
+                await running
+            assert caught.value is error
+            assert thread_finished.is_set()
+            assert role.calls == 1
+            assert harness.events.index("claim_result_recorded") < harness.events.index("close_begin")
+            assert_drained_and_closed(harness)
+        finally:
+            release_thread.set()
             await harness.settle(running)
 
     asyncio.run(scenario())

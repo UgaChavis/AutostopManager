@@ -398,21 +398,35 @@ class AutomationDaemon:
 
     async def _finish_shutdown(self, scheduler: asyncio.Task[None] | None) -> None:
         async def cleanup() -> None:
+            failure: BaseException | None = None
             try:
-                try:
-                    notify_systemd("STOPPING=1")
-                    with suppress(Exception):
-                        self.store.controller_heartbeat(owner=self.owner, state="stopping")
-                finally:
-                    # A failed notification must not abandon the owned worker.
-                    if self.role_task is not None:
-                        await asyncio.shield(self.role_task)
-                    if scheduler is not None:
-                        await asyncio.shield(scheduler)
+                notify_systemd("STOPPING=1")
+                with suppress(Exception):
+                    self.store.controller_heartbeat(owner=self.owner, state="stopping")
+            except BaseException as exc:  # noqa: BLE001 - re-raised after all owned resources finish cleanup.
+                failure = exc
+            for worker in (self.role_task, scheduler):
+                if worker is not None:
+                    try:
+                        await asyncio.shield(worker)
+                    except BaseException as exc:  # noqa: BLE001 - cancellation also requires draining the other worker.
+                        # A failed/cancelled role must not abandon the current
+                        # scheduler claim. Observe both workers without replay.
+                        if failure is None:
+                            failure = exc
+            try:
+                if failure is None:
                     with suppress(Exception):
                         self.store.controller_heartbeat(owner=self.owner, state="stopped")
-            finally:
+            except BaseException as exc:  # noqa: BLE001 - retain the failure while still closing the owned server.
+                failure = exc
+            try:
                 await self.control_server.close()
+            except BaseException as exc:  # noqa: BLE001 - preserve the first cleanup failure, then re-raise it.
+                if failure is None:
+                    failure = exc
+            if failure is not None:
+                raise failure
 
         completion = asyncio.create_task(cleanup())
         cancellation: asyncio.CancelledError | None = None
