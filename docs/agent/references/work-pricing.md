@@ -15,6 +15,15 @@ operation scope/source, included_operations и overlaps_with. Неизвестн
 Переданный boolean `overlap_resolved` сохраняется в `data.labor` с исходным значением;
 отсутствующий ключ остаётся отсутствующим. Эти метаданные передаются в `calculate_work_price`
 с прежними правилами исключения unresolved overlap.
+При отсутствии `operation_id` (также `null` или пустой строке) normalizer сохраняет
+отдельный generated ID каждой строки. Ссылка `included_operations` на точное уникальное
+выбранное имя такой строки перепривязывается к её ID; разные работы с одинаковым именем
+не объединяются. Точное совпадение с ID имеет приоритет, включая `0`; имя строки с явным
+другим ID не становится его альтернативой. Ссылка на неоднозначное имя без точного ID
+даёт `invalid_input` / `rows.included_operations`: нужны явные ID работ.
+Ссылки вне переданного набора остаются буквально прежними, без создания новых работ;
+их наличие не подтверждает включение какой-либо другой строки. Это сохраняет прежнюю
+границу расчёта: dangling reference сама по себе не делает итог неизвестным.
 collect_work_price_evidence принимает выбранные kinds/sources и обезличенный профиль,
 либо explicit aggregates. Публичный research ограничен deadline; internal experience не загружается неявно.
 calculate_work_price(labor, policy, hourly_rate, observations, unknown_costs) является pure.
