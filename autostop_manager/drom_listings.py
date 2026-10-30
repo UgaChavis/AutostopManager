@@ -10,6 +10,7 @@ ID/UID before trying again.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from http.client import HTTPException
 import json
@@ -124,11 +125,12 @@ def _api_request(
             status_code = int(response.status)
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as exc:
-        try:
-            status_code = int(exc.code)
-            raw = exc.read(MAX_RESPONSE_BYTES + 1)
-        finally:
+        status_code = int(exc.code)
+        # Callers use only the HTTP status for errors. Diagnostic body reads or
+        # cleanup failures must not turn a known rejection into a lost response.
+        with suppress(Exception):
             exc.close()
+        return status_code, None
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ValueError("webbee_response_too_large")
     if not raw:
