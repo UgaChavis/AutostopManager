@@ -422,6 +422,146 @@ def test_conductor_deduplicates_one_active_quote_run_and_rejects_stale_state(tmp
     assert "workflow_state_conflict" in stale["warnings"]
 
 
+@pytest.mark.parametrize("phase", ["new", "evidence_ready", "declined", "handoff"])
+def test_conductor_replayed_start_preserves_existing_run(tmp_path, phase):
+    conductor, gateway, store = _conductor(tmp_path, _QuoteGateway(manual=phase == "handoff"))
+    current = _evidence_ready(conductor) if phase == "evidence_ready" else _start(conductor)
+    if phase == "declined":
+        current = conductor.execute(
+            operation="decline",
+            quote_request_id="quote-1",
+            run_id=current["run_id"],
+            expected_state_version=current["summary"]["state_version"],
+        )
+        assert current["ok"] is True
+    before = store.get_manager_run(current["run_id"])
+
+    replay = _start(conductor)
+
+    assert replay["run_id"] == current["run_id"]
+    assert replay["status"] == before["item"]["status"]
+    assert replay["summary"]["phase"] == phase
+    assert replay["summary"]["deduplicated"] is True
+    assert store.get_manager_run(current["run_id"]) == before
+    assert all(name == "get" for name, _ in gateway.calls)
+    if phase == "evidence_ready":
+        drafted = conductor.execute(
+            operation="draft",
+            quote_request_id="quote-1",
+            run_id=current["run_id"],
+            expected_state_version=current["summary"]["state_version"],
+            expected_revision="revision-1",
+            idempotency_key="quote-draft-001",
+            correlation_id="quote-correlation-001",
+            entries=deepcopy(_ENTRIES),
+            coverage=deepcopy(_COVERAGE),
+        )
+        assert drafted["ok"] is True
+        assert drafted["summary"]["phase"] == "draft_saved"
+
+
+def test_conductor_active_target_start_preserves_advanced_run(tmp_path):
+    conductor, gateway, store = _conductor(tmp_path)
+    current = _draft_saved(conductor)
+    before = store.get_manager_run(current["run_id"])
+    gateway.calls.clear()
+
+    replay = conductor.execute(
+        operation="start",
+        quote_request_id="quote-1",
+        idempotency_key="quote-start-002",
+        correlation_id="quote-correlation-002",
+    )
+
+    assert replay["ok"] is True
+    assert replay["run_id"] == current["run_id"]
+    assert replay["status"] == "executing"
+    assert replay["summary"]["phase"] == "draft_saved"
+    assert replay["summary"]["active_target_deduplicated"] is True
+    assert store.get_manager_run(current["run_id"]) == before
+    assert [name for name, _ in gateway.calls] == ["get"]
+
+
+@pytest.mark.parametrize("changed", ["target", "correlation", "revision"])
+def test_conductor_replayed_start_rejects_changed_scope(tmp_path, monkeypatch, changed):
+    conductor, gateway, store = _conductor(tmp_path)
+    current = _evidence_ready(conductor)
+    before = store.get_manager_run(current["run_id"])
+    quote_request_id = "quote-2" if changed == "target" else "quote-1"
+    if changed == "target":
+        snapshot = gateway._result()
+        snapshot["data"]["quoteRequestId"] = quote_request_id
+        monkeypatch.setattr(gateway, "get_estimate_draft", lambda **_: snapshot)
+    if changed == "revision":
+        gateway.revision = "revision-2"
+
+    replay = conductor.execute(
+        operation="start",
+        quote_request_id=quote_request_id,
+        idempotency_key="quote-start-001",
+        correlation_id="quote-correlation-002" if changed == "correlation" else "quote-correlation-001",
+    )
+
+    assert replay["ok"] is False
+    assert replay["warnings"] == ["idempotency_key_conflict"]
+    assert store.get_manager_run(current["run_id"]) == before
+    assert all(name == "get" for name, _ in gateway.calls)
+
+
+@pytest.mark.parametrize("concurrent_progress", [False, True])
+def test_conductor_replayed_start_recovers_only_empty_planned_checkpoint(tmp_path, monkeypatch, concurrent_progress):
+    conductor, gateway, store = _conductor(tmp_path)
+    checkpoint = StoreState.checkpoint_store_quote_conductor_run
+    monkeypatch.setattr(
+        StoreState,
+        "checkpoint_store_quote_conductor_run",
+        lambda *_, **__: {"ok": False, "error": "synthetic_interruption"},
+    )
+    interrupted = conductor.execute(
+        operation="start",
+        quote_request_id="quote-1",
+        idempotency_key="quote-start-001",
+        correlation_id="quote-correlation-001",
+    )
+    assert interrupted["ok"] is False
+    before = store.get_manager_run(interrupted["run_id"])["item"]
+    assert before["status"] == "planned"
+    assert before["checkpoint"] == {}
+    assert before["state_version"] == 1
+    monkeypatch.setattr(StoreState, "checkpoint_store_quote_conductor_run", checkpoint)
+    if concurrent_progress:
+
+        def progress_before_checkpoint(*args, **kwargs):
+            monkeypatch.setattr(StoreState, "checkpoint_store_quote_conductor_run", checkpoint)
+            assert checkpoint(*args, **kwargs)["ok"] is True
+            progressed = conductor.execute(
+                operation="evidence",
+                quote_request_id="quote-1",
+                run_id=interrupted["run_id"],
+                expected_state_version=2,
+                evidence=deepcopy(_EVIDENCE),
+            )
+            assert progressed["ok"] is True
+            return checkpoint(*args, **kwargs)
+
+        monkeypatch.setattr(StoreState, "checkpoint_store_quote_conductor_run", progress_before_checkpoint)
+
+    replay = conductor.execute(
+        operation="start",
+        quote_request_id="quote-1",
+        idempotency_key="quote-start-001",
+        correlation_id="quote-correlation-001",
+    )
+
+    after = store.get_manager_run(interrupted["run_id"])["item"]
+    assert replay["ok"] is (not concurrent_progress)
+    if concurrent_progress:
+        assert replay["warnings"] == ["workflow_state_conflict"]
+    assert after["checkpoint"]["phase"] == ("evidence_ready" if concurrent_progress else "new")
+    assert after["state_version"] == (4 if concurrent_progress else 2)
+    assert all(name == "get" for name, _ in gateway.calls)
+
+
 def test_conductor_handoffs_manual_or_unsafe_evidence_without_store_write(tmp_path):
     conductor, gateway, _ = _conductor(tmp_path, _QuoteGateway(manual=True))
     manual = _start(conductor)
