@@ -174,7 +174,8 @@ class SystemTimerController:
         period_minutes = _systemd_period_minutes(properties.get("TimersMonotonic", []))
         last_run = one("LastTriggerUSec") or None
         next_run = one("NextElapseUSecRealtime") or None
-        if next_run is None and period_minutes is not None:
+        active_state = one("ActiveState", "unknown")
+        if next_run is None and period_minutes is not None and active_state == "active":
             parsed_last = parse_time(last_run)
             if parsed_last is None and last_run:
                 try:
@@ -189,7 +190,6 @@ class SystemTimerController:
                     # cannot be represented by Python's datetime/timedelta.
                     next_run = None
         unit_file_state = one("UnitFileState", "unknown")
-        active_state = one("ActiveState", "unknown")
         result_state = one("Result", "unknown")
         state = {
             "load_state": one("LoadState", "unknown"),
