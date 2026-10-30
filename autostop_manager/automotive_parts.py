@@ -29,7 +29,6 @@ from .vehicle_identity import (
     _transmission_signature,
     identity_values_agree,
 )
-from .vehicle_identity_inputs import STRING_FIELDS
 from .vin_lookup import normalize_part_number
 
 
@@ -471,7 +470,7 @@ def _relation(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
                 isinstance(item.get(key), dict)
                 and bool(normalize_part_number(row[key]["number"]))
                 and _source_part_number(item[key].get("number")) == normalize_part_number(row[key]["number"])
-                and bool(str(row[key].get("brand") or "").strip())
+                and bool(row[key].get("brand"))
                 and str(item[key].get("brand") or "").casefold() == str(row[key]["brand"]).casefold()
                 for key in ("from", "to")
             )
@@ -641,8 +640,6 @@ def _pr_codes_criterion(expected: Any, actual: Any, *, complete: bool) -> str:
 
 def _identity_criterion(field: str, expected: Any, actual: Any) -> str:
     """Compatibility may reject a fact; support also requires its stated specificity."""
-    if field in STRING_FIELDS and (not isinstance(expected, str) or not isinstance(actual, str)):
-        return "unknown"
     if not identity_values_agree(field, expected, actual):
         return "rejected"
     if field == "transmission":
@@ -674,8 +671,6 @@ def _criterion(field: str, expected: Any, actual: Any, *, pr_codes_complete: boo
         if "from" not in expected and "to" not in expected:
             return "unknown"
         return _range_criterion(field, expected, actual)
-    if field == "production_date":
-        return _date_range_criterion({"from": expected, "to": expected}, actual)
     return _identity_criterion(field, expected, actual)
 
 
