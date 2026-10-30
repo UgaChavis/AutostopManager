@@ -22,7 +22,7 @@ from mcp.client.streamable_http import streamable_http_client
 import pytest
 import uvicorn
 
-from autostop_manager import mcp_tools
+from autostop_manager import listing_executor, mcp_tools
 from autostop_manager.listing_executor import BoundedListingExecutor
 from autostop_manager.mcp_store_executor import StoreWorkers
 from autostop_manager.mcp_store_lifecycle import StoreFastMCP
@@ -449,5 +449,103 @@ def test_stateless_requests_and_other_server_shutdown_keep_own_admission_open(tm
                 assert result["ok"] is True
                 await second_session.send_ping()
                 assert fake_store.requests == []
+
+    asyncio.run(run())
+
+
+def test_read_only_observation_does_not_interrupt_store_write_and_readback(tmp_path, fake_store):
+    manager, workers = registered(tmp_path, fake_store, wait_timeout=8)
+    arguments = write_arguments()
+
+    async def run():
+        async with (
+            serve(manager) as endpoint,
+            httpx.AsyncClient(base_url=endpoint.url, timeout=10, trust_env=False) as client,
+        ):
+            call = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "store_management_action", "arguments": arguments},
+            }
+            task = asyncio.create_task(
+                client.post("/mcp", json=call, headers={"Accept": "application/json, text/event-stream"})
+            )
+            try:
+                await until(fake_store.post_entered.is_set)
+                status = (await client.get("/internal/mcp-observation")).json()
+                assert status["http_scopes_active"] == 2
+                assert status["worker_observations"]["instance_pending"]["store_stateful"] == 1
+                assert status["service_drained"] is None and status["safe_to_stop"] is False
+                assert workers.status()["accepting"]
+                fake_store.release_post.set()
+                await until(fake_store.readback_entered.is_set)
+                assert workers.status()["pending"]["stateful"] == 1
+                assert workers.status()["pending"]["transport"] == 1
+                fake_store.release_readback.set()
+                response = await asyncio.wait_for(task, 5)
+                assert response.status_code == 200
+                result = json.loads(response.json()["result"]["content"][0]["text"])
+                assert result["ok"] is True and result["meta"]["readback_verified"] is True
+                assert_exact_write_and_readback(fake_store, arguments)
+                status = (await client.get("/internal/mcp-observation")).json()
+                assert status["http_scopes_active"] == 1 and status["service_drained"] is None
+                assert status["safe_to_stop"] is False and workers.status()["accepting"]
+            finally:
+                fake_store.release_post.set()
+                fake_store.release_readback.set()
+                await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_observation_sees_worker_after_http_timeout(monkeypatch):
+    executor = BoundedListingExecutor(max_workers=1, max_waiting_calls=0, timeout_seconds=0.1)
+    monkeypatch.setattr(listing_executor, "_EXECUTOR", executor)
+    started = threading.Event()
+    release = threading.Event()
+
+    def operation():
+        started.set()
+        assert release.wait(8)
+        return {"ok": True}
+
+    async def run():
+        manager = StoreFastMCP("synthetic-worker-tail", json_response=True, stateless_http=True, log_level="ERROR")
+
+        @manager.tool(name="worker_tool")
+        async def worker_tool() -> dict:
+            return await listing_executor.run_listing_request(operation)
+
+        try:
+            async with (
+                serve(manager) as endpoint,
+                httpx.AsyncClient(base_url=endpoint.url, timeout=3, trust_env=False) as client,
+            ):
+                response = await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "worker_tool", "arguments": {}},
+                    },
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+                assert response.status_code == 200 and started.is_set()
+                result = json.loads(response.json()["result"]["content"][0]["text"])
+                assert result["error"] == "provider_wait_timeout" and result["adapter_may_continue"] is True
+                status = (await client.get("/internal/mcp-observation")).json()
+                assert status["http_scopes_active"] == 1
+                assert status["worker_observations"]["shared_process_pending"]["avito"] == 1
+                assert status["service_drained"] is None and status["safe_to_stop"] is False
+                release.set()
+                await until(lambda: executor.pending_count == 0)
+                status = (await client.get("/internal/mcp-observation")).json()
+                assert status["worker_observations"]["shared_process_pending"]["avito"] == 0
+                assert status["service_drained"] is None and status["safe_to_stop"] is False
+        finally:
+            release.set()
+            await asyncio.to_thread(executor.close)
 
     asyncio.run(run())

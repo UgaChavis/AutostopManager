@@ -191,6 +191,27 @@ Store execution и CRM callbacks в этих pools: это не успех би�
 готовность всего Manager/CRM к выпуску. Подключение handshake к поддерживаемому
 release controller выполняется отдельным изменением по [deployment](deployment.md).
 
+### Частичное наблюдение MCP перед остановкой
+
+`GET /internal/mcp-observation` — локальное чтение числа активных HTTP scopes и
+части worker futures. В число scopes входит и сам диагностический GET. Ответ не
+содержит аргументов или клиентских данных; ограничения Host/Origin/Forwarded и
+`Cache-Control` совпадают с Store endpoints. Новый процесс получает свой instance.
+Если существующий MCP path или другой маршрут пересекается с этим адресом, включая
+путь с завершающим слешем, диагностический endpoint не добавляется; прежняя
+маршрутизация остаётся неизменной.
+
+Это **частичная диагностика, не разрешение на остановку**. Она не закрывает приём
+запросов (`admission_control=unavailable`). Счётчик HTTP scopes не
+учитывает продолжение MCP-сессий после конца HTTP. `worker_observations` отдельно
+показывает незавершённые futures известных process-wide pools и Store pools этого
+instance, но не все async задачи, дочерние потоки, DNS и процессы; значения
+снимаются по отдельности. Поэтому `service_drained=null`, `safe_to_stop=false` и
+`untracked_work=unknown` даже при нулевых счётчиках. Успех Store drain также не
+доказывает завершение всех MCP вызовов. Не начинать Store drain, пока не доказано
+завершение уже принятых MCP workflows и их readback. Эта capability отдельно не
+подключена к штатному release controller и не заменяет его проверок.
+
 ## CLI
 
 Точные аргументы: `python -m autostop_manager.cli <command> --help`.

@@ -12,7 +12,9 @@ from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Match, Route
 
+from .mcp_observation import MCPObservation, MCPObservationMiddleware, worker_observations
 from .mcp_store_executor import StoreWorkers
 
 
@@ -61,10 +63,28 @@ class StoreFastMCP(FastMCP):
     def __init__(self, *args: Any, store_workers: StoreWorkers | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.store_workers = store_workers or StoreWorkers()
+        self.mcp_observation = MCPObservation()
         self.custom_route("/internal/store-workers", methods=["GET"], include_in_schema=False)(self._worker_status)
         self.custom_route("/internal/store-workers/drain", methods=["POST"], include_in_schema=False)(
             self._begin_worker_drain
         )
+
+    def _mcp_snapshot(self) -> dict[str, Any]:
+        snapshot = self.mcp_observation.status()
+        try:
+            snapshot["worker_observations"] = worker_observations(self.store_workers)
+        except Exception:  # noqa: BLE001 - observation failure cannot become a false proof.
+            snapshot["worker_observations"] = {
+                "complete": False,
+                "atomic": False,
+                "error_code": "worker_observation_unavailable",
+            }
+        return snapshot
+
+    async def _mcp_observation_status(self, request: Request) -> JSONResponse:
+        if not _local_control_request(request):
+            return _response({"error_code": "mcp_control_local_request_required"}, 403)
+        return _response(self._mcp_snapshot())
 
     async def _worker_status(self, request: Request) -> JSONResponse:
         if not _local_control_request(request):
@@ -83,6 +103,27 @@ class StoreFastMCP(FastMCP):
 
     def streamable_http_app(self) -> Starlette:
         app = super().streamable_http_app()
+        # A configured MCP path (including a path parameter), an existing
+        # custom route, or a slash redirect may already own this path. In that
+        # case leave routing unchanged and simply omit the observation route.
+        path = "/internal/mcp-observation"
+        available = True
+        for candidate in (path, path + "/"):
+            scope = {"type": "http", "method": "GET", "path": candidate, "root_path": "", "headers": []}
+            for route in app.router.routes:
+                try:
+                    match, _ = route.matches(scope)
+                except Exception:  # noqa: BLE001 - unknown routing is not permission to shadow an existing route.
+                    available = False
+                    break
+                if match != Match.NONE:
+                    available = False
+                    break
+        if available:
+            app.router.routes.append(
+                Route(path, self._mcp_observation_status, methods=["GET"], include_in_schema=False)
+            )
+        app.add_middleware(MCPObservationMiddleware, observation=self.mcp_observation)
         original_lifespan = app.router.lifespan_context
 
         @asynccontextmanager
@@ -90,6 +131,7 @@ class StoreFastMCP(FastMCP):
             # FastMCP's own lifespan is per request in stateless mode. Keep its
             # session manager unchanged and attach shutdown to the outer app.
             async with original_lifespan(application) as state:
+                self.mcp_observation.bind_process()
                 try:
                     yield state
                 finally:
