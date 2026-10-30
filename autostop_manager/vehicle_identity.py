@@ -407,7 +407,10 @@ def identity_values_agree(field: str, left: Any, right: Any) -> bool:
 
 def _engine_values_agree(left: Any, right: Any) -> bool:
     def engine_code(value: Any) -> str | None:
-        for token in re.findall(r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*", _compact(value).upper()):
+        # Compact displacement labels describe a family, not an engine code.
+        # Remove them before punctuation folding turns 2.0TSI into 20TSI.
+        text = re.sub(r"(?<![A-Z0-9])[0-9]+[.,][0-9]+[A-Z][A-Z0-9]*(?![A-Z0-9])", " ", _compact(value).upper())
+        for token in re.findall(r"[A-Z0-9]+(?:[.-][A-Z0-9]+)*", text):
             code = re.sub(r"[^A-Z0-9]", "", token)
             if (
                 len(code) >= 3
