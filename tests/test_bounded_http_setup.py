@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import threading
+import time
 from types import SimpleNamespace
 from urllib.error import URLError
 from urllib.request import Request
 
 import pytest
+import httpx
 
 from autostop_manager import bounded_http_read as bounded
 
@@ -99,3 +102,42 @@ def test_rejected_admission_does_not_start_preparing_another_worker(monkeypatch,
     finally:
         if mode == "occupied":
             admission.release()
+
+
+def test_header_selector_failure_retains_admission_until_cleanup_finishes(monkeypatch):
+    admission = bounded.TrackedTransportAdmission(1)
+    cleanup_entered, release_cleanup = threading.Event(), threading.Event()
+    client = httpx.AsyncClient
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            pytest.fail("invalid selector must fail before reading the response body")
+            yield b""
+
+        async def aclose(self):
+            cleanup_entered.set()
+            await asyncio.to_thread(release_cleanup.wait, 2)
+
+    async def handle(_request):
+        return httpx.Response(200, stream=Body())
+
+    def invalid_selector(_headers):
+        raise ValueError("synthetic selector failure")
+
+    monkeypatch.setattr(
+        bounded.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs)
+    )
+    request = Request("http://127.0.0.1/synthetic")
+    try:
+        with pytest.raises(TimeoutError):
+            bounded.urlopen(request, timeout=0.2, maximum=20, admission=admission, response_maximum=invalid_selector)
+        assert cleanup_entered.is_set()
+        assert admission.pending_count == 1
+        with pytest.raises(URLError, match="provider_transport_busy"):
+            bounded.urlopen(request, timeout=0.2, maximum=20, admission=admission)
+    finally:
+        release_cleanup.set()
+        deadline = time.monotonic() + 2
+        while admission.pending_count and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert admission.pending_count == 0

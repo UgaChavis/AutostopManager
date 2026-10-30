@@ -127,6 +127,7 @@ async def _fetch(
     truncate: bool = False,
     error_maximum: int = ERROR_BODY_LIMIT,
     on_error_headers: Callable[[int, Message], None] | None = None,
+    response_maximum: Callable[[Message], int] | None = None,
 ) -> BufferedResponse:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -170,6 +171,11 @@ async def _fetch(
                     if failed and on_error_headers is not None and follow_redirects:
                         on_error_headers(response.status_code, headers)
                     limit = error_maximum if failed else maximum
+                    if not failed and response_maximum is not None:
+                        selected = response_maximum(headers)
+                        if isinstance(selected, bool) or not isinstance(selected, int) or selected <= 0:
+                            raise ValueError("invalid_response_size_limit")
+                        limit = min(limit, selected)
                     body = bytearray()
                     async for chunk in response.aiter_raw():
                         remaining_bytes = limit + 1 - len(body)
@@ -209,6 +215,7 @@ def urlopen(
     admission: threading.BoundedSemaphore | TrackedTransportAdmission | None = None,
     deadline: float | None = None,
     preserve_error_status: bool = False,
+    response_maximum: Callable[[Message], int] | None = None,
 ) -> BufferedResponse:
     """Urllib-compatible buffered response; its read() never waits on a socket.
 
@@ -219,6 +226,7 @@ def urlopen(
     A supplied monotonic deadline can only shorten the relative timeout. Callers
     may isolate transport capacity and retain a known HTTP error status when its
     body cannot be completed; the original provider defaults remain unchanged.
+    A response header selector may lower, never increase, the success body limit.
     """
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("invalid_http_deadline")
@@ -226,6 +234,8 @@ def urlopen(
         raise ValueError("invalid_response_size_limit")
     if isinstance(error_maximum, bool) or not isinstance(error_maximum, int) or error_maximum <= 0:
         raise ValueError("invalid_error_response_size_limit")
+    if response_maximum is not None and not callable(response_maximum):
+        raise ValueError("invalid_response_size_selector")
     if deadline is not None and (
         isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)
     ):
@@ -267,6 +277,7 @@ def urlopen(
                         truncate=truncate,
                         error_maximum=error_maximum,
                         on_error_headers=remember_error_headers if preserve_error_status else None,
+                        response_maximum=response_maximum,
                     )
                 )
                 outcome.append((True, response))

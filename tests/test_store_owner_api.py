@@ -40,7 +40,7 @@ class _Opener:
         self.responses = list(responses)
         self.requests = []
 
-    def open(self, request, timeout):
+    def open(self, request, timeout, **_kwargs):
         self.requests.append((request, timeout))
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
@@ -150,7 +150,7 @@ def _planned_json_write(
         )
     responses.append(_preflight_response(expected_revision=expected_revision))
     opener = _Opener(responses)
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     planned = client.invoke(
         operation_id=capability.operation_id,
         mode="dry_run",
@@ -244,7 +244,7 @@ def test_high_risk_write_requires_matching_dry_run_and_sends_owner_metadata(monk
             _preflight_response(expected_revision=expected_revision),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: dry_run_opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", dry_run_opener.open)
     planned = client.invoke(
         operation_id="delete_part",
         mode="dry_run",
@@ -269,7 +269,7 @@ def test_high_risk_write_requires_matching_dry_run_and_sends_owner_metadata(monk
     assert blocked["error"]["code"] == "store_owner_dry_run_proof_required"
 
     opener = _Opener([_Response(b"", status=204)])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     applied = client.invoke(
         operation_id="delete_part",
         mode="apply",
@@ -305,7 +305,7 @@ def test_read_dispatch_returns_exact_json_without_write_metadata(monkeypatch):
     )
     client = _client_with_capability(capability)
     opener = _Opener([_Response({"id": "customer-1", "name": "Test"})])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     result = client.invoke(
         operation_id="get_customer",
@@ -353,7 +353,7 @@ def test_multipart_plan_contains_only_file_metadata_and_hash(monkeypatch):
             _preflight_response(expected_revision=expected_revision),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     result = client.invoke(
         operation_id="upload_photo",
@@ -422,7 +422,7 @@ def test_multipart_plan_proof_is_stable_across_random_boundaries(monkeypatch):
             _preflight_response(expected_revision=expected_revision),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: dry_run_opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", dry_run_opener.open)
     planned = client.invoke(
         operation_id="upload_photo",
         mode="dry_run",
@@ -432,7 +432,7 @@ def test_multipart_plan_proof_is_stable_across_random_boundaries(monkeypatch):
         **metadata,
     )
     opener = _Opener([_Response({"id": "photo-1"}, status=201)])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     applied = client.invoke(
         operation_id="upload_photo",
@@ -889,7 +889,7 @@ def test_large_binary_response_requires_explicit_opt_in(monkeypatch):
             _Response(b"x" * 16, content_type="image/jpeg"),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     blocked = client.invoke(
         operation_id="download_photo",
@@ -926,7 +926,7 @@ def test_transport_itself_blocks_revision_bypass_but_keeps_reviewed_create_revis
     )
     create_client = _client_with_capability(create)
     opener = _Opener([_preflight_response(expected_revision=None)])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     planned = create_client.invoke(
         operation_id="create_category",
         mode="dry_run",
@@ -954,7 +954,7 @@ def test_revision_discovery_and_aggregate_dry_run_dispatch_real_server_requests(
         current_revision=expected_revision,
     )
     revision_opener = _Opener([revision_response])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: revision_opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", revision_opener.open)
 
     discovered = client.invoke(
         operation_id="update_settings",
@@ -975,7 +975,7 @@ def test_revision_discovery_and_aggregate_dry_run_dispatch_real_server_requests(
             _preflight_response(expected_revision=expected_revision, proof="7" * 64),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: dry_run_opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", dry_run_opener.open)
     planned = client.invoke(
         operation_id="update_settings",
         mode="dry_run",
@@ -1015,7 +1015,7 @@ def test_dry_run_rejects_unbounded_server_receipt_expiry(monkeypatch, expires_de
             )
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     result = client.invoke(
         operation_id="create_category",
@@ -1138,7 +1138,9 @@ def test_write_post_dispatch_failures_are_always_uncertain(monkeypatch, failure_
         response = _Response({"name": "response larger than bound"})
     else:
         response = _Response(b"{invalid-json", content_type="application/json")
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: _Opener([response]))
+    monkeypatch.setattr(
+        store_owner_api, "bounded_urlopen", lambda request, **kwargs: (_Opener([response])).open(request, **kwargs)
+    )
 
     result = client.invoke(
         operation_id=capability.operation_id,
@@ -1185,7 +1187,7 @@ def test_interrupted_http_response_preserves_write_uncertainty(monkeypatch, stag
         else []
     )
     opener = _Opener([*responses, response])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     if stage == "openapi":
         client._capabilities.clear()
         result = client.list_capabilities()
@@ -1235,7 +1237,9 @@ def test_http_validation_error_after_apply_is_uncertain_and_error_body_is_never_
         {},
         io.BytesIO(json.dumps({"detail": "WBA12345678901234", "customer": "Private Name"}).encode()),
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: _Opener([response]))
+    monkeypatch.setattr(
+        store_owner_api, "bounded_urlopen", lambda request, **kwargs: (_Opener([response])).open(request, **kwargs)
+    )
 
     result = client.invoke(
         operation_id=capability.operation_id,
@@ -1272,7 +1276,9 @@ def test_apply_conflict_errors_remain_uncertain_after_dispatch(monkeypatch, deta
         {},
         io.BytesIO(json.dumps({"detail": detail}).encode()),
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: _Opener([response]))
+    monkeypatch.setattr(
+        store_owner_api, "bounded_urlopen", lambda request, **kwargs: (_Opener([response])).open(request, **kwargs)
+    )
 
     result = client.invoke(
         operation_id=capability.operation_id,
@@ -1303,7 +1309,7 @@ def test_idempotency_replay_is_reported_only_from_transport_header(monkeypatch):
             )
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     result = client.invoke(
         operation_id=capability.operation_id,
@@ -1350,8 +1356,8 @@ def test_invalid_success_response_never_becomes_completed(monkeypatch):
     client = _client_with_capability(capability)
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response({"unexpected": "payload"})]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response({"unexpected": "payload"})])).open(request, **kwargs),
     )
 
     result = client.invoke(operation_id="get_part", mode="read", path_parameters={"id": "part-1"})
@@ -1379,8 +1385,8 @@ def test_empty_success_body_is_rejected_when_openapi_declares_json_schema(monkey
     client = _client_with_capability(capability)
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response(b"")]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response(b"")])).open(request, **kwargs),
     )
 
     result = client.invoke(operation_id="get_part", mode="read", path_parameters={"id": "part-1"})
@@ -1404,8 +1410,8 @@ def test_rossko_credentials_never_egress_from_owner_get_or_patch(monkeypatch):
     secrets = {"key1": "rossko-secret-one", "key2": "rossko-secret-two"}
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response({**secrets, "markupPercent": 10})]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response({**secrets, "markupPercent": 10})])).open(request, **kwargs),
     )
 
     read_result = read_client.invoke(operation_id="get_rossko_settings", mode="read")
@@ -1436,7 +1442,7 @@ def test_rossko_credentials_never_egress_from_owner_get_or_patch(monkeypatch):
             _preflight_response(expected_revision=revision),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     planned = patch_client.invoke(
         operation_id="update_rossko_settings",
         mode="dry_run",
@@ -1449,8 +1455,8 @@ def test_rossko_credentials_never_egress_from_owner_get_or_patch(monkeypatch):
     assert planned["ok"] is True
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response({**secrets, "markupPercent": 10})]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response({**secrets, "markupPercent": 10})])).open(request, **kwargs),
     )
 
     patch_result = patch_client.invoke(
@@ -1491,8 +1497,8 @@ def test_masked_rossko_response_supports_apply_and_exact_safe_readback(monkeypat
     read_client = _client_with_capability(read_capability)
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response(safe_response)]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response(safe_response)])).open(request, **kwargs),
     )
     reread = read_client.invoke(operation_id="get_rossko_settings", mode="read")
     assert reread["ok"] is True
@@ -1521,7 +1527,7 @@ def test_masked_rossko_response_supports_apply_and_exact_safe_readback(monkeypat
             _preflight_response(expected_revision=revision),
         ]
     )
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
     planned = patch_client.invoke(
         operation_id="update_rossko_settings",
         mode="dry_run",
@@ -1533,8 +1539,8 @@ def test_masked_rossko_response_supports_apply_and_exact_safe_readback(monkeypat
     )
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response(safe_response)]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response(safe_response)])).open(request, **kwargs),
     )
     applied = patch_client.invoke(
         operation_id="update_rossko_settings",
@@ -1629,8 +1635,10 @@ def test_embedded_binary_and_write_binary_opt_in_are_blocked(monkeypatch):
     read_client = _client_with_capability(read_capability)
     monkeypatch.setattr(
         store_owner_api,
-        "build_opener",
-        lambda *_args: _Opener([_Response({"content_base64": base64.b64encode(b"secret").decode()})]),
+        "bounded_urlopen",
+        lambda request, **kwargs: (_Opener([_Response({"content_base64": base64.b64encode(b"secret").decode()})])).open(
+            request, **kwargs
+        ),
     )
     embedded = read_client.invoke(
         operation_id="get_document",
@@ -1722,7 +1730,7 @@ def test_owner_intent_unicode_is_ascii_safe_and_not_echoed(monkeypatch):
     client = _client_with_capability(capability)
     path_parameters, planned = _planned_json_write(client, capability, monkeypatch)
     opener = _Opener([_Response({"id": "part-1"})])
-    monkeypatch.setattr(store_owner_api, "build_opener", lambda *_args: opener)
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
 
     result = client.invoke(
         operation_id=capability.operation_id,

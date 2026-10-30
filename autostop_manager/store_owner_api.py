@@ -10,17 +10,21 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.message import Message
 from http.client import HTTPException
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 
+import httpx
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
 from referencing.exceptions import Unresolvable
 
+from .bounded_http_read import urlopen as bounded_urlopen
 from .config import normalize_store_api_url
+from .store_api import _STORE_TRANSPORT_ADMISSIONS, store_transport_admission
 
 
 STORE_OWNER_FORMAT = "autostop_store_owner_api_v1"
@@ -73,17 +77,46 @@ SAFE_REVERSIBLE_COLLECTION_CREATE_PATHS = frozenset(
 )
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+class _OwnerPreDispatchError(OSError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
-def _open_response(request: Request, *, timeout: float) -> Any:
-    """Read and close HTTP error streams through the same path as other responses."""
+def _open_response(request: Request, *, timeout: float, maximum: int, allow_binary_response: bool = False) -> Any:
+    """Bound each HTTP exchange while keeping the existing buffered response contract."""
+    deadline = time.monotonic() + timeout
+
+    def response_limit(headers: Message) -> int:
+        content_type = str(headers.get("Content-Type") or "").split(";", 1)[0].casefold()
+        binary = content_type != "application/json" and not content_type.endswith("+json")
+        return (MAX_BINARY_RESPONSE_BYTES if binary else maximum) + 1
+
     try:
-        return build_opener(_NoRedirect()).open(request, timeout=timeout)
+        return bounded_urlopen(
+            request,
+            timeout=timeout,
+            deadline=deadline,
+            maximum=(max(maximum, MAX_BINARY_RESPONSE_BYTES) if allow_binary_response else maximum) + 1,
+            response_maximum=response_limit if allow_binary_response else None,
+            error_maximum=MAX_RESPONSE_BYTES,
+            truncate=True,
+            follow_redirects=False,
+            preserve_error_status=True,
+            admission=store_transport_admission.get() or _STORE_TRANSPORT_ADMISSIONS,
+        )
     except HTTPError as response:
         return response
+    except httpx.InvalidURL:
+        raise _OwnerPreDispatchError("store_owner_request_invalid") from None
+    except URLError as exc:
+        code = {
+            "provider_transport_busy": "store_owner_transport_busy",
+            "provider_transport_unavailable": "store_owner_transport_unavailable",
+        }.get(str(exc.reason))
+        if code is not None:
+            raise _OwnerPreDispatchError(code) from None
+        raise
 
 
 @dataclass(frozen=True)
@@ -477,6 +510,8 @@ class StoreOwnerApiClient:
         try:
             payload = self._read_openapi()
             capabilities = _parse_capabilities(payload)
+        except _OwnerPreDispatchError as exc:
+            return _error(exc.code, request_dispatched=False, outcome_uncertain=False)
         except (OSError, HTTPException, TypeError, UnicodeError, ValueError):
             return _error("store_owner_openapi_unavailable")
         with self._cache_lock:
@@ -495,7 +530,7 @@ class StoreOwnerApiClient:
             },
             method="GET",
         )
-        with _open_response(request, timeout=self.timeout) as response:
+        with _open_response(request, timeout=self.timeout, maximum=MAX_OPENAPI_BYTES) as response:
             if not 200 <= int(getattr(response, "status", 200)) < 300:
                 raise ValueError("openapi_http_rejected")
             raw = response.read(MAX_OPENAPI_BYTES + 1)
@@ -523,9 +558,11 @@ class StoreOwnerApiClient:
             method="GET",
         )
         try:
-            with _open_response(request, timeout=self.timeout) as response:
+            with _open_response(request, timeout=self.timeout, maximum=MAX_RESPONSE_BYTES) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 status_code = int(getattr(response, "status", 200))
+        except _OwnerPreDispatchError as exc:
+            return _error(exc.code, request_dispatched=False, outcome_uncertain=False)
         except (OSError, HTTPException):
             return _error("store_owner_revision_read_failed", request_dispatched=True)
         if not 200 <= status_code < 300:
@@ -617,7 +654,12 @@ class StoreOwnerApiClient:
             method=capability.method,
         )
         try:
-            with _open_response(request, timeout=self.timeout) as response:
+            with _open_response(
+                request,
+                timeout=self.timeout,
+                maximum=MAX_RESPONSE_BYTES,
+                allow_binary_response=allow_binary_response,
+            ) as response:
                 status_code = int(getattr(response, "status", 200))
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].casefold()
                 response_limit = (
@@ -630,6 +672,8 @@ class StoreOwnerApiClient:
                 )
                 raw = response.read(response_limit + 1)
                 response_headers = response.headers
+        except _OwnerPreDispatchError as exc:
+            return _error(exc.code, request_dispatched=False, outcome_uncertain=False)
         except (OSError, HTTPException):
             code = "store_owner_outcome_uncertain" if capability.method != "GET" else "store_owner_read_failed"
             return _dispatch_error(

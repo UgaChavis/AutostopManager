@@ -72,6 +72,14 @@ Store имеет три отдельных HTTP worker-слота. `store_transp
 deadline; слот удерживается до фактического завершения worker, включая очистку и
 ожидание системного DNS. Лимиты тела JSON и JPEG проверяются отдельно.
 
+Owner API использует те же отслеживаемые HTTP-слоты и отдельный общий deadline
+для каждого OpenAPI/revision/read/dry-run/apply запроса, без автоматического повтора.
+Предел OpenAPI — 3 MiB, обычного и ошибочного ответа — 2 MiB; явный binary opt-in
+разрешает до 10 MiB только для успешного не-JSON ответа. Redirects не выполняются.
+`store_owner_transport_busy`, `store_owner_transport_unavailable` и
+`store_owner_request_invalid` означают отказ до отправки; после отправки apply
+ошибка, включая известный HTTP-отказ с неполным телом, требует проверки результата.
+
 Installed probe запускай из `/tmp` с `PYTHONSAFEPATH=1`, `PYTHONPATH`, равным физическому snapshot после разрешения current; source HEAD проверяется отдельно. Задай `runtime_python` точным проверенным Python из текущего `ExecStart` Manager:
 
 ```bash
