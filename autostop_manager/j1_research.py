@@ -179,7 +179,9 @@ def _canonical_url(value: str) -> str:
     """Return a stable public-document key without changing meaningful parameters."""
 
     try:
-        parsed = urlsplit(str(value or "").strip())
+        raw = str(value or "").strip()
+        raw.encode("utf-8")
+        parsed = urlsplit(raw)
         host = parsed.hostname
         port = parsed.port
     except ValueError:
@@ -193,7 +195,8 @@ def _canonical_url(value: str) -> str:
     ):
         netloc += f":{port}"
     try:
-        parameters = parse_qsl(parsed.query, keep_blank_values=True)
+        # Match discovery identity without replacing distinct legacy query bytes.
+        parameters = parse_qsl(parsed.query, keep_blank_values=True, errors="surrogateescape")
     except ValueError:
         return ""
     kept = [
@@ -201,7 +204,15 @@ def _canonical_url(value: str) -> str:
         for name, item in parameters
         if not (name.casefold().startswith("utm_") or name.casefold() in _TRACKING_PARAMETERS)
     ]
-    return urlunsplit((parsed.scheme.casefold(), netloc, parsed.path or "/", urlencode(kept, doseq=True), ""))
+    return urlunsplit(
+        (
+            parsed.scheme.casefold(),
+            netloc,
+            parsed.path or "/",
+            urlencode(kept, doseq=True, errors="surrogateescape"),
+            "",
+        )
+    )
 
 
 def _classify_source(url: str, title: str, kind: str) -> tuple[str, str, str]:
