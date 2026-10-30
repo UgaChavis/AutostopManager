@@ -28,6 +28,6 @@
     "workflow_transition",
     "workflow_wait_for_external"
   ],
-  "schema_fingerprint": "b10378098f31e0416c5a0a2159957befcd1a6c8ecc56002d32cf388421e44913",
-  "verified_at": "2026-10-01"
+  "schema_fingerprint": "25236adb66dc870635a975d0b55d8130b57aec8a3362c47f96264480a17012f8",
+  "verified_at": "2026-10-30"
 }
