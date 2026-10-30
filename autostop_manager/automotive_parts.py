@@ -29,6 +29,7 @@ from .vehicle_identity import (
     _transmission_signature,
     identity_values_agree,
 )
+from .vehicle_identity_inputs import STRING_FIELDS
 from .vin_lookup import normalize_part_number
 
 
@@ -599,6 +600,8 @@ def _pr_codes_criterion(expected: Any, actual: Any, *, complete: bool) -> str:
 
 def _identity_criterion(field: str, expected: Any, actual: Any) -> str:
     """Compatibility may reject a fact; support also requires its stated specificity."""
+    if field in STRING_FIELDS and (not isinstance(expected, str) or not isinstance(actual, str)):
+        return "unknown"
     if not identity_values_agree(field, expected, actual):
         return "rejected"
     if field == "transmission":
