@@ -113,7 +113,16 @@ def _quantity(raw: str) -> tuple[float | None, str | None]:
     unit = match[2].casefold().rstrip(".")
     # Keep the unit; a range endpoint or fraction denominator is not an exact count.
     prefix = raw[: match.start()]
-    non_scalar = _QUANTITY_RANGE_PREFIX.search(prefix) or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
+    range_prefix = _QUANTITY_RANGE_PREFIX.search(prefix)
+    if (
+        range_prefix
+        and re.fullmatch(r"[0-9]+\s+[-−–—]\s+", range_prefix[0])
+        and re.search(r"(?<!\w)артикул\s+$", prefix[: range_prefix.start()], re.I)
+    ):
+        # Only an explicitly labelled article and a spaced separator disambiguate
+        # this numeric token. A supplied part_number alone does not prove it.
+        range_prefix = None
+    non_scalar = range_prefix or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
     quantity = None if non_scalar or _labeled_grouped_quantity(raw, match) else finite_number(match[1])
     return quantity, "set" if unit.startswith("комп") else "pair" if unit.startswith(
         "пар"
