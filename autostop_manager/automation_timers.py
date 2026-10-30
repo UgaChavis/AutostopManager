@@ -218,7 +218,7 @@ class SystemTimerController:
             "name": policy.display_name,
             "control_mode": policy.control_mode,
             "locked": policy.control_mode == "read_only",
-            "inspection_ok": result.returncode == 0,
+            "inspection_ok": result.returncode == 0 and unit_file_state not in {"", "unknown"},
             "state": state,
         }
 
