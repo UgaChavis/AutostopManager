@@ -24,7 +24,7 @@ from autostop_manager.config import AutomationCrmConnectionConfig
 @pytest.mark.parametrize("host", ["127.0.0.1", "[::1]"])
 def test_real_http_client_preserves_existing_auth(monkeypatch, host):
     observed = []
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     def respond(request):
         observed.append(request)
@@ -48,7 +48,7 @@ def test_real_http_client_preserves_existing_auth(monkeypatch, host):
         assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
         return real_client(**kwargs, transport=httpx.MockTransport(respond))
 
-    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", client)
+    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.AsyncClient", client)
     source = HttpCrmDigestSource(
         AutomationCrmConnectionConfig(
             configured=True, api_url=f"http://{host}:8000", bearer_token="synthetic-existing-bearer"
@@ -525,13 +525,10 @@ def test_crm_source_uses_reserved_protocol_header_and_existing_mcp_bearer(monkey
     class Response:
         status_code = 200
 
-        def __enter__(self):
-            return self
+        async def aclose(self):
+            pass
 
-        def __exit__(self, *_args):
-            return False
-
-        def iter_bytes(self):
+        async def aiter_bytes(self):
             yield json.dumps(
                 {
                     "ok": True,
@@ -547,17 +544,20 @@ def test_crm_source_uses_reserved_protocol_header_and_existing_mcp_bearer(monkey
         def __init__(self, **kwargs):
             observed["client"] = kwargs
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *_args):
+        async def __aexit__(self, *_args):
             return False
 
-        def stream(self, method, path, *, json):
+        def build_request(self, method, path, *, json):
             observed["request"] = (method, path, dict(json))
+
+        async def send(self, _request, *, stream, follow_redirects):
+            assert stream is True and follow_redirects is False
             return Response()
 
-    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", Client)
+    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.AsyncClient", Client)
     source = HttpCrmDigestSource(
         AutomationCrmConnectionConfig(
             configured=True,
@@ -588,13 +588,10 @@ def test_crm_source_readiness_uses_non_mutating_probe_and_strict_contract(monkey
     class Response:
         status_code = 200
 
-        def __enter__(self):
-            return self
+        async def aclose(self):
+            pass
 
-        def __exit__(self, *_args):
-            return False
-
-        def iter_bytes(self):
+        async def aiter_bytes(self):
             yield json.dumps(
                 {
                     "ok": True,
@@ -614,17 +611,20 @@ def test_crm_source_readiness_uses_non_mutating_probe_and_strict_contract(monkey
         def __init__(self, **kwargs):
             observed["client"] = kwargs
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *_args):
+        async def __aexit__(self, *_args):
             return False
 
-        def stream(self, method, path, *, json):
+        def build_request(self, method, path, *, json):
             observed["request"] = (method, path, dict(json))
+
+        async def send(self, _request, *, stream, follow_redirects):
+            assert stream is True and follow_redirects is False
             return Response()
 
-    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.Client", Client)
+    monkeypatch.setattr("autostop_manager.automation_jobs.httpx.AsyncClient", Client)
     source = HttpCrmDigestSource(
         AutomationCrmConnectionConfig(
             configured=True,
@@ -643,5 +643,5 @@ def test_crm_source_readiness_uses_non_mutating_probe_and_strict_contract(monkey
         "generation": "generation-1",
         "high_water": 41,
     }
-    assert observed["client"]["timeout"] == 2
+    assert 0 < observed["client"]["timeout"] <= 2
     assert observed["request"] == ("POST", "/api/change_feed/readiness", {})

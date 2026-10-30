@@ -431,9 +431,10 @@ def test_production_wires_digest_and_reports_live_dependency_readiness(monkeypat
     sources = []
 
     class Source:
-        def __init__(self, received_config, *, timeout_seconds=10):
+        def __init__(self, received_config, *, timeout_seconds=10, admission=None):
             assert received_config is config
             self.timeout_seconds = timeout_seconds
+            self.admission = admission
             sources.append(self)
 
         def readiness(self):
@@ -451,11 +452,15 @@ def test_production_wires_digest_and_reports_live_dependency_readiness(monkeypat
     monkeypatch.setattr(automation_daemon, "HttpCrmDigestSource", Source)
     monkeypatch.setattr(automation_daemon, "TelegramOwnerNotifier", Notifier)
     monkeypatch.setattr(automation_daemon, "CrmDigestExecutor", lambda **_kwargs: lambda _claim: {"ok": True})
+    monkeypatch.setattr(automation_daemon, "AutomationControlServer", lambda **_kwargs: object())
 
     daemon = AutomationDaemon.production(store=AutomationStore(tmp_path / "manager.sqlite3"))
 
     assert set(daemon.executors) == {"crm_digest_v1", "m1_duty_v1", "m2_duty_v1"}
     assert [source.timeout_seconds for source in sources] == [10, 2]
+    assert sources[0].admission is daemon._crm_http_admission
+    assert sources[1].admission is daemon._crm_readiness_admission
+    assert sources[0].admission is not sources[1].admission
     assert daemon.readiness_provider() == {
         "ready": True,
         "checks": {
@@ -465,6 +470,11 @@ def test_production_wires_digest_and_reports_live_dependency_readiness(monkeypat
             "owner_notification_target": "ready",
         },
     }
+    other = AutomationDaemon.production(store=AutomationStore(tmp_path / "other.sqlite3"))
+    assert other._crm_http_admission is not daemon._crm_http_admission
+    assert sources[2].admission is other._crm_http_admission
+    assert sources[3].admission is other._crm_readiness_admission
+    assert other._crm_readiness_admission is not daemon._crm_readiness_admission
 
 
 def test_production_reports_invalid_crm_configuration_without_building_executor(monkeypatch, tmp_path):

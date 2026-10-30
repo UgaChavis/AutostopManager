@@ -25,6 +25,7 @@ from .automation_jobs import (
 )
 from .config import reject_obsolete_runtime_config
 from .automation_registry import AutomationStore
+from .bounded_http_read import TrackedTransportAdmission
 from .automation_timers import SystemTimerController
 from .config import get_automation_crm_connection_config, get_work_telegram_socket_path, load_runtime_env
 from .role_coordination import RoleStore
@@ -88,7 +89,11 @@ class AutomationDaemon:
         tick_seconds: float = 1,
         lease_seconds: int = 60,
         role_executor: RoleExecutor | None = None,
+        crm_http_admission: TrackedTransportAdmission | None = None,
+        crm_readiness_admission: TrackedTransportAdmission | None = None,
     ) -> None:
+        if crm_readiness_admission is not None and crm_readiness_admission is crm_http_admission:
+            raise ValueError("automation_crm_admissions_must_be_separate")
         self.store = store or AutomationStore()
         self.executors = dict(executors or {})
         self.timer_controller = timer_controller or SystemTimerController(store=self.store)
@@ -106,6 +111,8 @@ class AutomationDaemon:
         self.owner = f"automation-daemon-{uuid4().hex}"
         self.stopping = asyncio.Event()
         self.role_executor = role_executor
+        self._crm_http_admission = crm_http_admission
+        self._crm_readiness_admission = crm_readiness_admission
         if role_executor is not None:
             for template_id in ("m1_duty_v1", "m2_duty_v1"):
                 self.executors[template_id] = role_executor.request_reconcile
@@ -119,11 +126,13 @@ class AutomationDaemon:
         notifier = TelegramOwnerNotifier(telegram_socket)
         executors: dict[str, Executor] = {}
         crm_ready = bool(crm_config.configured and not crm_config.error_code)
+        crm_http_admission = TrackedTransportAdmission(1) if crm_ready else None
+        crm_readiness_admission = TrackedTransportAdmission(1) if crm_ready else None
         crm_source: HttpCrmDigestSource | None = None
         crm_readiness_source: HttpCrmDigestSource | None = None
         if crm_ready:
-            crm_source = HttpCrmDigestSource(crm_config)
-            crm_readiness_source = HttpCrmDigestSource(crm_config, timeout_seconds=2)
+            crm_source = HttpCrmDigestSource(crm_config, admission=crm_http_admission)
+            crm_readiness_source = HttpCrmDigestSource(crm_config, timeout_seconds=2, admission=crm_readiness_admission)
             executors["crm_digest_v1"] = CrmDigestExecutor(
                 store=state,
                 source=crm_source,
@@ -148,6 +157,8 @@ class AutomationDaemon:
             notifier=notifier,
             readiness_provider=readiness,
             role_executor=RoleExecutor(RoleStore(state.path)),
+            crm_http_admission=crm_http_admission,
+            crm_readiness_admission=crm_readiness_admission,
         )
 
     async def _execute_claim(self, claim: Mapping[str, Any]) -> None:
@@ -396,8 +407,16 @@ class AutomationDaemon:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
 
+    async def _drain_crm_http(self) -> None:
+        for admission in (self._crm_http_admission, self._crm_readiness_admission):
+            if admission is not None:
+                while admission.pending_count:
+                    await asyncio.sleep(0.01)
+
     async def _finish_shutdown(self, scheduler: asyncio.Task[None] | None) -> None:
         async def cleanup() -> None:
+            if self._crm_readiness_admission is not None:
+                self._crm_readiness_admission.begin_drain()
             failure: BaseException | None = None
             try:
                 notify_systemd("STOPPING=1")
@@ -414,6 +433,13 @@ class AutomationDaemon:
                         # scheduler claim. Observe both workers without replay.
                         if failure is None:
                             failure = exc
+            # The current digest may still need its exact ACK after shutdown
+            # starts. Keep its admission open until the scheduler has finished.
+            if self._crm_http_admission is not None:
+                self._crm_http_admission.begin_drain()
+            # A caller deadline or failed worker is not proof that its inner
+            # transport/DNS worker finished. Drain before stopped/control close.
+            await self._drain_crm_http()
             try:
                 if failure is None:
                     with suppress(Exception):
