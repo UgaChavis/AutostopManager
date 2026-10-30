@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from autostop_manager import crm_parts_store
 from autostop_manager.config import CrmMcpConnectionConfig
@@ -275,6 +278,127 @@ def test_parts_store_create_requires_readback_of_the_created_id():
     assert result["ok"] is False
     assert result["error"] == "crm_create_unverified"
     assert result["outcome_uncertain"] is True
+
+
+def _create_with_transport(gateway, *, native, monkeypatch, tmp_path, **arguments):
+    if not native:
+        return parts_store_cards("create", transport=gateway, **arguments)
+
+    from mcp.server.fastmcp import FastMCP
+
+    from autostop_manager import mcp_tools
+    from autostop_manager.mcp_store_executor import StoreWorkers
+    from autostop_manager.mcp_telemetry import instrument_manager_tools
+    from autostop_manager.storage import StoreState
+
+    for name in (
+        "get_store_api_url",
+        "get_store_read_token",
+        "get_store_manage_token",
+        "get_store_quote_token",
+        "get_store_owner_token",
+    ):
+        monkeypatch.setattr(mcp_tools, name, lambda: "")
+    monkeypatch.setattr(
+        crm_parts_store, "get_crm_mcp_connection_config", lambda: CrmMcpConnectionConfig(configured=False)
+    )
+    monkeypatch.setattr(crm_parts_store, "LoopbackCrmPartsStoreTransport", lambda _config: gateway)
+    server = FastMCP("synthetic-crm-create-readback")
+    server.store_workers = StoreWorkers()
+    mcp_tools.register_manager_tools(
+        server, store=StoreState(tmp_path / "unused.sqlite3"), include_tools={"parts_store_cards"}
+    )
+    instrument_manager_tools(server)
+    try:
+        tool = server._tool_manager.get_tool("parts_store_cards")
+        return asyncio.run(tool.run({"operation": "create", **arguments}))
+    finally:
+        server.store_workers.close()
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("actual_vehicle", ["", "Honda Civic", None, 42, {}, "missing-field"])
+def test_parts_store_create_rejects_unverified_vehicle(tmp_path, monkeypatch, native, actual_vehicle):
+    class ChangedVehicleGateway(FakeCrmGateway):
+        def invoke(self, name, arguments, *, idempotency_key=""):
+            result = super().invoke(name, arguments, idempotency_key=idempotency_key)
+            if name == "create_card":
+                # Change after the successful create, before Manager's independent readback.
+                if actual_vehicle == "missing-field":
+                    self.cards["store-1"].pop("vehicle")
+                else:
+                    self.cards["store-1"]["vehicle"] = actual_vehicle
+            return result
+
+    gateway = ChangedVehicleGateway()
+    result = _create_with_transport(
+        gateway,
+        native=native,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        title="Synthetic",
+        vehicle="Toyota Camry",
+        description="Synthetic facts",
+        idempotency_key="create-synthetic-vehicle",
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "uncertain"
+    assert result["error"] == "crm_create_unverified"
+    assert result["outcome_uncertain"] is True
+    assert [name for name, _, _ in gateway.calls] == ["create_card", "get_card"]
+    assert gateway.calls[0][2] == "create-synthetic-vehicle"
+    if native:
+        assert result["tool_execution"]["outcome"] == "error"
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("vehicle", [None, "", "Toyota Camry", " Toyota  Camry ", "Toyota\t\nCamry\u00a0", " \t\n"])
+def test_parts_store_create_accepts_canonical_or_default_vehicle(tmp_path, monkeypatch, native, vehicle):
+    class CanonicalVehicleGateway(FakeCrmGateway):
+        def invoke(self, name, arguments, *, idempotency_key=""):
+            result = super().invoke(name, arguments, idempotency_key=idempotency_key)
+            if name == "create_card":
+                canonical = " ".join(arguments["vehicle"].split())
+                self.cards["store-1"]["vehicle"] = canonical
+                result["data"]["data"]["card"]["vehicle"] = canonical
+            return result
+
+    gateway = CanonicalVehicleGateway()
+    arguments = {} if vehicle is None else {"vehicle": vehicle}
+    result = _create_with_transport(
+        gateway,
+        native=native,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+        title="Synthetic",
+        idempotency_key="create-synthetic-canonical-vehicle",
+        **arguments,
+    )
+
+    assert result["ok"] is True
+    assert result["card"]["vehicle"] == " ".join((vehicle or "").split())
+    # Readback normalization must not alter the existing write body/idempotency binding.
+    assert gateway.calls[0][1]["vehicle"] == (vehicle or "").strip()
+    assert [name for name, _, _ in gateway.calls] == ["create_card", "get_card"]
+
+
+@pytest.mark.parametrize("vehicle", [None, 42, True, {}, []])
+def test_parts_store_native_create_rejects_non_string_vehicle(tmp_path, monkeypatch, vehicle):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    gateway = FakeCrmGateway()
+    with pytest.raises(ToolError):
+        _create_with_transport(
+            gateway,
+            native=True,
+            monkeypatch=monkeypatch,
+            tmp_path=tmp_path,
+            title="Synthetic",
+            vehicle=vehicle,
+            idempotency_key="create-synthetic-invalid-vehicle",
+        )
+    assert gateway.calls == []
 
 
 def test_parts_store_append_requires_readback_of_the_requested_id():
