@@ -42,6 +42,8 @@ _GEARBOX_QUALIFIERS = {
     "dsg7": "gears",
     **dict.fromkeys(("0am", "0cw", "02e", "0d9", "0gc"), "gearbox"),
 }
+# Confirmed by Volkswagen Group UK's TPS: https://tps.trade/insider/dsg-servicing/
+_GEARBOX_GEARS = {"0d9": "dsg6", "0cw": "dsg7", "0gc": "dsg7"}
 _SIMPLE_OBJECTS = {
     ("рейка",),
     ("опорный_подшипник",),
@@ -73,6 +75,13 @@ class _Operation:
     core: tuple[str, ...]
     qualifiers: frozenset[tuple[str, str]]
     simple: bool
+
+
+def _gear_counts_compatible(left: _Operation, right: _Operation) -> bool:
+    qualifiers = left.qualifiers | right.qualifiers
+    counts = {value for axis, value in qualifiers if axis == "gears"}
+    counts.update(_GEARBOX_GEARS[value] for axis, value in qualifiers if axis == "gearbox" and value in _GEARBOX_GEARS)
+    return len(counts) <= 1
 
 
 class OperationMatcher:
@@ -155,6 +164,8 @@ class OperationMatcher:
             return True
         if not left.simple or not right.simple or left.core != right.core:
             return False
+        if not _gear_counts_compatible(left, right):
+            return False
         left_axes, right_axes = dict(left.qualifiers), dict(right.qualifiers)
         return all(left_axes[axis] == right_axes[axis] for axis in left_axes.keys() & right_axes.keys())
 
@@ -167,5 +178,6 @@ class OperationMatcher:
             left.simple
             and right.simple
             and left.core == right.core
+            and _gear_counts_compatible(left, right)
             and (left.qualifiers < right.qualifiers or right.qualifiers < left.qualifiers)
         )
