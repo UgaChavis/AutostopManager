@@ -8,6 +8,9 @@
 
 Ответ: bounded excerpt, publisher/title/edition/market/limitations, URL без query и PDF page либо XLSX sheet/row. `search_incomplete`/`skipped_catalog_ids` — выбранное множество просмотрено не полностью; `partially_extracted_catalog_ids` — incomplete text extraction. Завершённый OCR сам не делает поиск неполным. OCR match содержит `extraction_method=ocr`, `ocr_unverified=true` и требует сверки с исходной страницей. Synthetic `[PAGE N]` новых PDF исключается до match count; старый PDF сохраняет точный текстовый поиск.
 
+Готовый текстовый кеш поддерживает LF, CRLF и их сочетание; поиск не переписывает
+файлы для нормализации окончаний строк. Ограничения excerpt и исходные локаторы сохраняются.
+
 Находка — кандидат: сверяй vehicle modification, engine, market, размеры и VIN/OEM fitment. XLSX числовые форматы могут отличаться от отображаемого артикула; формулы не исполняются, внешние ссылки не читаются. Исходные PDF/XLSX не помещаются в Git.
 
 PDF locator учитывает только полный служебный marker `\f[PAGE N]` на отдельной строке
@@ -15,6 +18,11 @@ PDF locator учитывает только полный служебный mark
 и OCR-происхождение совпадения. Ошибка разрешения root, включая symlink loop, возвращает
 `catalog_root_invalid`; такая ошибка отдельного text entry исключает только этот каталог
 и оставляет явные признаки неполного поиска.
+В legacy-строке formfeed после найденного текста меняет страницу только для следующего
+текста. Контекст берётся с той же страницы. Если одна физическая строка содержит текст
+нескольких страниц, позиция совпадения неизвестна: такая строка не выдаётся с догадкой
+о page/OCR, а `catalog_locator_unavailable` и `search_incomplete=true` отмечают неполноту.
+Остальные найденные строки сохраняются; общий `ok` остаётся `true`.
 
 ## Pinned release sync
 
