@@ -488,47 +488,33 @@ def test_injected_base_url_accepts_only_reefapi_or_loopback(monkeypatch):
     assert good == "http://127.0.0.1:8765"
 
 
-def test_request_uses_no_redirect_handler_and_opens_only_configured_origin(monkeypatch):
+def test_request_uses_bounded_transport_and_opens_only_configured_origin(monkeypatch):
     monkeypatch.setenv("REEFAPI_API_KEY", "reef-secret-test-key")
     monkeypatch.setattr(avito_listings, "_API_BASE_URL", "http://127.0.0.1:8765")
-    captured_handlers = []
     opened = []
 
-    class _Opener:
-        def open(self, request, timeout):
-            opened.append((request.full_url, timeout))
-            return _Response({"ok": True, "data": {"listings": []}})
+    def fake_urlopen(request, **kwargs):
+        opened.append((request, kwargs))
+        return _Response({"ok": True, "data": {"listings": []}})
 
-    def fake_build_opener(*handlers):
-        captured_handlers.extend(handlers)
-        return _Opener()
-
-    monkeypatch.setattr(avito_listings, "build_opener", fake_build_opener)
+    monkeypatch.setattr(avito_listings, "urlopen", fake_urlopen)
 
     result = avito_listings.avito_search_listings("part")
 
     assert result["ok"] is True
-    assert len(captured_handlers) == 1
-    assert isinstance(captured_handlers[0], avito_listings._NoRedirectHandler)
-    assert opened == [("http://127.0.0.1:8765/avito/v1/search", avito_listings._REQUEST_TIMEOUT_SECONDS)]
-
-
-def test_no_redirect_handler_refuses_redirect_to_another_host():
-    from urllib.request import Request
-
-    handler = avito_listings._NoRedirectHandler()
-    request = Request("https://api.reefapi.com/avito/v1/search")
-
-    redirected = handler.redirect_request(
-        request,
-        None,
-        302,
-        "Found",
-        {"Location": "https://attacker.example/collect"},
-        "https://attacker.example/collect",
-    )
-
-    assert redirected is None
+    assert len(opened) == 1
+    request, options = opened[0]
+    assert request.full_url == "http://127.0.0.1:8765/avito/v1/search"
+    assert request.get_method() == "POST"
+    assert options["timeout"] == 30.0
+    assert options["maximum"] == 5_000_001
+    assert options["error_maximum"] == 64_000
+    assert options["follow_redirects"] is False
+    assert options["truncate"] is True
+    assert options["preserve_error_status"] is True
+    assert options["wait_for_cleanup"] is True
+    assert options["admission"] is avito_listings._HTTP_ADMISSION
+    assert callable(options["on_response_headers"])
 
 
 def test_read_listing_accepts_numeric_id_and_returns_normalized_card(monkeypatch):

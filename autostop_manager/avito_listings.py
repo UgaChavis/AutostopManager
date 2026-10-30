@@ -3,25 +3,29 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from email.message import Message
 import html
 import http.client
 import json
 import math
 import os
 import re
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 
 from .avito_listing_identity import clean_avito_listing_url
+from .bounded_http_read import TrackedTransportAdmission, urlopen
 from .j1_fetch import contains_sensitive, redact_sensitive
+from .listing_executor import MAX_WORKERS
 
 _API_BASE_URL = "https://api.reefapi.com"
 _API_KEY_ENV = "REEFAPI_API_KEY"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _MAX_RESPONSE_BYTES = 5_000_000
 _MAX_ERROR_RESPONSE_BYTES = 64_000
+_HTTP_ADMISSION = TrackedTransportAdmission(MAX_WORKERS)
 _MAX_PROVIDER_ROWS = 50
 _MAX_QUERY_CHARS = 256
 _MAX_TEXT_CHARS = 8_000
@@ -42,15 +46,32 @@ _PROVIDER_ERRORS = {
 _RETRYABLE_ERRORS = frozenset({"rate_limited", "source_blocked", "provider_timeout", "provider_unavailable"})
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
-    """Keep the ReefAPI key on the configured API origin."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def _open_request(request: Request, *, timeout: float):
-    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+    http_status = None
+
+    def remember_status(status: int, _headers: Message) -> None:
+        nonlocal http_status
+        http_status = status
+
+    try:
+        return urlopen(
+            request,
+            timeout=timeout,
+            # Keep the existing size check and its received HTTP status.
+            maximum=_MAX_RESPONSE_BYTES + 1,
+            truncate=True,
+            error_maximum=_MAX_ERROR_RESPONSE_BYTES,
+            follow_redirects=False,
+            admission=_HTTP_ADMISSION,
+            preserve_error_status=True,
+            on_response_headers=remember_status,
+            wait_for_cleanup=True,
+        )
+    except (OSError, http.client.HTTPException) as exc:
+        # The facade can fail after receiving success headers but before it can
+        # return a buffered response. Preserve that status without raw errors.
+        cast(Any, exc).http_status = http_status
+        raise
 
 
 def avito_search_listings(
@@ -296,13 +317,13 @@ def _request_json(action: str, payload: dict[str, Any], *, base_url: str | None 
         parsed_body = json.loads(body.decode("utf-8"))
     except HTTPError as exc:
         return _http_failure(exc)
-    except TimeoutError:
-        return _provider_failure("provider_timeout", http_status=http_status)
+    except TimeoutError as exc:
+        return _provider_failure("provider_timeout", http_status=getattr(exc, "http_status", http_status))
     except URLError as exc:
         error = "provider_timeout" if isinstance(exc.reason, TimeoutError) else "provider_unavailable"
-        return _provider_failure(error, http_status=http_status)
-    except (OSError, http.client.HTTPException):
-        return _provider_failure("provider_unavailable", http_status=http_status)
+        return _provider_failure(error, http_status=getattr(exc, "http_status", http_status))
+    except (OSError, http.client.HTTPException) as exc:
+        return _provider_failure("provider_unavailable", http_status=getattr(exc, "http_status", http_status))
     except (UnicodeDecodeError, ValueError, RecursionError):
         return _provider_failure("malformed_response", http_status=http_status)
 
