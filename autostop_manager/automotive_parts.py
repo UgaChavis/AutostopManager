@@ -37,6 +37,12 @@ _REQUEST_QUANTITY = re.compile(
     re.I,
 )
 _QUANTITY_RANGE_PREFIX = re.compile(r"(?<![\w−-])(?<![\d−-][.,])[-−]?\d+(?:[.,]\d+)?\s*[-−–—]\s*$")
+# Match from the final slash backwards, avoiding repeated scans of long chains.
+# The trailing guards are the reversed boundaries of a standalone numeric token.
+_REVERSED_FRACTION_PREFIX = re.compile(
+    r"\s*/\s*(?:\d+(?:[.,]\d+)?[-−]?\s*/\s*)*"
+    r"\d+(?:[.,]\d+)?[-−]?(?![\w/−-])(?![.,][\d/−-])"
+)
 
 
 def _quantity_only_clause(raw: str) -> bool:
@@ -84,8 +90,10 @@ def _quantity(raw: str) -> tuple[float | None, str | None]:
     if not match:
         return None, None
     unit = match[2].casefold().rstrip(".")
-    # Keep the parsed unit, but do not turn a range endpoint into an exact count.
-    quantity = None if _QUANTITY_RANGE_PREFIX.search(raw[: match.start()]) else finite_number(match[1])
+    # Keep the unit; a range endpoint or fraction denominator is not an exact count.
+    prefix = raw[: match.start()]
+    non_scalar = _QUANTITY_RANGE_PREFIX.search(prefix) or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
+    quantity = None if non_scalar else finite_number(match[1])
     return quantity, "set" if unit.startswith("комп") else "pair" if unit.startswith(
         "пар"
     ) else "liter" if unit.startswith("л") else "piece"

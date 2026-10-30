@@ -347,3 +347,99 @@ def test_unknown_range_does_not_consume_the_next_items_quantity(call, separator)
     assert [item["raw"] for item in items] == [first, second]
     assert [item["quantity"] for item in items] == [None, 4]
     assert [item["quantity_status"] for item in items] == ["unknown", "known"]
+
+
+@pytest.mark.parametrize(
+    "fraction",
+    [
+        "1/2",
+        "1 / 2",
+        "1 /2",
+        "1/ 2",
+        "1\u00a0/\u202f2",
+        "0/2",
+        "1/0",
+        "-1/2",
+        "−1/2",
+        "2 1/2",
+        "1.5/2",
+        "1,5/2",
+        "1/2/3",
+    ],
+)
+def test_fraction_is_not_converted_to_a_denominator_quantity(call, fraction):
+    raw = f"свечи зажигания {fraction} комплекта"
+    response = call(text=raw)
+
+    assert response["ok"] is True and response["outcome"] == "partial"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw
+    assert (item["quantity"], item["unit"], item["quantity_status"]) == (None, "set", "unknown")
+    assert item["missing_fields"] == ["quantity"]
+
+
+@pytest.mark.parametrize("shape", ["string", "object"])
+@pytest.mark.parametrize(
+    "unit,normalized_unit", [("шт", "piece"), ("комплект", "set"), ("пары", "pair"), ("л", "liter")]
+)
+def test_explicit_fraction_items_keep_raw_id_and_unit(call, shape, unit, normalized_unit):
+    raw = f"масляный фильтр 1/2 {unit}"
+    row = raw if shape == "string" else {"raw": raw, "item_id": "fraction", "brand": "DEMO", "part_number": "AB-12"}
+    response = call(items=[row])
+
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw and item["quantity"] is None and item["unit"] == normalized_unit
+    assert item["quantity_status"] == "unknown" and item["missing_fields"] == ["quantity"]
+    if shape == "object":
+        assert (item["item_id"], item["brand"], item["raw_part_number"], item["normalized_part_number"]) == (
+            "fraction",
+            "DEMO",
+            "AB-12",
+            "AB12",
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "масляный фильтр /2 шт",
+        "масляный фильтр / 2 шт",
+        "/ 2 шт масляный фильтр",
+        "масляный фильтр AB-12 / 2 шт",
+        "масляный фильтр SKU12.5 / 2 шт",
+        "масляный фильтр SKU12,5 / 2 шт",
+        "масляный фильтр AB-12/7 / 2 шт",
+        "масляный фильтр SKU12/7 / 2 шт",
+    ],
+)
+def test_slash_item_delimiters_and_skus_keep_exact_quantity(call, raw):
+    response = call(text=raw)
+    assert response["outcome"] == "success"
+    assert len(response["data"]["items"]) == 1
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw
+    assert (item["quantity"], item["unit"], item["quantity_status"]) == (2, "piece", "known")
+
+
+@pytest.mark.parametrize("quantity", [None, 0, 0.5])
+@pytest.mark.parametrize("supplied_unit", [True, False])
+def test_explicit_quantity_keeps_priority_over_fraction(call, quantity, supplied_unit):
+    row = {"item_id": "explicit-fraction", "raw": "свечи зажигания 1/2 комплекта", "quantity": quantity}
+    if supplied_unit:
+        row["unit"] = "set"
+    response = call(items=[row])
+    assert response["outcome"] == ("partial" if quantity is None else "success")
+    item = response["data"]["items"][0]
+    assert (item["item_id"], item["quantity"], item["unit"]) == ("explicit-fraction", quantity, "set")
+
+
+@pytest.mark.parametrize("separator", ["; ", ", ", " и ", "\n", " / "])
+def test_fraction_keeps_the_next_items_quantity(call, separator):
+    first, second = "свечи зажигания 1/2 комплекта", "масляный фильтр / 2 шт"
+    response = call(text=first + separator + second)
+    assert response["outcome"] == "partial"
+    items = response["data"]["items"]
+    assert [item["raw"] for item in items] == [first, second]
+    assert [item["quantity"] for item in items] == [None, 2]
