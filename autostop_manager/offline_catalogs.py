@@ -186,6 +186,9 @@ def _rg_matches(
         "--no-config",
         "--no-messages",
         "--text",
+        # Keep CR from entering the replacement window and becoming an
+        # embedded newline during subprocess text decoding. LF stays valid.
+        "--crlf",
         "--ignore-case",
         "--line-number",
         "--no-filename",
