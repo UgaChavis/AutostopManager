@@ -2746,13 +2746,25 @@ class DurableWakeDispatcher:
             await self._reconcile_job(job)
             return
         if self.inbox_status.get("compatibility_hold"):
-            rows, _cursor = await _active_job_page(self.jobs)
-            for legacy in rows:
-                if legacy.get("context_mode") == "legacy" and legacy.get("execution_proof") is None:
-                    await self._reconcile_job(legacy)
-                    if self.stop_proof_verified:
-                        self.jobs.changed.set()
-                    return
+            cursor = None
+            seen_cursors: set[str] = set()
+            for _ in range(MAX_ACTIVE_JOB_PAGES):
+                rows, next_cursor = await _active_job_page(self.jobs, after_job_id=cursor)
+                if next_cursor is not None:
+                    if next_cursor in seen_cursors:
+                        raise WakeError("wake_job_status_invalid")
+                    seen_cursors.add(next_cursor)
+                for legacy in rows:
+                    if legacy.get("context_mode") == "legacy" and legacy.get("execution_proof") is None:
+                        await self._reconcile_job(legacy)
+                        if self.stop_proof_verified:
+                            self.jobs.changed.set()
+                        return
+                if next_cursor is None:
+                    break
+                cursor = next_cursor
+            else:
+                raise WakeError("wake_job_status_invalid")
             raise WakeError("wake_legacy_context_requires_review")
 
     async def _reconcile_job(self, job: dict[str, Any]) -> None:
