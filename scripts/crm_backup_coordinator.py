@@ -400,6 +400,7 @@ def status(path, record):
     text = (
         f"# Резервная копия CRM\n\nРасписание: 02:00 Asia/Krasnoyarsk; таймер {timer_state}.\n"
         "Назначение: DESKTOP-7RAOHT7, C:\\Users\\9860606\\Desktop\\Резерв CRM.\n"
+        "Хранение: две последние копии на ПК; одна последняя непереданная на сервере.\n"
         f"Попытка: {attempt}; начало: {started}.\nКопия: {names[stage('copy')]}.\n"
         f"Возврат служб: {names[stage('restore')]}.\n"
         f"Передача на ПК: {delivery_text}; время: {delivery_at}{note}.\n"
