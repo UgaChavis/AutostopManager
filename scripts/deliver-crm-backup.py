@@ -424,10 +424,15 @@ def deliver_once(dirfd, remote):
         valid_record(record)
     set_status(dirfd, record, "running")
     stream = None
+    inspection_failed = False
     try:
         stream = open_source(dirfd, record)
         before = verify_source(stream, record) if stream is not None else None
-        observed = remote.inspect(record)
+        try:
+            observed = remote.inspect(record)
+        except DeliveryError:
+            inspection_failed = True
+            raise
         if observed["final"] is not None:
             if not matches(observed["final"], record):
                 raise DeliveryError("remote_conflict", unknown=True)
@@ -467,8 +472,10 @@ def deliver_once(dirfd, remote):
             raise
         # If a newer snapshot replaced an unavailable source, preserve the old
         # remote files but stop blocking delivery of the new generation.
-        if error.code in {"source_missing", "remote_conflict"} and pending_record(dirfd) != record:
-            unlink_file(dirfd, "delivery-intent.json")
+        if error.code in {"source_missing", "remote_conflict"} or (stream is None and inspection_failed):
+            replacement = pending_record(dirfd)
+            if replacement is not None and replacement != record:
+                unlink_file(dirfd, "delivery-intent.json")
         set_status(dirfd, record, "unknown" if error.unknown else "failed", error.code)
         if error is exc:
             raise
