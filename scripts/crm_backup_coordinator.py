@@ -28,6 +28,7 @@ from contextlib import suppress
 from contextlib import contextmanager, ExitStack
 
 ROOT = Path("/var/lib/autostop-manager/crm-backup")
+ROOT_UID = 0
 STATUS = Path("/var/lib/autostop-manager/roles/M2/crm-backup-status.md")
 CONTAINER = "autostopcrm"
 SCHEDULER = "autostop-manager-scheduler.service"
@@ -394,13 +395,25 @@ def status(path, record):
         )
     except (Uncertain, OSError, subprocess.SubprocessError):
         timer_state = "не подтверждён"
+    delivery = stage("delivery")
+    delivery_text = "не требовалась" if delivery == "not_needed" else names[delivery]
     text = (
         f"# Резервная копия CRM\n\nРасписание: 02:00 Asia/Krasnoyarsk; таймер {timer_state}.\n"
         "Назначение: DESKTOP-7RAOHT7, C:\\Users\\9860606\\Desktop\\Резерв CRM.\n"
         f"Попытка: {attempt}; начало: {started}.\nКопия: {names[stage('copy')]}.\n"
         f"Возврат служб: {names[stage('restore')]}.\n"
-        f"Передача на ПК: {names[stage('delivery')]}; время: {delivery_at}{note}.\n"
+        f"Передача на ПК: {delivery_text}; время: {delivery_at}{note}.\n"
     )
+    previous = record.get("previous_delivery")
+    if isinstance(previous, dict):
+        previous_at = previous.get("at")
+        if not isinstance(previous_at, str) or len(previous_at) > 40 or "\n" in previous_at:
+            previous_at = "неизвестно"
+        previous_note = "; удаление старых копий отложено" if previous.get("error_code") == "rotation_pending" else ""
+        text += (
+            f"Последняя другая передача: копия {previous['id']}; "
+            f"{names[previous['status']]}; время: {previous_at}{previous_note}.\n"
+        )
     durable(path, text.encode())
 
 
@@ -413,7 +426,7 @@ class Lock:
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
             info = os.fstat(self.fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o077 or info.st_nlink != 1:
                 raise Uncertain("unsafe lock file")
             fcntl.flock(self.fd, fcntl.LOCK_EX | (0 if self.wait else fcntl.LOCK_NB))
         except BaseException:
@@ -648,22 +661,31 @@ def refresh(root, status_path, *, copy_override=None):
     # network or archive reads are performed while holding it.
     with Lock(root / "status.lock"):
         record = load(root / "attempt.json")
+        current_delivery = False
         try:
             fd = os.open(root / "delivery-status.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
             with os.fdopen(fd) as stream:
                 delivery = json.load(stream)
             if (
-                set(delivery) == {"id", "status", "at", "error_code"}
-                and delivery["id"] == record["attempt"]
+                isinstance(delivery, dict)
+                and set(delivery) == {"id", "status", "at", "error_code"}
+                and isinstance(delivery["id"], str)
+                and ATTEMPT.fullmatch(delivery["id"])
                 and delivery["status"] in {"pending", "running", "ok", "failed", "unknown"}
             ):
-                record["delivery"] = delivery["status"]
-                record["delivery_at"] = delivery["at"]
-                record["delivery_note"] = delivery["error_code"]
+                if delivery["id"] == record["attempt"]:
+                    current_delivery = True
+                    record["delivery"] = delivery["status"]
+                    record["delivery_at"] = delivery["at"]
+                    record["delivery_note"] = delivery["error_code"]
+                else:
+                    record["previous_delivery"] = delivery
         except (FileNotFoundError, ValueError, TypeError):
             pass
         if copy_override is not None:
             record["copy"] = copy_override
+        if not current_delivery and record.get("copy") in {"failed", "unknown"}:
+            record["delivery"] = "not_needed" if record["copy"] == "failed" else "unknown"
         status(status_path, record)
 
 
@@ -996,7 +1018,7 @@ def _signature(info):
 
 def _checked_stat(stream):
     info = os.fstat(stream.fileno())
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o077 or info.st_nlink != 1:
         raise Uncertain("unsafe snapshot file")
     return info
 
@@ -1157,7 +1179,7 @@ def snapshot_command(output, initial):
 def make_root(root):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = root.lstat()
-    if not root.is_dir() or root.is_symlink() or info.st_uid != 0 or info.st_mode & 0o077:
+    if not root.is_dir() or root.is_symlink() or info.st_uid != ROOT_UID or info.st_mode & 0o077:
         raise Uncertain("backup state directory is not root-private")
 
 

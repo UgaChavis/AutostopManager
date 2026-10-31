@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
@@ -100,6 +101,8 @@ class Fake:
 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
+    # Only synthetic test files are owned by the runner instead of root.
+    monkeypatch.setattr(m, "ROOT_UID", os.geteuid())
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
     data = tmp_path / "data"
@@ -121,6 +124,39 @@ def ctx(tmp_path, monkeypatch):
 def run(ctx):
     root, data, status, fake, lock = ctx
     return m.backup(root, status, fake, lock, data, "b" * 40)
+
+
+def test_private_state_requires_owner_and_private_mode(tmp_path, monkeypatch):
+    assert m.ROOT_UID == 0
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    snapshot = root / "snapshot"
+    snapshot.write_bytes(b"synthetic")
+    snapshot.chmod(0o600)
+    lock = root / "lock"
+    lock.touch(mode=0o600)
+
+    monkeypatch.setattr(m, "ROOT_UID", os.geteuid() + 1)
+    with pytest.raises(m.Uncertain, match="root-private"):
+        m.make_root(root)
+    with pytest.raises(m.Uncertain, match="unsafe lock"):
+        with m.Lock(lock):
+            pass
+    with snapshot.open("rb") as stream, pytest.raises(m.Uncertain, match="unsafe snapshot"):
+        m._checked_stat(stream)
+
+    monkeypatch.setattr(m, "ROOT_UID", os.geteuid())
+    root.chmod(0o755)
+    with pytest.raises(m.Uncertain, match="root-private"):
+        m.make_root(root)
+    root.chmod(0o700)
+    lock.chmod(0o644)
+    with pytest.raises(m.Uncertain, match="unsafe lock"):
+        with m.Lock(lock):
+            pass
+    snapshot.chmod(0o644)
+    with snapshot.open("rb") as stream, pytest.raises(m.Uncertain, match="unsafe snapshot"):
+        m._checked_stat(stream)
 
 
 def test_backup_restores_before_publishing_and_preserves_one_pending(ctx, monkeypatch):
@@ -333,10 +369,27 @@ def test_delivery_status_does_not_cross_attempts(ctx):
     m.save(root / "delivery-status.json", delivery)
     m.refresh(root, status)
     assert "Передача на ПК: ожидается" in status.read_text()
+    assert f"Последняя другая передача: копия {delivery['id']}; успех" in status.read_text()
     delivery["id"] = result["attempt"]
     m.save(root / "delivery-status.json", delivery)
     m.refresh(root, status)
     assert "Передача на ПК: успех" in status.read_text()
+
+
+def test_failed_attempt_reports_delivery_of_previous_pending_copy(ctx):
+    root, data, status, fake, lock = ctx
+    previous = run(ctx)
+    with pytest.raises(m.Uncertain):
+        m.backup(root, status, fake, lock, data, "")
+    m.save(
+        root / "delivery-status.json",
+        {"id": previous["attempt"], "status": "ok", "at": "2026-10-31T00:00:00Z", "error_code": None},
+    )
+    m.refresh(root, status)
+    text = status.read_text()
+    assert "Копия: ошибка" in text
+    assert "Передача на ПК: не требовалась" in text
+    assert f"Последняя другая передача: копия {previous['attempt']}; успех; время: 2026-10-31T00:00:00Z" in text
 
 
 def test_journal_update_waits_for_inflight_worker(ctx):

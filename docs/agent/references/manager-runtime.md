@@ -283,6 +283,11 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/install-manager-automation.sh` | Registry/unit/socket: `--manager-revision SHA`, необязательные `--crm-revision SHA`, `--crm-version`, `--activate`, `--replace-unit`. После попытки активации ошибка требует ручного восстановления: автоматического возврата прежнего writer нет. |
 | `scripts/ensure-automation-group.sh` | Изменяет системную группу/UID-GID; вызывается installer. |
 | `scripts/backup-manager-automation-state.py` | Online backup: `--output PATH [--source PATH]`, root-owned `0700`. Непрерывный BUSY/LOCKED источника ограничен 10 с (`automation_backup_source_busy`); прогресс копирования сбрасывает этот бюджет, общего deadline копии нет. |
+| `scripts/crm_backup_coordinator.py` | Подготовленный root-only координатор CRM-копии: `backup` управляет остановкой writers и возвратом служб, `recover` восстанавливает прерванную попытку, `refresh` обновляет статус; `worker` — внутренний исполнитель. Запуск на рабочей CRM требует подтверждённых предусловий остановки writers и восстановления служб. |
+| `scripts/crm-snapshot.py` | Создаёт приватный архив данных CRM с ключом OAuth после подтверждённой остановки writers; сам службы не останавливает и результат не публикует. |
+| `scripts/check-crm-snapshot-restore.py` | Распаковывает и проверяет архив CRM с ключом в пустом приватном каталоге; службы не запускает и задания не воспроизводит. |
+| `scripts/deliver-crm-backup.py` | Отдельно передаёт готовую CRM-копию на подтверждённый ПК, проверяет принятые данные и удаляет старые поколения только после успеха; службы CRM не останавливает. |
+| `scripts/transfer-crm-backup-windows.py` | Вспомогательные SSH/PowerShell-команды для доставки на закреплённый Windows ПК; импортируется отправителем. |
 | `scripts/autostop-complete-backup.py` | Прежний complete-bundle helper для исторических manifests; с текущим Store helper не запускается. Действующие копии и восстановление — [правила backup](complete-backup.md). |
 | `scripts/store-backup.py` | Root-only текущая копия Store DB, files и settings; `--root` и `--lock` задают точные пути. Проверяет dump и стабильность источника, затем атомарно публикует одну генерацию. Live restore не выполняет. |
 | `scripts/technical-retention.py` | Без `--apply` планирует уборку; `--apply --days 3 --docker` ограничивает только закрытые технические логи и разрешённые download/build caches. Busy/open guards сохраняют активные файлы; business data не входит. |
@@ -315,6 +320,8 @@ Automation backup читает точное имя исходного файла
 При ошибке automation installer откат сохраняет исходный код завершения. Неуспешное восстановление файлов или состояния службы сохраняет rollback backup и диагностический путь; частично восстановленный комплект не запускается заново. Если до установки служба была выключена, её остановка предпринимается и при ошибке восстановления. Успех команды не заменяет независимую проверку фактического runtime.
 
 Units в `deploy/systemd/`: Manager MCP, scheduler, J1 static/browser, work/personal Telegram, Codex wake/start. `systemctl is-active` показывает процесс, не правильность его контракта. Службы и backup: [host-operations.md](host-operations.md); Telegram/G1: [telegram-runtime.md](telegram-runtime.md).
+
+Подготовленные units CRM-копии: `autostop-crm-workstation-backup.service` создаёт копию и вызывает восстановление при завершении; `autostop-crm-workstation-recovery.service` возвращает службы после прерванной попытки; `autostop-crm-backup-delivery.service` отдельно доставляет готовую копию. Расписания не включать до приёмки остановки всех writers, возврата служб после сбоев и изолированного восстановления текущей CRM с OAuth-ключом. Синтетические проверки не заменяют эту приёмку.
 
 Диагностика: `transport_route_unavailable` → socket/port/unit; `transport_auth_failure` → transport permissions; `tool_not_registered` → client/endpoint revision; `schema_mismatch` → imported PYTHONPATH и SHA; `annotation_mismatch` → active annotations/revision; provider failure → отдельный downstream. Ошибка provider/auth не повод перезапускать MCP.
 
