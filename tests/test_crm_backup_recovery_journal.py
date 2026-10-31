@@ -33,8 +33,22 @@ def begin(locked):
         attempt=ATTEMPT,
         boot=BOOT,
         services=[
-            {"name": "running", "identity": "id-one", "was_active": True, "step": "untouched"},
-            {"name": "already-off", "identity": "id-two", "was_active": False, "step": "untouched"},
+            {
+                "name": "running",
+                "kind": "systemd",
+                "restart_policy": None,
+                "identity": "id-one",
+                "was_active": True,
+                "step": "untouched",
+            },
+            {
+                "name": "already-off",
+                "kind": "docker",
+                "restart_policy": {"name": "no", "maximum_retry_count": 0},
+                "identity": "id-two",
+                "was_active": False,
+                "step": "untouched",
+            },
         ],
     )
 
@@ -185,7 +199,16 @@ def test_attempt_ids_cannot_be_reused_after_later_attempts(root):
     with journal.locked_journal(root) as locked:
         begin(locked)
         locked.complete(attempt=ATTEMPT, current_boot=BOOT)
-        services = [{"name": "running", "identity": "id-one", "was_active": True, "step": "untouched"}]
+        services = [
+            {
+                "name": "running",
+                "kind": "systemd",
+                "restart_policy": None,
+                "identity": "id-one",
+                "was_active": True,
+                "step": "untouched",
+            }
+        ]
         locked.begin(attempt="d" * 32, boot=BOOT, services=services)
         locked.complete(attempt="d" * 32, current_boot=BOOT)
         with pytest.raises(journal.RecoveryJournalError, match="attempt_reused"):
@@ -214,8 +237,22 @@ def test_threads_serialize_complete_transition_transaction(root, monkeypatch):
             attempt=ATTEMPT,
             boot=BOOT,
             services=[
-                {"name": "a", "identity": "a", "was_active": True, "step": "untouched"},
-                {"name": "b", "identity": "b", "was_active": True, "step": "untouched"},
+                {
+                    "name": "a",
+                    "kind": "systemd",
+                    "restart_policy": None,
+                    "identity": "a",
+                    "was_active": True,
+                    "step": "untouched",
+                },
+                {
+                    "name": "b",
+                    "kind": "systemd",
+                    "restart_policy": None,
+                    "identity": "b",
+                    "was_active": True,
+                    "step": "untouched",
+                },
             ],
         )
         entered = threading.Event()

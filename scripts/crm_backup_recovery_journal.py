@@ -38,6 +38,7 @@ _LOCK = ".crm-recovery.lock"
 _IDENTIFIER = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.:@-]{0,127}\Z")
 _HEX = re.compile(r"[0-9a-f]{32}\Z")
 _STEPS = {"untouched", "stop_intent", "stopped", "restore_intent", "restored"}
+_POLICY_STEPS = {"not_applicable", "untouched", "change_intent", "changed", "restore_intent", "restored"}
 _MAX_BYTES = 256 * 1024
 _MAX_ATTEMPTS = 4096
 
@@ -92,7 +93,7 @@ def _validate(state: Any) -> None:
         raise RecoveryJournalError("recovery_state_invalid")
     if (
         type(state["schema"]) is not int
-        or state["schema"] != 2
+        or state["schema"] != 3
         or not isinstance(state["attempt"], str)
         or not _HEX.fullmatch(state["attempt"])
         or not isinstance(state["attempts"], list)
@@ -108,22 +109,79 @@ def _validate(state: Any) -> None:
     ):
         raise RecoveryJournalError("recovery_state_invalid")
     seen = set()
+    seen_identities = set()
     for item in state["services"]:
-        if not isinstance(item, dict) or set(item) != {"name", "identity", "was_active", "step"}:
+        if not isinstance(item, dict) or set(item) != {
+            "name",
+            "identity",
+            "kind",
+            "was_active",
+            "step",
+            "restart_policy",
+            "policy_step",
+        }:
             raise RecoveryJournalError("recovery_state_invalid")
+        policy = item["restart_policy"]
+        valid_policy = policy is None or (
+            isinstance(policy, dict)
+            and set(policy) == {"name", "maximum_retry_count"}
+            and isinstance(policy["name"], str)
+            and policy["name"] in {"no", "always", "unless-stopped", "on-failure"}
+            and type(policy["maximum_retry_count"]) is int
+            and 0 <= policy["maximum_retry_count"] <= 2**31 - 1
+            and (policy["name"] == "on-failure" or policy["maximum_retry_count"] == 0)
+        )
         if (
             not isinstance(item["name"], str)
             or not _IDENTIFIER.fullmatch(item["name"])
             or item["name"] in seen
             or not isinstance(item["identity"], str)
             or not _IDENTIFIER.fullmatch(item["identity"])
+            or not isinstance(item["kind"], str)
+            or item["kind"] not in {"systemd", "docker"}
+            or (item["kind"] == "systemd" and policy is not None)
+            or (item["kind"] == "docker" and policy is None)
             or type(item["was_active"]) is not bool
             or not isinstance(item["step"], str)
             or item["step"] not in _STEPS
+            or not valid_policy
+            or not isinstance(item["policy_step"], str)
+            or item["policy_step"] not in _POLICY_STEPS
+            or (policy is None and item["policy_step"] != "not_applicable")
+            or (policy is not None and item["policy_step"] == "not_applicable")
             or (not item["was_active"] and item["step"] != "untouched")
+            or (not item["was_active"] and item["policy_step"] not in {"not_applicable", "untouched"})
             or (state["complete"] and item["step"] not in {"untouched", "restored"})
+            or (state["complete"] and item["policy_step"] not in {"not_applicable", "untouched", "restored"})
         ):
             raise RecoveryJournalError("recovery_state_invalid")
+        resource = (item["kind"], item["identity"])
+        if resource in seen_identities:
+            raise RecoveryJournalError("recovery_state_invalid")
+        seen_identities.add(resource)
+        if item["kind"] == "systemd" and not item["was_active"]:
+            # enabled units, sockets, timers or dependencies may start it after
+            # reboot; the required early-start fence is not implemented yet.
+            raise RecoveryJournalError("recovery_inactive_systemd_unfenced")
+        if policy is not None:
+            if not item["was_active"] and policy["name"] != "no":
+                raise RecoveryJournalError("recovery_inactive_autostart_unfenced")
+            if policy["name"] == "no" and item["policy_step"] != "untouched":
+                raise RecoveryJournalError("recovery_state_invalid")
+            if (
+                policy["name"] != "no"
+                and item["step"] in {"stop_intent", "stopped", "restore_intent"}
+                and item["policy_step"] != "changed"
+            ):
+                raise RecoveryJournalError("recovery_state_invalid")
+            if (
+                policy["name"] != "no"
+                and item["step"] == "restored"
+                and item["policy_step"] not in {"changed", "restore_intent", "restored"}
+            ):
+                raise RecoveryJournalError("recovery_state_invalid")
+            if item["policy_step"] == "change_intent" and item["step"] != "untouched":
+                raise RecoveryJournalError("recovery_state_invalid")
         seen.add(item["name"])
 
 
@@ -250,15 +308,32 @@ class RecoveryJournal:
             raise RecoveryJournalError("recovery_attempt_reused")
         if len(attempts) >= _MAX_ATTEMPTS:
             raise RecoveryJournalError("recovery_attempt_history_full")
+        if not isinstance(services, list):
+            raise RecoveryJournalError("recovery_state_invalid")
+        normalized = []
+        for item in services:
+            if not isinstance(item, dict) or set(item) not in (
+                {"name", "identity", "kind", "was_active", "step", "restart_policy"},
+            ):
+                raise RecoveryJournalError("recovery_state_invalid")
+            policy = item.get("restart_policy")
+            normalized.append(
+                {**item, "restart_policy": policy, "policy_step": "not_applicable" if policy is None else "untouched"}
+            )
         state = {
-            "schema": 2,
+            "schema": 3,
             "attempt": attempt,
             "attempts": [*attempts, attempt],
             "boot": boot,
             "complete": False,
-            "services": services,
+            "services": normalized,
         }
         _validate(state)
+        if any(
+            item["kind"] == "docker" and not item["was_active"] and item["restart_policy"]["name"] != "no"
+            for item in normalized
+        ):
+            raise RecoveryJournalError("recovery_inactive_autostart_unfenced")
         if any(item["step"] != "untouched" for item in services):
             raise RecoveryJournalError("recovery_initial_step_invalid")
         self._save(state)
@@ -282,7 +357,37 @@ class RecoveryJournal:
         item = next((item for item in state["services"] if item["name"] == name), None)
         if item is None or not item["was_active"] or item["step"] != expected:
             raise RecoveryJournalError("recovery_transition_conflict")
+        policy = item["restart_policy"]
+        if new == "stop_intent" and policy is not None and policy["name"] != "no" and item["policy_step"] != "changed":
+            raise RecoveryJournalError("recovery_restart_policy_not_fenced")
         item["step"] = new
+        self._save(state)
+
+    @_synchronized
+    def policy_transition(self, *, attempt: str, current_boot: str, name: str, expected: str, new: str) -> None:
+        """Record intent/readback only; never change a container or its policy."""
+        _require_current_boot(current_boot)
+        state = self.read()
+        if state is None or state["attempt"] != attempt or state["complete"]:
+            raise RecoveryJournalError("recovery_attempt_mismatch")
+        if state["boot"] != current_boot:
+            raise RecoveryJournalError("recovery_boot_mismatch")
+        if (expected, new) not in {
+            ("untouched", "change_intent"),
+            ("change_intent", "changed"),
+            ("change_intent", "restored"),
+            ("changed", "restore_intent"),
+            ("restore_intent", "restored"),
+        }:
+            raise RecoveryJournalError("recovery_transition_invalid")
+        item = next((item for item in state["services"] if item["name"] == name), None)
+        if item is None or not item["was_active"] or item["restart_policy"] is None or item["policy_step"] != expected:
+            raise RecoveryJournalError("recovery_transition_conflict")
+        if new == "change_intent" and (item["step"] != "untouched" or item["restart_policy"]["name"] == "no"):
+            raise RecoveryJournalError("recovery_transition_invalid")
+        if new == "restore_intent" and item["step"] not in {"untouched", "restored"}:
+            raise RecoveryJournalError("recovery_service_not_restored")
+        item["policy_step"] = new
         self._save(state)
 
     @_synchronized
@@ -293,7 +398,11 @@ class RecoveryJournal:
             raise RecoveryJournalError("recovery_attempt_mismatch")
         if state["boot"] != current_boot:
             raise RecoveryJournalError("recovery_boot_mismatch")
-        if any(item["step"] not in {"untouched", "restored"} for item in state["services"]):
+        if any(
+            item["step"] not in {"untouched", "restored"}
+            or item["policy_step"] not in {"not_applicable", "untouched", "restored"}
+            for item in state["services"]
+        ):
             raise RecoveryJournalError("recovery_incomplete")
         state["complete"] = True
         self._save(state)
@@ -313,6 +422,14 @@ class RecoveryJournal:
             "restore_intent": "inspect_restore_outcome",
             "restored": "verify_restored",
         }
+        policy_actions = {
+            "not_applicable": "not_applicable",
+            "untouched": "leave_untouched",
+            "change_intent": "inspect_policy_change_outcome",
+            "changed": "verify_ownership_then_restore_policy",
+            "restore_intent": "inspect_policy_restore_outcome",
+            "restored": "verify_restored_policy",
+        }
         boot_changed = state["boot"] != current_boot
         return {
             "status": "complete" if state["complete"] else "incomplete",
@@ -321,7 +438,18 @@ class RecoveryJournal:
                 {
                     "name": item["name"],
                     "identity": item["identity"],
+                    "kind": item["kind"],
                     "was_active": item["was_active"],
+                    "restart_policy": item["restart_policy"],
+                    "policy_step": item["policy_step"],
+                    "policy_action": (
+                        "inspect_after_boot"
+                        if boot_changed
+                        else "wait_for_service_restore"
+                        if item["policy_step"] == "changed"
+                        and item["step"] in {"stop_intent", "stopped", "restore_intent"}
+                        else policy_actions[item["policy_step"]]
+                    ),
                     "action": ("inspect_after_boot" if boot_changed else actions[item["step"]]),
                 }
                 for item in state["services"]
