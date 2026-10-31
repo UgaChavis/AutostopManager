@@ -6,11 +6,15 @@ must happen before stopping any writers. An ambiguous filesystem error must be
 reported as unknown; never assume it means that publication did not happen.
 An orphan without a pointer requires manual recovery, including when the very
 first publication was interrupted before its pointer became durable.
+The private key authenticates names owned by this spool; it is not encryption.
+Losing or corrupting the key requires manual recovery and never permits cleanup.
 """
 
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import hmac
 import os
 import re
 import stat
@@ -23,11 +27,13 @@ class SpoolError(RuntimeError):
     pass
 
 
-_GEN = re.compile(r"crm-pending-[0-9a-f]{32}\.bundle\Z")
-_TMP = re.compile(r"\.crm-spool-[0-9a-f]{32}\.tmp\Z")
+_GEN = re.compile(r"crm-pending-([0-9a-f]{32})-([0-9a-f]{64})\.bundle\Z")
+_TMP = re.compile(r"\.crm-spool-([0-9a-f]{32})-([0-9a-f]{64})\.tmp\Z")
 _POINTER = "crm-pending.current"
 _LOCK = ".crm-spool.lock"
+_KEY = ".crm-spool.key"
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 def _private_regular(fd: int) -> os.stat_result:
@@ -51,14 +57,58 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[count:]
 
 
+def _load_or_create_key(directory: int) -> bytes:
+    try:
+        fd = os.open(_KEY, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=directory)
+    except FileNotFoundError:
+        names = os.listdir(directory)
+        if any(name == _POINTER or name.startswith(("crm-pending-", ".crm-spool-")) for name in names):
+            raise SpoolError("spool_key_missing") from None
+        fd = os.open(_KEY, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            _private_regular(fd)
+            key = os.urandom(32)
+            _write_all(fd, key)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.fsync(directory)
+        return key
+    try:
+        info = _private_regular(fd)
+        if info.st_size != 32:
+            raise SpoolError("spool_key_invalid")
+        key = os.read(fd, 33)
+        if len(key) != 32:
+            raise SpoolError("spool_key_invalid")
+        return key
+    finally:
+        os.close(fd)
+
+
 class LockedSpool:
-    def __init__(self, directory: int, max_bytes: int) -> None:
+    def __init__(self, directory: int, max_bytes: int, key: bytes) -> None:
         self.directory = directory
         self.max_bytes = max_bytes
+        self.key = key
+
+    def _tag(self, kind: str, nonce: str) -> str:
+        return hmac.new(self.key, f"{kind}:{nonce}".encode("ascii"), hashlib.sha256).hexdigest()
+
+    def _new_name(self, kind: str) -> str:
+        nonce = uuid4().hex
+        tag = self._tag(kind, nonce)
+        if kind == "generation":
+            return f"crm-pending-{nonce}-{tag}.bundle"
+        return f".crm-spool-{nonce}-{tag}.tmp"
+
+    def _valid_name(self, name: str, kind: str) -> bool:
+        match = (_GEN if kind == "generation" else _TMP).fullmatch(name)
+        return bool(match and hmac.compare_digest(match.group(2), self._tag(kind, match.group(1))))
 
     def _read_pointer(self) -> str | None:
         try:
-            fd = os.open(_POINTER, os.O_RDONLY | _NOFOLLOW, dir_fd=self.directory)
+            fd = os.open(_POINTER, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=self.directory)
         except FileNotFoundError:
             return None
         try:
@@ -70,14 +120,14 @@ class LockedSpool:
                 name = raw[:-1].decode("ascii")
             except UnicodeDecodeError as exc:
                 raise SpoolError("spool_pointer_invalid") from exc
-            if not _GEN.fullmatch(name):
+            if not self._valid_name(name, "generation"):
                 raise SpoolError("spool_pointer_invalid")
             return name
         finally:
             os.close(fd)
 
     def _open_generation(self, name: str) -> int:
-        fd = os.open(name, os.O_RDONLY | _NOFOLLOW, dir_fd=self.directory)
+        fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=self.directory)
         try:
             info = _private_regular(fd)
             if info.st_size <= 0 or info.st_size > self.max_bytes:
@@ -90,8 +140,14 @@ class LockedSpool:
     def _reconcile(self) -> str | None:
         current = self._read_pointer()
         entries = os.listdir(self.directory)
-        generations = [name for name in entries if _GEN.fullmatch(name)]
-        temporaries = [name for name in entries if _TMP.fullmatch(name)]
+        generation_names = [name for name in entries if name.startswith("crm-pending-")]
+        temporary_names = [name for name in entries if name.startswith(".crm-spool-")]
+        if any(not self._valid_name(name, "generation") for name in generation_names) or any(
+            not self._valid_name(name, "temporary") for name in temporary_names
+        ):
+            raise SpoolError("spool_unknown_file")
+        generations = generation_names
+        temporaries = temporary_names
         if current is None and generations:
             # Could be an interrupted acknowledgement: preserve everything.
             raise SpoolError("spool_recovery_required")
@@ -103,7 +159,7 @@ class LockedSpool:
         for name in [*generations, *temporaries]:
             if name == current:
                 continue
-            fd = os.open(name, os.O_RDONLY | _NOFOLLOW, dir_fd=self.directory)
+            fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _NONBLOCK, dir_fd=self.directory)
             try:
                 _private_regular(fd)
             finally:
@@ -119,9 +175,9 @@ class LockedSpool:
         if not stat.S_ISREG(source.st_mode) or source.st_size <= 0 or source.st_size > self.max_bytes:
             raise SpoolError("spool_source_invalid")
         self._reconcile()
-        new_name = f"crm-pending-{uuid4().hex}.bundle"
-        data_tmp = f".crm-spool-{uuid4().hex}.tmp"
-        pointer_tmp = f".crm-spool-{uuid4().hex}.tmp"
+        new_name = self._new_name("generation")
+        data_tmp = self._new_name("temporary")
+        pointer_tmp = self._new_name("temporary")
         output = os.open(data_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=self.directory)
         try:
             _private_regular(output)
@@ -144,7 +200,11 @@ class LockedSpool:
             os.fsync(output)
         finally:
             os.close(output)
-        os.rename(data_tmp, new_name, src_dir_fd=self.directory, dst_dir_fd=self.directory)
+        # link(2) fails if the generation already exists; rename would overwrite it.
+        # An interruption between link and unlink leaves a hard link and fails
+        # closed for manual recovery instead of deleting an uncertain object.
+        os.link(data_tmp, new_name, src_dir_fd=self.directory, dst_dir_fd=self.directory, follow_symlinks=False)
+        os.unlink(data_tmp, dir_fd=self.directory)
         os.fsync(self.directory)
         pointer = os.open(pointer_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600, dir_fd=self.directory)
         try:
@@ -164,7 +224,7 @@ class LockedSpool:
         """Yield (generation, readable fd), or (None, None), under the lock."""
         name = self._read_pointer()
         if name is None:
-            if any(_GEN.fullmatch(entry) for entry in os.listdir(self.directory)):
+            if any(entry.startswith("crm-pending-") for entry in os.listdir(self.directory)):
                 raise SpoolError("spool_recovery_required")
             yield None, None
             return
@@ -176,7 +236,7 @@ class LockedSpool:
 
     def acknowledge(self, generation: str) -> None:
         """Only call after independently confirming remote publication."""
-        if not _GEN.fullmatch(generation) or self._read_pointer() != generation:
+        if not self._valid_name(generation, "generation") or self._read_pointer() != generation:
             raise SpoolError("spool_generation_mismatch")
         fd = self._open_generation(generation)
         os.close(fd)
@@ -197,7 +257,7 @@ def locked_spool(path: Path, *, max_bytes: int):
         info = os.fstat(directory)
         if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
             raise SpoolError("spool_directory_unsafe")
-        lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=directory)
+        lock = os.open(_LOCK, os.O_RDWR | os.O_CREAT | _NOFOLLOW | _NONBLOCK, 0o600, dir_fd=directory)
         try:
             _private_regular(lock)
             try:
@@ -205,7 +265,7 @@ def locked_spool(path: Path, *, max_bytes: int):
             except BlockingIOError as exc:
                 raise SpoolError("spool_busy") from exc
             try:
-                yield LockedSpool(directory, max_bytes)
+                yield LockedSpool(directory, max_bytes, _load_or_create_key(directory))
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
         finally:

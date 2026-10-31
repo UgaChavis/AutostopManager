@@ -1,6 +1,7 @@
 import multiprocessing
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -116,6 +117,8 @@ def test_rejects_unsafe_directory_and_pointer(root, tmp_path):
         with spool.locked_spool(root, max_bytes=100):
             pass
     root.chmod(0o700)
+    with spool.locked_spool(root, max_bytes=100):
+        pass
     (root / "crm-pending.current").symlink_to(tmp_path / "outside")
     with spool.locked_spool(root, max_bytes=100) as locked:
         with pytest.raises(OSError):
@@ -157,3 +160,95 @@ def test_first_publication_interrupted_before_pointer_requires_recovery(root, tm
             read_pending(locked)
         with pytest.raises(spool.SpoolError, match="recovery_required"):
             publish(locked, tmp_path / "second", b"second")
+
+
+def test_existing_generation_never_replaced_on_collision(root, tmp_path, monkeypatch):
+    with spool.locked_spool(root, max_bytes=100) as locked:
+        first = publish(locked, tmp_path / "first", b"first")
+        nonce = first.split("-")[2]
+        original_uuid = spool.uuid4
+        calls = 0
+
+        def collision_once():
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(hex=nonce) if calls == 1 else original_uuid()
+
+        monkeypatch.setattr(spool, "uuid4", collision_once)
+        with pytest.raises(FileExistsError):
+            publish(locked, tmp_path / "second", b"second")
+        assert read_pending(locked) == (first, b"first")
+
+
+def test_interruption_between_link_and_unlink_keeps_previous(root, tmp_path, monkeypatch):
+    with spool.locked_spool(root, max_bytes=100) as locked:
+        first = publish(locked, tmp_path / "first", b"first")
+        original_unlink = spool.os.unlink
+
+        def fail_temporary(name, *args, **kwargs):
+            if name.startswith(".crm-spool-"):
+                raise OSError("synthetic interruption")
+            return original_unlink(name, *args, **kwargs)
+
+        monkeypatch.setattr(spool.os, "unlink", fail_temporary)
+        with pytest.raises(OSError):
+            publish(locked, tmp_path / "second", b"second")
+        assert read_pending(locked) == (first, b"first")
+        monkeypatch.setattr(spool.os, "unlink", original_unlink)
+        with pytest.raises(spool.SpoolError, match="spool_file_unsafe"):
+            publish(locked, tmp_path / "third", b"third")
+        assert read_pending(locked) == (first, b"first")
+
+
+def test_unknown_reserved_file_never_deleted(root, tmp_path):
+    with spool.locked_spool(root, max_bytes=100) as locked:
+        first = publish(locked, tmp_path / "first", b"first")
+        foreign = root / ("crm-pending-" + "f" * 32 + "-" + "f" * 64 + ".bundle")
+        foreign.write_bytes(b"other")
+        foreign.chmod(0o600)
+        with pytest.raises(spool.SpoolError, match="unknown_file"):
+            publish(locked, tmp_path / "second", b"second")
+        assert foreign.read_bytes() == b"other"
+        assert read_pending(locked) == (first, b"first")
+
+
+@pytest.mark.parametrize("failure", ["missing", "truncated", "replaced"])
+def test_missing_or_corrupt_key_preserves_pending(root, tmp_path, failure):
+    with spool.locked_spool(root, max_bytes=100) as locked:
+        first = publish(locked, tmp_path / "first", b"first")
+    key = root / ".crm-spool.key"
+    if failure == "missing":
+        key.unlink()
+    else:
+        key.write_bytes(b"x" if failure == "truncated" else b"x" * 32)
+    with pytest.raises(spool.SpoolError):
+        with spool.locked_spool(root, max_bytes=100) as locked:
+            publish(locked, tmp_path / "second", b"second")
+    assert (root / first).read_bytes() == b"first"
+
+
+def _fifo_probe(path, connection):
+    try:
+        with spool.locked_spool(path, max_bytes=100) as locked:
+            read_pending(locked)
+    except (OSError, spool.SpoolError):
+        connection.send("rejected")
+    finally:
+        connection.close()
+
+
+def test_fifo_pointer_is_rejected_without_blocking(root):
+    with spool.locked_spool(root, max_bytes=100):
+        pass
+    os.mkfifo(root / "crm-pending.current", 0o600)
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    process = context.Process(target=_fifo_probe, args=(root, child))
+    process.start()
+    if not parent.poll(5):
+        process.terminate()
+        process.join(5)
+        pytest.fail("FIFO open blocked")
+    assert parent.recv() == "rejected"
+    process.join(5)
+    assert process.exitcode == 0
