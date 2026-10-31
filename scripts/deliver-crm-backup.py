@@ -10,19 +10,24 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
 import re
+import selectors
 import stat
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import suppress
 from pathlib import Path
 
 ROOT = Path("/var/lib/autostop-manager/crm-backup")
-REFRESH = "/opt/autostop-manager-releases/current/scripts/crm_backup_coordinator.py"
+REFRESH = "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
+OWNER_UID = 0
+VERIFY_TIMEOUT_SECONDS = 21600
 _spec = importlib.util.spec_from_file_location(
     "crm_windows_transfer", Path(__file__).with_name("transfer-crm-backup-windows.py")
 )
@@ -108,7 +113,7 @@ def read_json(dirfd, name, *, missing=None):
         return missing
     with os.fdopen(fd, "rb") as f:
         st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077 or st.st_nlink != 1:
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != OWNER_UID or st.st_mode & 0o077 or st.st_nlink != 1:
             raise DeliveryError("unsafe_metadata")
         data = f.read(1024 * 1024 + 1)
         if len(data) > 1024 * 1024:
@@ -148,7 +153,7 @@ def unlink_file(dirfd, name):
 def lock(dirfd, name, *, nonblocking=False):
     fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=dirfd)
     st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077 or st.st_nlink != 1:
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != OWNER_UID or st.st_mode & 0o077 or st.st_nlink != 1:
         os.close(fd)
         raise DeliveryError("unsafe_lock")
     try:
@@ -173,7 +178,7 @@ def open_source(dirfd, record):
         except FileNotFoundError:
             return None
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077 or st.st_nlink != 1:
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != OWNER_UID or st.st_mode & 0o077 or st.st_nlink != 1:
             os.close(fd)
             raise DeliveryError("unsafe_source")
         return os.fdopen(fd, "rb")
@@ -242,10 +247,12 @@ class Windows:
 
     def verify(self, record, *, final):
         try:
-            observed = transfer.remote_digest(
-                transfer.command(transfer.READ, record["id"], final=final), record["size"]
+            observed = bounded_remote_digest(
+                transfer.command(transfer.READ, record["id"], final=final),
+                record["size"],
+                VERIFY_TIMEOUT_SECONDS,
             )
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             raise DeliveryError("remote_read_unknown", unknown=True) from exc
         if observed != (record["size"], bytes.fromhex(record["sha256"])):
             raise DeliveryError("remote_integrity", unknown=True)
@@ -256,6 +263,46 @@ class Windows:
     def delete(self, record, observed, *, final):
         script = DELETE.replace("__SIZE__", str(observed["size"])).replace("__HASH__", observed["sha256"])
         self.run(script, record, final=final, timeout=21600)
+
+
+def bounded_remote_digest(command, expected_size, timeout):
+    """Hash SSH stdout, including a wall-clock bound even if the peer hangs."""
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        selector = selectors.DefaultSelector()
+    except BaseException:
+        with suppress(ProcessLookupError):
+            process.kill()
+        process.wait()
+        process.stdout.close()
+        raise
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise subprocess.TimeoutExpired(command, timeout)
+            block = os.read(process.stdout.fileno(), transfer.CHUNK)
+            if not block:
+                break
+            size += len(block)
+            if size > expected_size:
+                raise RuntimeError("remote file is larger than source")
+            digest.update(block)
+        remaining = max(0, deadline - time.monotonic())
+        if process.wait(timeout=remaining) != 0:
+            raise RuntimeError("remote read failed")
+        return size, digest.digest()
+    finally:
+        selector.close()
+        if process.poll() is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+            process.wait()
+        process.stdout.close()
 
 
 def matches(observed, record):
@@ -415,7 +462,7 @@ def main():
         return 1
     try:
         st = os.fstat(dirfd)
-        if st.st_uid != 0 or st.st_mode & 0o077:
+        if st.st_uid != OWNER_UID or st.st_mode & 0o077:
             raise DeliveryError("unsafe_directory")
         guard = lock(dirfd, "delivery.lock", nonblocking=True)
         try:

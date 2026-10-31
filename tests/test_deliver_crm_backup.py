@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -80,11 +82,27 @@ class FakeWindows:
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "REFRESH", "/no-such-test-refresh")
+    # Production stays fixed to root; only isolated test files use the runner's UID.
+    monkeypatch.setattr(delivery, "OWNER_UID", os.geteuid())
     fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         yield tmp_path, fd
     finally:
         os.close(fd)
+
+
+def test_production_owner_is_root():
+    assert delivery.OWNER_UID == 0
+
+
+def test_status_refreshes_installed_coordinator(store, monkeypatch):
+    expected = "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
+    monkeypatch.setattr(delivery, "REFRESH", expected)
+    calls = []
+    monkeypatch.setattr(delivery.subprocess, "run", lambda command, **kwargs: calls.append(command))
+    record = prepare(store, 1, b"synthetic")
+    delivery.set_status(store[1], record, "ok")
+    assert calls == [[sys.executable, expected, "refresh"]]
 
 
 def prepare(store, number, contents):
@@ -238,6 +256,36 @@ def test_refuses_symlink_source_and_marks_failure(store):
         delivery.deliver_once(store[1], FakeWindows())
     assert delivery.read_json(store[1], "delivery-status.json")["status"] == "failed"
     assert path.is_symlink()
+
+
+def test_stalled_remote_read_times_out_and_reaps_process(store, monkeypatch):
+    record = prepare(store, 1, b"synthetic payload")
+    pid_file = store[0] / "reader.pid"
+    command = [
+        sys.executable,
+        "-c",
+        "import os,sys,time; "
+        f"open({str(pid_file)!r},'w').write(str(os.getpid())); "
+        "sys.stdout.buffer.write(b'x'); sys.stdout.buffer.flush(); time.sleep(30)",
+    ]
+    monkeypatch.setattr(delivery.transfer, "command", lambda *a, **kw: command)
+    monkeypatch.setattr(delivery, "VERIFY_TIMEOUT_SECONDS", 0.4)
+    start = time.monotonic()
+    with pytest.raises(delivery.DeliveryError, match="remote_read_unknown") as error:
+        delivery.Windows().verify(record, final=True)
+    assert error.value.unknown
+    assert time.monotonic() - start < 5
+    assert pid_file.exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    assert (store[0] / record["file"]).exists()
+
+
+def test_bounded_digest_checks_all_bytes_and_size():
+    command = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'synthetic')"]
+    assert delivery.bounded_remote_digest(command, 9, 5) == (9, hashlib.sha256(b"synthetic").digest())
+    with pytest.raises(RuntimeError, match="larger"):
+        delivery.bounded_remote_digest(command, 8, 5)
 
 
 @pytest.mark.skipif(not shutil.which("pwsh"), reason="PowerShell parser not installed")
