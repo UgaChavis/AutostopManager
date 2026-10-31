@@ -76,6 +76,7 @@ def ctx(tmp_path, monkeypatch):
     def snapshot(path, initial):
         assert fake.crm()["state"] == "exited"
         path.write_bytes(b"synthetic snapshot")
+        path.chmod(0o600)
 
     monkeypatch.setattr(m, "snapshot_command", snapshot)
     return root, data, status, fake, tmp_path / "deploy.lock"
@@ -203,7 +204,9 @@ def test_unapproved_live_revision_is_rejected_before_any_stop(ctx):
     root, data, status, fake, lock = ctx
     with pytest.raises(m.Uncertain):
         m.backup(root, status, fake, lock, data, "")
-    assert not fake.actions and not (root / "attempt.json").exists()
+    result = m.load(root / "attempt.json")
+    assert not fake.actions and result["copy"] == "failed" and result["restore"] == "not_needed"
+    assert "Копия: ошибка" in status.read_text()
 
 
 def test_daemon_restart_does_not_resolve_scheduler_unknown(ctx):
@@ -306,3 +309,155 @@ def test_journal_update_waits_for_inflight_worker(ctx):
     editor.join(5)
     saved = m.load(root / "attempt.json")
     assert updated.is_set() and saved["phase"] == "crm_stop_done" and saved["copy"] == "failed"
+
+
+def test_completed_attempt_never_restarts_services(ctx):
+    root, _, status, fake, _ = ctx
+    result = run(ctx)
+    fake.c["state"] = "exited"
+    fake.s["state"] = "inactive"
+    fake.actions.clear()
+    fake.boot_id = "boot2"
+    recovered = m.recover(root, status, fake, interrupted=True)
+    assert recovered["attempt"] == result["attempt"] and not fake.actions
+    assert fake.c["state"] == "exited" and fake.s["state"] == "inactive"
+
+
+def test_interrupted_copy_after_completed_recovery_is_unknown(ctx):
+    root, _, status, fake, _ = ctx
+    result = run(ctx)
+    m.amend(root, result["attempt"], {"copy": "running"})
+    fake.actions.clear()
+    recovered = m.recover(root, status, fake, interrupted=True)
+    assert recovered["copy"] == "unknown" and not fake.actions
+    assert "Копия: не подтверждён" in status.read_text()
+
+
+def test_preflight_failure_replaces_previous_success_in_status(ctx):
+    root, data, status, fake, lock = ctx
+    prior = run(ctx)
+    with pytest.raises(m.Uncertain):
+        m.backup(root, status, fake, lock, data, "")
+    current = m.load(root / "attempt.json")
+    assert current["attempt"] != prior["attempt"] and current["copy"] == "failed"
+    assert "Копия: ошибка" in status.read_text()
+
+
+def test_old_archive_hash_does_not_hold_pending_lock(ctx, monkeypatch):
+    import os
+    import threading
+
+    root, _, _, _, _ = ctx
+    run(ctx)
+    old = m.load_pending(root / "pending.json")
+    old_inode = (root / old["file"]).stat().st_ino
+    path = root / ".staged-new.tar.gz"
+    path.write_bytes(b"new synthetic snapshot")
+    path.chmod(0o600)
+    hashing, release = threading.Event(), threading.Event()
+    original = m._file_info
+    errors = []
+
+    def slowed(stream):
+        if os.fstat(stream.fileno()).st_ino == old_inode:
+            hashing.set()
+            if not release.wait(5):
+                raise RuntimeError("test timeout")
+        return original(stream)
+
+    monkeypatch.setattr(m, "_file_info", slowed)
+
+    def publish():
+        try:
+            m.publish(root, path, "2" * 32)
+        except Exception as exc:  # noqa: BLE001 - propagate worker failure to the main test.
+            errors.append(exc)
+
+    thread = threading.Thread(target=publish)
+    thread.start()
+    try:
+        assert hashing.wait(5)
+        with m.Lock(root / "pending.lock", wait=False):
+            assert m.load_pending(root / "pending.json") == old
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive() and not errors
+    assert m.load_pending(root / "pending.json")["id"] == "2" * 32
+
+
+def test_changed_old_file_is_never_removed(ctx, monkeypatch):
+    root, _, _, _, _ = ctx
+    run(ctx)
+    old = m.load_pending(root / "pending.json")
+    path = root / ".staged-new.tar.gz"
+    path.write_bytes(b"new synthetic snapshot")
+    path.chmod(0o600)
+    original = m._publish_locked
+
+    def changed(root, path, attempt, staged_info, digest, old_value, old_info):
+        (root / old_value["file"]).write_bytes(b"changed while publisher was hashing")
+        return original(root, path, attempt, staged_info, digest, old_value, old_info)
+
+    monkeypatch.setattr(m, "_publish_locked", changed)
+    m.publish(root, path, "2" * 32)
+    assert (root / old["file"]).read_bytes() == b"changed while publisher was hashing"
+    assert m.load_pending(root / "pending.json")["id"] == "2" * 32
+
+
+def test_ready_failure_preserves_previous_archive_and_blocks_unconfirmed_pointer(ctx, monkeypatch):
+    root, _, _, _, _ = ctx
+    run(ctx)
+    old = m.load_pending(root / "pending.json")
+    assert m.load_pending(root / "pending-ready.json") == old
+    original = m.save
+
+    def fail_ready(path, record):
+        if path.name == "pending-ready.json":
+            raise OSError("synthetic fsync failure")
+        return original(path, record)
+
+    monkeypatch.setattr(m, "save", fail_ready)
+    with pytest.raises(OSError):
+        run(ctx)
+    pointer = m.load_pending(root / "pending.json")
+    ready = m.load_pending(root / "pending-ready.json")
+    assert pointer != ready and ready == old and (root / old["file"]).exists()
+    assert m.load(root / "attempt.json")["copy"] == "unknown"
+
+
+def test_recovery_can_retry_without_waiting_for_active_worker(ctx):
+    root, _, status, fake, _ = ctx
+    record = {
+        "attempt": "1" * 32,
+        "phase": "prepared",
+        "copy": "pending",
+        "restore": "pending",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+    }
+    m.save(root / "attempt.json", record)
+    with m.Lock(root / "operation.lock"):
+        with pytest.raises(BlockingIOError):
+            m.recover(root, status, fake, interrupted=True, wait=False)
+    assert m.load(root / "attempt.json") == record and not fake.actions
+
+
+def test_repeated_unknown_recovery_does_not_rewrite_journal(ctx):
+    root, _, status, fake, _ = ctx
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_stop_unknown",
+        "copy": "failed",
+        "restore": "unknown",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+    }
+    m.save(root / "attempt.json", record)
+    before = (root / "attempt.json").stat().st_mtime_ns
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True, wait=False)
+    assert m.load(root / "attempt.json") == record
+    assert (root / "attempt.json").stat().st_mtime_ns == before
