@@ -100,6 +100,16 @@ Manager/CRM не изменяются этой подготовкой.
 Реализация находится в `scripts/crm-first-transition.py`, низкоуровневый gate —
 в `scripts/crm_legacy_gate.py`. Применяется только к указанной старой ревизии.
 
+Первый `backup` в том же холодном интервале автоматически вызывает фиксированный
+`scripts/crm-first-checkpoint.py` **до возврата CRM**. Companion включает реальные
+данные Manager `/opt/AutostopManager/data`, служебные очереди/сессии и заранее
+сохранённую приватную конфигурацию из `crm-first-transition/configuration`.
+Восстанавливаемый `offline_parts_catalogs` не копируется. Helper запускается с
+закреплённой SQLite 3.51.3 и проверяет WAL при изолированной распаковке.
+Файлы `manager-first-<attempt>.tar.gz` и его `.receipt.json` находятся рядом с
+CRM-архивом; поля `file/size/sha256/receipt_file` записываются в `manager_companion`.
+Отдельный вызов companion после запуска CRM не является холодной копией.
+
 `python3 scripts/crm-first-transition.py plan` читает версию, здоровье и
 предусловия без изменения служб. `run` выполняет **проверку остановки и возврата**
 через отдельные controller, worker и recovery units. `backup` после clean stop

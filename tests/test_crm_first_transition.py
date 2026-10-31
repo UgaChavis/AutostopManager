@@ -1,8 +1,13 @@
 """Fault contracts for the one-time legacy handoff, using no real services."""
 
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
+import sqlite3
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,6 +102,9 @@ class FakeSystem:
         with output.open("xb") as stream:
             stream.write(b"synthetic first backup")
         output.chmod(0o600)
+        self.actions.append("manager_companion")
+        name = output.name.replace("crm-first-", "manager-first-", 1)
+        return {"file": name, "size": 1, "sha256": "d" * 64, "receipt_file": name + ".receipt.json"}
 
 
 @pytest.fixture
@@ -276,6 +284,8 @@ def test_first_backup_ready_only_after_healthy_return_and_archive_check(attempt,
     assert result["archive"]["file"] == f"crm-first-{ident}.tar.gz"
     assert result["archive"]["size"] == len(b"synthetic first backup")
     assert system.actions.index("snapshot") < system.actions.index("start")
+    assert system.actions.index("manager_companion") < system.actions.index("start")
+    assert result["manager_companion"]["file"] == f"manager-first-{ident}.tar.gz"
 
 
 def test_first_backup_failure_returns_crm_and_keeps_previous_copies(attempt, monkeypatch):
@@ -329,3 +339,93 @@ def test_interrupted_first_copy_is_not_promoted_by_recovery(attempt):
     assert result["restore"] == "ok" and result["copy_status"] == "unknown"
     assert not m.success(result) and "archive" not in result
     assert system.actions == ["start"]
+
+
+def test_real_snapshot_call_keeps_manager_companion_inside_cold_boundary(attempt, monkeypatch):
+    root, ident, fake = attempt
+    fake.current.update(state="exited", finished="end-one", health="")
+    stopped = fake.crm()
+    system = m.System()
+    monkeypatch.setattr(system, "crm", fake.crm)
+    monkeypatch.setattr(m.common, "host_writer_fence", lambda *_a: nullcontext())
+    calls = []
+
+    def capture_run(args, **kwargs):
+        assert fake.current["state"] == "exited"
+        calls.append((args, kwargs))
+        output = Path(args[args.index("--output") + 1])
+        output.write_bytes(b"synthetic archive")
+        output.chmod(0o600)
+        if str(m.CHECKPOINT) in args:
+            receipt = {
+                "ok": True,
+                "archive_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+                "isolated_extraction_removed": True,
+                "sqlite_runtime": "3.51.3",
+            }
+            path = output.with_name(output.name + ".receipt.json")
+            path.write_text(json.dumps(receipt))
+            path.chmod(0o600)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(m.subprocess, "run", capture_run)
+    metadata = system.snapshot(m.archive_path(root, ident), stopped, stopped)
+    assert str(m.common.SNAPSHOT) in calls[0][0] and str(m.CHECKPOINT) in calls[1][0]
+    assert calls[1][1]["env"]["LD_LIBRARY_PATH"] == m.SQLITE_LIBRARY
+    assert metadata["file"] == f"manager-first-{ident}.tar.gz"
+    assert fake.current["state"] == "exited"
+
+
+def test_companion_preserves_committed_wal_data_from_extra_manager_root(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("first_checkpoint", m.CHECKPOINT)
+    checkpoint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checkpoint)
+    # This synthetic WAL is created by the runner's engine. Production must
+    # separately enforce the qualified engine for the real Manager databases.
+    monkeypatch.setattr(checkpoint, "REQUIRED_SQLITE_VERSION", sqlite3.sqlite_version)
+    verify_databases = checkpoint.verify_databases
+
+    def verify_committed_row(root):
+        count = verify_databases(root)
+        copied = next(root.rglob("manager.sqlite3"))
+        with sqlite3.connect(copied) as restored:
+            assert restored.execute("SELECT value FROM synthetic").fetchall() == [("committed",)]
+        return count
+
+    monkeypatch.setattr(checkpoint, "verify_databases", verify_committed_row)
+    state = tmp_path / "state"
+    state.mkdir()
+    additional = tmp_path / "actual-manager-data"
+    additional.mkdir()
+    connection = sqlite3.connect(additional / "manager.sqlite3")
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE synthetic (value TEXT)")
+        connection.execute("INSERT INTO synthetic VALUES ('committed')")
+        connection.commit()
+        output = tmp_path / "manager-first-test.tar.gz"
+        tmp_path.chmod(0o700)
+        checkpoint.create_archive((state, additional), output, excluded=set())
+        receipt = checkpoint.verify_archive(output)
+        assert receipt["ok"] and receipt["sqlite_databases_verified"] == 1
+        assert receipt["isolated_extraction_removed"]
+    finally:
+        connection.close()
+
+
+def test_companion_rejects_unqualified_sqlite_before_copy(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("first_checkpoint", m.CHECKPOINT)
+    checkpoint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checkpoint)
+    monkeypatch.setattr(checkpoint.sqlite3, "sqlite_version", "0.0.0")
+    monkeypatch.setattr(checkpoint.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(m.sys, "argv", [str(m.CHECKPOINT), "--output", str(tmp_path / "unused.tar.gz")])
+
+    def unexpected_copy(*_args):
+        pytest.fail("copy started with unqualified SQLite")
+
+    monkeypatch.setattr(checkpoint, "create_archive", unexpected_copy)
+    assert checkpoint.main() == 1
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(ValueError, match="qualified SQLite"):
+        checkpoint.verify_databases(tmp_path)

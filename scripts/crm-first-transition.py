@@ -33,6 +33,8 @@ CONTAINER = "autostopcrm"
 DATA = Path("/opt/autostopcrm/data")
 DEPLOY_LOCK = Path("/opt/autostopcrm/.autostop-deploy.lock")
 SCRIPT = Path(__file__).resolve()
+CHECKPOINT = SCRIPT.with_name("crm-first-checkpoint.py")
+SQLITE_LIBRARY = "/opt/autostop-sqlite/3.51.3/lib"
 BLOCKERS = (
     "autostop-manager-scheduler.service",
     "autostop-manager-mcp.service",
@@ -75,7 +77,7 @@ def unit(attempt, kind):
 
 def source_digest():
     digest = hashlib.sha256()
-    for path in (SCRIPT, Path(common.__file__), Path(gate.__file__), Path(common.SNAPSHOT)):
+    for path in (SCRIPT, Path(common.__file__), Path(gate.__file__), Path(common.SNAPSHOT), CHECKPOINT):
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -253,6 +255,19 @@ class System:
 
     def backup_space(self, root):
         common.check_space(root, self.data)
+        config = root / "configuration"
+        if not config.is_dir() or config.is_symlink() or not (config / "baseline.json").is_file():
+            raise Uncertain("first-backup configuration baseline is missing")
+        private_root(config)
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", "import sqlite3;assert sqlite3.sqlite_version == '3.51.3'"],
+            env=checkpoint_environment(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode:
+            raise Uncertain("qualified companion SQLite runtime is unavailable")
 
     def snapshot(self, output, initial, stopped):
         # Native locks are taken only after the application has stopped. They
@@ -280,6 +295,48 @@ class System:
             if result.returncode:
                 raise Uncertain("first CRM snapshot failed")
             common.validate_stopped(initial, stopped, self.crm())
+            companion = output.with_name(output.name.replace("crm-first-", "manager-first-", 1))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(CHECKPOINT),
+                    "--output",
+                    str(companion),
+                    "--config-root",
+                    str(output.parent / "configuration"),
+                ],
+                env=checkpoint_environment(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=None,
+            )
+            if result.returncode:
+                raise Uncertain("cold Manager companion failed")
+            common.validate_stopped(initial, stopped, self.crm())
+            return companion_receipt(companion)
+
+
+def checkpoint_environment():
+    return {**os.environ, "LD_LIBRARY_PATH": SQLITE_LIBRARY, "PYTHONDONTWRITEBYTECODE": "1"}
+
+
+def companion_receipt(path):
+    receipt_path = path.with_name(path.name + ".receipt.json")
+    with common._open_snapshot(receipt_path) as stream:
+        common._checked_stat(stream)
+        receipt = json.load(stream)
+    with common._open_snapshot(path) as stream:
+        info, digest = common._file_info(stream)
+    if (
+        receipt.get("ok") is not True
+        or receipt.get("archive_sha256") != digest
+        or receipt.get("isolated_extraction_removed") is not True
+        or receipt.get("sqlite_runtime") != "3.51.3"
+    ):
+        raise Uncertain("cold Manager companion is not verified")
+    return {"file": path.name, "size": info.st_size, "sha256": digest, "receipt_file": receipt_path.name}
 
 
 def archive_path(root, attempt):
@@ -306,7 +363,10 @@ def success(record):
     return (
         record["restore"] == "ok"
         and record["result"] == expected
-        and (not record.get("backup_requested") or record.get("copy_status") == "ok")
+        and (
+            not record.get("backup_requested")
+            or (record.get("copy_status") == "ok" and isinstance(record.get("manager_companion"), dict))
+        )
     )
 
 
@@ -320,7 +380,10 @@ def _snapshot_stopped(root, attempt, record, system, stopped, note):
         return
     note(copy_status="running")
     try:
-        system.snapshot(archive_path(root, attempt), record["initial"], stopped)
+        companion = system.snapshot(archive_path(root, attempt), record["initial"], stopped)
+        if not isinstance(companion, dict):
+            raise Uncertain("cold Manager companion receipt is missing")
+        note(manager_companion=companion)
         common.validate_stopped(record["initial"], stopped, system.crm())
         if system.boot() != record["boot"] or system.daemon() != record["daemon"]:
             raise Uncertain("runtime changed during first snapshot")
@@ -646,7 +709,15 @@ def main():
                 json.dumps(
                     {
                         k: value[k]
-                        for k in ("attempt", "phase", "restore", "result", "copy_status", "archive")
+                        for k in (
+                            "attempt",
+                            "phase",
+                            "restore",
+                            "result",
+                            "copy_status",
+                            "archive",
+                            "manager_companion",
+                        )
                         if k in value
                     }
                 )
