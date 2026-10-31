@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry delivery of the newest completed CRM backup
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Unit=autostop-crm-backup-delivery.service
+
+[Install]
+WantedBy=timers.target
