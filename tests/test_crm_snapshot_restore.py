@@ -112,6 +112,27 @@ class CrmSnapshotTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             restore.check_archive(changed, destination)
 
+    def test_sqlite_attachment_is_preserved_byte_for_byte(self):
+        attachment = self.source / "attachments" / "database-attachment"
+        with sqlite3.connect(attachment) as database:
+            database.execute("CREATE TABLE synthetic (value TEXT)")
+            database.execute("INSERT INTO synthetic VALUES ('original')")
+        original = attachment.read_bytes()
+        path = self.stage / "snapshot.tar.gz"
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
+        destination = self.base / "restore"
+        destination.mkdir(mode=0o700)
+        restore.check_archive(path, destination)
+        self.assertEqual((destination / "crm" / "attachments" / "database-attachment").read_bytes(), original)
+
+    def test_unknown_system_database_fails_closed(self):
+        with sqlite3.connect(self.source / "unknown.sqlite3") as database:
+            database.execute("CREATE TABLE synthetic (value TEXT)")
+        path = self.stage / "snapshot.tar.gz"
+        with self.assertRaises(ValueError):
+            snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
+        self.assertFalse(path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

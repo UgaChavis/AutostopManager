@@ -24,7 +24,7 @@ def _record(hasher, info, digest=""):
     hasher.update(json.dumps(item, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n")
 
 
-def check_archive(archive_path: Path, destination: Path):  # noqa: C901 - one isolated restore boundary
+def check_archive(archive_path: Path, destination: Path):
     if destination.is_symlink() or not destination.is_dir():
         raise ValueError("restore directory is not a directory")
     root = destination.resolve(strict=True)
@@ -105,22 +105,13 @@ def check_archive(archive_path: Path, destination: Path):  # noqa: C901 - one is
     state = (root / "crm" / "mcp-oauth-state.json").read_bytes()
     if not isinstance(json.loads(Fernet(key).decrypt(state)), dict):
         raise ValueError("restored OAuth state invalid")
-    sqlite_count = 0
-    for base, _, files in os.walk(root / "crm"):
-        for name in files:
-            path = Path(base) / name
-            with path.open("rb") as file:
-                if file.read(16) != b"SQLite format 3\x00":
-                    continue
-            connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
-            try:
-                if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
-                    raise ValueError("restored SQLite corrupt")
-            finally:
-                connection.close()
-            sqlite_count += 1
-    if not sqlite_count:
-        raise ValueError("SQLite missing")
+    path = root / "crm" / "change_feed.sqlite3"
+    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+    try:
+        if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise ValueError("restored SQLite corrupt")
+    finally:
+        connection.close()
     for path, mode, uid, gid in reversed(directories):
         os.chmod(path, mode & 0o777)
         if os.geteuid() == 0:

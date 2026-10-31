@@ -141,7 +141,7 @@ def _sqlite_copy(path: Path, target: Path):
         source.close()
 
 
-def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str):
+def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str):  # noqa: C901 - single archive transaction
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("invalid CRM revision")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
@@ -158,13 +158,16 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     output = parent / output.name
     entries = _walk(root)
     paths = {p for p, _, directory in entries if not directory}
-    sqlite_paths = set()
+    sqlite_paths = {root / "change_feed.sqlite3"}
+    found_feed = False
     for path, metadata, is_dir in entries:
-        if not is_dir:
+        if not is_dir and path.relative_to(root).parts[0] not in {"attachments", "shared-files"}:
             with _file(path, metadata) as file:
                 if file.read(16) == b"SQLite format 3\x00":
-                    sqlite_paths.add(path)
-    if root / "change_feed.sqlite3" not in sqlite_paths:
+                    if path not in sqlite_paths:
+                        raise ValueError("unknown SQLite source requires review")
+                    found_feed = True
+    if not found_feed:
         raise ValueError("CRM feed is not SQLite")
     sidecars = {Path(str(p) + ext) for p in sqlite_paths for ext in ("-wal", "-shm")}
     if any(Path(str(p) + "-journal") in paths for p in sqlite_paths):
