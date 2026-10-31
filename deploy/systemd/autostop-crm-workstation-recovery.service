@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover services after an interrupted AutoStop CRM backup
+After=docker.service local-fs.target
+Wants=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py recover
+Restart=on-failure
+RestartSec=30s
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
