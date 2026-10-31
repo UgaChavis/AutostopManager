@@ -168,6 +168,9 @@ def current(dirfd):
     value = read_json(dirfd, "pending.json")
     ready = read_json(dirfd, "pending-ready.json")
     if value is None and ready is None:
+        os.fsync(dirfd)
+        if read_json(dirfd, "pending.json") is not None or read_json(dirfd, "pending-ready.json") is not None:
+            raise DeliveryError("pending_not_ready")
         return None
     if value is None and ready is not None:
         # A crash may occur after confirmed delivery removed pending.json but
@@ -179,6 +182,12 @@ def current(dirfd):
             unlink_file(dirfd, "pending-ready.json")
             return None
     if value is None or ready is None or valid_record(value) != valid_record(ready):
+        raise DeliveryError("pending_not_ready")
+    # A marker may have become visible just before the publisher's directory
+    # fsync failed. Make both names durable ourselves and read them back while
+    # holding the same short pending lock.
+    os.fsync(dirfd)
+    if read_json(dirfd, "pending.json") != value or read_json(dirfd, "pending-ready.json") != value:
         raise DeliveryError("pending_not_ready")
     return value
 
@@ -347,10 +356,34 @@ def remember(dirfd, record):
     write_json(dirfd, "delivered.json", rows)
 
 
+def rotation_authorized(dirfd, record):
+    guard = lock(dirfd, "pending.lock")
+    try:
+        pending = current(dirfd)
+        if pending is not None and pending != record:
+            return False
+    finally:
+        os.close(guard)
+    try:
+        guard = lock(dirfd, "operation.lock", nonblocking=True)
+    except BlockingIOError:
+        return False
+    try:
+        attempt = read_json(dirfd, "attempt.json")
+        if not isinstance(attempt, dict) or attempt.get("attempt") != record["id"] or attempt.get("copy") != "ok":
+            return False
+        os.fsync(dirfd)
+        return read_json(dirfd, "attempt.json") == attempt
+    finally:
+        os.close(guard)
+
+
 def rotate(dirfd, remote):
     rows = journal(dirfd)
     if len(rows) <= 2:
         return
+    if not rotation_authorized(dirfd, rows[-1]):
+        raise DeliveryError("rotation_unconfirmed", unknown=True)
     # Do not prune any generation unless both latest known generations pass a
     # fresh private-file, size and hash check on the exact destination.
     for recent in rows[-2:]:
@@ -470,16 +503,16 @@ def deliver_once(dirfd, remote):
             remote.publish(record)
         remote.verify(record, final=True)
         remember(dirfd, record)
-        cleanup_pending(dirfd, record, stream)
-        unlink_file(dirfd, "delivery-intent.json")
+        rotation_note = None
         try:
             rotate(dirfd, remote)
-        except DeliveryError:
+        except (DeliveryError, OSError):
             # Delivery is confirmed; failed housekeeping must not be reported
             # as a failed copy or prevent a newer pending generation.
-            set_status(dirfd, record, "ok", "rotation_pending")
-            return
-        set_status(dirfd, record, "ok")
+            rotation_note = "rotation_pending"
+        cleanup_pending(dirfd, record, stream)
+        unlink_file(dirfd, "delivery-intent.json")
+        set_status(dirfd, record, "ok", rotation_note)
     except (DeliveryError, OSError) as exc:
         error = exc if isinstance(exc, DeliveryError) else DeliveryError("local_io")
         if error.code == "status_refresh_failed":

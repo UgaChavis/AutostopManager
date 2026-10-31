@@ -136,6 +136,7 @@ def prepare(store, number, contents):
     file.chmod(0o600)
     delivery.write_json(fd, "pending.json", record)
     delivery.write_json(fd, "pending-ready.json", record)
+    delivery.write_json(fd, "attempt.json", {"attempt": ident, "copy": "ok"})
     return record
 
 
@@ -368,6 +369,76 @@ def test_failed_rotation_keeps_all_old_generations_then_retries(store):
     delivery.deliver_once(store[1], remote)
     assert set(remote.finals) == {records[-1]["id"], newest["id"]}
     assert delivery.read_json(store[1], "delivery-status.json")["error_code"] is None
+
+
+@pytest.mark.parametrize("attempt", ["unknown", "different"])
+def test_unconfirmed_attempt_never_rotates_old_generations(store, attempt):
+    remote = FakeWindows()
+    old = []
+    for number in (1, 2):
+        record = prepare(store, number, f"old-{number}".encode())
+        old.append(record)
+        delivery.deliver_once(store[1], remote)
+    newest = prepare(store, 3, b"newest")
+    result = {"attempt": newest["id"], "copy": "unknown"}
+    if attempt == "different":
+        result = {"attempt": "f" * 32, "copy": "ok"}
+    delivery.write_json(store[1], "attempt.json", result)
+    delivery.deliver_once(store[1], remote)
+    assert set(remote.finals) == {r["id"] for r in [*old, newest]}
+    assert remote.deletes == []
+    assert delivery.read_json(store[1], "delivery-status.json")["error_code"] == "rotation_pending"
+    delivery.write_json(store[1], "attempt.json", {"attempt": newest["id"], "copy": "ok"})
+    delivery.deliver_once(store[1], remote)
+    assert set(remote.finals) == {old[-1]["id"], newest["id"]}
+
+
+def test_directory_fsync_failure_refuses_visible_markers_without_pc_access(store, monkeypatch):
+    record = prepare(store, 1, b"synthetic")
+    remote = FakeWindows()
+
+    def fail_fsync(_fd):
+        raise OSError("synthetic directory sync failure")
+
+    monkeypatch.setattr(delivery.os, "fsync", fail_fsync)
+    with pytest.raises(OSError):
+        delivery.deliver_once(store[1], remote)
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert (store[0] / record["file"]).read_bytes() == b"synthetic"
+
+
+def test_attempt_fsync_failure_refuses_rotation_before_pc_access(store, monkeypatch):
+    remote = FakeWindows()
+    records = []
+    for number in (1, 2, 3):
+        record = prepare(store, number, f"generation-{number}".encode())
+        records.append(record)
+        delivery.remember(store[1], record)
+        remote.finals[record["id"]] = f"generation-{number}".encode()
+    original = delivery.os.fsync
+    calls = 0
+
+    def fail_attempt_sync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic attempt sync failure")
+        return original(fd)
+
+    monkeypatch.setattr(delivery.os, "fsync", fail_attempt_sync)
+    with pytest.raises(OSError, match="attempt sync failure"):
+        delivery.rotate(store[1], remote)
+    assert remote.inspections == remote.deletes == []
+    assert set(remote.finals) == {record["id"] for record in records}
+
+
+def test_busy_operation_lock_defers_rotation_without_waiting(store):
+    record = prepare(store, 1, b"synthetic")
+    guard = delivery.lock(store[1], "operation.lock")
+    try:
+        assert delivery.rotation_authorized(store[1], record) is False
+    finally:
+        os.close(guard)
 
 
 def test_busy_remote_preserves_source_and_previous_generations(store):
