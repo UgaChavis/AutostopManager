@@ -300,6 +300,42 @@ def test_pending_loses_readiness_during_transfer_no_cleanup_or_rotation(store):
     assert remote.moves.count(newest["id"]) == 1
 
 
+def test_completed_delivery_recovers_stale_ready_after_pending_was_removed(store):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"confirmed")
+    delivery.write_json(store[1], "delivery-intent.json", record)
+    delivery.remember(store[1], record)
+    remote.finals[record["id"]] = b"confirmed"
+    (store[0] / record["file"]).unlink()
+    (store[0] / "pending.json").unlink()
+    delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "pending-ready.json") is None
+    assert delivery.read_json(store[1], "delivery-intent.json") is None
+    assert delivery.journal(store[1]) == [record]
+    assert remote.writes == remote.moves == remote.deletes == []
+    assert remote.finals[record["id"]] == b"confirmed"
+
+
+def test_stale_ready_does_not_clear_without_matching_confirmed_intent(store):
+    record = prepare(store, 1, b"leave-local-file")
+    delivery.remember(store[1], record)
+    (store[0] / "pending.json").unlink()
+    with pytest.raises(delivery.DeliveryError, match="pending_not_ready"):
+        delivery.pending_record(store[1])
+    assert delivery.read_json(store[1], "pending-ready.json") == record
+    assert (store[0] / record["file"]).read_bytes() == b"leave-local-file"
+
+
+def test_stale_ready_repair_never_removes_local_archive(store):
+    record = prepare(store, 1, b"leave-local-file")
+    delivery.write_json(store[1], "delivery-intent.json", record)
+    delivery.remember(store[1], record)
+    (store[0] / "pending.json").unlink()
+    assert delivery.pending_record(store[1]) is None
+    assert delivery.read_json(store[1], "pending-ready.json") is None
+    assert (store[0] / record["file"]).read_bytes() == b"leave-local-file"
+
+
 def test_conflicting_old_final_is_preserved_when_new_generation_exists(store):
     remote = FakeWindows()
     first = prepare(store, 1, b"first")

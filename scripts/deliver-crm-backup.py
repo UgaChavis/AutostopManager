@@ -169,6 +169,15 @@ def current(dirfd):
     ready = read_json(dirfd, "pending-ready.json")
     if value is None and ready is None:
         return None
+    if value is None and ready is not None:
+        # A crash may occur after confirmed delivery removed pending.json but
+        # before it removed the marker. Only that exact completed intent can
+        # dispose of the stale marker; no archive or remote file is touched.
+        marker = valid_record(ready)
+        intent = read_json(dirfd, "delivery-intent.json")
+        if intent == marker and marker in journal(dirfd):
+            unlink_file(dirfd, "pending-ready.json")
+            return None
     if value is None or ready is None or valid_record(value) != valid_record(ready):
         raise DeliveryError("pending_not_ready")
     return value
