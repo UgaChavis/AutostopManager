@@ -369,7 +369,7 @@ def test_delivery_status_does_not_cross_attempts(ctx):
     m.save(root / "delivery-status.json", delivery)
     m.refresh(root, status)
     assert "Передача на ПК: ожидается" in status.read_text()
-    assert f"Последняя другая передача: копия {delivery['id']}; успех" in status.read_text()
+    assert f"Последняя передача другой копии: {delivery['id']}; успех" in status.read_text()
     delivery["id"] = result["attempt"]
     m.save(root / "delivery-status.json", delivery)
     m.refresh(root, status)
@@ -389,7 +389,7 @@ def test_failed_attempt_reports_delivery_of_previous_pending_copy(ctx):
     text = status.read_text()
     assert "Копия: ошибка" in text
     assert "Передача на ПК: не требовалась" in text
-    assert f"Последняя другая передача: копия {previous['attempt']}; успех; время: 2026-10-31T00:00:00Z" in text
+    assert f"Последняя передача другой копии: {previous['attempt']}; успех; время: 2026-10-31T00:00:00Z" in text
 
 
 def test_journal_update_waits_for_inflight_worker(ctx):

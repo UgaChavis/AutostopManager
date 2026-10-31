@@ -411,7 +411,7 @@ def status(path, record):
             previous_at = "неизвестно"
         previous_note = "; удаление старых копий отложено" if previous.get("error_code") == "rotation_pending" else ""
         text += (
-            f"Последняя другая передача: копия {previous['id']}; "
+            f"Последняя передача другой копии: {previous['id']}; "
             f"{names[previous['status']]}; время: {previous_at}{previous_note}.\n"
         )
     durable(path, text.encode())
