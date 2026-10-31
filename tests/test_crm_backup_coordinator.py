@@ -763,3 +763,44 @@ def test_expired_exact_commit_returns_only_owned_scheduler_without_signal(ctx):
     out = m.recover(root, status, fake, interrupted=True)
     assert fake.actions == [("start", "scheduler")]
     assert out["phase"] == "complete" and out["restore"] == "ok" and out["copy"] == "failed"
+
+
+def test_status_failure_cannot_expose_copy_success_to_sender(ctx, monkeypatch):
+    import threading
+
+    root, _, status, _, _ = ctx
+    run(ctx)
+    previous = m.load_pending(root / "pending.json")
+    original = m.refresh
+    entered, release = threading.Event(), threading.Event()
+    errors = []
+
+    def fail_final_refresh(root_path, status_path, *, copy_override=None):
+        if copy_override == "ok":
+            entered.set()
+            assert release.wait(5)
+            raise OSError("synthetic M2 status failure")
+        return original(root_path, status_path, copy_override=copy_override)
+
+    def run_backup():
+        try:
+            run(ctx)
+        except Exception as exc:  # noqa: BLE001 - propagate worker failure to the main test.
+            errors.append(exc)
+
+    monkeypatch.setattr(m, "refresh", fail_final_refresh)
+    thread = threading.Thread(target=run_backup)
+    thread.start()
+    try:
+        assert entered.wait(10)
+        with pytest.raises(BlockingIOError):
+            with m.Lock(root / "operation.lock", wait=False):
+                pass
+        assert m.load(root / "attempt.json")["copy"] == "running"
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive() and len(errors) == 1 and isinstance(errors[0], OSError)
+    assert m.load(root / "attempt.json")["copy"] == "unknown"
+    assert "Копия: не подтверждён" in status.read_text()
+    assert (root / previous["file"]).exists()

@@ -440,25 +440,18 @@ def load(path):
 
 
 def amend(root, attempt, fields=None, resource=None):
+    if resource is None and (fields or {}).get("copy") == "ok":
+        raise Uncertain("copy success requires completed status update")
     with Lock(root / "operation.lock"):
         record = load(root / "attempt.json")
         if record["attempt"] != attempt:
             raise Uncertain("attempt identity changed")
         (record[resource] if resource else record).update(fields or {})
-        try:
-            save(root / "attempt.json", record)
-        except BaseException:
-            if resource is None and (fields or {}).get("copy") == "ok":
-                # os.replace may have succeeded before directory fsync failed.
-                # Keep the lock while making a best-effort unknown marker.
-                record["copy"] = "unknown"
-                with suppress(Exception):
-                    save(root / "attempt.json", record)
-            raise
+        save(root / "attempt.json", record)
         return record
 
 
-def refresh(root, status_path):
+def refresh(root, status_path, *, copy_override=None):
     # Every writer renders from durable state under a common short lock. No
     # network or archive reads are performed while holding it.
     with Lock(root / "status.lock"):
@@ -477,7 +470,31 @@ def refresh(root, status_path):
                 record["delivery_note"] = delivery["error_code"]
         except (FileNotFoundError, ValueError, TypeError):
             pass
+        if copy_override is not None:
+            record["copy"] = copy_override
         status(status_path, record)
+
+
+def finish_copy(root, status_path, attempt):
+    """Expose copy=ok to the sender only after M2 has been updated."""
+    with Lock(root / "operation.lock"):
+        record = load(root / "attempt.json")
+        if record["attempt"] != attempt or record["phase"] != "complete" or record["copy"] != "running":
+            raise Uncertain("copy completion is not eligible")
+        try:
+            # The caller has already confirmed the closed archive, durable
+            # pointer/ready markers and restoration of the original services.
+            refresh(root, status_path, copy_override="ok")
+            record["copy"] = "ok"
+            save(root / "attempt.json", record)
+        except BaseException:
+            record["copy"] = "unknown"
+            with suppress(Exception):
+                save(root / "attempt.json", record)
+            with suppress(Exception):
+                refresh(root, status_path)
+            raise
+        return record
 
 
 def require_open_control(system, item):
@@ -1090,13 +1107,7 @@ def backup(
                 amend(root, r["attempt"], {"copy": "unknown"})
                 refresh(root, status_path)
                 raise
-            try:
-                r = amend(root, r["attempt"], {"copy": "ok"})
-            except Exception:
-                with suppress(Exception):
-                    refresh(root, status_path)
-                raise
-            refresh(root, status_path)
+            r = finish_copy(root, status_path, r["attempt"])
             with suppress(OSError):
                 cleanup_previous(root, published, previous, previous_info)
         finally:
