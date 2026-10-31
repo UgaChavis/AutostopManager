@@ -2,6 +2,8 @@ import fcntl
 import importlib.util
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -49,7 +51,8 @@ def populate(root, uid, gid):
 
 
 @pytest.fixture
-def synthetic(tmp_path):
+def synthetic(tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "check_host_writers", lambda: None)
     root = tmp_path / "data"
     return root, populate(root, os.geteuid(), os.getegid())
 
@@ -172,8 +175,97 @@ def test_lost_sqlite_fence_invalidates_snapshot(synthetic, monkeypatch):
         os.close(fd)
 
 
+@pytest.mark.parametrize("name", m.HOST_WRITER_SCRIPTS)
+def test_known_host_writer_is_detected_without_exposing_arguments(tmp_path, capsys, name):
+    process = tmp_path / "123"
+    process.mkdir()
+    (process / "cmdline").write_bytes(b"python3\0/opt/autostopcrm/scripts/" + name.encode() + b"\0private-synthetic\0")
+    with pytest.raises(m.Uncertain, match="maintenance is active") as error:
+        m.check_host_writers(tmp_path)
+    assert "private-synthetic" not in str(error.value)
+    assert capsys.readouterr().out == ""
+
+
+def test_unreadable_or_missing_process_fails_closed(tmp_path):
+    process = tmp_path / "123"
+    process.mkdir()
+    with pytest.raises(m.Uncertain, match="inspection unavailable"):
+        m.check_host_writers(tmp_path)
+    (process / "cmdline").write_bytes(b"")
+    (process / "stat").write_text("123 (synthetic) R 1 1 1 1 1 0")
+    with pytest.raises(m.Uncertain, match="command unavailable"):
+        m.check_host_writers(tmp_path)
+    (process / "stat").write_text("123 (synthetic) Z 1 1 1 1 1 0")
+    m.check_host_writers(tmp_path)
+
+
+def test_process_that_disappeared_during_scan_is_ignored(tmp_path, monkeypatch):
+    process = tmp_path / "123"
+    process.mkdir()
+    command = process / "cmdline"
+    command.write_bytes(b"synthetic")
+    original = Path.open
+
+    def vanished(path, *args, **kwargs):
+        if path == command:
+            command.unlink()
+            process.rmdir()
+            raise FileNotFoundError
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", vanished)
+    m.check_host_writers(tmp_path)
+
+
+def test_process_permission_error_fails_closed(tmp_path, monkeypatch):
+    process = tmp_path / "123"
+    process.mkdir()
+    command = process / "cmdline"
+    command.write_bytes(b"synthetic")
+    original = Path.open
+
+    def denied(path, *args, **kwargs):
+        if path == command:
+            raise PermissionError
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(m.Uncertain, match="inspection unavailable"):
+        m.check_host_writers(tmp_path)
+
+
+def test_host_writer_after_snapshot_invalidates_fence(synthetic, monkeypatch):
+    root, _ = synthetic
+    calls = []
+
+    def check():
+        calls.append(True)
+        if len(calls) == 2:
+            raise m.Uncertain("CRM host maintenance is active")
+
+    monkeypatch.setattr(m, "check_host_writers", check)
+    with pytest.raises(m.Uncertain, match="maintenance is active"):
+        with m.host_writer_fence(root, uid=os.geteuid(), gid=os.getegid()):
+            pass
+    assert len(calls) == 2
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="real proc inspection requires root")
+def test_real_artificial_process_with_known_name_is_detected(tmp_path):
+    script = tmp_path / m.HOST_WRITER_SCRIPTS[0]
+    script.write_text("import time; time.sleep(30)\n")
+    process = subprocess.Popen([sys.executable, str(script)])
+    try:
+        with pytest.raises(m.Uncertain, match="maintenance is active"):
+            m.check_host_writers()
+    finally:
+        process.terminate()
+        process.wait(timeout=3)
+
+
 @pytest.mark.skipif(os.geteuid() != 0, reason="requires root to emulate the CRM service UID")
-def test_sqlite_sidecars_are_created_as_crm_uid():
+def test_sqlite_sidecars_are_created_as_crm_uid(monkeypatch):
+    monkeypatch.setattr(m, "check_host_writers", lambda: None)
     with tempfile.TemporaryDirectory(prefix="crm-fence-uid-", dir="/tmp") as d:
         root = Path(d) / "data"
         Path(d).chmod(0o711)
