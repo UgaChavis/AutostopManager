@@ -23,6 +23,7 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, UTC
+from contextlib import suppress
 
 ROOT = Path("/var/lib/autostop-manager/crm-backup")
 STATUS = Path("/var/lib/autostop-manager/roles/M2/crm-backup-status.md")
@@ -40,8 +41,100 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
 
+# Executed as the CRM UID inside the exact container. It never prints the
+# environment, customer data, or key material. pidfd binds the signal to the
+# checked process even if its numeric PID is subsequently recycled.
+CONTROL_PROBE = r"""
+import json, os, re, signal, stat, sys, tempfile
+request = json.load(sys.stdin)
+path = "/home/autostop/.crm-backup-status.json"
+def read():
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        s = os.fstat(fd)
+        if not stat.S_ISREG(s.st_mode) or s.st_uid != 10001 or stat.S_IMODE(s.st_mode) != 0o600 or s.st_nlink != 1:
+            raise ValueError("invalid receipt permissions")
+        raw = os.read(fd, 4097)
+        if len(raw) > 4096:
+            raise ValueError("invalid receipt length")
+        def unique(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError("duplicate receipt field")
+                result[key] = item
+            return result
+        value = json.loads(raw, object_pairs_hook=unique)
+    finally:
+        os.close(fd)
+    if set(value) != {"pid", "start_ticks", "generation", "attempt", "state"}:
+        raise ValueError("invalid receipt fields")
+    if type(value["pid"]) is not int or value["pid"] <= 1 or type(value["start_ticks"]) is not int or value["start_ticks"] <= 0:
+        raise ValueError("invalid receipt process")
+    if not isinstance(value["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", value["generation"]):
+        raise ValueError("invalid generation")
+    if not isinstance(value["attempt"], str) or (value["attempt"] and not re.fullmatch(r"[0-9a-f]{32}", value["attempt"])):
+        raise ValueError("invalid attempt")
+    if value["state"] not in {"idle", "aborted", "preparing", "ready", "committed"}:
+        raise ValueError("invalid receipt state")
+    if value["state"] != "idle" and not value["attempt"]:
+        raise ValueError("missing receipt attempt")
+    return value
+receipt = read()
+if request.get("expected") is not None and receipt != request["expected"]:
+    raise ValueError("receipt changed")
+fd = os.pidfd_open(receipt["pid"])
+try:
+    with open("/proc/" + str(receipt["pid"]) + "/stat") as f:
+        ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+    if ticks != receipt["start_ticks"] or read() != receipt:
+        raise ValueError("process generation changed")
+    op = request.get("operation")
+    if op in ("USR1", "USR2", "HUP", "TERM"):
+        if request.get("expected") is None:
+            raise ValueError("signal requires exact receipt")
+        allowed = {"USR1": {"idle", "aborted"}, "USR2": {"ready"}, "HUP": {"preparing", "ready"}, "TERM": {"committed"}}
+        if receipt["state"] not in allowed[op]:
+            raise ValueError("signal is not valid for receipt state")
+        if op == "USR2":
+            directory = "/home/autostop"
+            d = os.lstat(directory)
+            if not stat.S_ISDIR(d.st_mode) or d.st_uid != 10001 or stat.S_IMODE(d.st_mode) & 0o077:
+                raise ValueError("unsafe control directory")
+            command = {k: receipt[k] for k in ("generation", "attempt", "pid", "start_ticks")}
+            command["operation"] = "commit"
+            out, name = tempfile.mkstemp(prefix=".crm-backup-command-", dir=directory)
+            try:
+                os.fchmod(out, 0o600)
+                with os.fdopen(out, "w") as f:
+                    json.dump(command, f, separators=(",", ":"))
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(name, directory + "/.crm-backup-command.json")
+                dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            finally:
+                if os.path.exists(name):
+                    os.unlink(name)
+            if read() != receipt:
+                raise ValueError("receipt changed before commit signal")
+        signal.pidfd_send_signal(fd, getattr(signal, "SIG" + op))
+    elif op != "read":
+        raise ValueError("invalid operation")
+finally:
+    os.close(fd)
+print(json.dumps(receipt, separators=(",", ":")))
+"""
+
 
 class Uncertain(RuntimeError):
+    pass
+
+
+class PrepareAborted(Uncertain):
     pass
 
 
@@ -176,6 +269,111 @@ class System:
             raise Uncertain("scheduler state transitioning")
         return {"identity": hashlib.sha256(definition.encode()).hexdigest(), "state": state, "invocation": invocation}
 
+    def control_enabled(self, identity):
+        # The full environment is held only in memory and never logged.
+        env = json.loads(run("docker", "inspect", "--format", "{{json .Config.Env}}", identity))
+        values = [v for v in env if isinstance(v, str) and v.startswith("AUTOSTOP_CRM_BACKUP_CONTROL=")]
+        return values == ["AUTOSTOP_CRM_BACKUP_CONTROL=1"]
+
+    def restart_policy(self, identity):
+        return run("docker", "inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", identity)
+
+    def control(self, identity, operation="read", expected=None):
+        request = json.dumps({"operation": operation, "expected": expected})
+        result = subprocess.run(
+            ["docker", "exec", "--interactive", "--user", "10001", identity, "python", "-c", CONTROL_PROBE],
+            input=request,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode:
+            raise Uncertain("CRM backup control unavailable or changed")
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict):
+            raise Uncertain("invalid CRM control receipt")
+        return value
+
+    @staticmethod
+    def _same_process(left, right):
+        return all(left[k] == right[k] for k in ("pid", "start_ticks", "generation"))
+
+    def prepare(self, identity, expected):
+        if not self.control_enabled(identity):
+            raise PrepareAborted("CRM backup control not enabled")
+        initial = self.control(identity)
+        if initial["state"] not in ("idle", "aborted"):
+            raise PrepareAborted("CRM backup control not idle")
+        if not self._same_process(initial, expected["control"]):
+            raise PrepareAborted("CRM control process changed before prepare")
+        current = self.crm()
+        if (
+            current["id"] != identity
+            or current["state"] != "running"
+            or current["started"] != expected["started"]
+            or current["restarts"] != expected["restarts"]
+            or current["revision"] != expected["revision"]
+        ):
+            raise PrepareAborted("CRM generation changed before prepare")
+        last = initial
+        try:
+            self.control(identity, "USR1", initial)
+            deadline = time.monotonic() + 35
+            while time.monotonic() < deadline:
+                last = self.control(identity)
+                if not self._same_process(initial, last):
+                    raise Uncertain("CRM process changed during prepare")
+                if last["attempt"] != initial["attempt"]:
+                    if last["state"] == "ready":
+                        return last
+                    if last["state"] == "aborted":
+                        raise PrepareAborted("CRM did not drain")
+                time.sleep(0.25)
+        except PrepareAborted:
+            raise
+        except Exception:  # noqa: BLE001 - abort only a verified pre-COMMIT attempt.
+            pass
+        # USR2 has not been sent by this worker. Abort only the exact observed
+        # preparation; a late or ambiguous signal is allowed to expire.
+        try:
+            last = self.control(identity)
+            if (
+                self._same_process(initial, last)
+                and last["attempt"] != initial["attempt"]
+                and last["state"] in ("preparing", "ready")
+            ):
+                self.control(identity, "HUP", last)
+                deadline = time.monotonic() + 35
+                while time.monotonic() < deadline:
+                    current = self.control(identity)
+                    if not self._same_process(last, current) or current["attempt"] != last["attempt"]:
+                        break
+                    if current["state"] == "aborted":
+                        raise PrepareAborted("CRM prepare aborted")
+                    time.sleep(0.25)
+        except PrepareAborted:
+            raise
+        except Exception:  # noqa: BLE001 - retain unknown state, never send stop.
+            pass
+        raise Uncertain("CRM prepare outcome unknown")
+
+    def commit(self, identity, ready):
+        if ready["state"] != "ready":
+            raise Uncertain("CRM was not ready")
+        self.control(identity, "USR2", ready)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            value = self.control(identity)
+            if not self._same_process(ready, value) or value["attempt"] != ready["attempt"]:
+                raise Uncertain("CRM generation changed during commit")
+            if value["state"] == "committed":
+                return value
+            if value["state"] == "aborted":
+                raise PrepareAborted("CRM prepare expired before commit")
+            time.sleep(0.25)
+        raise Uncertain("CRM commit outcome unknown")
+
     def stop(self, kind, identity):
         if kind == "scheduler":
             run("systemctl", "stop", SCHEDULER, timeout=None)
@@ -183,8 +381,9 @@ class System:
             if result != "success" or self.scheduler()["state"] != "inactive":
                 raise Uncertain("scheduler stop was not clean")
         else:
-            # Never send SIGKILL merely because graceful draining is slow.
-            run("docker", "stop", "--time", "-1", identity, timeout=None)
+            # Called only after exact PREPARE and COMMIT receipts. A forced
+            # exit is detected and makes the snapshot ineligible.
+            run("docker", "stop", "--time", "30", identity, timeout=None)
 
     def start(self, kind, identity):
         if kind == "scheduler":
@@ -246,7 +445,16 @@ def amend(root, attempt, fields=None, resource=None):
         if record["attempt"] != attempt:
             raise Uncertain("attempt identity changed")
         (record[resource] if resource else record).update(fields or {})
-        save(root / "attempt.json", record)
+        try:
+            save(root / "attempt.json", record)
+        except BaseException:
+            if resource is None and (fields or {}).get("copy") == "ok":
+                # os.replace may have succeeded before directory fsync failed.
+                # Keep the lock while making a best-effort unknown marker.
+                record["copy"] = "unknown"
+                with suppress(Exception):
+                    save(root / "attempt.json", record)
+            raise
         return record
 
 
@@ -272,6 +480,15 @@ def refresh(root, status_path):
         status(status_path, record)
 
 
+def require_open_control(system, item):
+    receipt = system.control(item["identity"])
+    if receipt.get("state") not in ("idle", "aborted"):
+        raise Uncertain("CRM backup gate is not confirmed open")
+    previous = item.get("drain") or {}
+    if item["phase"] == "stopped" and receipt.get("generation") == previous.get("generation"):
+        raise Uncertain("CRM still uses the stopped control generation")
+
+
 def worker(root, attempt, operation, kind, system=None):
     """Own exactly one operation; journal is checked again inside its lock."""
     system = system or System()
@@ -289,10 +506,53 @@ def worker(root, attempt, operation, kind, system=None):
                 actual["state"] != "running"
                 or actual["started"] != item["started"]
                 or actual["restarts"] != item["restarts"]
+                or actual["revision"] != item["revision"]
             ):
                 raise Uncertain("CRM generation changed before stop")
             if kind == "scheduler" and (actual["state"] != "active" or actual["invocation"] != item["invocation"]):
                 raise Uncertain("scheduler generation changed before stop")
+        if kind == "crm" and operation == "stop" and item["phase"] == "commit_verified":
+            # Recovery may finish a committed drain only when the journal proves
+            # the original worker had not yet issued Docker stop.
+            if item.get("drain", {}).get("state") != "committed" or system.control(item["identity"]) != item["drain"]:
+                raise Uncertain("committed CRM generation changed before recovery stop")
+        elif kind == "crm" and operation == "stop":
+            r["phase"] = "crm_prepare_running"
+            save(path, r)
+            try:
+                ready = system.prepare(item["identity"], item)
+            except PrepareAborted:
+                r["phase"] = "crm_prepare_aborted"
+                save(path, r)
+                raise
+            except Exception:
+                r["phase"] = "crm_prepare_unknown"
+                save(path, r)
+                raise
+            item["drain"] = ready
+            r["phase"] = "crm_commit_intent"
+            save(path, r)
+            try:
+                committed = system.commit(item["identity"], ready)
+                again = system.crm()
+                if (
+                    again["id"] != item["identity"]
+                    or again["state"] != "running"
+                    or again["started"] != item["started"]
+                    or again["restarts"] != item["restarts"]
+                    or again["revision"] != item["revision"]
+                    or system.control(item["identity"]) != committed
+                ):
+                    raise Uncertain("CRM generation changed after commit")
+            except PrepareAborted:
+                r["phase"] = "crm_prepare_aborted"
+                save(path, r)
+                raise
+            except Exception:
+                r["phase"] = "crm_commit_unknown"
+                save(path, r)
+                raise
+            item["drain"] = committed
         r["phase"] = f"{kind}_{operation}_running"
         save(path, r)
         try:
@@ -301,6 +561,8 @@ def worker(root, attempt, operation, kind, system=None):
             else:
                 system.start(kind, item["identity"])
                 system.healthy(kind, item["identity"])
+                if kind == "crm":
+                    require_open_control(system, item)
         except Exception:
             # A failed CLI may still have issued a request. Recovery must not
             # assume that a request was cancelled when its client returned.
@@ -346,6 +608,24 @@ def wait_operation(root, attempt, kind, operation):
     raise Uncertain("operation did not complete within its deadline")
 
 
+def _docker_restart_resolved(record, system):
+    """Docker may be restarted with live-restore while CRM stays committed."""
+    item = record["crm"]
+    current = system.crm()
+    if current["id"] != item["identity"]:
+        return False
+    if current["state"] in ("exited", "created"):
+        return True
+    if current["state"] != "running" or current["started"] == item.get("started"):
+        return False
+    try:
+        receipt = system.control(item["identity"])
+    except Exception:  # noqa: BLE001 - unreadable control state is not a confirmed recovery.
+        return False
+    previous = item.get("drain") or {}
+    return receipt.get("state") in ("idle", "aborted") and receipt.get("generation") != previous.get("generation")
+
+
 def same_stopped(before, after):
     return (
         after["id"] == before["id"]
@@ -358,7 +638,7 @@ def same_stopped(before, after):
     )
 
 
-def recover(root, status_path, system=None, *, interrupted=False, wait=True):
+def recover(root, status_path, system=None, *, interrupted=False, wait=True):  # noqa: C901 - explicit recovery states.
     system = system or System()
     path = root / "attempt.json"
     with Lock(root / "operation.lock", wait=wait):
@@ -375,13 +655,81 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):
                 save(path, r)
                 refresh(root, status_path)
             return r
+        if phase in ("crm_commit_intent", "crm_commit_unknown", "crm_term_intent"):
+            # No Docker stop was sent in these phases. For an exactly proven
+            # COMMIT, signal only the same process via pidfd and let its
+            # existing restart=always policy start a fresh generation.
+            item = r["crm"]
+            previous = item.get("drain") or {}
+            try:
+                current = system.crm()
+                if current["id"] != item["identity"] or current["revision"] != item["revision"]:
+                    raise Uncertain("CRM identity changed during commit recovery")
+                if current["state"] == "running":
+                    receipt = system.control(item["identity"])
+                    old = current["started"] == item["started"] and current["restarts"] == item["restarts"]
+                    if (
+                        old
+                        and receipt["state"] == "committed"
+                        and previous.get("attempt") == receipt["attempt"]
+                        and System._same_process(previous, receipt)
+                    ):
+                        if system.restart_policy(item["identity"]) != "always":
+                            raise Uncertain("CRM automatic restart is not configured")
+                        if phase != "crm_term_intent" or r["restore"] != "unknown" or changed:
+                            item["drain"] = receipt
+                            r["phase"] = "crm_term_intent"
+                            r["restore"] = "unknown"
+                            save(path, r)
+                            refresh(root, status_path)
+                        with suppress(Exception):
+                            system.control(item["identity"], "TERM", receipt)
+                        raise Uncertain("waiting for CRM to restart after committed drain")
+                    if (
+                        phase in ("crm_commit_intent", "crm_commit_unknown")
+                        and old
+                        and receipt["state"] == "aborted"
+                        and previous.get("attempt") == receipt["attempt"]
+                        and System._same_process(previous, receipt)
+                    ):
+                        # The CRM control protocol binds delayed COMMIT signals
+                        # to the old attempt, so this exact aborted receipt
+                        # proves its gates are open and no stop was issued.
+                        item["phase"] = "untouched"
+                        r["phase"] = "recovering"
+                        phase = "recovering"
+                        changed = True
+                    if (
+                        not old
+                        and receipt["state"] in ("idle", "aborted")
+                        and receipt["generation"] != previous.get("generation")
+                    ):
+                        system.healthy("crm", item["identity"])
+                        item["phase"] = "restored"
+                        r["phase"] = "recovering"
+                        phase = "recovering"
+                        changed = True
+            except Uncertain:
+                if changed and r["phase"] != "crm_term_intent":
+                    r["restore"] = "unknown"
+                    save(path, r)
+                    refresh(root, status_path)
+                raise
+            except Exception:  # noqa: BLE001 - unreadable receipt cannot authorize a signal.
+                if changed:
+                    r["restore"] = "unknown"
+                    save(path, r)
+                    refresh(root, status_path)
+                raise Uncertain("committed CRM state not confirmed") from None
         # Invalidate any worker that did not acquire the operation lock. A
         # worker killed while running leaves an unknown request and cannot be
         # treated as finished unless the host or daemon has since restarted.
         boot_restarted = system.boot() != r["boot"]
         daemon_restarted = system.daemon() != r["daemon"]
-        if phase.endswith(("_running", "_unknown")):
-            resolved = boot_restarted or (phase.startswith("crm_") and daemon_restarted)
+        if phase.endswith(("_running", "_unknown")) or phase in ("crm_commit_intent", "crm_term_intent"):
+            resolved = boot_restarted or (
+                phase.startswith("crm_") and daemon_restarted and _docker_restart_resolved(r, system)
+            )
             if not resolved:
                 if r["restore"] != "unknown":
                     r["restore"] = "unknown"
@@ -413,8 +761,12 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):
                 raise Uncertain("CRM not yet healthy")
         if active:
             system.healthy(kind, item["identity"])
+            if kind == "crm":
+                require_open_control(system, item)
             r = amend(root, r["attempt"], {"phase": "restored"}, resource=kind)
         else:
+            if item["phase"] != "stopped":
+                raise Uncertain("resource was not confirmed stopped by this attempt")
             r = begin_operation(root, r, kind, "start", system)
     r = amend(root, r["attempt"], {"phase": "complete", "restore": "ok"})
     refresh(root, status_path)
@@ -534,19 +886,27 @@ def _publish_locked(root, path, attempt, staged_info, digest, old, old_info):
     save(root / "pending-ready.json", value)
     if load_pending(root / "pending-ready.json") != value:
         raise Uncertain("snapshot readiness not confirmed")
-    if old and old != value and old_info:
-        old_path = root / old["file"]
+    return value, old, old_info
+
+
+def cleanup_previous(root, value, old, old_info):
+    if not old or old == value or not old_info:
+        return
+    with Lock(root / "pending.lock"):
         try:
-            if _signature(old_path.lstat()) == _signature(old_info):
-                old_path.unlink()
-                directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+            if load_pending(root / "pending.json") != value or load_pending(root / "pending-ready.json") != value:
+                return
+            old_path = root / old["file"]
+            if _signature(old_path.lstat()) != _signature(old_info):
+                return
+            old_path.unlink()
+            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         except FileNotFoundError:
             pass
-    return value
 
 
 def load_pending(path):
@@ -655,6 +1015,11 @@ def backup(
                 raise Uncertain("installed CRM revision is not approved for backup")
             if crm["state"] != "running" or crm["health"] != "healthy":
                 raise Uncertain("CRM was not initially healthy")
+            if not system.control_enabled(crm["id"]):
+                raise Uncertain("CRM backup control is not enabled")
+            control = system.control(crm["id"])
+            if control["state"] not in ("idle", "aborted"):
+                raise Uncertain("CRM backup control is not idle")
             boot = system.boot()
             daemon = system.daemon()
         except Exception:
@@ -674,6 +1039,8 @@ def backup(
                     "identity": crm["id"],
                     "started": crm["started"],
                     "restarts": crm["restarts"],
+                    "revision": crm["revision"],
+                    "control": control,
                     "initially_active": True,
                     "phase": "untouched",
                 },
@@ -718,13 +1085,20 @@ def backup(
             raise copy_error
         try:
             try:
-                publish(root, staged, r["attempt"])
+                published, previous, previous_info = publish(root, staged, r["attempt"])
             except Exception:
                 amend(root, r["attempt"], {"copy": "unknown"})
                 refresh(root, status_path)
                 raise
-            r = amend(root, r["attempt"], {"copy": "ok"})
+            try:
+                r = amend(root, r["attempt"], {"copy": "ok"})
+            except Exception:
+                with suppress(Exception):
+                    refresh(root, status_path)
+                raise
             refresh(root, status_path)
+            with suppress(OSError):
+                cleanup_previous(root, published, previous, previous_info)
         finally:
             if staged is not None:
                 staged.unlink(missing_ok=True)
