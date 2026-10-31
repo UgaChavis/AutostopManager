@@ -30,6 +30,8 @@ class FakeWindows:
         self.busy = False
         self.bad_inspection = None
         self.on_final_verify = None
+        self.on_part_verify = None
+        self.inspections = []
 
     @staticmethod
     def info(data):
@@ -38,6 +40,7 @@ class FakeWindows:
         return {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
     def inspect(self, record):
+        self.inspections.append(record["id"])
         if self.busy:
             raise delivery.DeliveryError("ssh_unknown", unknown=True)
         final = self.info(self.finals.get(record["id"]))
@@ -60,6 +63,9 @@ class FakeWindows:
         data = (self.finals if final else self.parts).get(record["id"])
         if not delivery.matches(self.info(data), record):
             raise delivery.DeliveryError("remote_integrity", unknown=True)
+        if not final and self.on_part_verify is not None:
+            action, self.on_part_verify = self.on_part_verify, None
+            action()
         if final and self.on_final_verify is not None:
             action, self.on_final_verify = self.on_final_verify, None
             action()
@@ -129,6 +135,7 @@ def prepare(store, number, contents):
     file.write_bytes(contents)
     file.chmod(0o600)
     delivery.write_json(fd, "pending.json", record)
+    delivery.write_json(fd, "pending-ready.json", record)
     return record
 
 
@@ -144,6 +151,7 @@ def test_success_retains_only_two_known_completed_generations(store):
     assert remote.deletes == [(records[0]["id"], True)]
     assert delivery.journal(store[1]) == records[-2:]
     assert delivery.read_json(store[1], "pending.json") is None
+    assert delivery.read_json(store[1], "pending-ready.json") is None
 
 
 def test_failed_write_is_retried_with_same_id_and_keeps_old_backups(store):
@@ -240,11 +248,52 @@ def test_old_missing_source_without_new_pointer_keeps_intent(store):
     delivery.write_json(store[1], "delivery-intent.json", first)
     (store[0] / first["file"]).unlink()
     (store[0] / "pending.json").unlink()
+    (store[0] / "pending-ready.json").unlink()
     remote.busy = True
     with pytest.raises(delivery.DeliveryError, match="ssh_unknown"):
         delivery.deliver_once(store[1], remote)
     assert delivery.read_json(store[1], "delivery-intent.json") == first
     assert remote.deletes == []
+
+
+@pytest.mark.parametrize("case", ["missing", "different", "no_pointer"])
+def test_unconfirmed_pending_prevents_all_remote_operations(store, case):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"newest")
+    # An old valid intent must not bypass the pending readiness barrier.
+    delivery.write_json(store[1], "delivery-intent.json", record)
+    if case == "missing":
+        (store[0] / "pending-ready.json").unlink()
+    elif case == "different":
+        different = dict(record, sha256="f" * 64)
+        delivery.write_json(store[1], "pending-ready.json", different)
+    else:
+        (store[0] / "pending.json").unlink()
+    with pytest.raises(delivery.DeliveryError, match="pending_not_ready"):
+        delivery.deliver_once(store[1], remote)
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert (store[0] / record["file"]).read_bytes() == b"newest"
+    assert delivery.read_json(store[1], "delivery-intent.json") == record
+
+
+def test_pending_loses_readiness_during_transfer_no_publish_or_rotation(store):
+    remote = FakeWindows()
+    old = []
+    for number in (1, 2):
+        record = prepare(store, number, f"old-{number}".encode())
+        old.append(record)
+        delivery.deliver_once(store[1], remote)
+    newest = prepare(store, 3, b"newest")
+    remote.on_part_verify = lambda: (store[0] / "pending-ready.json").unlink()
+    with pytest.raises(delivery.DeliveryError, match="pending_not_ready"):
+        delivery.deliver_once(store[1], remote)
+    assert set(remote.finals) == {record["id"] for record in old}
+    assert remote.parts[newest["id"]] == b"newest"
+    assert remote.deletes == []
+    assert (store[0] / newest["file"]).exists()
+    delivery.write_json(store[1], "pending-ready.json", newest)
+    delivery.deliver_once(store[1], remote)
+    assert set(remote.finals) == {old[-1]["id"], newest["id"]}
 
 
 def test_conflicting_old_final_is_preserved_when_new_generation_exists(store):

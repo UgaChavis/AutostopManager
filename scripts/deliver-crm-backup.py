@@ -166,7 +166,12 @@ def lock(dirfd, name, *, nonblocking=False):
 
 def current(dirfd):
     value = read_json(dirfd, "pending.json")
-    return None if value is None else valid_record(value)
+    ready = read_json(dirfd, "pending-ready.json")
+    if value is None and ready is None:
+        return None
+    if value is None or ready is None or valid_record(value) != valid_record(ready):
+        raise DeliveryError("pending_not_ready")
+    return value
 
 
 def open_source(dirfd, record):
@@ -348,6 +353,7 @@ def rotate(dirfd, remote):
         if observed is not None:
             if not matches(observed, old):
                 raise DeliveryError("rotation_precondition", unknown=True)
+            pending_record(dirfd)
             remote.delete(old, observed, final=True)
         rows.pop(0)
         write_json(dirfd, "delivered.json", rows)
@@ -371,6 +377,7 @@ def cleanup_pending(dirfd, record, stream):
                 raise DeliveryError("source_identity_changed")
             unlink_file(dirfd, record["file"])
         unlink_file(dirfd, "pending.json")
+        unlink_file(dirfd, "pending-ready.json")
     finally:
         os.close(guard)
 
@@ -403,9 +410,10 @@ def deliver_once(dirfd, remote):
     # Recover the visible M2 state even when the preceding run already
     # delivered and removed its pending pointer before refresh failed.
     refresh_status()
+    pending = pending_record(dirfd)
     record = read_json(dirfd, "delivery-intent.json")
     if record is None:
-        record = pending_record(dirfd)
+        record = pending
         if record is None:
             rotate(dirfd, remote)
             status = read_json(dirfd, "delivery-status.json")
@@ -442,15 +450,18 @@ def deliver_once(dirfd, remote):
                 # Keep the unidentified incomplete file if its source is gone.
                 if stream is None:
                     raise DeliveryError("source_missing", unknown=True)
+                pending_record(dirfd)
                 remote.delete(record, observed["part"], final=False)
                 observed["part"] = None
             if observed["part"] is None:
                 if stream is None:
                     raise DeliveryError("source_missing", unknown=True)
+                pending_record(dirfd)
                 remote.write(record, stream)
                 if _identity(before) != _identity(os.fstat(stream.fileno())):
                     raise DeliveryError("source_changed", unknown=True)
             remote.verify(record, final=False)
+            pending_record(dirfd)
             remote.publish(record)
         remote.verify(record, final=True)
         remember(dirfd, record)
