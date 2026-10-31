@@ -29,6 +29,7 @@ STATUS = Path("/var/lib/autostop-manager/roles/M2/crm-backup-status.md")
 CONTAINER = "autostopcrm"
 SCHEDULER = "autostop-manager-scheduler.service"
 DATA = "/opt/autostopcrm/data"
+EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
 DEPLOY_LOCK = Path("/opt/autostopcrm/.autostop-deploy.lock")
 SNAPSHOT = Path(__file__).with_name("crm-snapshot.py")
 TIMER = "autostop-crm-workstation-backup.timer"
@@ -524,6 +525,9 @@ def check_space(root, data=DATA):
         raise Uncertain("CRM data directory is unavailable")
     total = 0
     for directory, dirs, files in os.walk(source, followlinks=False):
+        if Path(directory) == source:
+            dirs[:] = [name for name in dirs if name not in EXCLUDED]
+            files = [name for name in files if name not in EXCLUDED]
         for name in dirs + files:
             info = (Path(directory) / name).lstat()
             if stat.S_ISLNK(info.st_mode):
