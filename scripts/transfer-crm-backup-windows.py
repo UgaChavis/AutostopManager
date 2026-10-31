@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared SSH and PowerShell commands for the CRM backup delivery job."""
+"""Shared SSH, native SFTP and PowerShell commands for CRM backup delivery."""
 
 import base64
 import hashlib
@@ -19,6 +19,8 @@ SSH = [
     "-oServerAliveCountMax=3",
     HOST,
 ]
+SFTP = ["sftp", "-b", "-", "-s", "C:/Windows/System32/OpenSSH/sftp-server.exe", *SSH[2:-1], HOST]
+SFTP_DIRECTORY = "/C:/Users/9860606/Desktop/Резерв CRM"
 CHUNK = 1024 * 1024
 
 # Arguments inserted below are either a generated UUID hex string or an integer.
@@ -52,7 +54,7 @@ function Assert-PrivateFile([string]$path) {
     }
 }
 """
-WRITE = r"""
+CREATE = r"""
 $security = New-Object Security.AccessControl.FileSecurity
 $security.SetAccessRuleProtection($true, $false)
 foreach ($sid in @($user, $system, $admins)) {
@@ -64,19 +66,16 @@ foreach ($sid in @($user, $system, $admins)) {
 $stream = New-Object IO.FileStream($part, [IO.FileMode]::CreateNew,
     [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None,
     4096, [IO.FileOptions]::None, $security)
+try { $stream.Flush($true) } finally { $stream.Dispose() }
+Assert-PrivateFile $part
+"""
+FLUSH = r"""
+Assert-PrivateFile $part
+$stream = [IO.File]::Open($part, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 try {
-    $inputStream = [Console]::OpenStandardInput()
-    $buf = New-Object byte[] 1048576
-    [long]$count = 0
-    while (($n = $inputStream.Read($buf, 0, $buf.Length)) -gt 0) {
-        $count += $n
-        if ($count -gt __SIZE__) { throw 'too many bytes' }
-        $stream.Write($buf, 0, $n)
-    }
-    if ($count -ne __SIZE__) { throw 'truncated input' }
+    if ($stream.Length -ne __SIZE__) { throw 'uploaded size mismatch' }
     $stream.Flush($true)
 } finally { $stream.Dispose() }
-Assert-PrivateFile $part
 """
 READ = r"""
 $path = __PATH__

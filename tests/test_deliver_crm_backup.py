@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -105,6 +107,73 @@ def test_production_owner_is_root():
 
 def test_production_refresh_path_matches_installed_package():
     assert delivery.REFRESH == "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
+
+
+def test_native_sftp_upload_uses_private_empty_create_and_open_generation(tmp_path, monkeypatch):
+    data = b"synthetic\x00" * (3 * 1024 * 1024 // 10 + 1)
+    ident = "a" * 32
+    record = {"id": ident, "file": f"crm-{ident}.tar.gz", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    path = tmp_path / record["file"]
+    path.write_bytes(data)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0] == "ssh":
+            script = base64.b64decode(command[-1]).decode("utf-16le")
+            assert "OpenStandardInput" not in script and "$stream.Write" not in script
+            assert kwargs["stdin"] == subprocess.DEVNULL
+            if len(calls) == 1:
+                assert "FileMode]::CreateNew" in script
+                assert "SetAccessRuleProtection($true, $false)" in script
+            else:
+                assert len(calls) == 3 and calls[-2][0][0] == "sftp"
+                assert "Assert-PrivateFile $part" in script
+                assert "FileAccess]::ReadWrite, [IO.FileShare]::None" in script
+                assert f"$stream.Length -ne {len(data)}" in script
+                assert "$stream.Flush($true)" in script
+        else:
+            assert command[0] == "sftp"
+            assert command[command.index("-s") + 1] == "C:/Windows/System32/OpenSSH/sftp-server.exe"
+            assert command[5:-1] == delivery.transfer.SSH[2:-1]
+            assert command[-1] == delivery.transfer.HOST
+            batch = kwargs["input"]
+            assert len(batch) < 1024 and "stdin" not in kwargs
+            operation, local, remote = shlex.split(batch.decode("utf-8"))
+            assert operation == "put"
+            assert local == f"/proc/{os.getpid()}/fd/{source.fileno()}"
+            assert Path(local).read_bytes() == data
+            assert remote == f"/C:/Users/9860606/Desktop/Резерв CRM/crm-{ident}.part"
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    with path.open("rb") as source:
+        # The caller's pinned source remains readable after its name is retired.
+        path.unlink()
+        delivery.Windows().write(record, source)
+    assert [command[0] for command, _ in calls] == ["ssh", "sftp", "ssh"]
+
+
+@pytest.mark.parametrize("failed_stage", ["create", "sftp", "flush"])
+def test_native_upload_failure_is_unknown_and_never_publishes(tmp_path, monkeypatch, failed_stage):
+    data = b"synthetic"
+    ident = "b" * 32
+    record = {"id": ident, "file": f"crm-{ident}.tar.gz", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    path = tmp_path / record["file"]
+    path.write_bytes(data)
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command[0])
+        stage = {1: "create", 2: "sftp", 3: "flush"}[len(calls)]
+        return SimpleNamespace(returncode=1 if stage == failed_stage else 0, stdout=b"")
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    with path.open("rb") as source, pytest.raises(delivery.DeliveryError, match="ssh_unknown") as error:
+        delivery.Windows().write(record, source)
+    assert error.value.unknown
+    assert calls == {"create": ["ssh"], "sftp": ["ssh", "sftp"], "flush": ["ssh", "sftp", "ssh"]}[failed_stage]
+    assert path.read_bytes() == data
 
 
 def test_status_refreshes_installed_coordinator(store, monkeypatch):

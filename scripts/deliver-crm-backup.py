@@ -266,7 +266,24 @@ class Windows:
         return value
 
     def write(self, record, source):
-        self.run(transfer.WRITE, record, stdin=source, timeout=21600)
+        valid_record(record)
+        # Keep the already verified generation open even if the pending name
+        # changes. SFTP opens its own reader through this process's stable fd.
+        local = f"/proc/{os.getpid()}/fd/{source.fileno()}"
+        remote = f"{transfer.SFTP_DIRECTORY}/crm-{record['id']}.part"
+        batch = f'put "{local}" "{remote}"\n'.encode()
+        # Precreate the empty file with its private ACL. Native SFTP truncates
+        # that same file; ordinary put does not replace its security descriptor.
+        self.run(transfer.CREATE, record)
+        try:
+            result = subprocess.run(
+                transfer.SFTP, input=batch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=21600
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise DeliveryError("ssh_unknown", unknown=True) from exc
+        if result.returncode != 0:
+            raise DeliveryError("ssh_unknown", unknown=True)
+        self.run(transfer.FLUSH, record)
 
     def verify(self, record, *, final):
         try:
