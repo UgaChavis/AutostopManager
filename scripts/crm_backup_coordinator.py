@@ -66,6 +66,16 @@ AGENT_SEED_FILES = (
     "runs.jsonl",
     "actions.jsonl",
 )
+HOST_WRITER_SCRIPTS = (
+    "migrate_repair_order_cycles.py",
+    "normalize_cashboxes_after_safe_fix.py",
+    "apply_payroll_policy_2026_07_13.py",
+    "client_duplicates_maintenance.py",
+    "client_data_quality_maintenance.py",
+    "compact_audit_events.py",
+    "operator_activity_maintenance.py",
+    "cleanup_audit_probe_consumer.py",
+)
 _SQLITE_FENCE_CHILD = r"""
 import os, sqlite3, sys
 from pathlib import Path
@@ -197,6 +207,40 @@ def _check_agent_seeds(seeds, uid):
             raise Uncertain("CRM agent state changed during snapshot")
 
 
+def check_host_writers(proc_root=Path("/proc")):
+    """Fail closed on known maintenance commands; never log their arguments."""
+    scripts = tuple(name.encode("ascii") for name in HOST_WRITER_SCRIPTS)
+    modules = tuple(b"scripts." + name[:-3] for name in scripts)
+    try:
+        processes = [entry for entry in Path(proc_root).iterdir() if entry.name.isdecimal()]
+    except OSError as exc:
+        raise Uncertain("host process inspection unavailable") from exc
+    for process in processes:
+        try:
+            with (process / "cmdline").open("rb") as source:
+                command = source.read(2 * 1024 * 1024 + 1)
+            if len(command) > 2 * 1024 * 1024:
+                raise Uncertain("host process command unavailable")
+            if not command:
+                fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
+                if fields[0] != "Z" and not int(fields[6]) & 0x00200000:
+                    raise Uncertain("host process command unavailable")
+            elif any(name in command for name in (*scripts, *modules)):
+                raise Uncertain("CRM host maintenance is active")
+        except FileNotFoundError as exc:
+            # A process which has completely exited can no longer write. If
+            # its PID still exists, missing details remain an unknown writer.
+            try:
+                process.stat()
+            except FileNotFoundError:
+                continue
+            except OSError as inner:
+                raise Uncertain("host process inspection unavailable") from inner
+            raise Uncertain("host process inspection unavailable") from exc
+        except (OSError, IndexError, ValueError) as exc:
+            raise Uncertain("host process inspection unavailable") from exc
+
+
 @contextmanager
 def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
     """Fence known cooperating host writers; no claims about arbitrary root processes."""
@@ -267,6 +311,7 @@ def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
         if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
             raise Uncertain("CRM database identity changed")
         _check_agent_seeds(seeds, uid)
+        check_host_writers()
         yield
         if child.poll() is not None:
             raise Uncertain("SQLite writer fence lost")
@@ -282,6 +327,7 @@ def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
         if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
             raise Uncertain("CRM database identity changed")
         _check_agent_seeds(seeds, uid)
+        check_host_writers()
 
 
 def run(*args, timeout=30):
