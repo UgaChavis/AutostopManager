@@ -1,8 +1,10 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import tarfile
 import unittest
 from unittest import mock
 
@@ -85,6 +87,24 @@ class CrmSnapshotTest(unittest.TestCase):
             result.stdout = json.dumps([item]).encode()
             with self.assertRaises(ValueError):
                 snapshot.container_key(ident, self.source)
+
+    def test_corrupted_archive_fails_integrity_check(self):
+        path = self.stage / "snapshot.tar.gz"
+        changed = self.stage / "modified.tar.gz"
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key)
+        with tarfile.open(path, "r:gz") as source, tarfile.open(changed, "w:gz") as target:
+            for entry in source:
+                if entry.isfile():
+                    data = source.extractfile(entry).read()
+                    if entry.name == "crm/attachments/example":
+                        data = b"x" * len(data)
+                    target.addfile(entry, io.BytesIO(data))
+                else:
+                    target.addfile(entry)
+        destination = self.base / "restore"
+        destination.mkdir(mode=0o700)
+        with self.assertRaises(ValueError):
+            restore.check_archive(changed, destination)
 
 
 if __name__ == "__main__":
