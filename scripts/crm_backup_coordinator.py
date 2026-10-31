@@ -57,6 +57,15 @@ HOST_WRITER_LOCKS = (
     "mcp-oauth-state.lock",
     "printing/completion_act_forms.lock",
 )
+AGENT_SEED_FILES = (
+    "system_prompt.md",
+    "memory.md",
+    "tasks.json",
+    "schedules.json",
+    "status.json",
+    "runs.jsonl",
+    "actions.jsonl",
+)
 _SQLITE_FENCE_CHILD = r"""
 import os, sqlite3, sys
 from pathlib import Path
@@ -182,6 +191,12 @@ def _owned_path(path, uid, *, directory=False):
     return info
 
 
+def _check_agent_seeds(seeds, uid):
+    for path, before in seeds:
+        if _signature(before) != _signature(_owned_path(path, uid)):
+            raise Uncertain("CRM agent state changed during snapshot")
+
+
 @contextmanager
 def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
     """Fence known cooperating host writers; no claims about arbitrary root processes."""
@@ -211,6 +226,9 @@ def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
                         raise Uncertain("CRM writer lock busy") from exc
                     time.sleep(min(0.05, remaining))
             locks.append((path, fd, before))
+        # AgentStorage.__init__ creates missing defaults before acquiring its
+        # lock. Refuse to snapshot unless all defaults exist and stay unchanged.
+        seeds = [(root / "agent" / name, _owned_path(root / "agent" / name, uid)) for name in AGENT_SEED_FILES]
         database = root / "change_feed.sqlite3"
         original = _owned_path(database, uid)
         # SQLite must run as the CRM user: opening a WAL database after its
@@ -248,6 +266,7 @@ def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
         current = _owned_path(database, uid)
         if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
             raise Uncertain("CRM database identity changed")
+        _check_agent_seeds(seeds, uid)
         yield
         if child.poll() is not None:
             raise Uncertain("SQLite writer fence lost")
@@ -262,6 +281,7 @@ def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
         current = _owned_path(database, uid)
         if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
             raise Uncertain("CRM database identity changed")
+        _check_agent_seeds(seeds, uid)
 
 
 def run(*args, timeout=30):
