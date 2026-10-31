@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import stat
 import subprocess
@@ -24,6 +25,7 @@ import time
 import uuid
 from datetime import datetime, UTC
 from contextlib import suppress
+from contextlib import contextmanager, ExitStack
 
 ROOT = Path("/var/lib/autostop-manager/crm-backup")
 STATUS = Path("/var/lib/autostop-manager/roles/M2/crm-backup-status.md")
@@ -40,6 +42,40 @@ APPROVED_CRM_REVISION = ""
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
+
+# Cooperative host writers use different native locks. These are the actual
+# CRM paths; never create a missing lock as root or change its permissions.
+HOST_WRITER_LOCKS = (
+    "state.lock",
+    "audit-archive/.audit-archive.lock",
+    "operator-activity/.operator-activity.lock",
+    "settings.lock",
+    "users.lock",
+    "manager_structure.lock",
+    "shared_files_index.lock",
+    "agent/agent.lock",
+    "mcp-oauth-state.lock",
+    "printing/completion_act_forms.lock",
+)
+_SQLITE_FENCE_CHILD = r"""
+import os, sqlite3, sys
+from pathlib import Path
+path, uid, gid = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+if os.geteuid() == 0:
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+elif os.geteuid() != uid or os.getegid() != gid:
+    raise RuntimeError('incorrect sqlite fence owner')
+connection = sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=2, isolation_level=None)
+try:
+    connection.execute('BEGIN IMMEDIATE')
+    os.write(1, b'R')
+    os.read(0, 1)
+    connection.rollback()
+finally:
+    connection.close()
+"""
 
 # Executed as the CRM UID inside the exact container. It never prints the
 # environment, customer data, or key material. pidfd binds the signal to the
@@ -136,6 +172,96 @@ class Uncertain(RuntimeError):
 
 class PrepareAborted(Uncertain):
     pass
+
+
+def _owned_path(path, uid, *, directory=False):
+    info = Path(path).lstat()
+    kind_ok = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    if not kind_ok or info.st_uid != uid or info.st_mode & 0o022 or (not directory and info.st_nlink != 1):
+        raise Uncertain("unsafe CRM writer lock or database")
+    return info
+
+
+@contextmanager
+def host_writer_fence(root, *, uid=10001, gid=10001, timeout=3):
+    """Fence known cooperating host writers; no claims about arbitrary root processes."""
+    root = Path(root)
+    deadline = time.monotonic() + timeout
+    _owned_path(root, uid, directory=True)
+    with ExitStack() as stack:
+        locks = []
+        for relative in HOST_WRITER_LOCKS:
+            path = root / relative
+            for parent in reversed(path.relative_to(root).parents):
+                if str(parent) != ".":
+                    _owned_path(root / parent, uid, directory=True)
+            before = _owned_path(path, uid)
+            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+            stack.callback(os.close, fd)
+            opened = os.fstat(fd)
+            if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise Uncertain("CRM writer lock changed")
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise Uncertain("CRM writer lock busy") from exc
+                    time.sleep(min(0.05, remaining))
+            locks.append((path, fd, before))
+        database = root / "change_feed.sqlite3"
+        original = _owned_path(database, uid)
+        # SQLite must run as the CRM user: opening a WAL database after its
+        # last connection closed may create -wal/-shm files. Root-created
+        # sidecars could otherwise prevent the CRM from starting again.
+        child = subprocess.Popen(
+            [sys.executable, "-c", _SQLITE_FENCE_CHILD, str(database), str(uid), str(gid)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+        def close_child():
+            child.stdin.close()
+            try:
+                code = child.wait(timeout=3)
+            except subprocess.TimeoutExpired as exc:
+                child.kill()
+                child.wait()
+                raise Uncertain("SQLite fence did not release") from exc
+            finally:
+                child.stdout.close()
+            if code != 0:
+                raise Uncertain("SQLite fence ended unexpectedly")
+
+        stack.callback(close_child)
+        remaining = max(0, deadline - time.monotonic())
+        readable, _, _ = select.select([child.stdout], [], [], remaining)
+        if not readable or os.read(child.stdout.fileno(), 1) != b"R" or child.poll() is not None:
+            if child.poll() is None:
+                with suppress(ProcessLookupError):
+                    child.kill()
+            raise Uncertain("SQLite writer fence unavailable")
+        current = _owned_path(database, uid)
+        if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
+            raise Uncertain("CRM database identity changed")
+        yield
+        if child.poll() is not None:
+            raise Uncertain("SQLite writer fence lost")
+        for path, fd, before in locks:
+            current = _owned_path(path, uid)
+            opened = os.fstat(fd)
+            if (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino) or (
+                before.st_dev,
+                before.st_ino,
+            ) != (opened.st_dev, opened.st_ino):
+                raise Uncertain("CRM writer lock changed")
+        current = _owned_path(database, uid)
+        if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
+            raise Uncertain("CRM database identity changed")
 
 
 def run(*args, timeout=30):
@@ -1082,10 +1208,11 @@ def backup(
             r = amend(root, r["attempt"], {"copy": "running"})
             refresh(root, status_path)
             staged = root / (".staged-" + r["attempt"] + ".tar.gz")
-            snapshot_command(staged, crm)
-            validate_stopped(crm, stopped, system.crm())
-            if system.boot() != r["boot"] or system.daemon() != r["daemon"]:
-                raise Uncertain("host or Docker daemon restarted during snapshot")
+            with host_writer_fence(data):
+                snapshot_command(staged, crm)
+                validate_stopped(crm, stopped, system.crm())
+                if system.boot() != r["boot"] or system.daemon() != r["daemon"]:
+                    raise Uncertain("host or Docker daemon restarted during snapshot")
         except Exception as exc:  # noqa: BLE001 - restore services after every snapshot failure.
             copy_error = exc
             r = amend(root, r["attempt"], {"copy": "failed"})

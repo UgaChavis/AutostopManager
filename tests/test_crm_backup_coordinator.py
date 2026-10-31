@@ -1,5 +1,6 @@
 import importlib.util
 import json
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,7 @@ def ctx(tmp_path, monkeypatch):
         path.chmod(0o600)
 
     monkeypatch.setattr(m, "snapshot_command", snapshot)
+    monkeypatch.setattr(m, "host_writer_fence", lambda *_args, **_kwargs: nullcontext())
     return root, data, status, fake, tmp_path / "deploy.lock"
 
 
@@ -140,6 +142,47 @@ def test_backup_restores_before_publishing_and_preserves_one_pending(ctx, monkey
     assert (root / new["file"]).read_bytes() == b"synthetic snapshot"
     assert fake.actions[:4] == [("stop", "scheduler"), ("stop", "crm"), ("start", "crm"), ("start", "scheduler")]
     assert "Копия: успех" in status.read_text() and "Передача на ПК: ожидается" in status.read_text()
+
+
+def test_host_fence_releases_before_crm_restart(ctx, monkeypatch):
+    _, _, _, fake, _ = ctx
+    events = []
+
+    @contextmanager
+    def fence(_data):
+        assert fake.crm()["state"] == "exited"
+        events.append("fenced")
+        try:
+            yield
+        finally:
+            events.append("released")
+
+    original = fake.start
+
+    def start(kind, identity):
+        if kind == "crm":
+            assert events == ["fenced", "released"]
+        original(kind, identity)
+
+    monkeypatch.setattr(m, "host_writer_fence", fence)
+    monkeypatch.setattr(fake, "start", start)
+    run(ctx)
+    assert events == ["fenced", "released"]
+
+
+def test_host_fence_failure_skips_copy_and_restores_services(ctx, monkeypatch):
+    root, _, _, fake, _ = ctx
+
+    @contextmanager
+    def fence(_data):
+        raise m.Uncertain("synthetic busy host writer")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(m, "host_writer_fence", fence)
+    with pytest.raises(m.Uncertain, match="busy host writer"):
+        run(ctx)
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+    assert not (root / "pending.json").exists()
 
 
 def test_failure_retains_old_pending_and_restores_services(ctx, monkeypatch):
