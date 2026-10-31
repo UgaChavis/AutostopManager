@@ -95,6 +95,10 @@ def test_production_owner_is_root():
     assert delivery.OWNER_UID == 0
 
 
+def test_production_refresh_path_matches_installed_package():
+    assert delivery.REFRESH == "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
+
+
 def test_status_refreshes_installed_coordinator(store, monkeypatch):
     expected = "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
     monkeypatch.setattr(delivery, "REFRESH", expected)
