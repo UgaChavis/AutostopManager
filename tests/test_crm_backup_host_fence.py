@@ -181,5 +181,5 @@ def test_sqlite_sidecars_are_created_as_crm_uid():
         with m.host_writer_fence(root):
             for suffix in ("-wal", "-shm"):
                 sidecar = Path(str(database) + suffix)
-                if sidecar.exists():
-                    assert sidecar.stat().st_uid == 10001
+                assert sidecar.is_file()
+                assert sidecar.stat().st_uid == 10001
