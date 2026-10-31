@@ -375,28 +375,48 @@ def cleanup_pending(dirfd, record, stream):
         os.close(guard)
 
 
-def set_status(dirfd, record, status, error=None):
-    write_json(
-        dirfd,
-        "delivery-status.json",
-        {"id": record["id"], "status": status, "at": dt.datetime.now(dt.UTC).isoformat(), "error_code": error},
-    )
-    with suppress(OSError, subprocess.TimeoutExpired):
-        subprocess.run(
+def refresh_status():
+    try:
+        result = subprocess.run(
             [sys.executable, REFRESH, "refresh"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=20,
             check=False,
         )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DeliveryError("status_refresh_failed") from exc
+    if result.returncode != 0:
+        raise DeliveryError("status_refresh_failed")
+
+
+def set_status(dirfd, record, status, error=None):
+    write_json(
+        dirfd,
+        "delivery-status.json",
+        {"id": record["id"], "status": status, "at": dt.datetime.now(dt.UTC).isoformat(), "error_code": error},
+    )
+    refresh_status()
 
 
 def deliver_once(dirfd, remote):
+    # Recover the visible M2 state even when the preceding run already
+    # delivered and removed its pending pointer before refresh failed.
+    refresh_status()
     record = read_json(dirfd, "delivery-intent.json")
     if record is None:
         record = pending_record(dirfd)
         if record is None:
             rotate(dirfd, remote)
+            status = read_json(dirfd, "delivery-status.json")
+            if (
+                isinstance(status, dict)
+                and status.get("status") == "ok"
+                and status.get("error_code") == "rotation_pending"
+            ):
+                rows = journal(dirfd)
+                if rows and status.get("id") == rows[-1]["id"]:
+                    set_status(dirfd, rows[-1], "ok")
             return
         # Persist the exact ID and byte identity before any remote operation.
         write_json(dirfd, "delivery-intent.json", record)
@@ -441,6 +461,10 @@ def deliver_once(dirfd, remote):
         set_status(dirfd, record, "ok")
     except (DeliveryError, OSError) as exc:
         error = exc if isinstance(exc, DeliveryError) else DeliveryError("local_io")
+        if error.code == "status_refresh_failed":
+            # The durable status was already recorded. Do not replace a
+            # confirmed delivery with a synthetic failure or repeat its write.
+            raise
         # If a newer snapshot replaced an unavailable source, preserve the old
         # remote files but stop blocking delivery of the new generation.
         if error.code in {"source_missing", "remote_conflict"} and pending_record(dirfd) != record:
