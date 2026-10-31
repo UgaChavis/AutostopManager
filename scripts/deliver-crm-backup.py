@@ -353,7 +353,6 @@ def rotate(dirfd, remote):
         if observed is not None:
             if not matches(observed, old):
                 raise DeliveryError("rotation_precondition", unknown=True)
-            pending_record(dirfd)
             remote.delete(old, observed, final=True)
         rows.pop(0)
         write_json(dirfd, "delivered.json", rows)
@@ -450,18 +449,15 @@ def deliver_once(dirfd, remote):
                 # Keep the unidentified incomplete file if its source is gone.
                 if stream is None:
                     raise DeliveryError("source_missing", unknown=True)
-                pending_record(dirfd)
                 remote.delete(record, observed["part"], final=False)
                 observed["part"] = None
             if observed["part"] is None:
                 if stream is None:
                     raise DeliveryError("source_missing", unknown=True)
-                pending_record(dirfd)
                 remote.write(record, stream)
                 if _identity(before) != _identity(os.fstat(stream.fileno())):
                     raise DeliveryError("source_changed", unknown=True)
             remote.verify(record, final=False)
-            pending_record(dirfd)
             remote.publish(record)
         remote.verify(record, final=True)
         remember(dirfd, record)

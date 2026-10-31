@@ -276,7 +276,7 @@ def test_unconfirmed_pending_prevents_all_remote_operations(store, case):
     assert delivery.read_json(store[1], "delivery-intent.json") == record
 
 
-def test_pending_loses_readiness_during_transfer_no_publish_or_rotation(store):
+def test_pending_loses_readiness_during_transfer_no_cleanup_or_rotation(store):
     remote = FakeWindows()
     old = []
     for number in (1, 2):
@@ -287,13 +287,17 @@ def test_pending_loses_readiness_during_transfer_no_publish_or_rotation(store):
     remote.on_part_verify = lambda: (store[0] / "pending-ready.json").unlink()
     with pytest.raises(delivery.DeliveryError, match="pending_not_ready"):
         delivery.deliver_once(store[1], remote)
-    assert set(remote.finals) == {record["id"] for record in old}
-    assert remote.parts[newest["id"]] == b"newest"
+    assert set(remote.finals) == {record["id"] for record in [*old, newest]}
+    assert remote.finals[newest["id"]] == b"newest"
     assert remote.deletes == []
     assert (store[0] / newest["file"]).exists()
+    assert remote.writes.count(newest["id"]) == 1
+    assert remote.moves.count(newest["id"]) == 1
     delivery.write_json(store[1], "pending-ready.json", newest)
     delivery.deliver_once(store[1], remote)
     assert set(remote.finals) == {old[-1]["id"], newest["id"]}
+    assert remote.writes.count(newest["id"]) == 1
+    assert remote.moves.count(newest["id"]) == 1
 
 
 def test_conflicting_old_final_is_preserved_when_new_generation_exists(store):
