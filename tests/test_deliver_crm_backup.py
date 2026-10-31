@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -84,6 +85,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "REFRESH", "/no-such-test-refresh")
     # Production stays fixed to root; only isolated test files use the runner's UID.
     monkeypatch.setattr(delivery, "OWNER_UID", os.geteuid())
+    monkeypatch.setattr(delivery.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
     fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         yield tmp_path, fd
@@ -103,7 +105,12 @@ def test_status_refreshes_installed_coordinator(store, monkeypatch):
     expected = "/usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py"
     monkeypatch.setattr(delivery, "REFRESH", expected)
     calls = []
-    monkeypatch.setattr(delivery.subprocess, "run", lambda command, **kwargs: calls.append(command))
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
     record = prepare(store, 1, b"synthetic")
     delivery.set_status(store[1], record, "ok")
     assert calls == [[sys.executable, expected, "refresh"]]
@@ -235,6 +242,7 @@ def test_failed_rotation_keeps_all_old_generations_then_retries(store):
     remote.bad_inspection = None
     delivery.deliver_once(store[1], remote)
     assert set(remote.finals) == {records[-1]["id"], newest["id"]}
+    assert delivery.read_json(store[1], "delivery-status.json")["error_code"] is None
 
 
 def test_busy_remote_preserves_source_and_previous_generations(store):
@@ -290,6 +298,39 @@ def test_bounded_digest_checks_all_bytes_and_size():
     assert delivery.bounded_remote_digest(command, 9, 5) == (9, hashlib.sha256(b"synthetic").digest())
     with pytest.raises(RuntimeError, match="larger"):
         delivery.bounded_remote_digest(command, 8, 5)
+
+
+def test_failed_refresh_after_delivery_retries_without_another_write(store, monkeypatch):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        # Start refresh, running status, then the confirmed delivery status.
+        return SimpleNamespace(returncode=1 if len(calls) == 3 else 0)
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    with pytest.raises(delivery.DeliveryError, match="status_refresh_failed"):
+        delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-status.json")["status"] == "ok"
+    assert delivery.read_json(store[1], "pending.json") is None
+    assert remote.writes == [record["id"]]
+    assert remote.moves == [record["id"]]
+    delivery.deliver_once(store[1], remote)
+    assert len(calls) == 4
+    assert remote.writes == [record["id"]]
+    assert remote.moves == [record["id"]]
+
+
+def test_failed_refresh_with_no_pending_returns_error_without_pc_access(store, monkeypatch):
+    remote = FakeWindows()
+    monkeypatch.setattr(delivery.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=1))
+    with pytest.raises(delivery.DeliveryError, match="status_refresh_failed"):
+        delivery.deliver_once(store[1], remote)
+    assert remote.writes == remote.moves == remote.deletes == []
+    monkeypatch.setattr(delivery, "ROOT", store[0])
+    assert delivery.main() == 1
 
 
 @pytest.mark.skipif(not shutil.which("pwsh"), reason="PowerShell parser not installed")
