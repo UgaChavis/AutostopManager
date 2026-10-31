@@ -211,6 +211,42 @@ def test_old_missing_source_leaves_partial_file_and_allows_new_pointer(store):
     assert remote.parts[first["id"]] == b"incomplete"
 
 
+def test_old_missing_source_and_unreadable_pc_does_not_block_new_pointer(store):
+    remote = FakeWindows()
+    first = prepare(store, 1, b"first")
+    delivery.write_json(store[1], "delivery-intent.json", first)
+    remote.parts[first["id"]] = b"unknown partial"
+    remote.finals[first["id"]] = b"unknown final"
+    newer = prepare(store, 2, b"newer")
+    (store[0] / first["file"]).unlink()
+    remote.busy = True
+    with pytest.raises(delivery.DeliveryError, match="ssh_unknown"):
+        delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-intent.json") is None
+    assert delivery.read_json(store[1], "pending.json") == newer
+    assert remote.parts[first["id"]] == b"unknown partial"
+    assert remote.finals[first["id"]] == b"unknown final"
+    assert remote.deletes == []
+    remote.busy = False
+    delivery.deliver_once(store[1], remote)
+    assert remote.finals[newer["id"]] == b"newer"
+    assert remote.parts[first["id"]] == b"unknown partial"
+    assert remote.finals[first["id"]] == b"unknown final"
+
+
+def test_old_missing_source_without_new_pointer_keeps_intent(store):
+    remote = FakeWindows()
+    first = prepare(store, 1, b"first")
+    delivery.write_json(store[1], "delivery-intent.json", first)
+    (store[0] / first["file"]).unlink()
+    (store[0] / "pending.json").unlink()
+    remote.busy = True
+    with pytest.raises(delivery.DeliveryError, match="ssh_unknown"):
+        delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-intent.json") == first
+    assert remote.deletes == []
+
+
 def test_conflicting_old_final_is_preserved_when_new_generation_exists(store):
     remote = FakeWindows()
     first = prepare(store, 1, b"first")
