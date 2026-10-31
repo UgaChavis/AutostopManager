@@ -27,7 +27,7 @@ EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
 REQUIRED = frozenset({"state.json", "settings.json", "users.json", "mcp-oauth-state.json", "change_feed.sqlite3"})
 
 
-def container_key(container_id: str, data_dir: Path) -> bytes:
+def container_context(container_id: str, data_dir: Path, revision: str) -> tuple[bytes, str]:
     if not re.fullmatch(r"[0-9a-f]{64}", container_id):
         raise ValueError("invalid container identity")
     result = subprocess.run(["docker", "inspect", container_id], capture_output=True, check=True, timeout=15)
@@ -38,6 +38,17 @@ def container_key(container_id: str, data_dir: Path) -> bytes:
     state = item["State"]
     if item["Id"] != container_id or state["Running"] or state["ExitCode"] != 0 or state["OOMKilled"]:
         raise ValueError("container is not cleanly stopped")
+    image = item["Image"]
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        raise ValueError("invalid image identity")
+    image_result = subprocess.run(["docker", "image", "inspect", image], capture_output=True, check=True, timeout=15)
+    images = json.loads(image_result.stdout)
+    if (
+        len(images) != 1
+        or images[0]["Id"] != image
+        or images[0]["Config"]["Labels"].get("org.opencontainers.image.revision") != revision
+    ):
+        raise ValueError("CRM image revision mismatch")
     mounts = [m for m in item["Mounts"] if m.get("Destination") == "/home/autostop/.minimal-kanban"]
     if (
         len(mounts) != 1
@@ -50,7 +61,7 @@ def container_key(container_id: str, data_dir: Path) -> bytes:
         raise ValueError("OAuth key unavailable")
     key = values[0].encode("ascii")
     Fernet(key)
-    return key
+    return key, image
 
 
 def _walk(root: Path):
@@ -130,9 +141,11 @@ def _sqlite_copy(path: Path, target: Path):
         source.close()
 
 
-def create_snapshot(root: Path, output: Path, revision: str, key: bytes):
+def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str):
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("invalid CRM revision")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        raise ValueError("invalid image identity")
     root = root.resolve(strict=True)
     if not root.is_dir() or not REQUIRED.issubset({p.name for p in root.iterdir()}):
         raise ValueError("CRM data incomplete")
@@ -203,6 +216,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes):
                     {
                         "schema": 1,
                         "crm_revision": revision,
+                        "crm_image": image,
                         "created_utc": datetime.now(UTC).isoformat(),
                         "tree_sha256": digest.hexdigest(),
                     },
@@ -232,8 +246,8 @@ def main():
     parser.add_argument("--crm-revision", required=True)
     args = parser.parse_args()
     try:
-        key = container_key(args.container_id, args.data_dir)
-        create_snapshot(args.data_dir, args.output, args.crm_revision, key)
+        key, image = container_context(args.container_id, args.data_dir, args.crm_revision)
+        create_snapshot(args.data_dir, args.output, args.crm_revision, key, image)
     except Exception:  # noqa: BLE001 - avoid leaking secret-bearing inputs in tracebacks
         print("CRM snapshot failed; no archive was published.")
         return 1

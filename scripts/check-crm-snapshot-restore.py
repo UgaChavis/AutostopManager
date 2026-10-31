@@ -84,6 +84,7 @@ def check_archive(archive_path: Path, destination: Path):  # noqa: C901 - one is
         not isinstance(manifest, dict)
         or manifest.get("schema") != 1
         or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("crm_revision", "")))
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(manifest.get("crm_image", "")))
         or manifest.get("tree_sha256") != digest.hexdigest()
     ):
         raise ValueError("archive integrity mismatch")

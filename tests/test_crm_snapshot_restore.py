@@ -50,7 +50,7 @@ class CrmSnapshotTest(unittest.TestCase):
 
     def test_real_archive_and_isolated_restore_with_key_and_wal(self):
         path = self.stage / "snapshot.tar.gz"
-        snapshot.create_snapshot(self.source, path, "a" * 40, self.key)
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         destination = self.base / "restore"
         destination.mkdir(mode=0o700)
@@ -65,33 +65,39 @@ class CrmSnapshotTest(unittest.TestCase):
     def test_wrong_key_and_symlink_do_not_publish(self):
         path = self.stage / "snapshot.tar.gz"
         with self.assertRaises(InvalidToken):
-            snapshot.create_snapshot(self.source, path, "a" * 40, Fernet.generate_key())
+            snapshot.create_snapshot(self.source, path, "a" * 40, Fernet.generate_key(), "sha256:" + "c" * 64)
         self.assertFalse(path.exists())
         (self.source / "attachments" / "bad").symlink_to(self.source / "state.json")
         with self.assertRaises(ValueError):
-            snapshot.create_snapshot(self.source, path, "a" * 40, self.key)
+            snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
         self.assertFalse(path.exists())
 
     def test_key_read_only_from_exact_stopped_container(self):
         ident = "b" * 64
         item = {
             "Id": ident,
+            "Image": "sha256:" + "c" * 64,
             "State": {"Running": False, "ExitCode": 0, "OOMKilled": False},
             "Mounts": [{"Destination": "/home/autostop/.minimal-kanban", "Source": str(self.source), "RW": True}],
             "Config": {"Env": ["AUTOSTOP_MCP_OAUTH_STATE_KEY=" + self.key.decode()]},
         }
         result = mock.Mock(stdout=json.dumps([item]).encode())
-        with mock.patch.object(snapshot.subprocess, "run", return_value=result):
-            self.assertEqual(snapshot.container_key(ident, self.source), self.key)
+        image = mock.Mock(
+            stdout=json.dumps(
+                [{"Id": "sha256:" + "c" * 64, "Config": {"Labels": {"org.opencontainers.image.revision": "a" * 40}}}]
+            ).encode()
+        )
+        with mock.patch.object(snapshot.subprocess, "run", side_effect=[result, image, result]):
+            self.assertEqual(snapshot.container_context(ident, self.source, "a" * 40), (self.key, "sha256:" + "c" * 64))
             item["State"]["Running"] = True
             result.stdout = json.dumps([item]).encode()
             with self.assertRaises(ValueError):
-                snapshot.container_key(ident, self.source)
+                snapshot.container_context(ident, self.source, "a" * 40)
 
     def test_corrupted_archive_fails_integrity_check(self):
         path = self.stage / "snapshot.tar.gz"
         changed = self.stage / "modified.tar.gz"
-        snapshot.create_snapshot(self.source, path, "a" * 40, self.key)
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
         with tarfile.open(path, "r:gz") as source, tarfile.open(changed, "w:gz") as target:
             for entry in source:
                 if entry.isfile():
