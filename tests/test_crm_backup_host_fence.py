@@ -28,6 +28,11 @@ def populate(root, uid, gid):
         path.touch(mode=0o600)
         if os.geteuid() == 0:
             os.chown(path, uid, gid)
+    for name in m.AGENT_SEED_FILES:
+        path = root / "agent" / name
+        path.touch(mode=0o600)
+        if os.geteuid() == 0:
+            os.chown(path, uid, gid)
     database = root / "change_feed.sqlite3"
     db = sqlite3.connect(database)
     try:
@@ -128,6 +133,21 @@ def test_replaced_lock_invalidates_snapshot(synthetic):
         with m.host_writer_fence(root, uid=os.geteuid(), gid=os.getegid()):
             path.unlink()
             path.touch(mode=0o600)
+
+
+def test_missing_or_replaced_agent_seed_invalidates_snapshot(synthetic):
+    root, _ = synthetic
+    path = root / "agent" / m.AGENT_SEED_FILES[0]
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        with m.host_writer_fence(root, uid=os.geteuid(), gid=os.getegid()):
+            pass
+    assert not path.exists()
+    path.touch(mode=0o600)
+    with pytest.raises(m.Uncertain, match="agent state changed"):
+        with m.host_writer_fence(root, uid=os.geteuid(), gid=os.getegid()):
+            path.unlink()
+            path.write_bytes(b"synthetic")
 
 
 def test_lost_sqlite_fence_invalidates_snapshot(synthetic, monkeypatch):
