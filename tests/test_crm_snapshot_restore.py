@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -131,6 +132,38 @@ class CrmSnapshotTest(unittest.TestCase):
         path = self.stage / "snapshot.tar.gz"
         with self.assertRaises(ValueError):
             snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
+        self.assertFalse(path.exists())
+
+    def test_new_attachment_after_walk_rejects_archive(self):
+        path = self.stage / "snapshot.tar.gz"
+        original = tarfile.TarFile.addfile
+
+        def change_tree(archive, entry, source=None):
+            result = original(archive, entry, source)
+            if entry.name == "crm/state.json":
+                (self.source / "attachments" / "late-file").write_bytes(b"synthetic")
+            return result
+
+        with mock.patch.object(tarfile.TarFile, "addfile", new=change_tree):
+            with self.assertRaisesRegex(ValueError, "tree changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
+        self.assertFalse(path.exists())
+
+    def test_replaced_file_after_read_rejects_archive(self):
+        path = self.stage / "snapshot.tar.gz"
+        original = tarfile.TarFile.addfile
+
+        def replace_state(archive, entry, source=None):
+            result = original(archive, entry, source)
+            if entry.name == "crm/users.json":
+                replacement = self.source / "temporary-state"
+                replacement.write_text('{"synthetic": 1}')
+                os.replace(replacement, self.source / "state.json")
+            return result
+
+        with mock.patch.object(tarfile.TarFile, "addfile", new=replace_state):
+            with self.assertRaisesRegex(ValueError, "tree changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64)
         self.assertFalse(path.exists())
 
 
