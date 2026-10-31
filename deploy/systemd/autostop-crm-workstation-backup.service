@@ -1,0 +1,12 @@
+[Unit]
+Description=Create an AutoStop CRM workstation backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py backup
+ExecStopPost=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py recover
+KillMode=control-group
+TimeoutStartSec=infinity
+TimeoutStopSec=infinity
