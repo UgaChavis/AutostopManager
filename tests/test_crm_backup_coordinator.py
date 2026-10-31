@@ -258,6 +258,49 @@ def test_initially_inactive_scheduler_not_started(ctx):
     assert all(kind != "scheduler" for _, kind in fake.actions)
 
 
+def test_scheduler_gate_preserves_initially_inactive_service_after_reboot(ctx):
+    root, _, status, fake, _ = ctx
+    record = {
+        "attempt": "1" * 32,
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "phase": "crm_stop_running",
+        "copy": "running",
+        "restore": "pending",
+        "delivery": "pending",
+        "crm": {"identity": fake.c["id"], "initially_active": True, "phase": "untouched"},
+        "scheduler": {"identity": fake.s["identity"], "initially_active": False, "phase": "untouched"},
+    }
+    fake.s["state"] = "inactive"
+    m.save(root / "attempt.json", record)
+    before = (root / "attempt.json").read_bytes()
+    fake.boot_id = "boot2"
+    # Simulate an enabled unit's automatic boot start through ExecCondition.
+    if m.scheduler_start_allowed(root):
+        fake.start("scheduler", fake.s["identity"])
+    assert (root / "attempt.json").read_bytes() == before
+    result = m.recover(root, status, fake, interrupted=True)
+    assert result["phase"] == "complete" and result["restore"] == "ok"
+    assert fake.s["state"] == "inactive" and not fake.actions
+    assert m.scheduler_start_allowed(root)
+
+
+@pytest.mark.parametrize("phase,active", [("complete", False), ("prepared", True), ("recovering", True)])
+def test_scheduler_gate_preserves_normal_startup(tmp_path, phase, active):
+    assert m.scheduler_start_allowed(tmp_path)
+    record = {"attempt": "1" * 32, "phase": phase, "scheduler": {"initially_active": active}}
+    m.save(tmp_path / "attempt.json", record)
+    assert m.scheduler_start_allowed(tmp_path)
+
+
+def test_scheduler_gate_fails_closed_without_an_incomplete_attempt_baseline(tmp_path):
+    record = {"attempt": "1" * 32, "phase": "prepared"}
+    m.save(tmp_path / "attempt.json", record)
+    before = (tmp_path / "attempt.json").read_bytes()
+    assert not m.scheduler_start_allowed(tmp_path)
+    assert (tmp_path / "attempt.json").read_bytes() == before
+
+
 def test_late_worker_after_recovery_cannot_stop_service(ctx):
     root, _, status, fake, _ = ctx
     attempt = "1" * 32

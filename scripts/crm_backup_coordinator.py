@@ -645,6 +645,15 @@ def load(path):
     return record
 
 
+def scheduler_start_allowed(root=ROOT):
+    """Preserve an originally stopped scheduler during interrupted recovery."""
+    try:
+        record = load(root / "attempt.json")
+    except FileNotFoundError:
+        return True
+    return record.get("phase") == "complete" or record.get("scheduler", {}).get("initially_active") is True
+
+
 def amend(root, attempt, fields=None, resource=None):
     if resource is None and (fields or {}).get("copy") == "ok":
         raise Uncertain("copy success requires completed status update")
@@ -1334,12 +1343,14 @@ def backup(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("backup", "recover", "worker", "refresh"))
+    parser.add_argument("action", choices=("backup", "recover", "worker", "refresh", "scheduler-start-allowed"))
     parser.add_argument("attempt", nargs="?")
     parser.add_argument("operation", nargs="?", choices=("stop", "start"))
     parser.add_argument("resource", nargs="?", choices=("crm", "scheduler"))
     args = parser.parse_args()
     try:
+        if args.action == "scheduler-start-allowed":
+            return 0 if scheduler_start_allowed() else 1
         if args.action == "worker":
             if not args.attempt or not ATTEMPT.fullmatch(args.attempt) or not args.operation or not args.resource:
                 raise Uncertain("invalid worker arguments")
