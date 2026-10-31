@@ -94,6 +94,30 @@ def _stable(before, after):
     )
 
 
+def _tree_signature(root, root_metadata, entries, sidecars):
+    def signature(info):
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+
+    return (
+        signature(root_metadata),
+        tuple(
+            (path.relative_to(root).as_posix(), is_dir, signature(metadata))
+            for path, metadata, is_dir in entries
+            if path not in sidecars
+        ),
+    )
+
+
 def _file(path: Path, expected):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     f = os.fdopen(fd, "rb")
@@ -156,6 +180,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     if parent == root or parent.is_relative_to(root):
         raise ValueError("staging directory inside source")
     output = parent / output.name
+    root_metadata = root.lstat()
     entries = _walk(root)
     paths = {p for p, _, directory in entries if not directory}
     sqlite_paths = {root / "change_feed.sqlite3"}
@@ -170,6 +195,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     if not found_feed:
         raise ValueError("CRM feed is not SQLite")
     sidecars = {Path(str(p) + ext) for p in sqlite_paths for ext in ("-wal", "-shm")}
+    original_tree = _tree_signature(root, root_metadata, entries, sidecars)
     if any(Path(str(p) + "-journal") in paths for p in sqlite_paths):
         raise ValueError("SQLite rollback journal present")
     state = root / "mcp-oauth-state.json"
@@ -229,6 +255,8 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
                 info.mode = 0o600
                 info.size = len(manifest)
                 archive.addfile(info, io.BytesIO(manifest))
+            if _tree_signature(root, root.lstat(), _walk(root), sidecars) != original_tree:
+                raise ValueError("CRM source tree changed during snapshot")
             raw.flush()
             os.fsync(raw.fileno())
         directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
