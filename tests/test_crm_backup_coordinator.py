@@ -25,8 +25,11 @@ class Fake:
         }
         self.s = {"identity": "c" * 64, "state": "active", "invocation": "one"}
         self.actions = []
+        self.start_count = 0
+        self.auto_restart = False
         self.boot_id = "boot1"
         self.daemon_id = "daemon1"
+        self.receipt = {"pid": 7, "start_ticks": 123, "generation": "d" * 32, "attempt": "", "state": "idle"}
 
     def boot(self):
         return self.boot_id
@@ -39,6 +42,35 @@ class Fake:
 
     def scheduler(self):
         return self.s.copy()
+
+    def control_enabled(self, identity):
+        return identity == self.c["id"]
+
+    def restart_policy(self, identity):
+        assert identity == self.c["id"]
+        return "always"
+
+    def prepare(self, identity, expected):
+        assert identity == self.c["id"]
+        assert expected["started"] == self.c["started"]
+        self.receipt["attempt"] = "e" * 32
+        self.receipt["state"] = "ready"
+        return self.receipt.copy()
+
+    def commit(self, identity, ready):
+        assert identity == self.c["id"] and ready["state"] == "ready"
+        self.receipt["state"] = "committed"
+        return self.receipt.copy()
+
+    def control(self, identity, operation="read", expected=None):
+        assert identity == self.c["id"]
+        if operation == "TERM":
+            assert expected == self.receipt and self.receipt["state"] == "committed"
+            self.actions.append(("term", "crm"))
+            if self.auto_restart:
+                self.c.update(started="start2", restarts="1", state="running", health="healthy")
+                self.receipt.update(generation="f" * 32, attempt="", state="idle")
+        return self.receipt.copy()
 
     def healthy(self, kind, identity):
         current = self.crm() if kind == "crm" else self.scheduler()
@@ -55,7 +87,9 @@ class Fake:
     def start(self, kind, identity):
         self.actions.append(("start", kind))
         if kind == "crm":
-            self.c.update(state="running", started="start2", health="healthy")
+            self.start_count += 1
+            self.c.update(state="running", started="start" + str(self.start_count + 1), health="healthy")
+            self.receipt.update(generation=("f" if self.start_count % 2 else "d") * 32, attempt="", state="idle")
         else:
             self.s.update(state="active")
 
@@ -278,6 +312,7 @@ def test_journal_update_waits_for_inflight_worker(ctx):
             "identity": fake.c["id"],
             "started": fake.c["started"],
             "restarts": fake.c["restarts"],
+            "revision": fake.c["revision"],
             "initially_active": True,
             "phase": "untouched",
         },
@@ -461,3 +496,270 @@ def test_repeated_unknown_recovery_does_not_rewrite_journal(ctx):
         m.recover(root, status, fake, interrupted=True, wait=False)
     assert m.load(root / "attempt.json") == record
     assert (root / "attempt.json").stat().st_mtime_ns == before
+
+
+def test_control_disabled_never_reads_receipt_or_sends_signal():
+    class Disabled(m.System):
+        def control_enabled(self, identity):
+            return False
+
+        def control(self, *args):
+            raise AssertionError("control must not be called")
+
+    with pytest.raises(m.PrepareAborted):
+        Disabled().prepare("a" * 64, {})
+
+
+def test_changed_generation_before_prepare_never_sends_signal():
+    class Changed(m.System):
+        def control_enabled(self, identity):
+            return True
+
+        def control(self, identity, operation="read", expected=None):
+            assert operation == "read"
+            return {"pid": 7, "start_ticks": 123, "generation": "d" * 32, "attempt": "", "state": "idle"}
+
+        def crm(self):
+            return {"id": "a" * 64, "state": "running", "started": "changed", "restarts": "0", "revision": "b" * 40}
+
+    with pytest.raises(m.PrepareAborted):
+        Changed().prepare(
+            "a" * 64,
+            {
+                "started": "old",
+                "restarts": "0",
+                "revision": "b" * 40,
+                "control": {"pid": 7, "start_ticks": 123, "generation": "d" * 32},
+            },
+        )
+
+
+def test_aborted_prepare_never_stops_crm_and_restores_scheduler(ctx):
+    root, _, _, fake, _ = ctx
+
+    def abort(*_):
+        raise m.PrepareAborted("synthetic refusal")
+
+    fake.prepare = abort
+    with pytest.raises(m.Uncertain):
+        run(ctx)
+    assert fake.actions == [("stop", "scheduler"), ("start", "scheduler")]
+    assert fake.crm()["state"] == "running" and not (root / "pending.json").exists()
+
+
+def test_unknown_commit_never_sends_stop(ctx):
+    root, _, _, fake, _ = ctx
+
+    def unknown(*_):
+        raise m.Uncertain("synthetic unknown commit")
+
+    fake.commit = unknown
+    with pytest.raises(m.Uncertain):
+        run(ctx)
+    assert ("stop", "crm") not in fake.actions and not (root / "pending.json").exists()
+    assert m.load(root / "attempt.json")["phase"] == "crm_commit_unknown"
+
+
+def test_forced_exit_after_commit_rejects_snapshot_but_restores(ctx):
+    root, _, _, fake, _ = ctx
+    old_stop = fake.stop
+
+    def forced(kind, identity):
+        old_stop(kind, identity)
+        if kind == "crm":
+            fake.c["exit"] = "137"
+
+    fake.stop = forced
+    with pytest.raises(m.Uncertain):
+        run(ctx)
+    assert not (root / "pending.json").exists()
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+
+
+def test_daemon_restart_with_inflight_stop_and_same_committed_crm_does_not_claim_recovery(ctx):
+    root, _, status, fake, _ = ctx
+    fake.daemon_id = "daemon2"
+    fake.receipt.update(attempt="e" * 32, state="committed")
+    fake.s["state"] = "inactive"
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_stop_unknown",
+        "copy": "failed",
+        "restore": "unknown",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {
+            "identity": fake.c["id"],
+            "started": fake.c["started"],
+            "restarts": fake.c["restarts"],
+            "revision": fake.c["revision"],
+            "initially_active": True,
+            "phase": "untouched",
+            "drain": dict(fake.receipt),
+        },
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    m.save(root / "attempt.json", record)
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [] and m.load(root / "attempt.json")["restore"] == "unknown"
+
+
+def test_recovery_does_not_start_service_stopped_by_another_actor(ctx):
+    root, _, status, fake, _ = ctx
+    fake.c["state"] = "exited"
+    fake.s["state"] = "inactive"
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_prepare_aborted",
+        "copy": "failed",
+        "restore": "pending",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {"identity": fake.c["id"], "initially_active": True, "phase": "untouched"},
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    m.save(root / "attempt.json", record)
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [] and fake.c["state"] == "exited"
+
+
+def test_unknown_commit_recovers_only_exact_committed_pid(ctx):
+    root, _, status, fake, _ = ctx
+    fake.s["state"] = "inactive"
+    ready = dict(fake.receipt, attempt="e" * 32, state="ready")
+    fake.receipt.update(attempt="e" * 32, state="committed")
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_commit_unknown",
+        "copy": "failed",
+        "restore": "unknown",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {
+            "identity": fake.c["id"],
+            "started": fake.c["started"],
+            "restarts": fake.c["restarts"],
+            "revision": fake.c["revision"],
+            "initially_active": True,
+            "phase": "untouched",
+            "drain": ready,
+        },
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    m.save(root / "attempt.json", record)
+    fake.auto_restart = True
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [("term", "crm")]
+    assert m.load(root / "attempt.json")["phase"] == "crm_term_intent"
+    out = m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [("term", "crm"), ("start", "scheduler")]
+    assert out["phase"] == "complete" and out["restore"] == "ok" and out["copy"] == "failed"
+
+
+def test_unknown_term_is_never_repeated_for_different_generation(ctx):
+    root, _, status, fake, _ = ctx
+    ready = dict(fake.receipt, attempt="e" * 32, state="ready")
+    fake.receipt.update(attempt="e" * 32, state="committed")
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_commit_unknown",
+        "copy": "failed",
+        "restore": "unknown",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {
+            "identity": fake.c["id"],
+            "started": fake.c["started"],
+            "restarts": fake.c["restarts"],
+            "revision": fake.c["revision"],
+            "initially_active": True,
+            "phase": "untouched",
+            "drain": ready,
+        },
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    fake.s["state"] = "inactive"
+    m.save(root / "attempt.json", record)
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    fake.receipt["generation"] = "0" * 32
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [("term", "crm")]
+
+
+def test_recovery_does_not_start_scheduler_stopped_by_another_actor(ctx):
+    root, _, status, fake, _ = ctx
+    fake.s["state"] = "inactive"
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_prepare_aborted",
+        "copy": "failed",
+        "restore": "pending",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {"identity": fake.c["id"], "initially_active": True, "phase": "untouched"},
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "untouched"},
+    }
+    m.save(root / "attempt.json", record)
+    with pytest.raises(m.Uncertain):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [] and fake.s["state"] == "inactive"
+
+
+def test_result_fsync_failure_preserves_previous_archive_and_reports_unknown(ctx, monkeypatch):
+    root, _, status, _, _ = ctx
+    run(ctx)
+    previous = m.load_pending(root / "pending.json")
+    original = m.save
+
+    def fail_after_replace(path, record):
+        if path.name == "attempt.json" and record.get("copy") == "ok":
+            original(path, record)
+            raise OSError("synthetic post-replace fsync failure")
+        return original(path, record)
+
+    monkeypatch.setattr(m, "save", fail_after_replace)
+    with pytest.raises(OSError):
+        run(ctx)
+    assert (root / previous["file"]).exists()
+    assert m.load(root / "attempt.json")["copy"] == "unknown"
+    assert "Копия: не подтверждён" in status.read_text()
+
+
+def test_expired_exact_commit_returns_only_owned_scheduler_without_signal(ctx):
+    root, _, status, fake, _ = ctx
+    fake.s["state"] = "inactive"
+    ready = dict(fake.receipt, attempt="e" * 32, state="ready")
+    fake.receipt.update(attempt="e" * 32, state="aborted")
+    record = {
+        "attempt": "1" * 32,
+        "phase": "crm_commit_unknown",
+        "copy": "failed",
+        "restore": "unknown",
+        "delivery": "pending",
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "crm": {
+            "identity": fake.c["id"],
+            "started": fake.c["started"],
+            "restarts": fake.c["restarts"],
+            "revision": fake.c["revision"],
+            "initially_active": True,
+            "phase": "untouched",
+            "drain": ready,
+        },
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    m.save(root / "attempt.json", record)
+    out = m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == [("start", "scheduler")]
+    assert out["phase"] == "complete" and out["restore"] == "ok" and out["copy"] == "failed"
