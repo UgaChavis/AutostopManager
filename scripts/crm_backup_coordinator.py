@@ -78,7 +78,7 @@ def save(path, record):
 
 
 def status(path, record):
-    allowed = {"pending", "running", "ok", "failed", "unknown"}
+    allowed = {"pending", "running", "ok", "failed", "unknown", "not_needed"}
 
     def stage(key):
         return record.get(key) if record.get(key) in allowed else "unknown"
@@ -89,6 +89,7 @@ def status(path, record):
         "ok": "успех",
         "failed": "ошибка",
         "unknown": "не подтверждён",
+        "not_needed": "не требовался",
     }
     attempt = record.get("attempt", "")
     if not ATTEMPT.fullmatch(attempt):
@@ -127,7 +128,7 @@ class Lock:
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
             info = os.fstat(self.fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
                 raise Uncertain("unsafe lock file")
             fcntl.flock(self.fd, fcntl.LOCK_EX | (0 if self.wait else fcntl.LOCK_NB))
         except BaseException:
@@ -357,12 +358,23 @@ def same_stopped(before, after):
     )
 
 
-def recover(root, status_path, system=None, *, interrupted=False):
+def recover(root, status_path, system=None, *, interrupted=False, wait=True):
     system = system or System()
     path = root / "attempt.json"
-    with Lock(root / "operation.lock"):
+    with Lock(root / "operation.lock", wait=wait):
         r = load(path)
         phase = r["phase"]
+        changed = False
+        if interrupted and r["copy"] in ("pending", "running"):
+            r["copy"] = "failed" if r["copy"] == "pending" else "unknown"
+            changed = True
+        if phase == "complete":
+            # The owner may have intentionally changed services afterwards.
+            # A completed recovery is immutable, even across a reboot.
+            if changed:
+                save(path, r)
+                refresh(root, status_path)
+            return r
         # Invalidate any worker that did not acquire the operation lock. A
         # worker killed while running leaves an unknown request and cannot be
         # treated as finished unless the host or daemon has since restarted.
@@ -371,12 +383,13 @@ def recover(root, status_path, system=None, *, interrupted=False):
         if phase.endswith(("_running", "_unknown")):
             resolved = boot_restarted or (phase.startswith("crm_") and daemon_restarted)
             if not resolved:
-                r["restore"] = "unknown"
-                save(path, r)
-                refresh(root, status_path)
+                if r["restore"] != "unknown":
+                    r["restore"] = "unknown"
+                    changed = True
+                if changed:
+                    save(path, r)
+                    refresh(root, status_path)
                 raise Uncertain("in-flight operation outcome unknown")
-        if interrupted and r["copy"] == "running":
-            r["copy"] = "unknown"
         r["phase"] = "recovering"
         save(path, r)
         refresh(root, status_path)
@@ -416,34 +429,86 @@ def validate_stopped(initial, stopped, later):
         raise Uncertain("CRM changed during snapshot")
 
 
-def file_info(path):
+def _signature(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink
+
+
+def _checked_stat(stream):
+    info = os.fstat(stream.fileno())
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077 or info.st_nlink != 1:
+        raise Uncertain("unsafe snapshot file")
+    return info
+
+
+def _file_info(stream):
     digest = hashlib.sha256()
     size = 0
+    before = _checked_stat(stream)
+    stream.seek(0)
+    while data := stream.read(1024 * 1024):
+        size += len(data)
+        digest.update(data)
+    if not size or size != before.st_size or _signature(before) != _signature(_checked_stat(stream)):
+        raise Uncertain("snapshot changed while hashing")
+    return before, digest.hexdigest()
+
+
+def _open_snapshot(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, "rb") as stream:
-        while data := stream.read(1024 * 1024):
-            size += len(data)
-            digest.update(data)
-    if not size:
-        raise Uncertain("empty snapshot")
-    return size, digest.hexdigest()
+    return os.fdopen(fd, "rb")
 
 
 def publish(root, path, attempt):
     """Retain the old pending generation unless a new pointer is durable."""
     if not ATTEMPT.fullmatch(attempt):
         raise Uncertain("invalid attempt ID")
-    size, digest = file_info(path)
-    with Lock(root / "pending.lock"):
-        return _publish_locked(root, path, attempt, size, digest)
+    with _open_snapshot(path) as staged:
+        staged_info, digest = _file_info(staged)
+        with Lock(root / "pending.lock"):
+            try:
+                old = load_pending(root / "pending.json")
+            except FileNotFoundError:
+                old = None
+            try:
+                old_ready = load_pending(root / "pending-ready.json")
+            except FileNotFoundError:
+                old_ready = None
+            try:
+                old_stream = _open_snapshot(root / old["file"]) if old and old == old_ready else None
+            except FileNotFoundError:
+                old_stream = None
+        old_info = None
+        if old_stream:
+            with old_stream:
+                try:
+                    old_info, old_digest = _file_info(old_stream)
+                    if old_info.st_size != old["size"] or old_digest != old["sha256"]:
+                        old_info = None
+                except (OSError, Uncertain):
+                    # The previous file is never removed if it cannot be verified.
+                    old_info = None
+        with Lock(root / "pending.lock"):
+            try:
+                current = load_pending(root / "pending.json")
+            except FileNotFoundError:
+                current = None
+            try:
+                current_ready = load_pending(root / "pending-ready.json")
+            except FileNotFoundError:
+                current_ready = None
+            if current is not None and current != old:
+                raise Uncertain("pending generation changed during publication")
+            if current is not None and current_ready != old_ready:
+                raise Uncertain("pending readiness changed during publication")
+            if _signature(staged_info) != _signature(_checked_stat(staged)) or _signature(staged_info) != _signature(
+                path.lstat()
+            ):
+                raise Uncertain("staged snapshot changed before publication")
+            return _publish_locked(root, path, attempt, staged_info, digest, current, old_info)
 
 
-def _publish_locked(root, path, attempt, size, digest):
+def _publish_locked(root, path, attempt, staged_info, digest, old, old_info):
     pending = root / "pending.json"
-    try:
-        old = load_pending(pending)
-    except FileNotFoundError:
-        old = None
     target = root / ("crm-" + attempt + ".tar.gz")
     # Hard link preserves the fully fsynced inode and cannot overwrite a file.
     os.link(path, target, follow_symlinks=False)
@@ -455,14 +520,24 @@ def _publish_locked(root, path, attempt, size, digest):
         os.fsync(directory)
     finally:
         os.close(directory)
-    value = {"id": attempt, "file": target.name, "sha256": digest, "size": size}
+    value = {"id": attempt, "file": target.name, "sha256": digest, "size": staged_info.st_size}
     save(pending, value)
-    if load_pending(pending) != value or file_info(target) != (size, digest):
+    target_info = target.lstat()
+    if (
+        load_pending(pending) != value
+        or not stat.S_ISREG(target_info.st_mode)
+        or target_info.st_nlink != 1
+        or (target_info.st_dev, target_info.st_ino, target_info.st_size, target_info.st_mtime_ns)
+        != (staged_info.st_dev, staged_info.st_ino, staged_info.st_size, staged_info.st_mtime_ns)
+    ):
         raise Uncertain("published snapshot not confirmed")
-    if old and old != value:
+    save(root / "pending-ready.json", value)
+    if load_pending(root / "pending-ready.json") != value:
+        raise Uncertain("snapshot readiness not confirmed")
+    if old and old != value and old_info:
         old_path = root / old["file"]
         try:
-            if file_info(old_path) == (old["size"], old["sha256"]):
+            if _signature(old_path.lstat()) == _signature(old_info):
                 old_path.unlink()
                 directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
                 try:
@@ -553,42 +628,63 @@ def backup(
     make_root(root)
     path = root / "attempt.json"
     with Lock(root / "coordinator.lock", wait=False), Lock(deploy_lock, wait=False):
+        old = None
         if path.exists():
             old = load(path)
             if old.get("phase") != "complete":
                 raise Uncertain("previous attempt requires recovery")
-            (root / (".staged-" + old["attempt"] + ".tar.gz")).unlink(missing_ok=True)
-        check_space(root, data)
-        crm = system.crm()
-        scheduler = system.scheduler()
-        if not HEX40.fullmatch(approved_revision) or crm["revision"] != approved_revision:
-            raise Uncertain("installed CRM revision is not approved for backup")
-        if crm["state"] != "running" or crm["health"] != "healthy":
-            raise Uncertain("CRM was not initially healthy")
         r = {
             "attempt": uuid.uuid4().hex,
             "started_at": datetime.now(UTC).isoformat(),
-            "boot": system.boot(),
-            "daemon": system.daemon(),
-            "phase": "prepared",
-            "copy": "pending",
-            "restore": "pending",
+            # Until preflight is complete no service can have been stopped.
+            "phase": "complete",
+            "copy": "running",
+            "restore": "not_needed",
             "delivery": "pending",
-            "crm": {
-                "identity": crm["id"],
-                "started": crm["started"],
-                "restarts": crm["restarts"],
-                "initially_active": True,
-                "phase": "untouched",
-            },
-            "scheduler": {
-                "identity": scheduler["identity"],
-                "invocation": scheduler["invocation"],
-                "initially_active": scheduler["state"] == "active",
-                "phase": "untouched",
-            },
         }
-        save(path, r)
+        with Lock(root / "operation.lock"):
+            save(path, r)
+        refresh(root, status_path)
+        try:
+            if old:
+                (root / (".staged-" + old["attempt"] + ".tar.gz")).unlink(missing_ok=True)
+            check_space(root, data)
+            crm = system.crm()
+            scheduler = system.scheduler()
+            if not HEX40.fullmatch(approved_revision) or crm["revision"] != approved_revision:
+                raise Uncertain("installed CRM revision is not approved for backup")
+            if crm["state"] != "running" or crm["health"] != "healthy":
+                raise Uncertain("CRM was not initially healthy")
+            boot = system.boot()
+            daemon = system.daemon()
+        except Exception:
+            amend(root, r["attempt"], {"copy": "failed"})
+            refresh(root, status_path)
+            raise
+        r = amend(
+            root,
+            r["attempt"],
+            {
+                "boot": boot,
+                "daemon": daemon,
+                "phase": "prepared",
+                "copy": "pending",
+                "restore": "pending",
+                "crm": {
+                    "identity": crm["id"],
+                    "started": crm["started"],
+                    "restarts": crm["restarts"],
+                    "initially_active": True,
+                    "phase": "untouched",
+                },
+                "scheduler": {
+                    "identity": scheduler["identity"],
+                    "invocation": scheduler["invocation"],
+                    "initially_active": scheduler["state"] == "active",
+                    "phase": "untouched",
+                },
+            },
+        )
         refresh(root, status_path)
         staged = None
         copy_error = None
@@ -621,7 +717,12 @@ def backup(
                 staged.unlink(missing_ok=True)
             raise copy_error
         try:
-            publish(root, staged, r["attempt"])
+            try:
+                publish(root, staged, r["attempt"])
+            except Exception:
+                amend(root, r["attempt"], {"copy": "unknown"})
+                refresh(root, status_path)
+                raise
             r = amend(root, r["attempt"], {"copy": "ok"})
             refresh(root, status_path)
         finally:
@@ -649,11 +750,15 @@ def main():
             with Lock(ROOT / "coordinator.lock", wait=False), Lock(DEPLOY_LOCK, wait=False):
                 if (ROOT / "attempt.json").exists():
                     try:
-                        recover(ROOT, STATUS, interrupted=True)
+                        recover(ROOT, STATUS, interrupted=True, wait=False)
+                    except BlockingIOError:
+                        # A live worker owns the operation; retry later.
+                        raise
                     except Exception:
                         record = load(ROOT / "attempt.json")
-                        amend(ROOT, record["attempt"], {"restore": "unknown"})
-                        refresh(ROOT, STATUS)
+                        if record["restore"] != "unknown":
+                            amend(ROOT, record["attempt"], {"restore": "unknown"})
+                            refresh(ROOT, STATUS)
                         raise
         else:
             backup()

@@ -6,7 +6,7 @@ After=docker.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py backup
-ExecStopPost=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py recover
+ExecStopPost=/usr/bin/systemctl start --no-block autostop-crm-workstation-recovery.service
 KillMode=control-group
 TimeoutStartSec=infinity
 TimeoutStopSec=infinity
