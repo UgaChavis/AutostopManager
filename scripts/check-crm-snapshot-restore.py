@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -19,9 +20,42 @@ import tarfile
 from cryptography.fernet import Fernet
 
 
+def _runtime_config(path):
+    spec = importlib.util.spec_from_file_location("crm_snapshot_runtime", Path(__file__).with_name("crm-snapshot.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with path.open("rb") as stream:
+        return module.validate_runtime_config(json.load(stream))
+
+
 def _record(hasher, info, digest=""):
     item = [info.name, info.isdir(), info.size, info.mode, info.uid, info.gid, info.mtime, digest]
     hasher.update(json.dumps(item, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n")
+
+
+def _member_parts(entry, seen, manifest):
+    parts = PurePosixPath(entry.name).parts
+    if (
+        not parts
+        or PurePosixPath(entry.name).is_absolute()
+        or any(p in (".", "..") for p in parts)
+        or entry.name in seen
+        or not (entry.isfile() or entry.isdir())
+        or manifest is not None
+    ):
+        raise ValueError("unsupported archive member")
+    if entry.name == "manifest.json":
+        if not entry.isfile() or entry.size > 4096:
+            raise ValueError("invalid manifest")
+        return parts
+    private_config = entry.name in {"oauth-state.key", "runtime-config.json"}
+    if not (parts[0] == "crm" or private_config) or (private_config and len(parts) != 1):
+        raise ValueError("unsupported archive layout")
+    if private_config and (not entry.isfile() or entry.mode != 0o600):
+        raise ValueError("runtime recovery material is not private")
+    if private_config and entry.size > (512 * 1024 if entry.name == "runtime-config.json" else 1024):
+        raise ValueError("runtime recovery material is too large")
+    return parts
 
 
 def check_archive(archive_path: Path, destination: Path):
@@ -37,26 +71,11 @@ def check_archive(archive_path: Path, destination: Path):
     manifest = None
     with tarfile.open(archive_path, "r:gz") as archive:
         for entry in archive:
-            parts = PurePosixPath(entry.name).parts
-            if (
-                not parts
-                or PurePosixPath(entry.name).is_absolute()
-                or any(p in (".", "..") for p in parts)
-                or entry.name in seen
-                or not (entry.isfile() or entry.isdir())
-                or manifest is not None
-            ):
-                raise ValueError("unsupported archive member")
+            parts = _member_parts(entry, seen, manifest)
             seen.add(entry.name)
             if entry.name == "manifest.json":
-                if not entry.isfile() or entry.size > 4096:
-                    raise ValueError("invalid manifest")
                 manifest = json.load(archive.extractfile(entry))
                 continue
-            if not (parts[0] == "crm" or entry.name == "oauth-state.key") or (
-                parts[0] == "oauth-state.key" and len(parts) != 1
-            ):
-                raise ValueError("unsupported archive layout")
             out = root.joinpath(*parts)
             if not out.parent.is_dir() or out.parent.is_symlink():
                 raise ValueError("archive parent missing")
@@ -82,7 +101,8 @@ def check_archive(archive_path: Path, destination: Path):
                 _record(digest, entry, h.hexdigest())
     if (
         not isinstance(manifest, dict)
-        or manifest.get("schema") != 1
+        or type(manifest.get("schema")) is not int
+        or manifest["schema"] not in (1, 2)
         or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("crm_revision", "")))
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(manifest.get("crm_image", "")))
         or manifest.get("tree_sha256") != digest.hexdigest()
@@ -98,6 +118,12 @@ def check_archive(archive_path: Path, destination: Path):
         "oauth-state.key",
     }.issubset(seen):
         raise ValueError("archive incomplete")
+    if manifest["schema"] == 2:
+        if "runtime-config.json" not in seen:
+            raise ValueError("runtime configuration missing")
+        _runtime_config(root / "runtime-config.json")
+    elif "runtime-config.json" in seen:
+        raise ValueError("runtime configuration requires archive schema 2")
     for name in ("state.json", "settings.json", "users.json"):
         with (root / "crm" / name).open("rb") as file:
             json.load(file)
@@ -130,6 +156,10 @@ def main():
         print("Isolated CRM restore check failed.")
         return 1
     print("Isolated CRM data, SQLite and saved OAuth key verified; revision:", revision)
+    if (args.destination / "runtime-config.json").is_file():
+        print("Saved runtime authentication configuration verified.")
+    else:
+        print("Legacy archive: runtime authentication configuration was not saved.")
     return 0
 
 

@@ -88,6 +88,16 @@ class FakeSystem:
         assert identity == self.current["id"]
         assert self.current["state"] == "running" and self.current["health"] == "healthy"
 
+    def backup_space(self, root):
+        self.actions.append("space")
+
+    def snapshot(self, output, initial, stopped):
+        assert self.current["state"] == "exited"
+        self.actions.append("snapshot")
+        with output.open("xb") as stream:
+            stream.write(b"synthetic first backup")
+        output.chmod(0o600)
+
 
 @pytest.fixture
 def attempt(tmp_path, monkeypatch):
@@ -241,4 +251,81 @@ def test_recovery_journal_failure_cannot_skip_confirmed_owned_return(attempt, mo
         m.recover(root, ident, system)
     assert injected
     assert system.current["state"] == "running" and system.current["started"] == "generation-two"
+    assert system.actions == ["start"]
+
+
+def request_backup(root):
+    m.save(root, m.load(root), backup_requested=True, copy_status="pending")
+
+
+def test_first_backup_ready_only_after_healthy_return_and_archive_check(attempt, monkeypatch):
+    root, ident, system = attempt
+    request_backup(root)
+    original_receipt = m.archive_receipt
+
+    def checked_receipt(*args):
+        assert system.current["state"] == "running" and system.current["health"] == "healthy"
+        assert m.load(root)["copy_status"] == "running"
+        assert "archive" not in m.load(root)
+        return original_receipt(*args)
+
+    monkeypatch.setattr(m, "archive_receipt", checked_receipt)
+    m.worker(root, ident, system)
+    result = m.load(root)
+    assert m.success(result) and result["copy_status"] == "ok"
+    assert result["archive"]["file"] == f"crm-first-{ident}.tar.gz"
+    assert result["archive"]["size"] == len(b"synthetic first backup")
+    assert system.actions.index("snapshot") < system.actions.index("start")
+
+
+def test_first_backup_failure_returns_crm_and_keeps_previous_copies(attempt, monkeypatch):
+    root, ident, system = attempt
+    request_backup(root)
+    previous = root / ("crm-first-" + "c" * 32 + ".tar.gz")
+    previous.write_bytes(b"previous completed copy")
+
+    def failed_snapshot(*_args):
+        raise m.Uncertain("synthetic snapshot failure")
+
+    monkeypatch.setattr(system, "snapshot", failed_snapshot)
+    with pytest.raises(m.Uncertain, match="snapshot failure"):
+        m.worker(root, ident, system)
+    result = m.load(root)
+    assert result["restore"] == "ok" and result["copy_status"] == "failed"
+    assert not m.success(result) and "archive" not in result
+    assert system.current["state"] == "running" and system.actions.count("start") == 1
+    assert previous.read_bytes() == b"previous completed copy"
+
+
+def test_first_backup_receipt_failure_does_not_publish_readiness(attempt, monkeypatch):
+    root, ident, system = attempt
+    request_backup(root)
+
+    def failed_receipt(*_args):
+        raise OSError("synthetic archive fsync failure")
+
+    monkeypatch.setattr(m, "archive_receipt", failed_receipt)
+    with pytest.raises(OSError, match="archive fsync"):
+        m.worker(root, ident, system)
+    result = m.load(root)
+    assert result["restore"] == "ok" and result["copy_status"] == "unknown"
+    assert "archive" not in result and not m.success(result)
+    assert m.archive_path(root, ident).exists() and system.current["state"] == "running"
+
+
+def test_interrupted_first_copy_is_not_promoted_by_recovery(attempt):
+    root, ident, system = attempt
+    system.current.update(state="exited", finished="end-one", health="")
+    m.save(
+        root,
+        m.load(root),
+        phase="stopped",
+        stop_receipt=system.crm(),
+        backup_requested=True,
+        copy_status="running",
+    )
+    m.archive_path(root, ident).write_bytes(b"unconfirmed bytes")
+    result = m.recover(root, ident, system)
+    assert result["restore"] == "ok" and result["copy_status"] == "unknown"
+    assert not m.success(result) and "archive" not in result
     assert system.actions == ["start"]

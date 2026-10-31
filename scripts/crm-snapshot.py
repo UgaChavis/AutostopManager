@@ -25,9 +25,58 @@ from cryptography.fernet import Fernet
 
 EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
 REQUIRED = frozenset({"state.json", "settings.json", "users.json", "mcp-oauth-state.json", "change_feed.sqlite3"})
+RUNTIME_ENV_KEYS = frozenset(
+    {
+        "MINIMAL_KANBAN_API_BEARER_TOKEN",
+        "MINIMAL_KANBAN_API_HOST",
+        "MINIMAL_KANBAN_API_PORT",
+        "MINIMAL_KANBAN_API_BASE_URL",
+        "MINIMAL_KANBAN_BOARD_API_URL",
+        "MINIMAL_KANBAN_MCP_BEARER_TOKEN",
+        "MINIMAL_KANBAN_MCP_HOST",
+        "MINIMAL_KANBAN_MCP_PORT",
+        "MINIMAL_KANBAN_MCP_PATH",
+        "MINIMAL_KANBAN_MCP_PUBLIC_BASE_URL",
+        "MINIMAL_KANBAN_MCP_PUBLIC_ENDPOINT_URL",
+        "MINIMAL_KANBAN_MCP_ALLOWED_HOSTS",
+        "MINIMAL_KANBAN_MCP_ALLOWED_ORIGINS",
+        "AUTOSTOP_MCP_OAUTH_ENABLED",
+        "AUTOSTOP_MCP_EMBEDDED_OAUTH_ENABLED",
+        "AUTOSTOP_DEPLOYMENT_ENV",
+        "AUTOSTOP_AGENT_SERVICE_IDENTITY",
+    }
+)
 
 
-def container_context(container_id: str, data_dir: Path, revision: str) -> tuple[bytes, str]:
+def validate_runtime_config(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema", "environment"}
+        or type(value["schema"]) is not int
+        or value["schema"] != 1
+        or not isinstance(value["environment"], dict)
+        or not set(value["environment"]).issubset(RUNTIME_ENV_KEYS)
+    ):
+        raise ValueError("invalid saved runtime configuration")
+    if any(not isinstance(v, str) or "\0" in v or len(v) > 16384 for v in value["environment"].values()):
+        raise ValueError("invalid saved runtime value")
+    return value
+
+
+def runtime_config_from_environment(values):
+    selected = {}
+    for value in values:
+        if not isinstance(value, str) or "=" not in value:
+            raise ValueError("invalid container environment")
+        name, content = value.split("=", 1)
+        if name in RUNTIME_ENV_KEYS:
+            if name in selected:
+                raise ValueError("duplicate saved runtime key")
+            selected[name] = content
+    return validate_runtime_config({"schema": 1, "environment": selected})
+
+
+def container_context(container_id: str, data_dir: Path, revision: str) -> tuple[bytes, str, dict]:
     if not re.fullmatch(r"[0-9a-f]{64}", container_id):
         raise ValueError("invalid container identity")
     result = subprocess.run(["docker", "inspect", container_id], capture_output=True, check=True, timeout=15)
@@ -61,7 +110,7 @@ def container_context(container_id: str, data_dir: Path, revision: str) -> tuple
         raise ValueError("OAuth key unavailable")
     key = values[0].encode("ascii")
     Fernet(key)
-    return key, image
+    return key, image, runtime_config_from_environment(item["Config"]["Env"])
 
 
 def _walk(root: Path):
@@ -165,11 +214,12 @@ def _sqlite_copy(path: Path, target: Path):
         source.close()
 
 
-def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str):  # noqa: C901 - single archive transaction
+def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str, runtime_config: dict):  # noqa: C901
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("invalid CRM revision")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
         raise ValueError("invalid image identity")
+    runtime = json.dumps(validate_runtime_config(runtime_config), separators=(",", ":")).encode("utf-8")
     root = root.resolve(strict=True)
     if not root.is_dir() or not REQUIRED.issubset({p.name for p in root.iterdir()}):
         raise ValueError("CRM data incomplete")
@@ -241,9 +291,14 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
                 info.size = len(key)
                 archive.addfile(info, io.BytesIO(key))
                 _record(digest, info, hashlib.sha256(key).hexdigest())
+                info = tarfile.TarInfo("runtime-config.json")
+                info.mode = 0o600
+                info.size = len(runtime)
+                archive.addfile(info, io.BytesIO(runtime))
+                _record(digest, info, hashlib.sha256(runtime).hexdigest())
                 manifest = json.dumps(
                     {
-                        "schema": 1,
+                        "schema": 2,
                         "crm_revision": revision,
                         "crm_image": image,
                         "created_utc": datetime.now(UTC).isoformat(),
@@ -277,8 +332,8 @@ def main():
     parser.add_argument("--crm-revision", required=True)
     args = parser.parse_args()
     try:
-        key, image = container_context(args.container_id, args.data_dir, args.crm_revision)
-        create_snapshot(args.data_dir, args.output, args.crm_revision, key, image)
+        key, image, runtime = container_context(args.container_id, args.data_dir, args.crm_revision)
+        create_snapshot(args.data_dir, args.output, args.crm_revision, key, image, runtime)
     except Exception:  # noqa: BLE001 - avoid leaking secret-bearing inputs in tracebacks
         print("CRM snapshot failed; no archive was published.")
         return 1

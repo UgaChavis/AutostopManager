@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time qualification of the legacy CRM stop and return; never a release or backup."""
+"""One-time legacy CRM stop/return and optional first data backup; never a release."""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ def unit(attempt, kind):
 
 def source_digest():
     digest = hashlib.sha256()
-    for path in (SCRIPT, Path(common.__file__), Path(gate.__file__)):
+    for path in (SCRIPT, Path(common.__file__), Path(gate.__file__), Path(common.SNAPSHOT)):
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -251,6 +251,100 @@ class System:
             time.sleep(0.5)
         raise Uncertain("CRM health is not confirmed")
 
+    def backup_space(self, root):
+        common.check_space(root, self.data)
+
+    def snapshot(self, output, initial, stopped):
+        # Native locks are taken only after the application has stopped. They
+        # fence cooperating host writers, not live application transactions.
+        with common.host_writer_fence(self.data):
+            common.validate_stopped(initial, stopped, self.crm())
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(common.SNAPSHOT),
+                    "--data-dir",
+                    str(self.data),
+                    "--container-id",
+                    initial["id"],
+                    "--output",
+                    str(output),
+                    "--crm-revision",
+                    initial["revision"],
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=None,
+            )
+            if result.returncode:
+                raise Uncertain("first CRM snapshot failed")
+            common.validate_stopped(initial, stopped, self.crm())
+
+
+def archive_path(root, attempt):
+    if not re.fullmatch(r"[0-9a-f]{32}", attempt):
+        raise Uncertain("invalid backup attempt")
+    return root / f"crm-first-{attempt}.tar.gz"
+
+
+def archive_receipt(root, attempt):
+    path = archive_path(root, attempt)
+    with common._open_snapshot(path) as stream:
+        info, digest = common._file_info(stream)
+        os.fsync(stream.fileno())
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return {"file": path.name, "size": info.st_size, "sha256": digest}
+
+
+def success(record):
+    expected = "backup_and_return_verified" if record.get("backup_requested") else "stop_and_return_verified"
+    return (
+        record["restore"] == "ok"
+        and record["result"] == expected
+        and (not record.get("backup_requested") or record.get("copy_status") == "ok")
+    )
+
+
+def interrupted_copy(record):
+    if record.get("backup_requested") and record.get("copy_status") != "ok":
+        record["copy_status"] = "failed" if record.get("copy_status") == "failed" else "unknown"
+
+
+def _snapshot_stopped(root, attempt, record, system, stopped, note):
+    if not record.get("backup_requested"):
+        return
+    note(copy_status="running")
+    try:
+        system.snapshot(archive_path(root, attempt), record["initial"], stopped)
+        common.validate_stopped(record["initial"], stopped, system.crm())
+        if system.boot() != record["boot"] or system.daemon() != record["daemon"]:
+            raise Uncertain("runtime changed during first snapshot")
+    except BaseException:
+        note(copy_status="failed")
+        raise
+
+
+def _finish_snapshot(root, attempt, record, note, journal_errors):
+    if not record.get("backup_requested"):
+        return "stop_and_return_verified"
+    if record.get("copy_status") == "failed":
+        return "snapshot_failed_crm_returned"
+    if journal_errors:
+        note(copy_status="unknown")
+        return "returned_with_journal_error"
+    try:
+        receipt = archive_receipt(root, attempt)
+        note(copy_status="ok", archive=receipt)
+        return "backup_and_return_verified"
+    except Exception:
+        note(copy_status="unknown", phase="complete", restore="ok", result="backup_unconfirmed_crm_returned")
+        raise
+
 
 def plan(system=None):
     system = system or System()
@@ -272,6 +366,8 @@ def plan(system=None):
 def _prepare_gate(root, record, system):
     value = None
     try:
+        if record.get("backup_requested"):
+            system.backup_space(root)
         value = system.capture(record["initial"])
         save(root, record, gate=value, phase="freeze_intent")
         system.freeze(value)
@@ -350,6 +446,7 @@ def worker(root, attempt, system=None):
                 raise Uncertain("runtime changed during stop")
             stopped = observed
             note(phase="stopped", stop_receipt=stopped, result="stopped")
+            _snapshot_stopped(root, attempt, record, system, stopped, note)
         except BaseException:
             if process is not None and stopped is None:
                 note(phase="stop_unknown", restore="unknown", result="stop_unknown")
@@ -366,10 +463,11 @@ def worker(root, attempt, system=None):
                 after = system.crm()
                 if after["id"] != stopped["id"] or after["started"] == record["initial"]["started"]:
                     raise Uncertain("CRM did not enter a new generation")
+                result = _finish_snapshot(root, attempt, record, note, journal_errors)
                 note(
                     phase="complete",
                     restore="ok",
-                    result="returned_with_journal_error" if journal_errors else "stop_and_return_verified",
+                    result="returned_with_journal_error" if journal_errors else result,
                 )
         if journal_errors:
             raise Uncertain("CRM returned; transition journal durability failed")
@@ -383,6 +481,7 @@ def recover(root, attempt, system=None):
             raise Uncertain("transition attempt changed")
         if record["phase"] == "complete":
             return record
+        interrupted_copy(record)
         if record["source_digest"] != source_digest():
             raise Uncertain("transition source changed")
         actual = system.crm()
@@ -449,7 +548,7 @@ def controller(root, attempt, system=None):
         finally:
             recover(root, attempt, system)
         result = load(root)
-        if result["restore"] != "ok" or result["result"] != "stop_and_return_verified":
+        if not success(result):
             raise Uncertain("stop qualification was not successful")
         return result
 
@@ -491,7 +590,7 @@ def require_supervision(action, attempt):
         raise Uncertain("internal operation is not its supervised service")
 
 
-def launch(system=None):
+def launch(system=None, *, backup=False):
     system = system or System()
     private_root(ROOT)
     with common.Lock(ROOT / "launch.lock", wait=False), common.Lock(DEPLOY_LOCK, wait=False):
@@ -502,6 +601,8 @@ def launch(system=None):
             raise Uncertain("maintenance prerequisites are not satisfied")
         attempt = uuid.uuid4().hex
         record = {**value, "attempt": attempt, "phase": "prepared", "restore": "pending", "result": "pending"}
+        if backup:
+            record.update(backup_requested=True, copy_status="pending")
         common.save(ROOT / "attempt.json", record)
         created = _install_units(attempt)
     # The main service, stop worker and recovery have separate cgroups. The
@@ -517,14 +618,14 @@ def launch(system=None):
             for path in created:
                 path.unlink(missing_ok=True)
             run("systemctl", "daemon-reload")
-    if record["restore"] != "ok" or record["result"] != "stop_and_return_verified":
+    if not success(record):
         raise Uncertain("transition did not complete")
     return record
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "run", "controller", "worker", "recover"))
+    parser.add_argument("action", choices=("plan", "run", "backup", "controller", "worker", "recover"))
     parser.add_argument("attempt", nargs="?")
     args = parser.parse_args()
     try:
@@ -539,9 +640,17 @@ def main():
                     }
                 )
             )
-        elif args.action == "run":
-            value = launch()
-            print(json.dumps({k: value[k] for k in ("attempt", "phase", "restore", "result")}))
+        elif args.action in ("run", "backup"):
+            value = launch(backup=args.action == "backup")
+            print(
+                json.dumps(
+                    {
+                        k: value[k]
+                        for k in ("attempt", "phase", "restore", "result", "copy_status", "archive")
+                        if k in value
+                    }
+                )
+            )
         else:
             if (
                 not args.attempt
