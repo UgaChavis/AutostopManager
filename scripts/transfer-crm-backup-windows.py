@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""Copy one already prepared CRM archive; never remove local or remote files.
+"""Shared SSH and PowerShell commands for the CRM backup delivery job."""
 
-Not installed or scheduled. A failed/unknown SSH result requires manual review of
-its printed ID. This helper does not prove that its input is a CRM snapshot.
-"""
-
-import argparse
 import base64
 import hashlib
-import os
-import stat
-import subprocess
-import sys
-import uuid
 
 HOST = "autostop-pc"
 SSH = [
@@ -116,86 +106,3 @@ def digest(stream):
         h.update(block)
         size += len(block)
     return size, h.digest()
-
-
-def remote_digest(cmd, expected_size):
-    process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    try:
-        h = hashlib.sha256()
-        size = 0
-        while True:
-            block = process.stdout.read(CHUNK)
-            if not block:
-                break
-            size += len(block)
-            if size > expected_size:
-                raise RuntimeError("remote file is larger than source")
-            h.update(block)
-        process.stdout.close()
-        if process.wait() != 0:
-            raise RuntimeError("remote read failed")
-        return size, h.digest()
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-
-
-def transfer(source):
-    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, "rb") as stream:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_size == 0:
-            raise RuntimeError("source must be a nonempty regular file")
-        expected = digest(stream)
-        stream.seek(0)
-        ident = uuid.uuid4().hex
-        print("Transfer ID:", ident, flush=True)
-        result = subprocess.run(
-            command(WRITE, ident, expected[0]),
-            stdin=stream,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        after = os.fstat(fd)
-        if result.returncode != 0:
-            raise RuntimeError("write failed or outcome unknown")
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        ):
-            raise RuntimeError("source changed during transfer")
-        if remote_digest(command(READ, ident), expected[0]) != expected:
-            raise RuntimeError("temporary file verification failed")
-        result = subprocess.run(
-            command(PUBLISH, ident),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError("publication failed or outcome unknown")
-        if remote_digest(command(READ, ident, final=True), expected[0]) != expected:
-            raise RuntimeError("published file verification failed or outcome unknown")
-        print("Published and read back:", ident, flush=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", help="approved prepared archive on server")
-    args = parser.parse_args()
-    try:
-        transfer(args.source)
-    except (OSError, RuntimeError) as exc:
-        print("Transfer incomplete:", exc, file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
