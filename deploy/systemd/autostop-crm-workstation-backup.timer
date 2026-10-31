@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily CRM workstation backup at 02:00 Krasnoyarsk
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 Asia/Krasnoyarsk
+AccuracySec=1min
+Persistent=false
+Unit=autostop-crm-workstation-backup.service
+
+[Install]
+WantedBy=timers.target
