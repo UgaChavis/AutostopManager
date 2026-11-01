@@ -236,6 +236,70 @@ def test_failure_retains_old_pending_and_restores_services(ctx, monkeypatch):
     assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
 
 
+def test_m2_write_failure_does_not_block_recovery_of_owned_stopped_services(ctx, monkeypatch):
+    root, _, status, fake, _ = ctx
+    fake.stop("scheduler", fake.s["identity"])
+    fake.stop("crm", fake.c["id"])
+    fake.actions.clear()
+    record = {
+        "attempt": "1" * 32,
+        "boot": "boot1",
+        "daemon": "daemon1",
+        "phase": "crm_stop_done",
+        "copy": "running",
+        "restore": "pending",
+        "delivery": "pending",
+        "crm": {"identity": fake.c["id"], "initially_active": True, "phase": "stopped"},
+        "scheduler": {"identity": fake.s["identity"], "initially_active": True, "phase": "stopped"},
+    }
+    m.save(root / "attempt.json", record)
+
+    def denied(path, _record):
+        assert path == status
+        raise PermissionError("synthetic M2 write denied")
+
+    monkeypatch.setattr(m, "status", denied)
+    result = m.recover(root, status, fake, interrupted=True)
+    assert result["phase"] == "complete" and result["restore"] == "ok"
+    assert result["copy"] == "unknown"
+    assert m.load(root / "attempt.json") == result
+    assert fake.actions == [("start", "crm"), ("start", "scheduler")]
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+    assert not (root / "pending.json").exists()
+
+
+@pytest.mark.parametrize("snapshot_fails", [False, True])
+def test_m2_write_failure_after_stop_still_restores_and_preserves_previous_copy(ctx, monkeypatch, snapshot_fails):
+    root, _, status, fake, _ = ctx
+    run(ctx)
+    previous = m.load_pending(root / "pending.json")
+    original_status = m.status
+    original_snapshot = m.snapshot_command
+
+    def denied_after_stop(path, record):
+        assert path == status
+        if record["copy"] == "failed" or (not snapshot_fails and fake.crm()["state"] == "exited"):
+            raise PermissionError("synthetic M2 write denied")
+        return original_status(path, record)
+
+    def snapshot(path, initial):
+        if snapshot_fails:
+            raise RuntimeError("synthetic snapshot failure")
+        return original_snapshot(path, initial)
+
+    monkeypatch.setattr(m, "status", denied_after_stop)
+    monkeypatch.setattr(m, "snapshot_command", snapshot)
+    expected = RuntimeError if snapshot_fails else PermissionError
+    with pytest.raises(expected, match="synthetic snapshot failure" if snapshot_fails else "synthetic M2 write denied"):
+        run(ctx)
+    result = m.load(root / "attempt.json")
+    assert result["phase"] == "complete" and result["restore"] == "ok" and result["copy"] == "failed"
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+    assert m.load_pending(root / "pending.json") == previous
+    assert (root / previous["file"]).exists()
+    assert list(root.glob("crm-*.tar.gz")) == [root / previous["file"]]
+
+
 def test_restart_during_snapshot_rejects_copy_and_restores(ctx, monkeypatch):
     root, _, _, fake, _ = ctx
 

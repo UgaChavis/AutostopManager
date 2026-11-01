@@ -721,6 +721,14 @@ def finish_copy(root, status_path, attempt):
         return record
 
 
+def refresh_during_recovery(root, status_path):
+    """Reporting must not prevent restoring services from their durable ledger."""
+    try:
+        refresh(root, status_path)
+    except Exception:  # noqa: BLE001 - status is auxiliary; operation state remains mandatory.
+        print("CRM backup: M2 status unavailable during service recovery.", file=sys.stderr)
+
+
 def require_open_control(system, item):
     receipt = system.control(item["identity"])
     if receipt.get("state") not in ("idle", "aborted"):
@@ -894,7 +902,7 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
             # A completed recovery is immutable, even across a reboot.
             if changed:
                 save(path, r)
-                refresh(root, status_path)
+                refresh_during_recovery(root, status_path)
             return r
         if phase in ("crm_commit_intent", "crm_commit_unknown", "crm_term_intent"):
             # No Docker stop was sent in these phases. For an exactly proven
@@ -922,7 +930,7 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                             r["phase"] = "crm_term_intent"
                             r["restore"] = "unknown"
                             save(path, r)
-                            refresh(root, status_path)
+                            refresh_during_recovery(root, status_path)
                         with suppress(Exception):
                             system.control(item["identity"], "TERM", receipt)
                         raise Uncertain("waiting for CRM to restart after committed drain")
@@ -954,13 +962,13 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                 if changed and r["phase"] != "crm_term_intent":
                     r["restore"] = "unknown"
                     save(path, r)
-                    refresh(root, status_path)
+                    refresh_during_recovery(root, status_path)
                 raise
             except Exception:  # noqa: BLE001 - unreadable receipt cannot authorize a signal.
                 if changed:
                     r["restore"] = "unknown"
                     save(path, r)
-                    refresh(root, status_path)
+                    refresh_during_recovery(root, status_path)
                 raise Uncertain("committed CRM state not confirmed") from None
         # Invalidate any worker that did not acquire the operation lock. A
         # worker killed while running leaves an unknown request and cannot be
@@ -977,11 +985,11 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                     changed = True
                 if changed:
                     save(path, r)
-                    refresh(root, status_path)
+                    refresh_during_recovery(root, status_path)
                 raise Uncertain("in-flight operation outcome unknown")
         r["phase"] = "recovering"
         save(path, r)
-        refresh(root, status_path)
+        refresh_during_recovery(root, status_path)
     for kind in ("crm", "scheduler"):
         item = r[kind]
         if not item["initially_active"]:
@@ -1010,7 +1018,7 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                 raise Uncertain("resource was not confirmed stopped by this attempt")
             r = begin_operation(root, r, kind, "start", system)
     r = amend(root, r["attempt"], {"phase": "complete", "restore": "ok"})
-    refresh(root, status_path)
+    refresh_during_recovery(root, status_path)
     return r
 
 
@@ -1314,12 +1322,12 @@ def backup(
         except Exception as exc:  # noqa: BLE001 - restore services after every snapshot failure.
             copy_error = exc
             r = amend(root, r["attempt"], {"copy": "failed"})
-            refresh(root, status_path)
+            refresh_during_recovery(root, status_path)
         try:
             r = recover(root, status_path, system)
         except Exception:
             r = amend(root, r["attempt"], {"restore": "unknown"})
-            refresh(root, status_path)
+            refresh_during_recovery(root, status_path)
             raise
         if copy_error:
             if staged is not None:
