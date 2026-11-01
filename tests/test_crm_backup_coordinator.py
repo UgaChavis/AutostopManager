@@ -118,6 +118,7 @@ def ctx(tmp_path, monkeypatch):
 
     monkeypatch.setattr(m, "snapshot_command", snapshot)
     monkeypatch.setattr(m, "host_writer_fence", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(m, "run", lambda *_args, **_kwargs: "active")
     return root, data, status, fake, tmp_path / "deploy.lock"
 
 
@@ -268,8 +269,24 @@ def test_m2_write_failure_does_not_block_recovery_of_owned_stopped_services(ctx,
     assert not (root / "pending.json").exists()
 
 
+def test_m2_unavailable_throughout_backup_does_not_block_durable_copy(ctx, monkeypatch):
+    root, _, _, fake, _ = ctx
+
+    def denied(*_):
+        raise PermissionError("synthetic M2 write denied")
+
+    monkeypatch.setattr(m, "status", denied)
+    result = run(ctx)
+    pending = m.load_pending(root / "pending.json")
+    assert result["copy"] == "ok" and result["restore"] == "ok" and result["phase"] == "complete"
+    assert m.load(root / "attempt.json") == result
+    assert pending == m.load_pending(root / "pending-ready.json")
+    assert (root / pending["file"]).read_bytes() == b"synthetic snapshot"
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+
+
 @pytest.mark.parametrize("snapshot_fails", [False, True])
-def test_m2_write_failure_after_stop_still_restores_and_preserves_previous_copy(ctx, monkeypatch, snapshot_fails):
+def test_m2_write_failure_after_stop_does_not_change_copy_outcome(ctx, monkeypatch, snapshot_fails):
     root, _, status, fake, _ = ctx
     run(ctx)
     previous = m.load_pending(root / "pending.json")
@@ -289,15 +306,21 @@ def test_m2_write_failure_after_stop_still_restores_and_preserves_previous_copy(
 
     monkeypatch.setattr(m, "status", denied_after_stop)
     monkeypatch.setattr(m, "snapshot_command", snapshot)
-    expected = RuntimeError if snapshot_fails else PermissionError
-    with pytest.raises(expected, match="synthetic snapshot failure" if snapshot_fails else "synthetic M2 write denied"):
+    if snapshot_fails:
+        with pytest.raises(RuntimeError, match="synthetic snapshot failure"):
+            run(ctx)
+    else:
         run(ctx)
     result = m.load(root / "attempt.json")
-    assert result["phase"] == "complete" and result["restore"] == "ok" and result["copy"] == "failed"
+    assert result["phase"] == "complete" and result["restore"] == "ok"
     assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
-    assert m.load_pending(root / "pending.json") == previous
-    assert (root / previous["file"]).exists()
-    assert list(root.glob("crm-*.tar.gz")) == [root / previous["file"]]
+    if snapshot_fails:
+        assert result["copy"] == "failed" and m.load_pending(root / "pending.json") == previous
+        assert list(root.glob("crm-*.tar.gz")) == [root / previous["file"]]
+    else:
+        pending = m.load_pending(root / "pending.json")
+        assert result["copy"] == "ok" and pending != previous
+        assert list(root.glob("crm-*.tar.gz")) == [root / pending["file"]]
 
 
 def test_restart_during_snapshot_rejects_copy_and_restores(ctx, monkeypatch):
@@ -320,6 +343,125 @@ def test_initially_inactive_scheduler_not_started(ctx):
     run(ctx)
     assert fake.s["state"] == "inactive"
     assert all(kind != "scheduler" for _, kind in fake.actions)
+
+
+@pytest.mark.parametrize("resource,probe", [("crm", "healthy"), ("crm", "control"), ("scheduler", "healthy")])
+def test_confirmed_start_retries_only_failed_probe_and_restores_services(ctx, monkeypatch, resource, probe):
+    root, _, status, fake, _ = ctx
+    run(ctx)
+    previous = m.load_pending(root / "pending.json")
+    fake.actions.clear()
+    original = fake.healthy if probe == "healthy" else m.require_open_control
+    failed = False
+
+    def checked(*args):
+        nonlocal failed
+        relevant = probe == "control" or args[0] == resource
+        if relevant and not failed:
+            failed = True
+            raise m.Uncertain("synthetic probe unavailable after successful start")
+        return original(*args)
+
+    monkeypatch.setattr(
+        fake if probe == "healthy" else m, "healthy" if probe == "healthy" else "require_open_control", checked
+    )
+    with pytest.raises(m.Uncertain, match="synthetic probe unavailable"):
+        run(ctx)
+    record = m.load(root / "attempt.json")
+    assert record["phase"] == f"{resource}_start_confirmed" and record[resource]["phase"] == "started"
+    assert fake.crm()["state"] == "running"
+    result = m.recover(root, status, fake, interrupted=True)
+    assert result["phase"] == "complete" and result["restore"] == "ok" and result["copy"] == "unknown"
+    assert fake.actions == [("stop", "scheduler"), ("stop", "crm"), ("start", "crm"), ("start", "scheduler")]
+    assert m.load_pending(root / "pending.json") == previous and (root / previous["file"]).exists()
+
+
+def test_confirmed_start_does_not_repeat_after_another_actor_stops_crm(ctx, monkeypatch):
+    root, _, status, fake, _ = ctx
+    original = fake.healthy
+
+    def unavailable(kind, identity):
+        if kind == "crm":
+            raise m.Uncertain("synthetic health unavailable")
+        return original(kind, identity)
+
+    monkeypatch.setattr(fake, "healthy", unavailable)
+    with pytest.raises(m.Uncertain, match="synthetic health unavailable"):
+        run(ctx)
+    fake.c.update(state="exited", health="")
+    before = list(fake.actions)
+    with pytest.raises(m.Uncertain, match="resource was not confirmed stopped"):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == before and fake.scheduler()["state"] == "inactive"
+
+
+@pytest.mark.parametrize("request_completed", [False, True])
+def test_unacknowledged_start_remains_unknown_even_if_crm_becomes_healthy(ctx, monkeypatch, request_completed):
+    root, _, status, fake, _ = ctx
+    original = fake.start
+
+    def uncertain(kind, identity):
+        if kind != "crm":
+            return original(kind, identity)
+        if request_completed:
+            original(kind, identity)
+        raise m.Uncertain("synthetic start acknowledgement unavailable")
+
+    monkeypatch.setattr(fake, "start", uncertain)
+    with pytest.raises(m.Uncertain, match="synthetic start acknowledgement unavailable"):
+        run(ctx)
+    record = m.load(root / "attempt.json")
+    assert record["phase"] == "crm_start_unknown" and record["crm"]["phase"] == "stopped"
+    before = list(fake.actions)
+    with pytest.raises(m.Uncertain, match="in-flight operation outcome unknown"):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == before and fake.scheduler()["state"] == "inactive"
+
+
+def test_confirmed_start_requires_new_control_generation(ctx, monkeypatch):
+    root, _, status, fake, _ = ctx
+    original = fake.start
+
+    def unchanged(kind, identity):
+        generation = fake.receipt["generation"]
+        original(kind, identity)
+        if kind == "crm":
+            fake.receipt["generation"] = generation
+
+    monkeypatch.setattr(fake, "start", unchanged)
+    with pytest.raises(m.Uncertain, match="stopped control generation"):
+        run(ctx)
+    assert m.load(root / "attempt.json")["phase"] == "crm_start_confirmed"
+    before = list(fake.actions)
+    with pytest.raises(m.Uncertain, match="stopped control generation"):
+        m.recover(root, status, fake, interrupted=True)
+    assert fake.actions == before and fake.scheduler()["state"] == "inactive"
+
+
+@pytest.mark.parametrize("change_process", [False, True])
+def test_unknown_prepare_recovers_only_after_exact_process_confirms_abort(ctx, change_process):
+    root, _, status, fake, _ = ctx
+
+    def unknown(*_):
+        fake.receipt.update(attempt="e" * 32, state="ready")
+        raise m.Uncertain("synthetic prepare receipt unavailable")
+
+    fake.prepare = unknown
+    with pytest.raises(m.Uncertain):
+        run(ctx)
+    assert fake.actions == [("stop", "scheduler")]
+    assert m.load(root / "attempt.json")["phase"] == "crm_prepare_unknown"
+    fake.receipt["state"] = "aborted"
+    if change_process:
+        fake.receipt["generation"] = "f" * 32
+        with pytest.raises(m.Uncertain, match="in-flight operation outcome unknown"):
+            m.recover(root, status, fake, interrupted=True)
+        assert fake.actions == [("stop", "scheduler")]
+    else:
+        result = m.recover(root, status, fake, interrupted=True)
+        assert result["phase"] == "complete" and result["restore"] == "ok" and result["copy"] == "failed"
+        assert fake.actions == [("stop", "scheduler"), ("start", "scheduler")]
+    assert not (root / "pending.json").exists()
 
 
 def test_scheduler_gate_preserves_initially_inactive_service_after_reboot(ctx):
@@ -968,22 +1110,22 @@ def test_expired_exact_commit_returns_only_owned_scheduler_without_signal(ctx):
     assert out["phase"] == "complete" and out["restore"] == "ok" and out["copy"] == "failed"
 
 
-def test_status_failure_cannot_expose_copy_success_to_sender(ctx, monkeypatch):
+def test_m2_failure_does_not_undo_durable_completed_copy(ctx, monkeypatch):
     import threading
 
-    root, _, status, _, _ = ctx
+    root, _, _, fake, _ = ctx
     run(ctx)
     previous = m.load_pending(root / "pending.json")
     original = m.refresh
     entered, release = threading.Event(), threading.Event()
     errors = []
 
-    def fail_final_refresh(root_path, status_path, *, copy_override=None):
-        if copy_override == "ok":
+    def fail_final_refresh(root_path, status_path):
+        if m.load(root_path / "attempt.json")["copy"] == "ok":
             entered.set()
             assert release.wait(5)
             raise OSError("synthetic M2 status failure")
-        return original(root_path, status_path, copy_override=copy_override)
+        return original(root_path, status_path)
 
     def run_backup():
         try:
@@ -999,11 +1141,15 @@ def test_status_failure_cannot_expose_copy_success_to_sender(ctx, monkeypatch):
         with pytest.raises(BlockingIOError):
             with m.Lock(root / "operation.lock", wait=False):
                 pass
-        assert m.load(root / "attempt.json")["copy"] == "running"
+        record = m.load(root / "attempt.json")
+        assert record["copy"] == "ok" and record["phase"] == "complete" and record["restore"] == "ok"
+        assert m.load_pending(root / "pending.json") == m.load_pending(root / "pending-ready.json")
+        assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
     finally:
         release.set()
         thread.join(10)
-    assert not thread.is_alive() and len(errors) == 1 and isinstance(errors[0], OSError)
-    assert m.load(root / "attempt.json")["copy"] == "unknown"
-    assert "Копия: не подтверждён" in status.read_text()
-    assert (root / previous["file"]).exists()
+    assert not thread.is_alive() and not errors
+    assert m.load(root / "attempt.json")["copy"] == "ok"
+    pending = m.load_pending(root / "pending.json")
+    assert pending != previous and (root / pending["file"]).exists()
+    assert not (root / previous["file"]).exists()

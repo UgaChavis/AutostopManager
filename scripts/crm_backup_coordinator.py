@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CRM backup coordinator; uninstalled until all snapshot and recovery checks pass.
+"""CRM backup coordinator with recoverable service operations.
 
 Only the named CRM container and Manager scheduler are managed. Operations that
 may outlive the caller run in a separate systemd unit while holding an operation
@@ -38,8 +38,8 @@ DEPLOY_LOCK = Path("/opt/autostopcrm/.autostop-deploy.lock")
 SNAPSHOT = Path(__file__).with_name("crm-snapshot.py")
 TIMER = "autostop-crm-workstation-backup.timer"
 # Must be set to the reviewed, installed CRM revision with the complete writer
-# drain before this uninstalled coordinator is allowed to stop CRM.
-APPROVED_CRM_REVISION = "fab26067f1c03d1dbcd9a94ea68534c107d184fa"
+# drain before the coordinator is allowed to stop CRM.
+APPROVED_CRM_REVISION = "603cbfca1a7ebb12c5097d8797861bc6f7efb915"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
@@ -386,7 +386,11 @@ def status(path, record):
     delivery_at = record.get("delivery_at", "неизвестно")
     if not isinstance(delivery_at, str) or len(delivery_at) > 40 or "\n" in delivery_at:
         delivery_at = "неизвестно"
-    note = "; удаление старых копий отложено" if record.get("delivery_note") == "rotation_pending" else ""
+    notes = {
+        "rotation_pending": "; удаление старых копий отложено",
+        "cleanup_pending": "; локальная очистка отложена",
+    }
+    note = notes.get(record.get("delivery_note"), "")
     try:
         load_state = run("systemctl", "show", TIMER, "-p", "LoadState", "--value")
         active_state = run("systemctl", "show", TIMER, "-p", "ActiveState", "--value")
@@ -410,7 +414,7 @@ def status(path, record):
         previous_at = previous.get("at")
         if not isinstance(previous_at, str) or len(previous_at) > 40 or "\n" in previous_at:
             previous_at = "неизвестно"
-        previous_note = "; удаление старых копий отложено" if previous.get("error_code") == "rotation_pending" else ""
+        previous_note = notes.get(previous.get("error_code"), "")
         text += (
             f"Последняя передача другой копии: {previous['id']}; "
             f"{names[previous['status']]}; время: {previous_at}{previous_note}.\n"
@@ -623,7 +627,7 @@ class System:
             "--no-block",
             "--unit=" + name,
             "--service-type=oneshot",
-            "--remain-after-exit",
+            "--collect",
             "-p",
             "TimeoutStartSec=infinity",
             sys.executable,
@@ -656,7 +660,7 @@ def scheduler_start_allowed(root=ROOT):
 
 def amend(root, attempt, fields=None, resource=None):
     if resource is None and (fields or {}).get("copy") == "ok":
-        raise Uncertain("copy success requires completed status update")
+        raise Uncertain("copy success requires completed publication")
     with Lock(root / "operation.lock"):
         record = load(root / "attempt.json")
         if record["attempt"] != attempt:
@@ -666,7 +670,7 @@ def amend(root, attempt, fields=None, resource=None):
         return record
 
 
-def refresh(root, status_path, *, copy_override=None):
+def refresh(root, status_path):
     # Every writer renders from durable state under a common short lock. No
     # network or archive reads are performed while holding it.
     with Lock(root / "status.lock"):
@@ -692,41 +696,38 @@ def refresh(root, status_path, *, copy_override=None):
                     record["previous_delivery"] = delivery
         except (FileNotFoundError, ValueError, TypeError):
             pass
-        if copy_override is not None:
-            record["copy"] = copy_override
         if not current_delivery and record.get("copy") in {"failed", "unknown"}:
             record["delivery"] = "not_needed" if record["copy"] == "failed" else "unknown"
         status(status_path, record)
 
 
 def finish_copy(root, status_path, attempt):
-    """Expose copy=ok to the sender only after M2 has been updated."""
+    """Record durable copy completion; M2 is auxiliary reporting."""
     with Lock(root / "operation.lock"):
         record = load(root / "attempt.json")
         if record["attempt"] != attempt or record["phase"] != "complete" or record["copy"] != "running":
             raise Uncertain("copy completion is not eligible")
         try:
-            # The caller has already confirmed the closed archive, durable
-            # pointer/ready markers and restoration of the original services.
-            refresh(root, status_path, copy_override="ok")
+            # The closed archive and ready markers were published only after
+            # restoration of the original services. Delivery may already run.
             record["copy"] = "ok"
             save(root / "attempt.json", record)
         except BaseException:
             record["copy"] = "unknown"
             with suppress(Exception):
                 save(root / "attempt.json", record)
-            with suppress(Exception):
-                refresh(root, status_path)
+            refresh_best_effort(root, status_path)
             raise
+        refresh_best_effort(root, status_path)
         return record
 
 
-def refresh_during_recovery(root, status_path):
-    """Reporting must not prevent restoring services from their durable ledger."""
+def refresh_best_effort(root, status_path):
+    """Auxiliary M2 reporting must not prevent copying or restoring services."""
     try:
         refresh(root, status_path)
     except Exception:  # noqa: BLE001 - status is auxiliary; operation state remains mandatory.
-        print("CRM backup: M2 status unavailable during service recovery.", file=sys.stderr)
+        print("CRM backup: M2 status unavailable.", file=sys.stderr)
 
 
 def require_open_control(system, item):
@@ -734,7 +735,7 @@ def require_open_control(system, item):
     if receipt.get("state") not in ("idle", "aborted"):
         raise Uncertain("CRM backup gate is not confirmed open")
     previous = item.get("drain") or {}
-    if item["phase"] == "stopped" and receipt.get("generation") == previous.get("generation"):
+    if item["phase"] in ("stopped", "started") and receipt.get("generation") == previous.get("generation"):
         raise Uncertain("CRM still uses the stopped control generation")
 
 
@@ -809,15 +810,22 @@ def worker(root, attempt, operation, kind, system=None):
                 system.stop(kind, item["identity"])
             else:
                 system.start(kind, item["identity"])
-                system.healthy(kind, item["identity"])
-                if kind == "crm":
-                    require_open_control(system, item)
         except Exception:
             # A failed CLI may still have issued a request. Recovery must not
             # assume that a request was cancelled when its client returned.
             r["phase"] = f"{kind}_{operation}_unknown"
             save(path, r)
             raise
+        if operation == "start":
+            # The request returned successfully. A failed health/control read
+            # must be retried without treating this completed start as unknown
+            # or starting it again after another actor subsequently stops it.
+            item["phase"] = "started"
+            r["phase"] = f"{kind}_start_confirmed"
+            save(path, r)
+            system.healthy(kind, item["identity"])
+            if kind == "crm":
+                require_open_control(system, item)
         item["phase"] = "stopped" if operation == "stop" else "restored"
         r["phase"] = f"{kind}_{operation}_done"
         save(path, r)
@@ -902,8 +910,26 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
             # A completed recovery is immutable, even across a reboot.
             if changed:
                 save(path, r)
-                refresh_during_recovery(root, status_path)
+                refresh_best_effort(root, status_path)
             return r
+        if phase in ("crm_prepare_running", "crm_prepare_unknown"):
+            # No COMMIT can have been sent from these durable phases. An
+            # expired PREPARE from the exact original process is safe to leave
+            # open even if the worker lost its final receipt read.
+            item = r["crm"]
+            current = system.crm()
+            if (
+                current["id"] == item["identity"]
+                and current["revision"] == item["revision"]
+                and current["state"] == "running"
+                and current["started"] == item["started"]
+                and current["restarts"] == item["restarts"]
+            ):
+                receipt = system.control(item["identity"])
+                if receipt["state"] == "aborted" and System._same_process(item["control"], receipt):
+                    item["phase"] = "untouched"
+                    r["phase"] = phase = "recovering"
+                    changed = True
         if phase in ("crm_commit_intent", "crm_commit_unknown", "crm_term_intent"):
             # No Docker stop was sent in these phases. For an exactly proven
             # COMMIT, signal only the same process via pidfd and let its
@@ -930,7 +956,7 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                             r["phase"] = "crm_term_intent"
                             r["restore"] = "unknown"
                             save(path, r)
-                            refresh_during_recovery(root, status_path)
+                            refresh_best_effort(root, status_path)
                         with suppress(Exception):
                             system.control(item["identity"], "TERM", receipt)
                         raise Uncertain("waiting for CRM to restart after committed drain")
@@ -962,13 +988,13 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                 if changed and r["phase"] != "crm_term_intent":
                     r["restore"] = "unknown"
                     save(path, r)
-                    refresh_during_recovery(root, status_path)
+                    refresh_best_effort(root, status_path)
                 raise
             except Exception:  # noqa: BLE001 - unreadable receipt cannot authorize a signal.
                 if changed:
                     r["restore"] = "unknown"
                     save(path, r)
-                    refresh_during_recovery(root, status_path)
+                    refresh_best_effort(root, status_path)
                 raise Uncertain("committed CRM state not confirmed") from None
         # Invalidate any worker that did not acquire the operation lock. A
         # worker killed while running leaves an unknown request and cannot be
@@ -985,11 +1011,11 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                     changed = True
                 if changed:
                     save(path, r)
-                    refresh_during_recovery(root, status_path)
+                    refresh_best_effort(root, status_path)
                 raise Uncertain("in-flight operation outcome unknown")
         r["phase"] = "recovering"
         save(path, r)
-        refresh_during_recovery(root, status_path)
+        refresh_best_effort(root, status_path)
     for kind in ("crm", "scheduler"):
         item = r[kind]
         if not item["initially_active"]:
@@ -1018,7 +1044,7 @@ def recover(root, status_path, system=None, *, interrupted=False, wait=True):  #
                 raise Uncertain("resource was not confirmed stopped by this attempt")
             r = begin_operation(root, r, kind, "start", system)
     r = amend(root, r["attempt"], {"phase": "complete", "restore": "ok"})
-    refresh_during_recovery(root, status_path)
+    refresh_best_effort(root, status_path)
     return r
 
 
@@ -1253,7 +1279,7 @@ def backup(
         }
         with Lock(root / "operation.lock"):
             save(path, r)
-        refresh(root, status_path)
+        refresh_best_effort(root, status_path)
         try:
             if old:
                 (root / (".staged-" + old["attempt"] + ".tar.gz")).unlink(missing_ok=True)
@@ -1273,7 +1299,7 @@ def backup(
             daemon = system.daemon()
         except Exception:
             amend(root, r["attempt"], {"copy": "failed"})
-            refresh(root, status_path)
+            refresh_best_effort(root, status_path)
             raise
         r = amend(
             root,
@@ -1301,7 +1327,7 @@ def backup(
                 },
             },
         )
-        refresh(root, status_path)
+        refresh_best_effort(root, status_path)
         staged = None
         copy_error = None
         try:
@@ -1312,7 +1338,7 @@ def backup(
             if not same_stopped(crm, stopped):
                 raise Uncertain("CRM did not stop cleanly")
             r = amend(root, r["attempt"], {"copy": "running"})
-            refresh(root, status_path)
+            refresh_best_effort(root, status_path)
             staged = root / (".staged-" + r["attempt"] + ".tar.gz")
             with host_writer_fence(data):
                 snapshot_command(staged, crm)
@@ -1322,12 +1348,12 @@ def backup(
         except Exception as exc:  # noqa: BLE001 - restore services after every snapshot failure.
             copy_error = exc
             r = amend(root, r["attempt"], {"copy": "failed"})
-            refresh_during_recovery(root, status_path)
+            refresh_best_effort(root, status_path)
         try:
             r = recover(root, status_path, system)
         except Exception:
             r = amend(root, r["attempt"], {"restore": "unknown"})
-            refresh_during_recovery(root, status_path)
+            refresh_best_effort(root, status_path)
             raise
         if copy_error:
             if staged is not None:
@@ -1338,7 +1364,7 @@ def backup(
                 published, previous, previous_info = publish(root, staged, r["attempt"])
             except Exception:
                 amend(root, r["attempt"], {"copy": "unknown"})
-                refresh(root, status_path)
+                refresh_best_effort(root, status_path)
                 raise
             r = finish_copy(root, status_path, r["attempt"])
             with suppress(OSError):
@@ -1378,7 +1404,7 @@ def main():
                         record = load(ROOT / "attempt.json")
                         if record["restore"] != "unknown":
                             amend(ROOT, record["attempt"], {"restore": "unknown"})
-                            refresh(ROOT, STATUS)
+                            refresh_best_effort(ROOT, STATUS)
                         raise
         else:
             backup()

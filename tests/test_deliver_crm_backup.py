@@ -289,6 +289,51 @@ def test_old_missing_source_leaves_partial_file_and_allows_new_pointer(store):
     assert remote.parts[first["id"]] == b"incomplete"
 
 
+def test_damaged_retired_source_preserves_old_files_and_allows_new_pointer(store):
+    remote = FakeWindows()
+    first = prepare(store, 1, b"first")
+    delivery.write_json(store[1], "delivery-intent.json", first)
+    old_path = store[0] / first["file"]
+    old_path.write_bytes(b"damaged old source")
+    remote.parts[first["id"]] = b"unknown partial"
+    remote.finals[first["id"]] = b"unknown old final"
+    newer = prepare(store, 2, b"newer")
+
+    with pytest.raises(delivery.DeliveryError, match="source_integrity"):
+        delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-intent.json") is None
+    assert delivery.read_json(store[1], "pending.json") == newer
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+
+    delivery.deliver_once(store[1], remote)
+    assert remote.finals[newer["id"]] == b"newer"
+    assert delivery.read_json(store[1], "pending.json") is None
+    assert delivery.journal(store[1]) == [newer]
+    assert old_path.read_bytes() == b"damaged old source"
+    assert remote.parts[first["id"]] == b"unknown partial"
+    assert remote.finals[first["id"]] == b"unknown old final"
+    assert remote.deletes == []
+
+
+@pytest.mark.parametrize("replacement", ["same_generation", "not_ready"])
+def test_damaged_source_keeps_intent_without_new_ready_generation(store, replacement):
+    remote = FakeWindows()
+    first = prepare(store, 1, b"first")
+    delivery.write_json(store[1], "delivery-intent.json", first)
+    old_path = store[0] / first["file"]
+    old_path.write_bytes(b"damaged old source")
+    expected = "source_integrity"
+    if replacement == "not_ready":
+        prepare(store, 2, b"newer")
+        (store[0] / "pending-ready.json").unlink()
+        expected = "pending_not_ready"
+    with pytest.raises(delivery.DeliveryError, match=expected):
+        delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-intent.json") == first
+    assert old_path.read_bytes() == b"damaged old source"
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+
+
 def test_old_missing_source_and_unreadable_pc_does_not_block_new_pointer(store):
     remote = FakeWindows()
     first = prepare(store, 1, b"first")
@@ -565,7 +610,7 @@ def test_bounded_digest_checks_all_bytes_and_size():
         delivery.bounded_remote_digest(command, 8, 5)
 
 
-def test_failed_refresh_after_delivery_retries_without_another_write(store, monkeypatch):
+def test_failed_m2_refresh_after_delivery_retries_without_another_write(store, monkeypatch, capsys):
     remote = FakeWindows()
     record = prepare(store, 1, b"synthetic")
     calls = []
@@ -576,8 +621,8 @@ def test_failed_refresh_after_delivery_retries_without_another_write(store, monk
         return SimpleNamespace(returncode=1 if len(calls) == 3 else 0)
 
     monkeypatch.setattr(delivery.subprocess, "run", run)
-    with pytest.raises(delivery.DeliveryError, match="status_refresh_failed"):
-        delivery.deliver_once(store[1], remote)
+    delivery.deliver_once(store[1], remote)
+    assert capsys.readouterr().err == "CRM backup: M2 status unavailable during delivery.\n"
     assert delivery.read_json(store[1], "delivery-status.json")["status"] == "ok"
     assert delivery.read_json(store[1], "pending.json") is None
     assert remote.writes == [record["id"]]
@@ -588,14 +633,103 @@ def test_failed_refresh_after_delivery_retries_without_another_write(store, monk
     assert remote.moves == [record["id"]]
 
 
-def test_failed_refresh_with_no_pending_returns_error_without_pc_access(store, monkeypatch):
+@pytest.mark.parametrize("failure", ["exit", "missing", "timeout"])
+def test_failed_m2_refresh_with_no_pending_is_nonfatal_without_pc_access(store, monkeypatch, failure):
     remote = FakeWindows()
-    monkeypatch.setattr(delivery.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=1))
-    with pytest.raises(delivery.DeliveryError, match="status_refresh_failed"):
-        delivery.deliver_once(store[1], remote)
-    assert remote.writes == remote.moves == remote.deletes == []
+
+    def run(*_args, **_kwargs):
+        if failure == "missing":
+            raise FileNotFoundError("synthetic missing M2 renderer")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(["synthetic M2 renderer"], 20)
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    delivery.deliver_once(store[1], remote)
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
     monkeypatch.setattr(delivery, "ROOT", store[0])
-    assert delivery.main() == 1
+    assert delivery.main() == 0
+
+
+@pytest.mark.parametrize("metadata", ["delivery-status.json", "delivered.json"])
+def test_failed_delivery_metadata_write_preserves_source_until_confirmed_retry(store, monkeypatch, metadata):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+    original = delivery.write_json
+
+    def denied(dirfd, name, value):
+        if name == metadata:
+            raise OSError("synthetic delivery metadata write failure")
+        return original(dirfd, name, value)
+
+    monkeypatch.setattr(delivery, "write_json", denied)
+    with pytest.raises((delivery.DeliveryError, OSError)):
+        delivery.deliver_once(store[1], remote)
+    assert (store[0] / record["file"]).read_bytes() == b"synthetic"
+    assert delivery.read_json(store[1], "pending.json") == record
+    assert delivery.read_json(store[1], "delivery-intent.json") == record
+    assert remote.deletes == []
+
+    monkeypatch.setattr(delivery, "write_json", original)
+    delivery.deliver_once(store[1], remote)
+    assert remote.finals[record["id"]] == b"synthetic"
+    assert delivery.read_json(store[1], "pending.json") is None
+    assert delivery.read_json(store[1], "delivery-status.json")["status"] == "ok"
+    assert remote.writes == [record["id"]]
+
+
+def test_failed_confirmed_receipt_keeps_source_until_exact_remote_retry(store, monkeypatch):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+    original = delivery.write_json
+
+    def denied(dirfd, name, value):
+        if name == "delivery-status.json" and value["status"] == "ok":
+            raise OSError("synthetic confirmed receipt failure")
+        return original(dirfd, name, value)
+
+    monkeypatch.setattr(delivery, "write_json", denied)
+    with pytest.raises(OSError, match="confirmed receipt failure"):
+        delivery.deliver_once(store[1], remote)
+    assert remote.finals[record["id"]] == b"synthetic"
+    assert delivery.journal(store[1]) == [record]
+    assert (store[0] / record["file"]).read_bytes() == b"synthetic"
+    assert delivery.read_json(store[1], "pending.json") == record
+    assert delivery.read_json(store[1], "delivery-intent.json") == record
+
+    monkeypatch.setattr(delivery, "write_json", original)
+    delivery.deliver_once(store[1], remote)
+    assert delivery.read_json(store[1], "delivery-status.json")["status"] == "ok"
+    assert delivery.read_json(store[1], "delivery-intent.json") is None
+    assert not (store[0] / record["file"]).exists()
+    assert remote.writes == [record["id"]]
+
+
+def test_cleanup_failure_preserves_confirmed_status_and_retries_without_upload(store, monkeypatch):
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+    original = delivery.cleanup_pending
+
+    def failed_after_cleanup(*args):
+        original(*args)
+        raise OSError("synthetic cleanup failure")
+
+    monkeypatch.setattr(delivery, "cleanup_pending", failed_after_cleanup)
+    with pytest.raises(delivery.DeliveryError, match="local_io"):
+        delivery.deliver_once(store[1], remote)
+    status = delivery.read_json(store[1], "delivery-status.json")
+    assert status["status"] == "ok" and status["error_code"] == "cleanup_pending"
+    assert delivery.read_json(store[1], "delivery-intent.json") == record
+    assert delivery.read_json(store[1], "pending.json") is None
+    assert not (store[0] / record["file"]).exists()
+
+    monkeypatch.setattr(delivery, "cleanup_pending", original)
+    delivery.deliver_once(store[1], remote)
+    status = delivery.read_json(store[1], "delivery-status.json")
+    assert status["status"] == "ok" and status["error_code"] is None
+    assert delivery.read_json(store[1], "delivery-intent.json") is None
+    assert remote.writes == [record["id"]]
+    assert remote.finals[record["id"]] == b"synthetic"
 
 
 @pytest.mark.skipif(not shutil.which("pwsh"), reason="PowerShell parser not installed")

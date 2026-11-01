@@ -449,10 +449,11 @@ def refresh_status():
             timeout=20,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise DeliveryError("status_refresh_failed") from exc
-    if result.returncode != 0:
-        raise DeliveryError("status_refresh_failed")
+        if result.returncode == 0:
+            return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    print("CRM backup: M2 status unavailable during delivery.", file=sys.stderr)
 
 
 def set_status(dirfd, record, status, error=None):
@@ -478,7 +479,7 @@ def deliver_once(dirfd, remote):
             if (
                 isinstance(status, dict)
                 and status.get("status") == "ok"
-                and status.get("error_code") == "rotation_pending"
+                and status.get("error_code") in {"rotation_pending", "cleanup_pending"}
             ):
                 rows = journal(dirfd)
                 if rows and status.get("id") == rows[-1]["id"]:
@@ -491,6 +492,8 @@ def deliver_once(dirfd, remote):
     set_status(dirfd, record, "running")
     stream = None
     inspection_failed = False
+    confirmed = False
+    rotation_note = None
     try:
         stream = open_source(dirfd, record)
         before = verify_source(stream, record) if stream is not None else None
@@ -520,29 +523,30 @@ def deliver_once(dirfd, remote):
             remote.publish(record)
         remote.verify(record, final=True)
         remember(dirfd, record)
-        rotation_note = None
+        confirmed = True
         try:
             rotate(dirfd, remote)
         except (DeliveryError, OSError):
             # Delivery is confirmed; failed housekeeping must not be reported
             # as a failed copy or prevent a newer pending generation.
             rotation_note = "rotation_pending"
+        set_status(dirfd, record, "ok", rotation_note)
         cleanup_pending(dirfd, record, stream)
         unlink_file(dirfd, "delivery-intent.json")
-        set_status(dirfd, record, "ok", rotation_note)
     except (DeliveryError, OSError) as exc:
         error = exc if isinstance(exc, DeliveryError) else DeliveryError("local_io")
-        if error.code == "status_refresh_failed":
-            # The durable status was already recorded. Do not replace a
-            # confirmed delivery with a synthetic failure or repeat its write.
-            raise
-        # If a newer snapshot replaced an unavailable source, preserve the old
-        # remote files but stop blocking delivery of the new generation.
-        if error.code in {"source_missing", "remote_conflict"} or (stream is None and inspection_failed):
+        # A missing or damaged retired source must not block a newer ready
+        # generation. Release only its intent; preserve all old files.
+        if error.code in {"source_missing", "source_integrity", "remote_conflict"} or (
+            stream is None and inspection_failed
+        ):
             replacement = pending_record(dirfd)
             if replacement is not None and replacement != record:
                 unlink_file(dirfd, "delivery-intent.json")
-        set_status(dirfd, record, "unknown" if error.unknown else "failed", error.code)
+        if confirmed:
+            set_status(dirfd, record, "ok", rotation_note or "cleanup_pending")
+        else:
+            set_status(dirfd, record, "unknown" if error.unknown else "failed", error.code)
         if error is exc:
             raise
         raise error from exc
