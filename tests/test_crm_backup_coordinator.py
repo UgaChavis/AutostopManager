@@ -571,6 +571,29 @@ def test_unapproved_live_revision_is_rejected_before_any_stop(ctx):
     assert "Копия: ошибка" in status.read_text()
 
 
+def test_backup_uses_configured_approved_revision(ctx, monkeypatch):
+    root, data, status, fake, lock = ctx
+    monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_REVISION", fake.c["revision"])
+    result = m.backup(root, status, fake, lock, data)
+    assert result["copy"] == result["restore"] == "ok"
+    assert fake.actions == [("stop", "scheduler"), ("stop", "crm"), ("start", "crm"), ("start", "scheduler")]
+    assert m.load_pending(root / "pending.json")["file"]
+
+
+@pytest.mark.parametrize("revision", [None, "invalid", "c" * 40])
+def test_missing_invalid_or_unapproved_config_does_not_stop_services(ctx, monkeypatch, revision):
+    root, data, status, fake, lock = ctx
+    if revision is None:
+        monkeypatch.delenv("AUTOSTOP_AUTOMATION_CRM_REVISION", raising=False)
+    else:
+        monkeypatch.setenv("AUTOSTOP_AUTOMATION_CRM_REVISION", revision)
+    with pytest.raises(m.Uncertain, match="not approved"):
+        m.backup(root, status, fake, lock, data)
+    result = m.load(root / "attempt.json")
+    assert not fake.actions and result["copy"] == "failed" and result["restore"] == "not_needed"
+    assert not (root / "pending.json").exists()
+
+
 def test_daemon_restart_does_not_resolve_scheduler_unknown(ctx):
     root, _, status, fake, _ = ctx
     record = {

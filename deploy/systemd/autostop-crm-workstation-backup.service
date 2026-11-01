@@ -5,6 +5,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/autostop-manager/crm-backup-identity.env
 ExecStart=/usr/bin/python3 /usr/local/libexec/autostop-crm-backup/crm_backup_coordinator.py backup
 ExecStopPost=/usr/bin/systemctl start --no-block autostop-crm-workstation-recovery.service
 KillMode=control-group

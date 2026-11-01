@@ -37,9 +37,6 @@ EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
 DEPLOY_LOCK = Path("/opt/autostopcrm/.autostop-deploy.lock")
 SNAPSHOT = Path(__file__).with_name("crm-snapshot.py")
 TIMER = "autostop-crm-workstation-backup.timer"
-# Must be set to the reviewed, installed CRM revision with the complete writer
-# drain before the coordinator is allowed to stop CRM.
-APPROVED_CRM_REVISION = "81825c052ba1dbe1da30994761bee984b6b401c4"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
@@ -1257,8 +1254,10 @@ def backup(
     system=None,
     deploy_lock=DEPLOY_LOCK,
     data=DATA,
-    approved_revision=APPROVED_CRM_REVISION,
+    approved_revision=None,
 ):
+    if approved_revision is None:
+        approved_revision = os.environ.get("AUTOSTOP_AUTOMATION_CRM_REVISION", "")
     system = system or System()
     make_root(root)
     path = root / "attempt.json"
