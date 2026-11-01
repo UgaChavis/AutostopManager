@@ -39,7 +39,7 @@ SNAPSHOT = Path(__file__).with_name("crm-snapshot.py")
 TIMER = "autostop-crm-workstation-backup.timer"
 # Must be set to the reviewed, installed CRM revision with the complete writer
 # drain before the coordinator is allowed to stop CRM.
-APPROVED_CRM_REVISION = "603cbfca1a7ebb12c5097d8797861bc6f7efb915"
+APPROVED_CRM_REVISION = "81825c052ba1dbe1da30994761bee984b6b401c4"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
