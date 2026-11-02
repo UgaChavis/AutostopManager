@@ -3,16 +3,24 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from copy import deepcopy
+import fcntl
 import inspect
 import json
+import os
 from pathlib import Path
+import tempfile
 import threading
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 import pytest
 
-from autostop_manager import mcp_read_executor as executor, mcp_tools
+from autostop_manager import (
+    j1_vin_research as vin_api,
+    j1_vin_store as vin_store,
+    mcp_read_executor as executor,
+    mcp_tools,
+)
 from autostop_manager.listing_executor import BoundedListingExecutor, ListingExecutionError
 from autostop_manager.mcp_contract import mcp_schema_fingerprint
 from autostop_manager.mcp_telemetry import instrument_manager_tools
@@ -179,6 +187,35 @@ def test_native_vin_start_offloads_and_preserves_exact_response(monkeypatch, ine
     asyncio.run(run())
     assert tool.is_async and tool.parameters is parameters and tool.fn_metadata is metadata
     assert inspect.signature(tool.fn) == signature and tool.fn is wrapper
+
+
+def test_native_real_vin_lock_timeout_drains_and_same_key_finds_one_job(monkeypatch, inert_registration, tmp_path):
+    with tempfile.TemporaryDirectory(prefix="vin-native-lock-", dir="/dev/shm") as private:
+        root = Path(private)
+        monkeypatch.setenv("AUTOSTOP_J1_VIN_CACHE_DIR", private)
+        monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path / "queue"))
+        monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "1")
+        monkeypatch.setattr(vin_store, "API_LOCK_WAIT_SECONDS", 0.05)
+        server = _native(monkeypatch, inert_registration, NAME, vin_api.j1_research_vin)
+        tool = server._tool_manager.get_tool(NAME)
+        instrument_manager_tools(server)
+        pool = getattr(executor, POOL_NAMES[NAME])
+        fd = os.open(root / "start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = asyncio.run(tool.run(_arguments()))
+            assert {key: value for key, value in result.items() if key != "tool_execution"} == vin_store.error(
+                "vin_store_unavailable"
+            )
+            assert pool.pending_count == 0
+            assert not [path for path in root.iterdir() if vin_store.IDENTIFIER.fullmatch(path.name)]
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            first = asyncio.run(tool.run(_arguments()))
+            replay = asyncio.run(tool.run(_arguments()))
+            assert first["ok"] and replay["ok"] and first["job_id"] == replay["job_id"]
+            assert len([path for path in root.iterdir() if vin_store.IDENTIFIER.fullmatch(path.name)]) == 1
+        finally:
+            os.close(fd)
 
 
 def test_pool_limits_required_strings_and_validation_before_admission(monkeypatch, inert_registration):

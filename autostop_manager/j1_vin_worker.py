@@ -350,7 +350,7 @@ def _refresh_duplicates(conn: sqlite3.Connection, document_id: str) -> None:
 def queue_ocr(job_id: str, document_id: str, page: int) -> dict[str, Any]:
     if not store.enabled():
         return store.error("vin_research_disabled", job_id)
-    with store.start_lock(), store.connect(job_id, transaction=True) as conn:
+    with store.start_lock(bounded=True), store.connect(job_id, transaction=True) as conn:
         current = store.metadata(conn)
         if current["cancel_requested"] or current["collection_status"] in {"cancelled", "failed"}:
             return store.error("job_not_extendable", job_id)

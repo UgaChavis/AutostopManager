@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from copy import deepcopy
+import fcntl
 import inspect
 import json
+import os
 from pathlib import Path
+import tempfile
 import threading
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 import pytest
 
-from autostop_manager import mcp_read_executor as executor, mcp_tools
+from autostop_manager import j1_research, j1_vin_research, j1_vin_store, mcp_read_executor as executor, mcp_tools
 from autostop_manager.listing_executor import BoundedListingExecutor, ListingExecutionError
 from autostop_manager.mcp_contract import mcp_schema_fingerprint
 from autostop_manager.mcp_telemetry import instrument_manager_tools
@@ -116,6 +119,34 @@ def test_native_status_offloads_and_preserves_domain_response(monkeypatch, inert
     asyncio.run(run())
     assert tool.is_async and tool.parameters is parameters and tool.fn_metadata is metadata
     assert inspect.signature(tool.fn) == signature
+
+
+def test_native_vin_status_lock_timeout_drains_then_recovers(monkeypatch, inert_registration, tmp_path):
+    with tempfile.TemporaryDirectory(prefix="vin-native-status-", dir="/dev/shm") as private:
+        root = Path(private)
+        monkeypatch.setenv("AUTOSTOP_J1_VIN_CACHE_DIR", private)
+        monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path / "queue"))
+        monkeypatch.setenv("AUTOSTOP_J1_VIN_RESEARCH_ENABLED", "1")
+        monkeypatch.setattr(j1_vin_store, "API_LOCK_WAIT_SECONDS", 0.05)
+        created = j1_vin_research.j1_research_vin("A" * 17, "synthetic-status-key")
+        assert created["ok"]
+        job_id = created["job_id"]
+        j1_vin_store.set_stub(job_id, "failed", "synthetic_worker_failed")
+        server = _native(monkeypatch, inert_registration, j1_research.research_status)
+        tool = server._tool_manager.get_tool(NAME)
+        instrument_manager_tools(server)
+        fd = os.open(root / "start.lock", os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = asyncio.run(tool.run({"job_id": job_id}))
+            assert {key: value for key, value in result.items() if key != "tool_execution"} == j1_vin_store.error(
+                "vin_store_unavailable", job_id
+            )
+            assert executor._J1_STATUS_EXECUTOR.pending_count == 0
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            assert asyncio.run(tool.run({"job_id": job_id}))["collection_status"] == "failed"
+        finally:
+            os.close(fd)
 
 
 def test_status_pool_is_lazy_fixed_and_validation_precedes_admission(monkeypatch, inert_registration):

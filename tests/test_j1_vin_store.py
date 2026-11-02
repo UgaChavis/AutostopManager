@@ -5,14 +5,18 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+import errno
+import fcntl
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
 import sqlite3
 import stat
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -24,6 +28,254 @@ from autostop_manager import j1_vin_store as store
 
 VIN = "Z94K241BBKR000000"
 OTHER = "1HGCM82673A000000"
+
+
+@contextmanager
+def held_start_lock(root: Path):
+    fd = os.open(root / "start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        yield fd
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _hold_start_lock_process(path: str, channel) -> None:
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        channel.send("held")
+        channel.recv()
+    finally:
+        os.close(fd)
+        channel.close()
+
+
+@contextmanager
+def held_start_lock_in_process(root: Path):
+    context = multiprocessing.get_context("fork")
+    parent, child = context.Pipe()
+    process = context.Process(target=_hold_start_lock_process, args=(str(root / "start.lock"), child))
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(3) and parent.recv() == "held"
+        yield
+    finally:
+        if process.is_alive():
+            parent.send("release")
+        process.join(timeout=3)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=3)
+        parent.close()
+    assert process.exitcode == 0
+
+
+def test_contended_start_fails_without_duplicate_and_same_key_finds_job(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    monkeypatch.setattr(store, "API_LOCK_WAIT_SECONDS", 0.05)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with held_start_lock_in_process(root):
+            result = pool.submit(api.j1_research_vin, VIN, "synthetic-start-key").result(timeout=3)
+            assert result == store.error("vin_store_unavailable")
+            assert not [path for path in root.iterdir() if store.IDENTIFIER.fullmatch(path.name)]
+        first = api.j1_research_vin(VIN, "synthetic-start-key")
+        again = api.j1_research_vin(VIN, "synthetic-start-key")
+        assert first["ok"] and again["ok"] and first["job_id"] == again["job_id"]
+        assert len(queue_rows()) == 1
+    finally:
+        pool.shutdown(wait=True)
+
+
+def test_short_contention_allows_start_when_lock_is_released(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    monkeypatch.setattr(store, "API_LOCK_WAIT_SECONDS", 2.0)
+    attempted = threading.Event()
+    flock = fcntl.flock
+
+    def observed_flock(fd, operation):
+        try:
+            return flock(fd, operation)
+        except BlockingIOError:
+            if operation & fcntl.LOCK_NB:
+                attempted.set()
+            raise
+
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with held_start_lock(root):
+            future = pool.submit(api.j1_research_vin, VIN, "synthetic-start-key")
+            assert attempted.wait(timeout=3)
+            assert not future.done()
+        assert future.result(timeout=3)["ok"]
+        assert len(queue_rows()) == 1
+    finally:
+        pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("late", ["after_sleep", "after_acquire"])
+def test_bounded_lock_never_enters_after_deadline_and_releases_fd(private_stores, monkeypatch, late) -> None:
+    root, _disk = private_stores
+    clock = [0.0]
+    attempts = []
+    real_flock = fcntl.flock
+
+    def late_flock(fd, operation):
+        attempts.append(operation)
+        if late == "after_sleep":
+            raise BlockingIOError(errno.EAGAIN, "synthetic contention")
+        real_flock(fd, operation)
+        clock[0] = 2.0
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "API_LOCK_WAIT_SECONDS", 1.0)
+        patch.setattr(store.time, "monotonic", lambda: clock[0])
+        patch.setattr(store.time, "sleep", lambda _delay: clock.__setitem__(0, 2.0))
+        patch.setattr(fcntl, "flock", late_flock)
+        with pytest.raises(store.VinLockTimeout):
+            with store.start_lock(bounded=True):
+                pytest.fail("entered after deadline")
+    assert attempts == [fcntl.LOCK_EX | fcntl.LOCK_NB]
+    fd = os.open(root / "start.lock", os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        real_flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(fd)
+
+
+def test_existing_start_reconciles_failure_without_new_job(private_stores) -> None:
+    _root, _disk = private_stores
+    job_id = start()
+    store.set_stub(job_id, "failed", "synthetic_worker_failed")
+    result = api.j1_research_vin(VIN, "synthetic-start-key")
+    assert result["ok"] and result["job_id"] == job_id
+    assert result["collection_status"] == "failed"
+    assert len(queue_rows()) == 1
+
+
+def test_start_snapshot_precedes_worker_failure_publication(private_stores, monkeypatch) -> None:
+    _root, _disk = private_stores
+    at_read = threading.Event()
+    release_read = threading.Event()
+    worker_attempted = threading.Event()
+    job_ids = []
+    read_status = api._read_status
+    reconcile = store._reconcile_failed_worker
+    flock = fcntl.flock
+
+    def gated_read(conn):
+        job_ids.append(store.metadata(conn)["job_id"])
+        at_read.set()
+        assert release_read.wait(timeout=3)
+        return read_status(conn)
+
+    def unavailable_reconciliation(job_id):
+        if store._failed_worker_info(job_id) is not None:
+            raise store.VinJobError("vin_storage_unavailable")
+        return reconcile(job_id)
+
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX and threading.current_thread() is not threading.main_thread():
+            worker_attempted.set()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(api, "_read_status", gated_read)
+    monkeypatch.setattr(store, "_reconcile_failed_worker", unavailable_reconciliation)
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        started = pool.submit(api.j1_research_vin, VIN, "synthetic-start-key")
+        assert at_read.wait(timeout=3)
+        failed = pool.submit(store.fail_worker, job_ids[0], "synthetic_worker_failed")
+        assert worker_attempted.wait(timeout=3)
+        assert not failed.done()
+        assert queue_rows()[0]["status"] == "queued"
+        release_read.set()
+        assert started.result(timeout=3)["collection_status"] == "queued"
+        failed.result(timeout=3)
+        assert queue_rows()[0]["status"] == "failed"
+        assert api.research_status(job_ids[0]) == store.error("vin_storage_unavailable", job_ids[0])
+    finally:
+        release_read.set()
+        pool.shutdown(wait=True)
+
+
+def test_failed_job_reconciliation_wait_is_bounded(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    job_id = start()
+    store.set_stub(job_id, "failed", "synthetic_worker_failed")
+    monkeypatch.setattr(store, "API_LOCK_WAIT_SECONDS", 0.05)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with held_start_lock(root):
+            result = pool.submit(api.research_status, job_id).result(timeout=3)
+            assert result == store.error("vin_store_unavailable", job_id)
+            with store.connect(job_id) as conn:
+                assert store.metadata(conn)["collection_status"] == "queued"
+        assert api.research_status(job_id)["collection_status"] == "failed"
+    finally:
+        pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("operation", ["add_queries", "ocr"])
+def test_contended_mutation_fails_before_changing_job(private_stores, monkeypatch, operation) -> None:
+    root, _disk = private_stores
+    job_id = start()
+    finish(job_id)
+    monkeypatch.setattr(store, "API_LOCK_WAIT_SECONDS", 0.05)
+    with store.connect(job_id) as conn:
+        before = store.metadata(conn)
+        queries = [tuple(row) for row in conn.execute("SELECT * FROM queries ORDER BY id")]
+
+    def request():
+        if operation == "add_queries":
+            return api.research_add_queries(job_id, ["Synthetic additional source"])
+        return api.research_document(job_id, "a" * 32, page=1, ocr=True)
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with held_start_lock(root):
+            assert pool.submit(request).result(timeout=3) == store.error("vin_store_unavailable", job_id)
+        with store.connect(job_id) as conn:
+            assert store.metadata(conn) == before
+            assert [tuple(row) for row in conn.execute("SELECT * FROM queries ORDER BY id")] == queries
+        if operation == "add_queries":
+            assert request()["added"] == 1
+        else:
+            assert request()["error"]["code"] == "ocr_document_unavailable"
+    finally:
+        pool.shutdown(wait=True)
+
+
+def test_worker_failure_waits_for_start_lock_before_publishing(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    job_id = start()
+    attempted = threading.Event()
+    flock = fcntl.flock
+
+    def observed_flock(fd, operation):
+        if threading.current_thread() is not threading.main_thread() and operation == fcntl.LOCK_EX:
+            attempted.set()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with held_start_lock(root):
+            future = pool.submit(store.fail_worker, job_id, "synthetic_worker_failed")
+            assert attempted.wait(timeout=3)
+            assert not future.done()
+            assert queue_rows()[0]["status"] == "queued"
+        future.result(timeout=3)
+        assert queue_rows()[0]["status"] == "failed"
+        with store.connect(job_id) as conn:
+            assert store.metadata(conn)["collection_status"] == "failed"
+    finally:
+        pool.shutdown(wait=True)
 
 
 @pytest.fixture

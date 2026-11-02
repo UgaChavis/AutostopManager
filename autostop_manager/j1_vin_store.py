@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
+import errno
 import fcntl
 import json
 import math
@@ -54,6 +55,8 @@ DEFAULT_FIELDS = (
     "history",
 )
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
+API_LOCK_WAIT_SECONDS = 10.0
+API_LOCK_POLL_SECONDS = 0.025
 
 
 class VinJobError(Exception):
@@ -62,6 +65,13 @@ class VinJobError(Exception):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class VinLockTimeout(VinJobError):
+    """A busy VIN lock outlasted the API's bounded wait."""
+
+    def __init__(self) -> None:
+        super().__init__("vin_store_unavailable")
 
 
 def enabled() -> bool:
@@ -130,14 +140,32 @@ def check_capacity(root: Path, additional: int = 0) -> None:
 
 
 @contextmanager
-def start_lock() -> Iterator[Path]:
+def start_lock(*, bounded: bool = False) -> Iterator[Path]:
     root = runtime_root(create=True)
     fd = os.open(root / "start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         details = os.fstat(fd)
         if not stat.S_ISREG(details.st_mode) or details.st_uid != os.geteuid() or details.st_mode & 0o077:
             raise VinJobError("vin_store_permissions_invalid")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if not bounded:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + API_LOCK_WAIT_SECONDS
+            while True:
+                if time.monotonic() >= deadline:
+                    raise VinLockTimeout from None
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if time.monotonic() >= deadline:
+                        raise VinLockTimeout from None
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise VinLockTimeout from None
+                    time.sleep(min(remaining, API_LOCK_POLL_SECONDS))
         yield root
     finally:
         os.close(fd)
@@ -296,7 +324,7 @@ def reconcile_failed_job(job_id: str) -> None:
     """
 
     if _failed_worker_info(job_id) is not None:
-        with start_lock():
+        with start_lock(bounded=True):
             _reconcile_failed_worker(job_id)
 
 
@@ -379,12 +407,15 @@ def find_receipt(root: Path, key: str, vin: str) -> str:
     return ""
 
 
-def create(vin: str, key: str, queries: list[str]) -> str:
-    with start_lock() as root:
+@contextmanager
+def create(vin: str, key: str, queries: list[str]) -> Iterator[str]:
+    with start_lock(bounded=True) as root:
         prune()
         existing = find_receipt(root, key, vin)
         if existing:
-            return existing
+            _reconcile_failed_worker(existing)
+            yield existing
+            return
         check_capacity(root)
         job_id = uuid4().hex
         path = root / job_id
@@ -406,7 +437,11 @@ def create(vin: str, key: str, queries: list[str]) -> str:
                 queue.rollback()
                 _delete_job(root, job_id)
                 raise
-        return job_id
+        # Keep the original admission lock through reconciliation and the
+        # caller's status snapshot. A second acquisition after commit could
+        # time out after creation, or let failure publication precede the read.
+        _reconcile_failed_worker(job_id)
+        yield job_id
 
 
 def initialize(path: Path, job_id: str, vin: str, key: str, queries: list[str]) -> None:

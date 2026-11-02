@@ -197,9 +197,7 @@ def j1_research_vin(vin: str, idempotency_key: str) -> dict[str, Any]:
         return store.error("vin_invalid")
     _check_key(idempotency_key)
     queries = [f'"{normalized}"', f'"{normalized[:3]}" VIN manufacturer', f'"{normalized[:8]}" VIN identification']
-    job_id = store.create(normalized, idempotency_key, queries)
-    store.reconcile_failed_job(job_id)
-    with store.connect(job_id) as conn:
+    with store.create(normalized, idempotency_key, queries) as job_id, store.connect(job_id) as conn:
         return _read_status(conn)
 
 
@@ -335,7 +333,7 @@ def research_add_queries(job_id: str, queries: list[str]) -> dict[str, Any]:
         return store.error("vin_research_disabled", job_id)
     if not isinstance(queries, list) or not 1 <= len(queries) <= store.MAX_QUERIES:
         return store.error("queries_invalid", job_id)
-    with store.start_lock(), store.connect(job_id, transaction=True) as conn:
+    with store.start_lock(bounded=True), store.connect(job_id, transaction=True) as conn:
         current = store.metadata(conn)
         if current["collection_status"] in {"cancelled", "failed"} or current["cancel_requested"]:
             return store.error("job_not_extendable", job_id)
