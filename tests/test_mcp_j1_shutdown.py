@@ -120,14 +120,12 @@ def test_native_entrypoint_enables_process_wide_shutdown(monkeypatch):
     mcp_server.main()
 
 
-def test_store_shutdown_error_does_not_abandon_j1_future(monkeypatch):
-    pool = BoundedListingExecutor(max_workers=1, max_waiting_calls=1)
-
-    def begin_shutdown():
-        pool.begin_drain()
-        return (pool,)
-
-    monkeypatch.setattr("autostop_manager.mcp_store_lifecycle.begin_j1_shutdown", begin_shutdown)
+@pytest.mark.parametrize("active_index", range(len(POOL_NAMES)), ids=POOL_NAMES)
+def test_store_shutdown_error_does_not_abandon_j1_future(monkeypatch, active_index):
+    pools = [BoundedListingExecutor(max_workers=1, max_waiting_calls=1) for _ in POOL_NAMES]
+    for name, item in zip(POOL_NAMES, pools, strict=True):
+        monkeypatch.setattr(mcp_read_executor, name, item)
+    pool = pools[active_index]
     server = StoreFastMCP("synthetic-j1-store-error", stateless_http=True)
     server.drain_j1_on_shutdown = True
     app = server.streamable_http_app()
@@ -162,6 +160,7 @@ def test_store_shutdown_error_does_not_abandon_j1_future(monkeypatch):
             await asyncio.wait_for(exiting.wait(), 2)
             await asyncio.sleep(0.03)
             assert not shutdown.done() and pool.pending_count == 1
+            assert all(item._draining for item in pools)
             release.set()
             with pytest.raises(ExceptionGroup) as raised:
                 await asyncio.wait_for(shutdown, 2)
@@ -171,7 +170,7 @@ def test_store_shutdown_error_does_not_abandon_j1_future(monkeypatch):
                 )
                 is not None
             )
-            assert pool.pending_count == 0
+            assert all(item.pending_count == 0 for item in pools)
         finally:
             release.set()
 
@@ -179,7 +178,8 @@ def test_store_shutdown_error_does_not_abandon_j1_future(monkeypatch):
         asyncio.run(exercise())
     finally:
         release.set()
-        pool.close()
+        for item in pools:
+            item.close()
         server.store_workers.close()
 
 
