@@ -13,6 +13,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .mcp_read_executor import begin_j1_shutdown
 from .mcp_store_executor import StoreWorkers
 
 
@@ -61,6 +62,9 @@ class StoreFastMCP(FastMCP):
     def __init__(self, *args: Any, store_workers: StoreWorkers | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.store_workers = store_workers or StoreWorkers()
+        # These pools are process-wide, so only the native process entrypoint
+        # may drain them; test/embedded server instances can share the process.
+        self.drain_j1_on_shutdown = False
         self.custom_route("/internal/store-workers", methods=["GET"], include_in_schema=False)(self._worker_status)
         self.custom_route("/internal/store-workers/drain", methods=["POST"], include_in_schema=False)(
             self._begin_worker_drain
@@ -97,11 +101,20 @@ class StoreFastMCP(FastMCP):
                     # Store write. This is only a fallback AFTER Uvicorn's HTTP
                     # drain; the controller must do the handshake before SIGTERM.
                     with anyio.CancelScope(shield=True):
-                        report = await self.store_workers.drain(SHUTDOWN_DRAIN_SECONDS)
-                        if report["ok"]:
-                            self.store_workers.close()
-                        else:
-                            LOGGER.error("store_drain_timeout pending=%s", report["pending"])
+                        j1_pools = begin_j1_shutdown() if self.drain_j1_on_shutdown else ()
+                        try:
+                            report = await self.store_workers.drain(SHUTDOWN_DRAIN_SECONDS)
+                            if report["ok"]:
+                                self.store_workers.close()
+                            else:
+                                LOGGER.error("store_drain_timeout pending=%s", report["pending"])
+                        finally:
+                            # A cancelled caller may leave a real J1 future
+                            # running even if Store cleanup itself failed.
+                            while any(pool.pending_count for pool in j1_pools):
+                                await anyio.sleep(0.01)
+                            if j1_pools:
+                                LOGGER.warning("j1_shutdown_drained")
 
         app.router.lifespan_context = lifespan
         return app

@@ -51,7 +51,9 @@ def build_server() -> FastMCP:
 
 
 def main() -> None:
-    build_server().run(transport="streamable-http")
+    server = build_server()
+    server.drain_j1_on_shutdown = True
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
