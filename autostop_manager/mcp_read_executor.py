@@ -68,6 +68,24 @@ BLOCKING_J1_VIN_START_TOOLS = frozenset({"j1_research_vin"})
 _J1_VIN_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 
 
+def begin_j1_shutdown() -> tuple[BoundedListingExecutor, ...]:
+    """Close J1 admissions and return the actual process-wide pools to await."""
+    pools = (
+        _J1_STATUS_EXECUTOR,
+        _J1_REPORT_EXECUTOR,
+        _J1_RESULTS_EXECUTOR,
+        _J1_DOCUMENT_EXECUTOR,
+        _J1_ADD_QUERIES_EXECUTOR,
+        _J1_CANCEL_EXECUTOR,
+        _J1_START_EXECUTOR,
+        _J1_RECORD_FACTS_EXECUTOR,
+        _J1_VIN_START_EXECUTOR,
+    )
+    for pool in pools:
+        pool.begin_drain()
+    return pools
+
+
 def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str, Any]:
     result: dict[str, Any]
     if (

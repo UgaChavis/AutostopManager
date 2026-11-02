@@ -132,6 +132,15 @@ timeout, а занятый worker удерживает слот до реаль�
 показывают, могло ли действие начаться. Не повторяй неизвестный исход мутации:
 сначала проверь результат, затем используй прежнее тело и ключ идемпотентности.
 
+При штатном завершении native MCP после закрытия HTTP новые J1 вызовы отклоняются,
+а все девять process-wide J1 pools ожидаются до реального завершения futures,
+включая работу после timeout/cancel caller. Установленный unit должен иметь
+`TimeoutStopSec=infinity`: ожидание зависшего backend может быть неограниченным.
+`j1_shutdown_drained` в журнале процесса означает завершение J1 futures, а не
+приёмку отправок, Store или всех остальных pools. Это не pre-stop handshake и не
+доказывает безопасную остановку старой версии, где такого ожидания нет. Embedded
+серверы, созданные через `build_server()`, не владеют процессными J1 pools.
+
 MCP проверяет `manager_automation_control.expected_revision` как исходное JSON-число
 целого типа: bool и строки не превращаются в revision. У `decode_vehicle_identity`
 строгие поля `model_year`, `production_year`, `transmission_speeds`, `source_confidence`
