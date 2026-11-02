@@ -78,7 +78,10 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     manual: list[str] = []
     raw_actions = observation.get("actions", [])
     if not isinstance(raw_actions, list) or any(
-        not isinstance(item, dict) or not isinstance(item.get("action"), str) for item in raw_actions
+        not isinstance(item, dict)
+        or not isinstance(item.get("action"), str)
+        or ("data" in item and not isinstance(item["data"], str))
+        for item in raw_actions
     ):
         return {"case_id": case["id"], "hard_pass": False, "failures": ["invalid action trace"]}
     actions = [item["action"] for item in raw_actions]

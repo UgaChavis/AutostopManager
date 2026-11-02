@@ -315,6 +315,30 @@ def test_unknown_ack_case_starts_after_the_original_attempt(oracle):
 
 
 @pytest.mark.parametrize(
+    ("present", "data", "valid"),
+    [
+        (False, None, True),
+        (True, "", True),
+        (True, "fake evidence", True),
+        (True, {}, False),
+        (True, [], False),
+        (True, None, False),
+        (True, 7, False),
+        (True, True, False),
+    ],
+)
+def test_action_data_is_an_optional_string(oracle, present, data, valid):
+    fixture, cases, score = oracle
+    observation = unknown_ack_plan()
+    if present:
+        observation["actions"][0]["data"] = data
+    result = score(fixture, cases["C35"], observation)
+    assert result["hard_pass"] is valid
+    if not valid:
+        assert "invalid action trace" in result["failures"]
+
+
+@pytest.mark.parametrize(
     "action",
     [
         "reply.ack",
