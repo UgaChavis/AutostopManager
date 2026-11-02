@@ -14,6 +14,7 @@ from uuid import NAMESPACE_OID, uuid5
 import pytest
 from telegram_wake_fakes import THREAD, MockServer, until
 from test_telegram_bridge import _minimal_pdf
+from tests.instruction_bundle_fakes import create_instruction_bundle
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_bridge as bridge
@@ -98,17 +99,7 @@ def bundle(tmp_path, monkeypatch):
         pytest.skip("real privileged bridge IPC requires root")
     releases = tmp_path / "releases"
     root = releases / "snapshot"
-    for relative in (
-        "AGENTS.md",
-        "docs/agent/modules/B2.md",
-        "docs/agent/modules/B4.md",
-        ".agents/skills/manage-owner-telegram/SKILL.md",
-        ".agents/skills/manage-autostop-client/SKILL.md",
-    ):
-        target = root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("synthetic instruction bundle\n")
-    (root / "REVISION").write_text(REVISION + "\n")
+    create_instruction_bundle(root, revision=REVISION)
     monkeypatch.setattr(wake, "INSTRUCTION_RELEASE_ROOTS", (releases,))
     monkeypatch.setattr(wake, "RECONNECT_DELAYS", (0.05,))
     utilities = SimpleNamespace(get_peer_id=lambda entity: entity.id)
