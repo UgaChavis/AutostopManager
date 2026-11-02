@@ -9,10 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from tests.instruction_bundle_fakes import seal_instruction_bundle
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager import telegram_owner
 from autostop_manager import telegram_wake as wake
+from autostop_manager.instruction_bundle import REQUIRED_DOCUMENTS
+from autostop_manager.instruction_inventory import collect_instruction_inventory
 from test_telegram_durable_integration import (
     CLIENT,
     OTHER,
@@ -118,17 +121,13 @@ def test_forged_text_readback_cannot_verify_effect_or_finish_client_job(tmp_path
 
 def test_client_clarification_continuation_preserves_history_and_current_target(tmp_path, bundle):
     source = Path(__file__).resolve().parents[1]
-    for relative in (
-        "AGENTS.md",
-        "docs/agent/modules/B1.md",
-        "docs/agent/modules/B2.md",
-        "docs/agent/modules/B4.md",
-        ".agents/skills/manage-owner-telegram/SKILL.md",
-        ".agents/skills/manage-autostop-client/SKILL.md",
-    ):
-        target = bundle / relative
+    inventory = collect_instruction_inventory(source, required_paths=REQUIRED_DOCUMENTS)
+    assert not inventory.issues
+    for path in inventory.paths:
+        target = bundle / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((source / relative).read_bytes())
+        target.write_bytes(inventory.contents[path])
+    seal_instruction_bundle(bundle)
 
     async def scenario():
         async with bridge_runtime(tmp_path) as runtime:
