@@ -4,7 +4,7 @@
 
 ## Действующее хранение
 
-- Одна согласованная копия Manager + CRM: `/var/backups/autostop-current/manager-crm/20261021-current`. Одна текущая генерация Store: `/var/backups/autostop-current/store`. Состав, проверка и замена — [complete-backup.md](complete-backup.md).
+- Сохраняй согласованную копию Manager + CRM; перед обслуживанием подтверждай её фактический путь, состав и пригодность к восстановлению. Одна текущая генерация Store: `/var/backups/autostop-current/store`. Состав, проверка и замена — [complete-backup.md](complete-backup.md).
 - `autostop24-db-backup.timer` сохраняет запуск в **03:30 UTC**, но служба использует новый [store-backup.py](../../../scripts/store-backup.py). Прежний `disk-retention.conf`/`pg-retain` после backup и автоматический complete bundle больше не активны. Старые backup roots исключаются из актуальной `/etc/autostop-maintenance/policy.json`; не возвращай их из сохранённого шаблона.
 - Технические системные журналы хранятся три дня: journald `MaxRetentionSec=3day`, `MaxFileSec=1day`, существующие лимиты `500M/100M`; logrotate `daily`, `rotate 3`, `maxage 3`; sysstat `HISTORY=3`. Деловые данные, audit и очереди CRM/Store не относятся к техническим логам.
 - Ежедневный существующий `logrotate.service` вызывает [technical-retention.py](../../../scripts/technical-retention.py): только закрытые технические логи и разрешённые download caches. Лимиты — 1 GiB суммарно для root/runner pip `http-v2` и npm `_cacache`, ещё 1 GiB для неиспользуемого cache Docker builder `default`. Активные сборки/установки, CI и открытые файлы откладывают очистку. `_npx`, Python/venv, браузеры, модели, образы/volumes и инструменты этой процедурой не удаляются.
