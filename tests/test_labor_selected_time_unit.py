@@ -8,7 +8,7 @@ import socket
 from mcp.server.fastmcp import FastMCP
 import pytest
 
-from autostop_manager.automotive_labor import normalize_labor_time
+from autostop_manager.automotive_labor import calculate_work_price, normalize_labor_time
 from autostop_manager.automotive_mcp import register_automotive_tools
 
 
@@ -177,6 +177,66 @@ def test_nonfinite_time_is_unknown_and_both_native_channels_are_strict_json(nati
         json.dumps(structured, allow_nan=False)
         _assert_time(direct, expected, "hours", None, ["time"])
         assert json.dumps(arguments, sort_keys=True) == original
+
+
+def test_nonfinite_echoed_metadata_keeps_labor_outputs_consistent():
+    def reject_constant(value):
+        raise ValueError(value)
+
+    nonfinite = float("inf")
+    nested = {"values": [nonfinite, 3, {"unit": "demo"}]}
+    safe_nested = {"values": [None, 3, {"unit": "demo"}]}
+    source = {"provider": "DEMO", "extra": nested}
+    normalize_args = {
+        "rows": [
+            {
+                "operation_id": "demo1",
+                "operation_name": "DEMO work",
+                "workTime": nested,
+                "unit": nested,
+                "source": source,
+                "catalog_ref": nested,
+                "scope": nested,
+                "conditions": nested,
+            },
+            {"operation_id": "demo2", "operation_name": "DEMO work 2", "hours": 2},
+        ],
+        "source": source,
+    }
+    price_args = {
+        "labor": [
+            {"operation_id": "demo1", "operation_name": nested, "hours": 1},
+            {"operation_id": "demo2", "operation_name": "DEMO work", "hours": 2},
+        ],
+        "policy": {"basis": "hourly_rate", "version": nested, "currency": nested, "metadata": nested},
+        "hourly_rate": 1000,
+        "unknown_costs": ["extra"],
+    }
+    server = FastMCP("isolated-labor-json")
+    register_automotive_tools(server)
+    for name, function, arguments in (
+        ("normalize_labor_time", normalize_labor_time, normalize_args),
+        ("calculate_work_price", calculate_work_price, price_args),
+    ):
+        original = json.dumps(arguments, sort_keys=True)
+        direct = function(**arguments)
+        content, structured = asyncio.run(server._tool_manager.get_tool(name).run(arguments, convert_result=True))
+        assert json.loads(content[0].text, parse_constant=reject_constant) == structured == direct
+        json.dumps(structured, allow_nan=False)
+        assert json.dumps(arguments, sort_keys=True) == original
+        if name == "normalize_labor_time":
+            first, second = direct["data"]["labor"]
+            assert first["raw_time"] == first["raw_unit"] == safe_nested
+            assert first["catalog_ref"] == first["scope"] == first["conditions"] == safe_nested
+            assert first["source"]["extra"] == second["source"]["extra"] == safe_nested
+            assert second["hours"] == 2
+            assert direct["missing_fields"] == ["rows[0].time", "rows[0].unit"]
+        else:
+            assert direct["data"]["policy"]["version"] == safe_nested
+            assert direct["data"]["policy"]["metadata"] == direct["data"]["currency"] == safe_nested
+            assert direct["data"]["operations"][0]["operation_name"] == safe_nested
+            assert direct["data"]["known_subtotal"] == 3000 and direct["data"]["total"] is None
+            assert direct["missing_fields"] == ["extra"]
 
 
 def test_selected_time_unit_keeps_raw_metadata_and_repeatable_output(call):
