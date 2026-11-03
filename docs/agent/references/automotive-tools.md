@@ -62,7 +62,7 @@ Hash — SHA256 canonical JSON excluding source_revision/content_hash (ensure_as
 В bundle входят тексты/хеши, registry, native_schemas, origins и migration map.
 
 CRM committed pin: src/minimal_kanban/web_app_assets/source/automotive_tool_catalog.json.
-Добавить export после публикации Manager; объём проверок и выпуск определяются поручением и [deployment](deployment.md).
+Добавить export после публикации Manager; объём проверок и выпуск определяются поручением и [deployment](m2-server-update.md).
 Открытие окна не обращается к providers и не читает Manager checkout.
 Coordinated deploy сравнивает installed Manager REVISION и CRM pin/hash.
 Порядок schema→Manager producer→CRM pinned consumer; Store API не меняется.
@@ -95,7 +95,7 @@ CRM scripts/sync_manager_structure_instructions.py готовит тексты, 
 при обновлении текста его не запускай: он перестраивает E-геометрию.
 Preview не меняет live state; применение — через owner/CAS/idempotency API с независимым readback.
 При конфликте409 перечитай полный граф и заново подготовь текстовые изменения.
-Release/rollback — [deployment](deployment.md); current/previous coherent tuple и business data сохраняются.
+Release/rollback — [deployment](m2-server-update.md); current/previous coherent tuple и business data сохраняются.
 После открытия live writers нельзя вернуть старую DB ради отката UI.
 
 ## Контракт данных

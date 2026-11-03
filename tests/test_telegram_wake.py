@@ -601,7 +601,7 @@ def test_service_and_instructions_are_event_only():
     assert "`order`" in store_modules["F5"]
     for state in ("handoff", "waiting_payment"):
         assert f"`{state}`" in store_modules["F2"]
-    runbook = (ROOT / "docs/agent/references/deployment.md").read_text()
+    runbook = (ROOT / "docs/agent/references/m2-server-update.md").read_text()
     assert "scripts/install-codex-wake.sh" in runbook
 
 

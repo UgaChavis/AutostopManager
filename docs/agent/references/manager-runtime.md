@@ -24,7 +24,7 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Сохраняются текущие версии и одна проверенная копия данных каждого проекта (Manager + CRM совместно), без обязательной предыдущей установки. Резервирование — [complete-backup.md](complete-backup.md), границы очистки и техническое хранение — [disk-maintenance.md](disk-maintenance.md).
 
-`codex mcp list` показывает config, endpoint `tools/list` — схемы сервера, а declarations текущего хода — доступные клиенту инструменты; эти срезы могут различаться. После разрешённой активации вызови App Server `config/mcpServer/reload` с `params: null`; он лишь ставит refresh загруженных чатов в очередь. Reload и следующий ход не гарантируют обновление desktop declarations. В новом ходе сравни endpoint `tools/list`, thread-specific `mcpServerStatus/list` и фактические declarations. Reload не является read-only и ради аудита не выполняется. Установка и rollback: [deployment.md](deployment.md). Контракт API: [Codex App Server](https://learn.chatgpt.com/docs/app-server#api-overview).
+`codex mcp list` показывает config, endpoint `tools/list` — схемы сервера, а declarations текущего хода — доступные клиенту инструменты; эти срезы могут различаться. После разрешённой активации вызови App Server `config/mcpServer/reload` с `params: null`; он лишь ставит refresh загруженных чатов в очередь. Reload и следующий ход не гарантируют обновление desktop declarations. В новом ходе сравни endpoint `tools/list`, thread-specific `mcpServerStatus/list` и фактические declarations. Reload не является read-only и ради аудита не выполняется. Установка и rollback: [m2-server-update.md](m2-server-update.md). Контракт API: [Codex App Server](https://learn.chatgpt.com/docs/app-server#api-overview).
 
 Для content-free проверки существующего work Telegram чата используй `WakeConfig.load()` и `AppServer` из active bridge release. Root-only `wake.json` даёт thread ID; его не выводи. `AppServer.manager_mcp_schema_status(expected_schemas, declarations=...)` использует `threadId`, `serverName="autostopmanager"`, `detail="toolsAndAuthOnly"` и все страницы `cursor=nextCursor`. Передай input schemas из endpoint и отдельно реально доступные клиенту declarations; без последних результат явно `model_declarations_unverified`. `runtimeStatus="connected"` и `toolsError=null` могут сопровождать cached catalog, поэтому сами по себе обновление не доказывают. При `model_declarations_stale` не подгоняй аргументы под старую схему. Для уже разрешённого bounded вызова доступен существующий App Server `mcpServer/tool/call` с `threadId`, `server`, `tool`, `arguments`, либо обычный MCP SDK через актуальный endpoint; это обход cached declaration, а не доказательство её обновления. Схему локального App Server уточняй через `codex app-server generate-json-schema --out <temporary-dir> --experimental`. Не перезапускай daemon ради schema mismatch.
 
@@ -59,7 +59,7 @@ Restart worker сохраняет срок, host reboot возвращает `vi
 запись claims с server-derived match evidence, отсутствие decoder API, финализация общей ревизии,
 честные family/unknown/conflicts и expiry приватных данных. Для проверки источников нужен
 отдельно разрешённый bounded случай; обязательные CI-тесты используют синтетические fixtures.
-Изменение units/installers в Git не устанавливает службы. Граница PR/CI и выпуска — [deployment](deployment.md).
+Изменение units/installers в Git не устанавливает службы. Граница PR/CI и выпуска — [deployment](m2-server-update.md).
 
 Выбранные блокирующие read-команды из [BLOCKING_READ_TOOLS](../../../autostop_manager/mcp_read_executor.py)
 исполняются вне event loop: общий пул
@@ -198,7 +198,7 @@ HTTP handlers; этот hook не заменяет pre-stop handshake и не г
 в `TimeoutStopSec=20s`. Thread/DNS принудительно не прерываются. `drained` описывает
 Store execution и CRM callbacks в этих pools: это не успех бизнес-записи, не `readback_verified` и не
 готовность всего Manager/CRM к выпуску. Подключение handshake к поддерживаемому
-release controller выполняется отдельным изменением по [deployment](deployment.md).
+release controller выполняется отдельным изменением по [deployment](m2-server-update.md).
 
 ## CLI
 
