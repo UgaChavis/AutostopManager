@@ -44,6 +44,7 @@ _REQUEST_QUANTITY = re.compile(
     re.I,
 )
 _QUANTITY_RANGE_PREFIX = re.compile(r"(?<![\w−-])(?<![\d−-][.,])[-−]?\d+(?:[.,]\d+)?\s*[-−–—]\s*$")
+_QUANTITY_BOUND_OR_ALTERNATIVE_PREFIX = re.compile(r"(?<!\w)(?:от|до|\d+(?:[.,]\d+)?\s+или)\s*$", re.I)
 # Match from the final slash backwards, avoiding repeated scans of long chains.
 # The trailing guards are the reversed boundaries of a standalone numeric token.
 _REVERSED_FRACTION_PREFIX = re.compile(
@@ -129,7 +130,11 @@ def _quantity(raw: str) -> tuple[float | None, str | None]:
         # Only an explicitly labelled article and a spaced separator disambiguate
         # this numeric token. A supplied part_number alone does not prove it.
         range_prefix = None
-    non_scalar = range_prefix or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
+    non_scalar = (
+        range_prefix
+        or _REVERSED_FRACTION_PREFIX.match(prefix[::-1])
+        or _QUANTITY_BOUND_OR_ALTERNATIVE_PREFIX.search(prefix)
+    )
     quantity = None if non_scalar or _labeled_grouped_quantity(raw, match) else finite_number(match[1])
     return quantity, "set" if unit.startswith("комп") else "pair" if unit.startswith(
         "пар"

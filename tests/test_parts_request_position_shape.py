@@ -92,6 +92,34 @@ def call(request, native_tool):
     return invoke
 
 
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("quantity_text", ["от 2 шт", "до 2 шт", "1 или 2 шт"])
+def test_quantity_bound_or_alternative_remains_unknown(call, structured, quantity_text):
+    raw = f"масляный фильтр {quantity_text}"
+    response = call(**({"items": [{"raw": raw}]} if structured else {"text": raw}))
+    item = response["data"]["items"][0]
+    assert response["outcome"] == "partial"
+    assert item["raw"] == raw
+    assert item["quantity"] is None and item["unit"] == "piece"
+    assert item["quantity_status"] == "unknown"
+    assert f"{item['item_id']}.quantity" in response["missing_fields"]
+
+
+@pytest.mark.parametrize("raw", ["масляный фильтр 2 шт", "масляный фильтр от модели 2 шт"])
+def test_exact_quantity_remains_known(call, raw):
+    item = call(text=raw)["data"]["items"][0]
+    assert item["quantity"] == 2 and item["unit"] == "piece"
+    assert item["quantity_status"] == "known"
+
+
+@pytest.mark.parametrize("quantity", [0, 3])
+def test_explicit_quantity_keeps_priority_over_bound(call, quantity):
+    response = call(items=[{"raw": "масляный фильтр до 2 шт", "quantity": quantity}])
+    item = response["data"]["items"][0]
+    assert response["outcome"] == "success"
+    assert item["quantity"] == quantity and item["unit"] == "piece"
+
+
 @pytest.mark.parametrize("field", ["axle", "side", "position"])
 @pytest.mark.parametrize("value", [True, False, 2, 0, 1.5, [], ["left"], {}, {"value": "front"}])
 def test_nonstring_position_hint_returns_invalid_input_without_echo(call, field, value):
