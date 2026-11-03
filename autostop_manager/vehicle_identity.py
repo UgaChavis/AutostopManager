@@ -365,6 +365,10 @@ def _transmission_signature(value: Any) -> tuple[str | None, frozenset[int], fro
         if re.fullmatch(r"dq\d{3}", token):
             kinds.add("dual_clutch_or_robot")
             gearbox_codes.add(token)
+        if re.fullmatch(r"[68]hp\d{2}[a-z]?", token):
+            kinds.add("automatic")
+            gear_counts.add(int(token[0]))
+            gearbox_codes.add(token)
 
     kind = next(iter(kinds)) if len(kinds) == 1 else None
     return kind, frozenset(gear_counts), frozenset(gearbox_codes)
