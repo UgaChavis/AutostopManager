@@ -173,7 +173,7 @@ Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` 
 Составные периоды systemd, например `1h 15min`, читаются целиком. Неразобранный фактический период при известном желаемом периоде не доказывает `in_sync`. Ошибка или timeout изменения запускает откат; неуспешный откат возвращает `system_timer_rollback_failed`.
 
 Доказанный отказ bridge `conversation_changed_since_dry_run` происходит до send intent и возвращает digest в `prepared`: повтор сохраняет исходные тело и ключ. Другие неизвестные исходы требуют точного readback без повторной отправки. Ключи уже сохранённых outbox не меняются при обновлении; новые тестовые уведомления получают ключ из своего command ID, сохраняя независимость источников команд.
-- `database_backup` относится к Store: `autostop24-db-backup.timer` → `/usr/local/sbin/autostop24-db-backup` → PostgreSQL `autostop-db` → `/var/backups/autostop24/database`. Текущее расписание проверяй через `TimersCalendar`. CRM backup имеет отдельный [runbook](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
+- `database_backup` относится к Store; состав, путь и расписание копии описаны в [справочнике резервных копий](complete-backup.md). Фактическое расписание проверяй через `TimersCalendar`. CRM backup имеет отдельный [runbook](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
 Readiness из `/tmp`:
 

@@ -101,11 +101,6 @@ transport и Nginx public deny → tools/list schema → presence-only token che
 principal (`401`/`403`) → runtime circuit → Store response contract → business
 validation. Provider/auth error не повод для restart.
 
-Общий порядок обслуживания: остановка приложений с сохранением SSH/operator,
-одна согласованная копия данных/настроек и одна локальная проверка восстановления,
-установка проверенных версий, техническая приёмка и очистка временных материалов.
-Business volumes, Manager registry, principal IDs, credentials и история
-идемпотентности сохраняются. Совместимый Store уже выбранной версии повторно не
-устанавливается. Push в Store `main` запускает `Deploy VPS`, поэтому даже docs-only
-merge требует соответствующего окна обслуживания. Полный порядок —
-[m2-server-update.md](m2-server-update.md).
+Публикация, обновление и восстановление приложений — в
+[инструкции M2](m2-server-update.md). Store API и его проверки описаны здесь;
+изменение документации само по себе не разрешает выпуск Store.
