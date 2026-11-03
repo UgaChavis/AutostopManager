@@ -136,6 +136,9 @@ def test_later_bad_row_identifies_its_own_input_field(call, field):
     [
         ("передние колодки", {"axle": "rear"}, "axle"),
         ("колодки спереди", {"axle": "rear"}, "axle"),
+        ("колодки на перед", {"axle": "rear"}, "axle"),
+        ("колодки на зад", {"axle": "front"}, "axle"),
+        ("колодки на двух осях", {"axle": "front"}, "split_by_axle"),
         ("амортизаторы перед и зад", {"axle": "front"}, "split_by_axle"),
         ("колодки на обеих осях", {"axle": "front"}, "split_by_axle"),
         ("brake pads", {"axle": "front/rear"}, "split_by_axle"),
@@ -157,6 +160,9 @@ def test_axle_conflicts_propagate_through_all_public_routes(call, raw, hints, mi
     "raw,hints",
     [
         ("колодки спереди", {"axle": "передней оси"}),
+        ("колодки на перед", {"axle": "front"}),
+        ("колодки на зад", {"axle": "rear"}),
+        ("колодки перед заменой", {"axle": "rear"}),
         ("rear brake pads for both sides", {"axle": "rear"}),
         ("front shock absorbers both sides", {"axle": "front", "side": "left"}),
     ],

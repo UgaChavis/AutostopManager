@@ -726,8 +726,8 @@ def _single_text_position_hint(text: str, patterns: dict[str, str]) -> str | Non
 
 
 _AXLE_PATTERNS = {
-    "front": r"\b(?:front(?:\s+axle)?|передн\w*|спереди)\b",
-    "rear": r"\b(?:rear(?:\s+axle)?|задн\w*|сзади)\b",
+    "front": r"\b(?:front(?:\s+axle)?|передн\w*|спереди|на\s+перед)\b",
+    "rear": r"\b(?:rear(?:\s+axle)?|задн\w*|сзади|на\s+зад)\b",
 }
 
 
@@ -739,7 +739,8 @@ def _axle_hints(value: str | None, *, explicit_axle: bool = False) -> set[str]:
     if normalized.strip() in {"перед", "зад"}:
         return {"front" if normalized.strip() == "перед" else "rear"}
     if (explicit_axle and normalized.strip() == "both") or re.search(
-        r"\b(?:both\s+axles?|обе(?:их)?\s+(?:оси|осей|осях)|перед\s+и\s+зад|зад\s+и\s+перед)\b", normalized
+        r"\b(?:both\s+axles?|обе(?:их)?\s+(?:оси|осей|осях)|двух\s+осях|перед\s+и\s+зад|зад\s+и\s+перед)\b",
+        normalized,
     ):
         return {"front", "rear"}
     return hints
