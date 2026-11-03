@@ -308,6 +308,15 @@ def _hours_from_text(text: str) -> list[tuple[float, float]]:
                 range_spans.append(match.span())
             elif any(match.start() < end and match.end() > start for start, end in range_spans):
                 continue
+            marker_end = match.start(1)
+            while marker_end and text[marker_end - 1].isspace():
+                marker_end -= 1
+            if (
+                marker_end >= 2
+                and text[marker_end - 2 : marker_end].casefold() in {"от", "до"}
+                and (marker_end == 2 or not (text[marker_end - 3].isalnum() or text[marker_end - 3] == "_"))
+            ):
+                continue
             # Do not turn a truncated range into a precise time. The range
             # pattern can stop before the inflection in "часа" or "часов".
             tail = text[match.end() :]
@@ -644,10 +653,9 @@ def _split_observed_clause(text: str, markers: list[tuple[int, int]]) -> list[tu
     for layer in reversed(layers):
         end = layer[end][0][0]
         boundaries.append(end)
-    # A slash at a proved internal record boundary is layout, not a dangling
-    # operation connector. Keep an actual final slash visible to the resolver.
+    # Separators at a proved internal record boundary are layout, not dangling ranges.
     return [
-        (re.sub(r"\s+/\s*$", "", text[start:end]) if end < len(text) else text[start:end], True)
+        (re.sub(r"\s+(?:/|[–—])\s*$", "", text[start:end]) if end < len(text) else text[start:end], True)
         for start, end in pairwise(reversed(boundaries))
     ]
 
