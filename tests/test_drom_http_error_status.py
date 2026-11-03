@@ -142,6 +142,32 @@ def call(request, native_tools, monkeypatch):
     return invoke
 
 
+@pytest.mark.parametrize(
+    "price,expected,qualifier",
+    [
+        ("1 250–1 800 руб.", None, None),
+        ("1250-1800 руб.", None, None),
+        ("1 250 — 1 800 руб.", None, None),
+        ("1,25–1,80 руб.", None, None),
+        ("от 1 250 до 1 800 руб.", None, "from"),
+        ("1 250 руб.", 1250, None),
+        ("от 1 250 руб.", 1250, "from"),
+        ("до 1 800 руб.", 1800, "up_to"),
+        ("+1 250 руб.", 1250, None),
+        ("-", None, None),
+        ("1 250 руб. за шт.", 1250, "per_item"),
+    ],
+)
+def test_drom_price_ranges_keep_text_without_a_fixed_price(call, price, expected, qualifier):
+    row = {"url": "https://baza.drom.ru/synthetic/part/123/", "title": "Колодки", "Цена": price}
+    result, _ = call("drom_get_parts_search", [Response({"completedAt": "2026-10-30"}), Response([row])])
+    assert result["ok"] is True
+    listing = result["listings"][0]
+    assert listing["price_text"] == price
+    assert listing["price_rub"] == expected
+    assert listing["price_qualifier"] == qualifier
+
+
 @pytest.mark.parametrize("stage", ["status", "result"])
 @pytest.mark.parametrize(
     "status,code,uncertain",
