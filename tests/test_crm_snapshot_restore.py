@@ -70,6 +70,102 @@ class CrmSnapshotTest(unittest.TestCase):
         with sqlite3.connect(destination / "crm" / "change_feed.sqlite3") as db:
             self.assertEqual(db.execute("SELECT value FROM sample").fetchone(), ("synthetic",))
 
+    def test_cold_wal_snapshot_does_not_create_source_sidecars(self):
+        self.db.close()
+        self.db = sqlite3.connect(":memory:")  # tearDown closes this unrelated connection
+        feed = self.source / "change_feed.sqlite3"
+        self.assertFalse(Path(str(feed) + "-wal").exists())
+        self.assertFalse(Path(str(feed) + "-shm").exists())
+        root_before = self.source.stat()
+        path = self.stage / "snapshot.tar.gz"
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertEqual(self.source.stat().st_mtime_ns, root_before.st_mtime_ns)
+        self.assertFalse(Path(str(feed) + "-wal").exists())
+        self.assertFalse(Path(str(feed) + "-shm").exists())
+        destination = self.base / "restore"
+        destination.mkdir(mode=0o700)
+        restore.check_archive(path, destination)
+        with sqlite3.connect(destination / "crm" / "change_feed.sqlite3") as db:
+            self.assertEqual(db.execute("SELECT value FROM sample").fetchone(), ("synthetic",))
+
+    def test_replaced_feed_symlink_is_rejected_before_sqlite_reads_it(self):
+        path = self.stage / "snapshot.tar.gz"
+        feed = self.source / "change_feed.sqlite3"
+        saved = self.base / "saved-feed.sqlite3"
+        original = snapshot._sqlite_copy
+
+        def replace_feed(*args):
+            feed.rename(saved)
+            feed.symlink_to(self.source / "state.json")
+            try:
+                with mock.patch.object(snapshot.sqlite3, "connect") as connect:
+                    with self.assertRaises(OSError):
+                        original(*args)
+                    connect.assert_not_called()
+                raise ValueError("source changed")
+            finally:
+                feed.unlink()
+                saved.rename(feed)
+
+        with mock.patch.object(snapshot, "_sqlite_copy", side_effect=replace_feed):
+            with self.assertRaisesRegex(ValueError, "source changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(path.exists())
+
+    def test_wal_changed_after_copy_rejects_archive(self):
+        path = self.stage / "snapshot.tar.gz"
+        wal = self.source / "change_feed.sqlite3-wal"
+        original = tarfile.TarFile.addfile
+
+        def change_wal(archive, entry, source=None):
+            result = original(archive, entry, source)
+            if entry.name == "crm/state.json":
+                metadata = wal.stat()
+                os.utime(wal, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000))
+            return result
+
+        with mock.patch.object(tarfile.TarFile, "addfile", new=change_wal):
+            with self.assertRaisesRegex(ValueError, "tree changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(path.exists())
+
+    def test_wal_appearing_during_snapshot_rejects_archive(self):
+        self.db.close()
+        self.db = sqlite3.connect(":memory:")
+        path = self.stage / "snapshot.tar.gz"
+        wal = self.source / "change_feed.sqlite3-wal"
+        self.assertFalse(wal.exists())
+        original = snapshot._sqlite_copy
+
+        def add_wal(*args):
+            wal.write_bytes(b"synthetic WAL")
+            return original(*args)
+
+        with mock.patch.object(snapshot, "_sqlite_copy", side_effect=add_wal):
+            with self.assertRaisesRegex(ValueError, "tree changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(path.exists())
+
+    def test_replaced_wal_is_rejected_before_copy(self):
+        path = self.stage / "snapshot.tar.gz"
+        wal = self.source / "change_feed.sqlite3-wal"
+        saved = self.base / "saved-wal"
+        original = snapshot._sqlite_copy
+
+        def replace_wal(*args):
+            wal.rename(saved)
+            wal.write_bytes(saved.read_bytes())
+            try:
+                return original(*args)
+            finally:
+                wal.unlink()
+                saved.rename(wal)
+
+        with mock.patch.object(snapshot, "_sqlite_copy", side_effect=replace_wal):
+            with self.assertRaisesRegex(ValueError, "source changed"):
+                snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(path.exists())
+
     def test_wrong_key_and_symlink_do_not_publish(self):
         path = self.stage / "snapshot.tar.gz"
         with self.assertRaises(InvalidToken):

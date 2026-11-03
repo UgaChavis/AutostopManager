@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -202,16 +203,28 @@ def _info(name, metadata, directory=False):
     return info
 
 
-def _sqlite_copy(path: Path, target: Path):
-    source = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
-    dest = sqlite3.connect(target)
-    try:
-        source.backup(dest)
-        if dest.execute("PRAGMA integrity_check").fetchone() != ("ok",):
-            raise ValueError("sqlite integrity check failed")
-    finally:
-        dest.close()
-        source.close()
+def _sqlite_copy(path: Path, metadata, wal_metadata, target: Path):
+    # SQLite can create WAL/SHM on a read. Copy the fenced source and WAL
+    # without following links, then let SQLite operate only in private scratch.
+    with tempfile.TemporaryDirectory(prefix=".sqlite-source-", dir=target.parent) as private:
+        copied = Path(private) / path.name
+        sources = [(path, metadata)]
+        if wal_metadata is not None:
+            sources.append((Path(str(path) + "-wal"), wal_metadata))
+        for original, expected in sources:
+            with _file(original, expected) as src, (Path(private) / original.name).open("xb") as dst:
+                shutil.copyfileobj(src, dst)
+                if not _stable(expected, os.fstat(src.fileno())):
+                    raise ValueError("source changed")
+        source = sqlite3.connect(copied.as_uri() + "?mode=ro", uri=True, timeout=5)
+        dest = sqlite3.connect(target)
+        try:
+            source.backup(dest)
+            if dest.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                raise ValueError("sqlite integrity check failed")
+        finally:
+            dest.close()
+            source.close()
 
 
 def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: str, runtime_config: dict):  # noqa: C901
@@ -245,7 +258,9 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     if not found_feed:
         raise ValueError("CRM feed is not SQLite")
     sidecars = {Path(str(p) + ext) for p in sqlite_paths for ext in ("-wal", "-shm")}
-    original_tree = _tree_signature(root, root_metadata, entries, sidecars)
+    shared_memory = {Path(str(p) + "-shm") for p in sqlite_paths}
+    original_tree = _tree_signature(root, root_metadata, entries, shared_memory)
+    metadata_by_path = {path: metadata for path, metadata, _ in entries}
     if any(Path(str(p) + "-journal") in paths for p in sqlite_paths):
         raise ValueError("SQLite rollback journal present")
     state = root / "mcp-oauth-state.json"
@@ -276,7 +291,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
                     source = path
                     if path in sqlite_paths:
                         source = Path(scratch) / str(len(list(Path(scratch).iterdir())))
-                        _sqlite_copy(path, source)
+                        _sqlite_copy(path, metadata, metadata_by_path.get(Path(str(path) + "-wal")), source)
                     info = _info(name, metadata)
                     if path in sqlite_paths:
                         info.size = source.stat().st_size
@@ -310,7 +325,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
                 info.mode = 0o600
                 info.size = len(manifest)
                 archive.addfile(info, io.BytesIO(manifest))
-            if _tree_signature(root, root.lstat(), _walk(root), sidecars) != original_tree:
+            if _tree_signature(root, root.lstat(), _walk(root), shared_memory) != original_tree:
                 raise ValueError("CRM source tree changed during snapshot")
             raw.flush()
             os.fsync(raw.fileno())
