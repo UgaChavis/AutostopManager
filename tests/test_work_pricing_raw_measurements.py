@@ -62,6 +62,25 @@ def parse(row, kind, *, operations=OPERATIONS):
     return rows
 
 
+@pytest.mark.parametrize("value", ["1 час – ?", "1–2 часа – ?", "1 час до ?", "1 час –", "норма времени 1 час – ?"])
+@pytest.mark.parametrize("placement", ["snippet", "title"])
+def test_truncated_labor_time_cannot_create_price_from_two_public_sources(value, placement):
+    observations = []
+    for index in range(2):
+        observations.extend(parse(public_row(value, placement, source=f"synthetic-{index}.example"), "labor_times"))
+    result = pricing.estimate_repair_work_cost(
+        make="DEMO",
+        work_items=[OPERATION],
+        quotes_json={"labor_time_sample": observations},
+        auto_research=False,
+        use_internal_experience=False,
+    )
+    analysis = result["operation_estimates"][0]["labor_time_analysis"]
+    assert analysis["valid_count"] == 0
+    assert analysis["average_hours"] is None
+    assert result["recommended_total_works_rub"] is None
+
+
 AMBIGUOUS = [
     pytest.param("labor_prices", "price_rub", "5000 руб., 5000 руб.", [5000], id="price-repeat"),
     pytest.param(

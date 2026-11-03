@@ -308,6 +308,17 @@ def _hours_from_text(text: str) -> list[tuple[float, float]]:
                 range_spans.append(match.span())
             elif any(match.start() < end and match.end() > start for start, end in range_spans):
                 continue
+            # Do not turn a truncated range into a precise time. The range
+            # pattern can stop before the inflection in "часа" or "часов".
+            tail = text[match.end() :]
+            if pattern_index == 1:
+                tail = re.sub(r"^\s*(?:н/?ч|нормо[- ]?час(?:а|ы|ов)?|час(?:а|ы|ов)?|ч\.)", "", tail, flags=re.I)
+            if re.match(
+                r"(?:а|ы|ов)?\s*(?:[-–—]|до\b)\s*(?:\?|неизвестно\b|nan\b|none\b|null\b|unknown\b|(?:[-+−]\s*)?\d|$)",
+                tail,
+                flags=re.I,
+            ):
+                continue
             if any(match.start() < end and match.end() > start for start, end in observed_spans):
                 continue
             try:

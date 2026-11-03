@@ -412,6 +412,24 @@ def _normalize_quote_sample(rows: list[dict[str, Any]], matcher: OperationMatche
     return [_normalize_quote(row) for row in _dedupe_quote_rows(adapted, identities=identities)]
 
 
+_LABOR_TIME_UNIT_PATTERN = r"(?:нормо[-\s]?)?(?:час(?:а|ы|ов)?|ч|h|hrs?|hours?)\b\.?"
+
+
+def _has_labor_range_continuation(suffix: str) -> bool:
+    suffix = suffix.lstrip()
+    unit_match = re.match(rf"(?:-\s*)?{_LABOR_TIME_UNIT_PATTERN}", suffix, re.I)
+    if unit_match:
+        suffix = suffix[unit_match.end() :].lstrip()
+    if re.match(r"до\b", suffix, re.I):
+        return True
+    if not suffix.startswith(("-", "–", "—")):
+        return False
+    if not unit_match:
+        return True
+    remainder = suffix[1:].lstrip()
+    return not remainder or bool(re.match(r"(?:[\d+?−-]|nan\b|none\b|null\b|unknown\b|неизвестно\b)", remainder, re.I))
+
+
 def _coerce_hours(value: Any, *, range_field: bool = False) -> tuple[float | None, list[float] | None]:
     if isinstance(value, bool) or value is None:
         return None, None
@@ -436,15 +454,12 @@ def _coerce_hours(value: Any, *, range_field: bool = False) -> tuple[float | Non
     number_pattern = _number_text_pattern(text, r"(?<![\d.])(?:[-+]\s*)?\d+(?:\.\d+)?(?![\d.])")
     if number_pattern is None:
         return None, None
-    time_unit = r"(?:нормо[-\s]?)?(?:час(?:а|ы|ов)?|ч|h|hrs?|hours?)\b\.?"
+    time_unit = _LABOR_TIME_UNIT_PATTERN
     range_match = re.search(
         rf"({number_pattern})\s*(?:{time_unit}\s*)?(?:[-–—]|\bдо\b)\s*({number_pattern})", text, re.I
     )
     if range_match:
-        suffix = text[range_match.end() :].lstrip()
-        if re.match(r"до\b", suffix, re.I) or (
-            suffix.startswith(("-", "–", "—")) and not re.match(rf"-\s*{time_unit}", suffix, re.I)
-        ):
+        if _has_labor_range_continuation(text[range_match.end() :]):
             return None, None
         low, high = (finite_number(re.sub(r"\s+", "", group)) for group in range_match.groups())
         if low is None or high is None:
@@ -462,7 +477,7 @@ def _coerce_hours(value: Any, *, range_field: bool = False) -> tuple[float | Non
     if (
         re.search(r"\b(?:от|до)\s*$", prefix, re.I)
         or (re.search(r"\bот\b", prefix, re.I) and re.search(r"\bдо\b", prefix, re.I))
-        or re.match(rf"(?:{time_unit}\s*)?до\b", suffix, re.I)
+        or _has_labor_range_continuation(suffix)
     ):
         return None, None
     if prefix.endswith(("–", "—")):
@@ -474,8 +489,6 @@ def _coerce_hours(value: Any, *, range_field: bool = False) -> tuple[float | Non
             or re.search(r"(?:\b(?:nan|none|null|unknown|неизвестно)|\?)$", left, re.I)
         ):
             return None, None
-    if suffix.startswith(("-", "–", "—")) and not re.match(rf"-\s*{time_unit}", suffix, re.I):
-        return None, None
     parsed = finite_number(re.sub(r"\s+", "", match.group(0)))
     if parsed is None:
         return None, None
