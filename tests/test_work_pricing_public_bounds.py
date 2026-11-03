@@ -14,14 +14,14 @@ def no_acquisition(monkeypatch):
     monkeypatch.setattr(pricing, "_load_labor_experience", denied)
 
 
-def estimate_snippets(text):
+def estimate_snippets(text, *, title="Замена масла"):
     operation = "замена масла"
     rows = []
     for index in range(2):
         row = {
             "source": f"synthetic-{index}.example",
             "url": f"https://synthetic-{index}.example/labor",
-            "title": "Замена масла",
+            "title": title,
             "snippet": text,
         }
         parsed, _ = research.parse_public_work_evidence(
@@ -55,6 +55,15 @@ def estimate_snippets(text):
 def test_one_sided_or_incomplete_time_does_not_create_a_price(snippet):
     rows, operation = estimate_snippets(snippet)
     assert not any(row["operation_name"] for row in rows)
+    assert operation["labor_time_analysis"]["valid_count"] == 0
+    assert operation["autostop_price_rub"] is None
+
+
+@pytest.mark.parametrize("marker", ["макс.", "мин.", "максимум", "минимум", "не более", "не менее", "≥", "≤"])
+@pytest.mark.parametrize("layout", ["{} 2 часа — замена масла", "замена масла — {} 2 часа", "замена масла: {} 2 часа"])
+def test_bound_marker_stays_with_measurement_and_does_not_create_a_price(marker, layout):
+    rows, operation = estimate_snippets(layout.format(marker), title="Прайс")
+    assert rows == []
     assert operation["labor_time_analysis"]["valid_count"] == 0
     assert operation["autostop_price_rub"] is None
 

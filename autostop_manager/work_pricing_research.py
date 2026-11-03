@@ -26,6 +26,11 @@ _HOUR_PATTERNS = (
     rf"(?:н/?ч|нормо[- ]?час|норма времени|трудоемкость|время выполнения)[^\d+−-]{{0,24}}({_DECIMAL_PATTERN})",
     rf"({_DECIMAL_PATTERN})\s*(?:н/?ч|нормо[- ]?час|час(?:а|ов)?|ч\.)",
 )
+_HOUR_BOUND_PREFIX = re.compile(
+    rf"(?<!\w)(?:от|до|(?:не\s+)?(?:более|менее|больше|меньше)|"
+    rf"макс(?:имум)?\.?|мин(?:имум)?\.?|[≥≤<>])\s*({_DECIMAL_PATTERN})",
+    re.I,
+)
 _ObservationSignature = tuple[int, int, tuple[bool | None, bool]]
 LABOR_ONLY_MARKERS = (
     "без запчаст",
@@ -298,24 +303,22 @@ def _labor_only_flags(text: str) -> tuple[bool | None, bool]:
     return None, False
 
 
+def _one_sided_hour_prefixes(text: str) -> dict[int, tuple[int, int]]:
+    return {match.start(1): match.span() for match in _HOUR_BOUND_PREFIX.finditer(text)}
+
+
 def _hours_from_text(text: str) -> list[tuple[float, float]]:
     values: list[tuple[float, float]] = []
     range_spans: list[tuple[int, int]] = []
     observed_spans: list[tuple[int, int]] = []
+    one_sided = _one_sided_hour_prefixes(text)
     for pattern_index, pattern in enumerate(_HOUR_PATTERNS):
         for match in re.finditer(pattern, text, flags=re.I):
             if pattern_index == 0:
                 range_spans.append(match.span())
             elif any(match.start() < end and match.end() > start for start, end in range_spans):
                 continue
-            marker_end = match.start(1)
-            while marker_end and text[marker_end - 1].isspace():
-                marker_end -= 1
-            if (
-                marker_end >= 2
-                and text[marker_end - 2 : marker_end].casefold() in {"от", "до"}
-                and (marker_end == 2 or not (text[marker_end - 3].isalnum() or text[marker_end - 3] == "_"))
-            ):
+            if match.start(1) in one_sided:
                 continue
             # Do not turn a truncated range into a precise time. The range
             # pattern can stop before the inflection in "часа" or "часов".
@@ -550,11 +553,24 @@ def _observed_operation_segments(text: str, operations: list[dict[str, Any]]) ->
             markers[-1] = (markers[-1][0], max(end, markers[-1][1]))
         else:
             markers.append((start, end))
+    one_sided = _one_sided_hour_prefixes(text)
+    time_starts = (
+        {match.start(1) for pattern in _HOUR_PATTERNS for match in re.finditer(pattern, text, flags=re.I)}
+        if one_sided
+        else set()
+    )
+    protected_prefixes = [span for start, span in one_sided.items() if start in time_starts]
+    protected_starts = [start for start, _ in protected_prefixes]
+
+    def inside_bound_prefix(position: int) -> bool:
+        index = bisect_left(protected_starts, position) - 1
+        return index >= 0 and position < protected_prefixes[index][1]
+
     boundaries = {0, len(text)}
     boundaries.update(
         match.end()
         for match in re.finditer(r"(?<!руб\.)(?<!р\.)(?<!ч\.)(?<=[.!?])\s+|;+\s*|[\r\n\u2028\u2029]+", text, flags=re.I)
-        if not any(start < match.end() < end for start, end in markers)
+        if not any(start < match.end() < end for start, end in markers) and not inside_bound_prefix(match.end())
     )
     result: list[tuple[str, bool]] = []
     for start, end in pairwise(sorted(boundaries)):
