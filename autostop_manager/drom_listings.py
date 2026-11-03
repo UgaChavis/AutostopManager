@@ -43,6 +43,7 @@ _ROBOT_ALIAS_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _UID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _NUMERIC_RE = re.compile(r"\d[\d\s\u00a0\u202f]*(?:[,.]\d{1,2})?")
 _PRICE_RANGE_RE = re.compile(rf"{_NUMERIC_RE.pattern}\s*(?:[-–—]|\bдо\b|\bto\b)\s*{_NUMERIC_RE.pattern}", re.I)
+_NEGATIVE_PRICE_RE = re.compile(r"^(?:(?:цена|price)\s*:\s*)?(?:(?:от|до|from|up\s+to)\s+)?[-−](?=\d)", re.I)
 _URL_RE = re.compile(r"(?i)(?:\b[a-z][a-z0-9+.-]*://|\bwww\.)")
 
 
@@ -461,7 +462,7 @@ def _parse_price(value: Any) -> tuple[int | float | None, str | None, str | None
         qualifier = "up_to"
     elif "за шт" in folded or "за штуку" in folded or "per item" in folded:
         qualifier = "per_item"
-    if _PRICE_RANGE_RE.search(price_text):
+    if _PRICE_RANGE_RE.search(price_text) or _NEGATIVE_PRICE_RE.search(price_text):
         return None, price_text, qualifier
     match = _NUMERIC_RE.search(price_text)
     if not match:

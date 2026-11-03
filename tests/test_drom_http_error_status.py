@@ -168,6 +168,30 @@ def test_drom_price_ranges_keep_text_without_a_fixed_price(call, price, expected
     assert listing["price_qualifier"] == qualifier
 
 
+@pytest.mark.parametrize(
+    "price,expected,qualifier",
+    [
+        ("-1250 руб.", None, None),
+        ("−1 250,50 руб.", None, None),
+        ("Цена: -1250 руб.", None, None),
+        ("от -1250 руб.", None, "from"),
+        ("цена: до −1250 руб.", None, "up_to"),
+        ("PRICE: from -1250 руб.", None, "from"),
+        ("Цена — 1250 руб.", 1250, None),
+        ("Цена - 1250 руб.", 1250, None),
+        ("Цена-1250 руб.", 1250, None),
+    ],
+)
+def test_drom_negative_price_does_not_become_positive(call, price, expected, qualifier):
+    row = {"url": "https://baza.drom.ru/synthetic/part/123/", "title": "Колодки", "Цена": price}
+    result, _ = call("drom_get_parts_search", [Response({"completedAt": "2026-10-30"}), Response([row])])
+    assert result["ok"] is True
+    listing = result["listings"][0]
+    assert listing["price_text"] == price
+    assert listing["price_rub"] == expected
+    assert listing["price_qualifier"] == qualifier
+
+
 @pytest.mark.parametrize("stage", ["status", "result"])
 @pytest.mark.parametrize(
     "status,code,uncertain",
