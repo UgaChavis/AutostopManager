@@ -62,11 +62,21 @@ def _labor_operation_name(row: dict[str, Any]) -> Any:
     return next((row[key] for key in ("workName", "operation_name", "operation", "name") if key in row), None)
 
 
+def _json_safe_raw_time(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, list):
+        return [_json_safe_raw_time(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_raw_time(item) for key, item in value.items()}
+    return value
+
+
 def _labor_row(row: dict[str, Any], unit: str | None, source: dict[str, Any] | None, index: int) -> dict[str, Any]:
     time_field = next(
         (key for key in ("workTime", "raw_time", "time", "hours", "labor_hours", "norm_hours") if key in row), None
     )
-    raw_time = row[time_field] if time_field is not None else None
+    raw_time = _json_safe_raw_time(row[time_field]) if time_field is not None else None
     operation = _labor_operation_name(row)
     operation_presence = operation.strip() if isinstance(operation, str) else operation
     raw_unit = row.get("unit", unit)

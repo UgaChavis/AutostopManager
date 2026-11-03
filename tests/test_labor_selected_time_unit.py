@@ -157,6 +157,28 @@ def test_unusable_time_preserves_raw_input_and_unknown_time(call, raw):
     _assert_time(call({"workTime": raw}, unit="minutes"), raw, "minutes", None, ["time"])
 
 
+def test_nonfinite_time_is_unknown_and_both_native_channels_are_strict_json(native_tool):
+    def reject_constant(value):
+        raise ValueError(value)
+
+    cases = [
+        (float("inf"), None),
+        (float("-inf"), None),
+        (float("nan"), None),
+        ([1, {"time": float("inf"), "name": "demo"}], [1, {"time": None, "name": "demo"}]),
+        ({"values": [float("-inf"), 2, float("nan")], "ready": True}, {"values": [None, 2, None], "ready": True}),
+    ]
+    for raw, expected in cases:
+        arguments = {"rows": [{"workName": "DEMO work", "hours": raw}], "source": {"provider": "DEMO"}}
+        original = json.dumps(arguments, sort_keys=True)
+        direct = normalize_labor_time(**arguments)
+        content, structured = asyncio.run(native_tool.run(arguments, convert_result=True))
+        assert json.loads(content[0].text, parse_constant=reject_constant) == structured == direct
+        json.dumps(structured, allow_nan=False)
+        _assert_time(direct, expected, "hours", None, ["time"])
+        assert json.dumps(arguments, sort_keys=True) == original
+
+
 def test_selected_time_unit_keeps_raw_metadata_and_repeatable_output(call):
     source = {"provider": "DEMO", "locator": "synthetic:manual"}
     supplied = {
