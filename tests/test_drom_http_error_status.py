@@ -142,6 +142,16 @@ def call(request, native_tools, monkeypatch):
     return invoke
 
 
+def test_drom_mcp_descriptions_report_default_not_current_status(native_tools):
+    server, loop = native_tools
+    listed = {tool.name: tool.description for tool in loop.run_until_complete(server.list_tools())}
+    for name in ("drom_start_parts_search", "drom_get_parts_search"):
+        description = server._tool_manager.get_tool(name).description
+        assert listed[name] == description
+        assert "Disabled by default; availability depends on configuration and the tool result." in description
+        assert "Currently disabled" not in description
+
+
 @pytest.mark.parametrize(
     "price,expected,qualifier",
     [
