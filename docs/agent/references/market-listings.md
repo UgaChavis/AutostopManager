@@ -9,7 +9,7 @@
 
 `catalog_provider_status(stage="market_listing")` показывает имена недостающих настроек без значений. `configured`/`authorization_status=unverified` не доказывают успешный запрос; `live_callable_now` учитывает настройки и switch. Оценивай доступ по результату каждого вызова.
 
-Drom switch по умолчанию выключен; без разрешённого API access инструменты возвращают `webbee_disabled` без vendor запроса. Включение отдельно: provider grants API → private token → bounded non-customer task в изолированной среде → `AUTOSTOP_DROM_LISTINGS_ENABLED=1` при порученном выпуске. Avito от switch Drom не зависит. Статус текущего аккаунта проверяется заново, исторический тариф не принимается за текущий факт.
+Drom switch по умолчанию выключен; при выключенном switch корректный вызов возвращает `webbee_disabled` без vendor запроса. При включённом switch и наличии конфигурации фактический доступ определяется ответом провайдера. Включение отдельно: provider grants API → private token → bounded non-customer task в изолированной среде → `AUTOSTOP_DROM_LISTINGS_ENABLED=1` при порученном выпуске. Avito от switch Drom не зависит. Статус текущего аккаунта проверяется заново, исторический тариф не принимается за текущий факт.
 
 ## Поиск и результаты
 
