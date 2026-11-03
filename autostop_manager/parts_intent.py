@@ -701,7 +701,9 @@ def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str 
         return None, None
     lowered = position.casefold()
     axle_hint = bool(
-        re.search(r"(?:^|[\s_/-])(?:front(?:_axle)?|rear(?:_axle)?|передн\w*|задн\w*)(?:$|[\s_/-])", lowered)
+        re.search(
+            r"(?:^|[\s_/-])(?:front(?:_axle)?|rear(?:_axle)?|передн\w*|задн\w*|спереди|сзади)(?:$|[\s_/-])", lowered
+        )
     )
     inner_outer_hint = bool(
         re.search(r"(?:^|[\s_/-])(?:inner|outer|internal|external|внутрен\w*|наружн\w*)(?:$|[\s_/-])", lowered)
@@ -711,12 +713,59 @@ def _legacy_position_coordinates(position: str | None) -> tuple[str | None, str 
     return (position, None) if axle_hint else (None, position)
 
 
+def _text_position_hints(text: str, patterns: dict[str, str]) -> set[str]:
+    normalized = re.sub(r"[_/\\-]+", " ", text.casefold())
+    return {value for value, pattern in patterns.items() if re.search(pattern, normalized)}
+
+
 def _single_text_position_hint(text: str, patterns: dict[str, str]) -> str | None:
     """Return one unambiguous position coordinate found in the part wording."""
 
-    normalized = re.sub(r"[_/\\-]+", " ", text.casefold())
-    matches = {value for value, pattern in patterns.items() if re.search(pattern, normalized)}
+    matches = _text_position_hints(text, patterns)
     return next(iter(matches)) if len(matches) == 1 else None
+
+
+_AXLE_PATTERNS = {
+    "front": r"\b(?:front(?:\s+axle)?|передн\w*|спереди)\b",
+    "rear": r"\b(?:rear(?:\s+axle)?|задн\w*|сзади)\b",
+}
+
+
+def _axle_hints(value: str | None, *, explicit_axle: bool = False) -> set[str]:
+    if not value:
+        return set()
+    hints = _text_position_hints(value, _AXLE_PATTERNS)
+    normalized = re.sub(r"[_/\\-]+", " ", value.casefold())
+    if normalized.strip() in {"перед", "зад"}:
+        return {"front" if normalized.strip() == "перед" else "rear"}
+    if (explicit_axle and normalized.strip() == "both") or re.search(
+        r"\b(?:both\s+axles?|обе(?:их)?\s+(?:оси|осей|осях)|перед\s+и\s+зад|зад\s+и\s+перед)\b", normalized
+    ):
+        return {"front", "rear"}
+    return hints
+
+
+def _axle_context_issue(text: str, axle: str | None, position: str | None, positions: tuple[str, ...]) -> str | None:
+    if not any("axle" in item or "front_or_rear" in item for item in positions):
+        return None
+    axle = axle.strip() if axle else None
+    position = position.strip() if position else None
+    raw_hints = _axle_hints(text)
+    axle_hints = _axle_hints(axle, explicit_axle=True)
+    position_hints = _axle_hints(position)
+    if len(axle_hints) > 1 or len(position_hints) > 1 or (len(raw_hints) > 1 and (axle or position_hints)):
+        return "split_by_axle"
+    if len(raw_hints) > 1:
+        return None
+    if axle:
+        normalized = re.sub(r"[_/\\-]+", " ", axle.casefold()).strip()
+        if not re.fullmatch(
+            r"(?:front|rear)(?:\s+axle)?|(?:перед|зад)(?:н\w*)?(?:\s+ос(?:ь|и|ей))?|спереди|сзади", normalized
+        ):
+            return "axle"
+    if len(raw_hints | axle_hints | position_hints) > 1:
+        return "axle"
+    return None
 
 
 def _infer_position_context(text: str) -> dict[str, str]:
@@ -727,13 +776,7 @@ def _infer_position_context(text: str) -> dict[str, str]:
     """
 
     coordinates = {
-        "axle": _single_text_position_hint(
-            text,
-            {
-                "front": r"\b(?:front(?:\s+axle)?|передн\w*)\b",
-                "rear": r"\b(?:rear(?:\s+axle)?|задн\w*)\b",
-            },
-        ),
+        "axle": _single_text_position_hint(text, _AXLE_PATTERNS),
         "side": _single_text_position_hint(
             text,
             {
@@ -799,6 +842,7 @@ def normalize_part_intent(
         }
 
     payload = asdict(matched)
+    axle_issue = _axle_context_issue(text, axle, position, matched.positions)
     required_position_tokens = {
         "axle": any(
             "front_or_rear_required" in value or "front_axle_or_rear_axle_required" in value or value == "axle_required"
@@ -828,11 +872,15 @@ def normalize_part_intent(
             + list(matched.clarification_fields)
         )
     )
+    if axle_issue and axle_issue not in derived_required_fields:
+        derived_required_fields.append(axle_issue)
     missing_fields = [
         field
         for field in dict.fromkeys([*matched.clarification_fields, *derived_required_fields])
         if not supplied_context.get(field)
     ]
+    if axle_issue:
+        missing_fields = list(dict.fromkeys([*missing_fields, axle_issue]))
     group_terms = list(dict.fromkeys([*matched.catalog_groups_ru, *matched.catalog_groups_en]))
     terms = [text, *group_terms, matched.canonical_name_ru, matched.canonical_name_en]
     payload.update(
@@ -840,9 +888,9 @@ def normalize_part_intent(
             "ok": True,
             "raw": text,
             "recognized": True,
-            "catalog_search_terms": list(dict.fromkeys(term for term in terms if term)),
-            "catalog_group_terms": group_terms,
-            "partsapi_category_candidates": list(matched.partsapi_cat_candidates),
+            "catalog_search_terms": [text] if axle_issue else list(dict.fromkeys(term for term in terms if term)),
+            "catalog_group_terms": [] if axle_issue else group_terms,
+            "partsapi_category_candidates": [] if axle_issue else list(matched.partsapi_cat_candidates),
             "required_position_fields": derived_required_fields,
             "risk_fields": list(matched.critical_vehicle_fields),
             "explicit_positions": explicit_positions,

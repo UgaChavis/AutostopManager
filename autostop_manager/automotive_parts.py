@@ -22,7 +22,13 @@ from .automotive_contracts import (
     source_metadata_errors,
     valid_binding,
 )
-from .parts_intent import _ITEM_QUANTITY, _QUANTITY_LABEL, _split_part_conjunctions, normalize_part_intent
+from .parts_intent import (
+    _ITEM_QUANTITY,
+    _QUANTITY_LABEL,
+    _axle_context_issue,
+    _split_part_conjunctions,
+    normalize_part_intent,
+)
 from .vehicle_identity import (
     _identity_tokens,
     _normalized_identity_value,
@@ -143,6 +149,12 @@ def _request_item(row: str | dict[str, Any], index: int) -> dict[str, Any]:
     missing = [field for field, value in (("quantity", quantity), ("unit", unit)) if value is None]
     if intent.get("intent_id") in {"unknown", "multiple_parts"}:
         missing.append("part_intent")
+    else:
+        axle_issue = _axle_context_issue(
+            raw, supplied.get("axle"), supplied.get("position"), intent.get("positions", ())
+        )
+        if axle_issue:
+            missing.append(axle_issue)
     return {
         "item_id": str(supplied.get("item_id") or "part-" + content_digest({"index": index, "raw": raw})[:16]),
         "raw": raw,

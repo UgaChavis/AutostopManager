@@ -131,6 +131,42 @@ def test_later_bad_row_identifies_its_own_input_field(call, field):
     assert response["missing_fields"] == [f"items[1].{field}"]
 
 
+@pytest.mark.parametrize(
+    "raw,hints,missing",
+    [
+        ("передние колодки", {"axle": "rear"}, "axle"),
+        ("колодки спереди", {"axle": "rear"}, "axle"),
+        ("амортизаторы перед и зад", {"axle": "front"}, "split_by_axle"),
+        ("колодки на обеих осях", {"axle": "front"}, "split_by_axle"),
+        ("brake pads", {"axle": "front/rear"}, "split_by_axle"),
+        ("передние и задние амортизаторы", {"axle": "front"}, "split_by_axle"),
+    ],
+)
+def test_axle_conflicts_propagate_through_all_public_routes(call, raw, hints, missing):
+    response = call(items=[{"raw": raw, "quantity": 1, "unit": "piece", **hints}])
+    assert response["outcome"] == "partial"
+    item = response["data"]["items"][0]
+    assert item["raw"] == raw
+    assert item["intent"]["clarification_required"] is True
+    assert item["intent"]["partsapi_category_candidates"] == []
+    assert missing in item["missing_fields"]
+    assert f"{item['item_id']}.{missing}" in response["missing_fields"]
+
+
+@pytest.mark.parametrize(
+    "raw,hints",
+    [
+        ("колодки спереди", {"axle": "передней оси"}),
+        ("rear brake pads for both sides", {"axle": "rear"}),
+        ("front shock absorbers both sides", {"axle": "front", "side": "left"}),
+    ],
+)
+def test_valid_axle_aliases_and_both_sides_keep_success_on_all_routes(call, raw, hints):
+    response = call(items=[{"raw": raw, "quantity": 1, "unit": "piece", **hints}])
+    assert response["outcome"] == "success"
+    assert response["data"]["items"][0]["intent"]["clarification_required"] is False
+
+
 @pytest.mark.parametrize("quantity", [0, None])
 def test_valid_position_hints_preserve_explicit_quantity_and_identifiers(call, quantity):
     supplied = {
