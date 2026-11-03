@@ -41,7 +41,7 @@ Sourcing — lookup-only: `store_sourcing_offer` не поддерживает e
 таких warnings остаётся совместим. Если выпуск Store меняет sourcing timeout или
 warning-контракт, проверь совместимость итоговых Manager consumer и Store producer
 до открытия приёма задач. Установка выполняется при остановленных приложениях по
-[deployment](deployment.md); совместимость промежуточных запущенных версий не нужна.
+[deployment](m2-server-update.md); совместимость промежуточных запущенных версий не нужна.
 Текущие лимиты и состояние
 выпуска проверяй по установленной ревизии и ответу Store; опубликованные исходники
 сами по себе не подтверждают работающий сервер.
@@ -94,7 +94,7 @@ manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
 env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check --store-check
 ```
 
-Проверяй initialize/ping, manifest/schemas, `checks.store_runtime_status.ok`, `checks.store_owner_capabilities.ok`, `checks.store_order_search.ok`. Fingerprint mismatch между checkout и installed revision — drift, не автоматически неисправность Store. Write smoke выполняй в synthetic tests с одноразовыми состояниями, без live apply. Release gates: [deployment.md](deployment.md); Store `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full` проверяют контракт, не качество провайдера.
+Проверяй initialize/ping, manifest/schemas, `checks.store_runtime_status.ok`, `checks.store_owner_capabilities.ok`, `checks.store_order_search.ok`. Fingerprint mismatch между checkout и installed revision — drift, не автоматически неисправность Store. Write smoke выполняй в synthetic tests с одноразовыми состояниями, без live apply. Release gates: [m2-server-update.md](m2-server-update.md); Store `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full` проверяют контракт, не качество провайдера.
 
 Диагностика: exact REVISION/image digest → service/container → loopback/private
 transport и Nginx public deny → tools/list schema → presence-only token checks →
@@ -108,4 +108,4 @@ Business volumes, Manager registry, principal IDs, credentials и история
 идемпотентности сохраняются. Совместимый Store уже выбранной версии повторно не
 устанавливается. Push в Store `main` запускает `Deploy VPS`, поэтому даже docs-only
 merge требует соответствующего окна обслуживания. Полный порядок —
-[deployment.md](deployment.md).
+[m2-server-update.md](m2-server-update.md).

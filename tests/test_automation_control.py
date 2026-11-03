@@ -310,6 +310,18 @@ def instruction_project(root: Path) -> None:
         path.write_text("# Synthetic instruction\n")
 
 
+def test_release_readiness_tracks_the_canonical_m2_runbook(monkeypatch, tmp_path):
+    instruction_project(tmp_path)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
+    runbook = "docs/agent/references/m2-server-update.md"
+
+    before = {item["label"]: item for item in AutomationControlService._instruction_hashes()}
+    assert before["deployment_runbook"]["path_label"] == runbook
+    (tmp_path / runbook).write_text("# Updated server procedure\n")
+    after = {item["label"]: item for item in AutomationControlService._instruction_hashes()}
+    assert after["deployment_runbook"]["sha256"] != before["deployment_runbook"]["sha256"]
+
+
 def instruction_readiness_service() -> AutomationControlService:
     # Exercise packet assembly without a registry, timer controller or service.
     service = object.__new__(AutomationControlService)

@@ -25,12 +25,10 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 
 Для публичного доступа отдельно сравни DNS A, внешний TCP/TLS/redirect/HTTP, локальные upstream, private endpoint и public deny (`401` private без токена, `404` публичный internal маршрут). Различай DNS/network, transport/protocol, schema, auth/permissions, config, provider и application failures. Логи читай ограниченно, без секретов и business payload.
 
-## Обновление ОС и выпуск
+## Обслуживание хоста и резервирование
 
-Сохраняются одна согласованная копия Manager + CRM `/var/backups/autostop-current/manager-crm/20261021-current` и одна генерация Store; состав и порядок замены — [complete-backup.md](complete-backup.md). Ежедневный timer остался только существующим Store backup. Старый complete bundle и `pg-retain` hook не активны; независимый ПК/offsite не входят в принятую схему.
+Сохранённая точка Manager + CRM и штатная генерация Store описаны в [complete-backup.md](complete-backup.md). Для CRM также предусмотрены отдельная [копия и доставка на согласованный ПК](manager-runtime.md#скрипты-и-службы); фактическое состояние их служб и расписания проверяй перед обслуживанием. Старый complete bundle и `pg-retain` hook не активны.
 
 Хранятся текущие версии приложений и необходимые runtime, без обязательного previous-комплекта: [disk-maintenance.md](disk-maintenance.md). Технические логи — три дня; существующий daily logrotate hook ограничивает download caches и Docker build cache по 1 GiB. Данные CRM/Store, полезная незавершённая работа, инструменты и CI сохраняются. После выпуска сверяй actual paths/images и обновляй policy; старые backup roots не возвращай из legacy-шаблона.
 
-Перед обновлением ОС сохрани root-only пакетный перечень, config служб/сети/proxy, свежий проверенный dump и `/proc/sys/kernel/random/boot_id`. Используй поддерживаемые обновления без снятия vendor phasing и автоматического удаления данных. Reboot — отдельное поручение, после окончания deploy/backup процессов. После него проверь новый boot ID, `uname -r`, SHA, systemd, containers, публичный TLS/HTTP, Gateway/MCP, G1, Telegram duty, J1 static/browser и Codex.
-
-Локальные gates Manager: `scripts/release-gates.sh` с одноразовой БД; CRM: `run_checks.ps1 -Profile ci` и текущий runbook; Store: `scripts/run-backend-tests.sh --agent-write-smoke`, затем `--full`. При failed backup/rollback gate, mandatory CI или неверном target SHA выпуск останавливается. Порядок и восстановление: [deployment.md](deployment.md), текущие `/opt/autostopcrm/docs/OPERATIONS_RUNBOOK.md` и `/opt/autostopapp/docs/deploy_rollback.md`.
+Порядок обновления ОС, выпуска приложений и восстановления — в [инструкции M2](m2-server-update.md).

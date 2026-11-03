@@ -145,7 +145,7 @@ VIN-mode допускает только scoped static fetch с исходным
 обезличенные страницы могут использовать прежний attested browser. Наличие feature flag или
 инструмента в `tools/list` не подтверждает runtime readiness, доступность источников или качество расшифровки.
 
-`autostop-j1.service` — static worker, root-only `/var/cache/autostop-j1`; `autostop-j1-browser.service` — one-shot renderer/proxy stack. Active/exited не доказывает container health. CLI `j1_research --help`: worker (`--once`), probe; `j1_browser_verify --help`: probe, attest, release-root/socket/marker. Worker и attest меняют состояние; attest вызывается штатной service после topology check. Installers/start/restart — только разрешённый [выпуск](deployment.md).
+`autostop-j1.service` — static worker, root-only `/var/cache/autostop-j1`; `autostop-j1-browser.service` — one-shot renderer/proxy stack. Active/exited не доказывает container health. CLI `j1_research --help`: worker (`--once`), probe; `j1_browser_verify --help`: probe, attest, release-root/socket/marker. Worker и attest меняют состояние; attest вызывается штатной service после topology check. Installers/start/restart — только разрешённый [выпуск](m2-server-update.md).
 
 Проверки installed revision запускай из `/tmp`:
 

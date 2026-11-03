@@ -68,7 +68,7 @@ INSTRUCTION_FILES = (
     ("store_instructions", "docs/agent/modules/F2.md"),
     ("director_instructions", "docs/agent/modules/M1.md"),
     ("engineer_instructions", "docs/agent/modules/M2.md"),
-    ("deployment_runbook", "docs/agent/references/deployment.md"),
+    ("deployment_runbook", "docs/agent/references/m2-server-update.md"),
 )
 
 
