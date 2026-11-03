@@ -175,10 +175,11 @@ Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` 
 Доказанный отказ bridge `conversation_changed_since_dry_run` происходит до send intent и возвращает digest в `prepared`: повтор сохраняет исходные тело и ключ. Другие неизвестные исходы требуют точного readback без повторной отправки. Ключи уже сохранённых outbox не меняются при обновлении; новые тестовые уведомления получают ключ из своего command ID, сохраняя независимость источников команд.
 - `database_backup` относится к Store; состав, путь и расписание копии описаны в [справочнике резервных копий](complete-backup.md). Фактическое расписание проверяй через `TimersCalendar`. CRM backup имеет отдельный [runbook](https://github.com/UgaChavis/AutostopCRM-V1/blob/autostopcrm-v1/docs/OPERATIONS_RUNBOOK.md).
 
-Readiness из `/tmp`:
+Readiness из `/tmp`: используй заранее разрешённый физический `manager_snapshot`
+с проверенным `REVISION`.
 
 ```bash
-env PYTHONSAFEPATH=1 PYTHONPATH=/opt/autostop-manager-releases/current /usr/bin/python3 -m autostop_manager.automation_control readiness
+env PYTHONSAFEPATH=1 PYTHONPATH="${manager_snapshot:?Укажи физический snapshot}" /usr/bin/python3 -m autostop_manager.automation_control readiness
 ```
 
 Нужны `ok=true`, `data.ready=true`, ready checks, `reconcile_state=in_sync`, отсутствие global hold и blocked outbox; сверяются пять timers. Reconciliation может завершиться позже первого ответа: перечитай status перед выводом о drift. Active scheduler сам не доказывает готовность.
