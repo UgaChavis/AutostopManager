@@ -2567,6 +2567,12 @@ async def _resolve_peer(client: Any, raw_peer: str) -> tuple[Any, dict[str, Any]
         try:
             entity = await client.get_entity(candidate)
         except Exception as exc:
+            # Only retry explicitly recognized network errors; do not present
+            # permission, provider or local failures as a missing recipient.
+            if _history_transport_failure(exc):
+                raise BridgeError("telegram_transport_error") from exc
+            if not isinstance(exc, ValueError):
+                raise BridgeError("telegram_operation_failed") from exc
             raise BridgeError("peer_not_found") from exc
     else:
         search_matches = await _search_entities(client, raw_peer, 20)
