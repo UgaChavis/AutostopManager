@@ -3883,6 +3883,16 @@ def _validate_inbound_monitor_messages(
     return messages
 
 
+def _inbound_lookup_error_code(error: Exception) -> str:
+    # Distinguish only explicit local permissions and network failures.
+    # Do not treat other provider failures as a missing message or retry them.
+    if isinstance(error, PermissionError):
+        return "telegram_permission_denied"
+    if _history_transport_failure(error):
+        return "telegram_transport_error"
+    return "telegram_operation_failed"
+
+
 async def _load_global_inbound_monitor_messages(
     client: Any,
     events: list[InboundMonitorEvent],
@@ -3891,7 +3901,7 @@ async def _load_global_inbound_monitor_messages(
     try:
         result = await client.get_messages(None, ids=requested_ids)
     except Exception as exc:  # avoid exposing live Telegram transport details.
-        raise BridgeError("inbound_message_unavailable") from exc
+        raise BridgeError(_inbound_lookup_error_code(exc)) from exc
     return _validate_inbound_monitor_messages(events, result)
 
 
@@ -3905,8 +3915,11 @@ async def _load_inbound_monitor_context_messages(client: Any, events: list[Inbou
         # bounded set of non-channel message IDs avoids resolving or persisting
         # a contact/entity; the checks below bind each result back to its ref.
         return await _load_global_inbound_monitor_messages(client, events, requested_ids)
-    except BridgeError:  # Try the bounded exact-peer fallback below.
-        pass
+    except BridgeError as exc:
+        # A provider exception is not evidence that this message is missing;
+        # the fallback applies only after a successful but unusable lookup.
+        if exc.code != "inbound_message_unavailable":
+            raise
 
     peer_id = events[0].peer_id
     if any(event.peer_id != peer_id for event in events):
@@ -3931,7 +3944,7 @@ async def _load_inbound_monitor_context_messages(client: Any, events: list[Inbou
     except BridgeError:
         raise
     except Exception as exc:  # avoid exposing live Telegram transport details.
-        raise BridgeError("inbound_message_unavailable") from exc
+        raise BridgeError(_inbound_lookup_error_code(exc)) from exc
 
 
 def _monitor_context_media_kind(message: Any) -> str | None:
