@@ -2615,6 +2615,11 @@ def test_monitor_operations_are_read_only_and_fetch_an_explicit_event(monkeypatc
             assert ids == 100
             return message
 
+        async def iter_dialogs(self, *, limit):
+            assert limit == 20
+            for dialog in []:
+                yield dialog
+
         async def send_message(self, *_args, **_kwargs):
             pytest.fail("monitor read must not send")
 
@@ -2690,7 +2695,7 @@ def test_monitor_mark_requires_explicit_no_reply_disposition_and_keeps_payload_o
         )
 
 
-def test_monitor_read_uses_bounded_exact_dialog_fallback_after_global_failure(tmp_path) -> None:
+def test_monitor_read_uses_bounded_exact_dialog_fallback_after_missing_global_result(tmp_path) -> None:
     monitor = _inbound_monitor()
     monitor.record(SimpleNamespace(is_private=True, out=False, chat_id=20, id=100))
     message = SimpleNamespace(
@@ -2713,7 +2718,7 @@ def test_monitor_read_uses_bounded_exact_dialog_fallback_after_global_failure(tm
         async def get_messages(self, actual_entity, *, ids):
             if actual_entity is None:
                 self.global_ids.append(ids)
-                raise RuntimeError("global message lookup unavailable")
+                return None
             assert actual_entity is self.exact_entity
             self.fallback_ids.append(ids)
             return message
@@ -2759,7 +2764,7 @@ def test_monitor_fallback_fails_closed_without_exact_dialog_or_message_binding(t
     class MissingDialogClient:
         async def get_messages(self, actual_entity, *, ids):
             if actual_entity is None:
-                raise RuntimeError("global message lookup unavailable")
+                return
             pytest.fail("fallback must not read a non-matching dialog")
 
         async def iter_dialogs(self, *, limit):
@@ -2791,7 +2796,7 @@ def test_monitor_fallback_fails_closed_without_exact_dialog_or_message_binding(t
 
         async def get_messages(self, actual_entity, *, ids):
             if actual_entity is None:
-                raise RuntimeError("global message lookup unavailable")
+                return None
             assert actual_entity is self.exact_entity
             assert ids == 100
             return mismatched_message
@@ -2853,7 +2858,7 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
         async def get_messages(self, actual_entity, *, ids):
             if actual_entity is None:
                 self.global_ids.append(ids)
-                raise RuntimeError("global message lookup unavailable")
+                return None
             assert actual_entity is self.exact_entity
             self.fallback_ids.append(ids)
             return [{100: photo, 101: voice}[message_id] for message_id in ids]
@@ -2905,7 +2910,7 @@ def test_monitor_context_reads_photo_and_voice_refs_from_one_private_chat_only(t
     class MissingVoiceClient(Client):
         async def get_messages(self, actual_entity, *, ids):
             if actual_entity is None:
-                raise RuntimeError("global message lookup unavailable")
+                return None
             assert actual_entity is self.exact_entity
             return [photo, None]
 
