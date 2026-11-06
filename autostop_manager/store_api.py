@@ -18,6 +18,14 @@ from urllib.request import Request
 import httpx
 
 from autostop_manager.bounded_http_read import TrackedTransportAdmission, urlopen as bounded_urlopen
+from autostop_manager.store_change_feed_contract import (
+    STORE_CHANGE_FEED_COMPATIBILITY_ENTITIES,
+    STORE_CHANGE_FEED_ENTITY_TYPES,
+    STORE_CHANGE_FEED_RELATED_ENTITIES,
+    STORE_CHANGE_FEED_SAFE_REF_ACCESS,
+    STORE_CHANGE_FEED_SOURCES,
+    STORE_CHANGE_KINDS,
+)
 
 
 STORE_AGENT_FORMAT = "store_agent_v1"
@@ -97,6 +105,12 @@ _ERROR_DETAIL_FIELDS = frozenset(
 )
 _VALIDATION_ISSUE_FIELDS = frozenset({"location", "type", "message"})
 _ENTITY_BASE_FIELDS = frozenset({"entity", "id", "entity_type", "entity_id", "updated_at", "deleted"})
+_DIGEST_CHANGE_FIELDS = frozenset({"change_kind", "related_refs"})
+_DIGEST_COMPACT_FIELDS = frozenset({"compact_ref", "owner_read", "safe_ref_only", "detail_access"})
+_DIGEST_RELATED_REF_FIELDS = frozenset({"entity_type", "entity_id"})
+_DIGEST_OWNER_READ_FIELDS = frozenset(
+    {"transport", "capability_source", "source_table", "primary_key", "entity_id", "related_refs", "resolve_exact_via"}
+)
 _ENTITY_SUMMARY_FIELDS: dict[str, frozenset[str]] = {
     "store_part": frozenset(
         {
@@ -1491,12 +1505,103 @@ def _validate_entity_projection(
             raise ValueError(f"{path}.allowed_entities contains an unsupported entity")
 
 
+def _validate_digest_ref_id(value: Any, *, path: str) -> None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_ENTITY_ID_CHARS
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise ValueError(f"{path} must be a bounded opaque id")
+
+
+def _validate_digest_related_refs(item: dict[str, Any], *, entity: str, path: str) -> None:
+    if "related_refs" not in item:
+        return
+    refs = _require_object_list(item["related_refs"], path=f"{path}.related_refs")
+    remaining = list(STORE_CHANGE_FEED_RELATED_ENTITIES.get(entity, ()))
+    if not refs or len(refs) > len(remaining):
+        raise ValueError(f"{path}.related_refs exceeds the entity relation contract")
+    for index, ref in enumerate(refs):
+        ref_path = f"{path}.related_refs[{index}]"
+        _require_allowed_keys(ref, _DIGEST_RELATED_REF_FIELDS, path=ref_path)
+        ref_entity = ref.get("entity_type")
+        if ref_entity not in remaining:
+            raise ValueError(f"{ref_path} has an unsupported relation")
+        remaining.remove(ref_entity)
+        _validate_digest_ref_id(ref.get("entity_id"), path=f"{ref_path}.entity_id")
+
+
+def _validate_digest_owner_read(item: dict[str, Any], *, entity: str, path: str) -> None:
+    owner_read = item.get("owner_read")
+    _require_allowed_keys(owner_read, _DIGEST_OWNER_READ_FIELDS, path=f"{path}.owner_read")
+    table, primary_key = STORE_CHANGE_FEED_SOURCES[entity]
+    expected: dict[str, Any] = {
+        "transport": "store_owner_api",
+        "capability_source": "live_openapi",
+        "source_table": table,
+        "primary_key": primary_key,
+        "entity_id": item["entity_id"],
+    }
+    if "related_refs" in item:
+        expected["related_refs"] = item["related_refs"]
+    if entity in {"store_cart_item", "store_favorite_item"}:
+        expected["resolve_exact_via"] = "get_customer_admin_detail"
+    if owner_read != expected:
+        raise ValueError(f"{path}.owner_read does not match the compact reference")
+
+
+def _validate_digest_projection(item: dict[str, Any], *, expected_entity: str | None = None, path: str) -> None:
+    # Older Store releases emit business projections without feed metadata.
+    if not (_DIGEST_CHANGE_FIELDS | _DIGEST_COMPACT_FIELDS).intersection(item):
+        _validate_entity_projection(item, expected_entity=expected_entity, path=path)
+        return
+    entity = item.get("entity_type")
+    if not isinstance(entity, str) or entity not in STORE_CHANGE_FEED_ENTITY_TYPES:
+        raise ValueError(f"{path} has an unsupported Store change-feed entity")
+    if expected_entity is not None and entity != expected_entity:
+        raise ValueError(f"{path} does not match the requested Store entity")
+    if item.get("entity") != entity:
+        raise ValueError(f"{path}.entity does not match the Store change-feed entity")
+    _validate_digest_ref_id(item.get("entity_id"), path=f"{path}.entity_id")
+    if item.get("id") != item["entity_id"]:
+        raise ValueError(f"{path}.id does not match the Store change-feed id")
+    change_kind = item.get("change_kind")
+    if not isinstance(change_kind, str) or change_kind not in STORE_CHANGE_KINDS:
+        raise ValueError(f"{path}.change_kind is invalid")
+    updated_at = item.get("updated_at")
+    if not isinstance(updated_at, str) or len(updated_at) > 64 or "T" not in updated_at:
+        raise ValueError(f"{path}.updated_at must be an ISO datetime")
+    if datetime.fromisoformat(updated_at).tzinfo is None:
+        raise ValueError(f"{path}.updated_at must include a timezone")
+    if "deleted" in item and not isinstance(item["deleted"], bool):
+        raise ValueError(f"{path}.deleted must be boolean")
+    _validate_digest_related_refs(item, entity=entity, path=path)
+    if entity in STORE_CHANGE_FEED_COMPATIBILITY_ENTITIES:
+        projection = {key: value for key, value in item.items() if key not in _DIGEST_CHANGE_FIELDS}
+        if item.get("deleted") is True:
+            _require_allowed_keys(projection, _ENTITY_BASE_FIELDS, path=path)
+        _validate_entity_projection(projection, path=path)
+        return
+    _require_allowed_keys(item, _ENTITY_BASE_FIELDS | _DIGEST_CHANGE_FIELDS | _DIGEST_COMPACT_FIELDS, path=path)
+    if item.get("compact_ref") is not True or not isinstance(item.get("deleted"), bool):
+        raise ValueError(f"{path} requires a compact reference and boolean deleted marker")
+    detail_access = STORE_CHANGE_FEED_SAFE_REF_ACCESS.get(entity)
+    if detail_access is not None:
+        if item.get("safe_ref_only") is not True or item.get("detail_access") != detail_access or "owner_read" in item:
+            raise ValueError(f"{path} requires the safe-ref-only security descriptor")
+    else:
+        if "safe_ref_only" in item or "detail_access" in item:
+            raise ValueError(f"{path} has an unexpected security descriptor")
+        _validate_digest_owner_read(item, entity=entity, path=path)
+
+
 def _validate_digest_summary(summary: dict[str, Any]) -> None:
     _require_allowed_keys(summary, _DIGEST_SUMMARY_FIELDS, path="summary")
     for key in ("changed_quote_requests",):
         if key in summary:
             for index, item in enumerate(_require_object_list(summary[key], path=f"summary.{key}")):
-                _validate_entity_projection(
+                _validate_digest_projection(
                     item,
                     expected_entity="store_quote_request",
                     path=f"summary.{key}[{index}]",
@@ -1714,7 +1819,7 @@ def _validate_contract_payload(
         _validate_digest_summary(payload["summary"])
         for collection_name in ("items", "changes"):
             for index, item in enumerate(payload.get(collection_name) or []):
-                _validate_entity_projection(item, path=f"{collection_name}[{index}]")
+                _validate_digest_projection(item, path=f"{collection_name}[{index}]")
         return
     if response_contract == "search":
         _require_allowed_keys(payload["summary"], _SEARCH_SUMMARY_FIELDS, path="summary")

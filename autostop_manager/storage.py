@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import get_db_path
+from .store_change_feed_contract import STORE_CHANGE_FEED_ENTITY_TYPES
 
 
 WORKFLOW_TERMINAL_STATES = {"completed", "failed", "cancelled"}
@@ -114,6 +115,9 @@ STORE_LEDGER_REF_ENTITIES = frozenset(
         "store_warehouse_operation",
     }
 )
+# Digest delivery checkpoints cover the complete feed. Workflow evidence keeps
+# its separate, narrower entity contract and does not gain new write authority.
+STORE_CHECKPOINT_REF_ENTITIES = STORE_LEDGER_REF_ENTITIES | STORE_CHANGE_FEED_ENTITY_TYPES
 STORE_WORKFLOW_OPERATIONS = frozenset(
     {
         "assign_quote_request",
@@ -1294,7 +1298,11 @@ def _safe_store_scalar_map(value: Any, *, kind: str) -> dict[str, Any] | None:
     return safe
 
 
-def _normalize_store_checkpoint_refs(value: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+def _normalize_store_checkpoint_refs(
+    value: list[dict[str, Any]] | None,
+    *,
+    allowed_entities: frozenset[str] = STORE_CHECKPOINT_REF_ENTITIES,
+) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for raw in value or []:
@@ -1304,7 +1312,7 @@ def _normalize_store_checkpoint_refs(value: list[dict[str, Any]] | None) -> list
         entity_id = str(raw.get("id") or "").strip()
         version = str(raw.get("version") or "").strip()
         updated_at = str(raw.get("updated_at") or "").strip()
-        if entity not in STORE_LEDGER_REF_ENTITIES or not entity_id:
+        if entity not in allowed_entities or not entity_id:
             raise ValueError("store checkpoint ref requires store entity and id")
         if any(not _store_machine_value_is_safe(value) for value in (entity, entity_id, version, updated_at) if value):
             raise ValueError("store checkpoint ref contains an unsafe identifier")
@@ -1336,7 +1344,10 @@ def _safe_bootstrap_checkpoint(value: Any) -> dict[str, Any]:
             continue
         if key == "compact_refs":
             try:
-                safe[key] = _normalize_store_checkpoint_refs(nested if isinstance(nested, list) else [])[:20]
+                safe[key] = _normalize_store_checkpoint_refs(
+                    nested if isinstance(nested, list) else [],
+                    allowed_entities=STORE_LEDGER_REF_ENTITIES,
+                )[:20]
             except ValueError:
                 continue
         elif key in {"counts", "verification"}:
