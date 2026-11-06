@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -24,6 +29,119 @@ def refresh(project, codex):
     a4, a5, _ = catalogs.build_catalogs(project, codex, "2026-10-10")
     write(project / "docs/agent/modules/A4.md", a4)
     write(project / "docs/agent/modules/A5.md", a5)
+
+
+def test_resolve_skill_uses_current_manifest_and_is_read_only(tmp_path):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    codex.mkdir()
+    write(codex / "config.toml", '[plugins."visualize@openai-bundled"]\nenabled=true\n')
+
+    def installed(version):
+        root = codex / "plugins/cache/openai-bundled/visualize" / version
+        write(root / ".codex-plugin/plugin.json", json.dumps({"name": "visualize", "skills": "./skills"}))
+        return write(root / "skills/visualize/SKILL.md", "---\nname: visualize\ndescription: synthetic\n---\n")
+
+    old = installed("1.0.66")
+    before = {p: p.read_bytes() for p in codex.rglob("*") if p.is_file()}
+    assert catalogs.resolve_skill(project, codex, "visualize:visualize") == old
+    assert {p: p.read_bytes() for p in codex.rglob("*") if p.is_file()} == before
+    new = installed("1.0.74")
+    with pytest.raises(ValueError, match="Specify current package version"):
+        catalogs.resolve_skill(project, codex, "visualize:visualize")
+    shutil.rmtree(old.parents[2])
+    assert catalogs.resolve_skill(project, codex, "visualize:visualize") == new
+    write(codex / "config.toml", '[plugins."visualize@openai-bundled"]\nenabled=false\n')
+    with pytest.raises(ValueError, match="skill_not_selected"):
+        catalogs.resolve_skill(project, codex, "visualize:visualize")
+
+
+def test_resolve_skill_fails_closed_for_absent_or_duplicate_name(tmp_path):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    codex.mkdir()
+    with pytest.raises(ValueError, match="skill_not_selected"):
+        catalogs.resolve_skill(project, codex, "missing")
+    write(project / ".agents/skills/one/SKILL.md", "---\nname: same\ndescription: synthetic\n---\n")
+    write(codex / "skills/.system/two/SKILL.md", "---\nname: same\ndescription: synthetic\n---\n")
+    with pytest.raises(ValueError, match="skill_ambiguous"):
+        catalogs.resolve_skill(project, codex, "same")
+
+
+def test_resolve_project_skill_uses_exact_physical_job_root(tmp_path, monkeypatch, capsys):
+    first, second, codex = tmp_path / "first", tmp_path / "second", tmp_path / "codex"
+    codex.mkdir()
+    for root in (first, second):
+        write(
+            root / ".agents/skills/manage-autostop-client/SKILL.md",
+            "---\nname: manage-autostop-client\ndescription: synthetic\n---\n",
+        )
+    monkeypatch.chdir(second)
+    assert (
+        catalogs.resolve_skill(first, codex, "manage-autostop-client")
+        == first / ".agents/skills/manage-autostop-client/SKILL.md"
+    )
+    monkeypatch.setattr(catalogs, "PROJECT", first)
+    monkeypatch.setattr(catalogs, "CODEX", codex)
+    monkeypatch.setattr("sys.argv", ["update-instruction-catalogs.py", "--resolve-skill", "manage-autostop-client"])
+    assert catalogs.main() == 0
+    assert json.loads(capsys.readouterr().out)["path"] == str(first / ".agents/skills/manage-autostop-client/SKILL.md")
+    alias = tmp_path / "current"
+    alias.symlink_to(first, target_is_directory=True)
+    with pytest.raises(ValueError, match="project_root_not_physical"):
+        catalogs.resolve_skill(alias, codex, "manage-autostop-client")
+
+
+def test_resolve_rejects_project_skills_redirected_outside_job_root(tmp_path, monkeypatch):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    codex.mkdir()
+    write(outside / "client/SKILL.md", "---\nname: client\ndescription: synthetic\n---\n")
+    (project / ".agents").mkdir()
+    (project / ".agents/skills").symlink_to(outside, target_is_directory=True)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("must not inspect skills outside the pinned job root")
+
+    monkeypatch.setattr(catalogs, "selected_skills", forbidden)
+    with pytest.raises(ValueError, match="project_skill_outside_root"):
+        catalogs.resolve_skill(project, codex, "client")
+
+
+def test_resolve_cli_does_not_guess_or_reveal_selection_errors(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    codex.mkdir()
+    monkeypatch.setattr(catalogs, "PROJECT", project)
+    monkeypatch.setattr(catalogs, "CODEX", codex)
+    monkeypatch.setattr("sys.argv", ["update-instruction-catalogs.py", "--resolve-skill", "missing"])
+    assert catalogs.main() == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "skill_resolution_failed"}
+
+
+def test_resolve_cli_does_not_write_project_bytecode(tmp_path):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    codex.mkdir()
+    source = (ROOT / "scripts/update-instruction-catalogs.py").read_text()
+    source = source.replace('CODEX = Path("/root/.codex")', f"CODEX = Path({str(codex)!r})")
+    script = write(project / "scripts/update-instruction-catalogs.py", source)
+    for name in ("__init__.py", "document_links.py", "instruction_inventory.py", "markdown_links.py"):
+        write(project / "autostop_manager" / name, (ROOT / "autostop_manager" / name).read_text())
+    expected = write(project / ".agents/skills/client/SKILL.md", "---\nname: client\ndescription: synthetic\n---\n")
+    env = os.environ.copy()
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env["PYTHONPYCACHEPREFIX"] = str(tmp_path / "bytecode")
+    result = subprocess.run(
+        [sys.executable, str(script), "--resolve-skill", "client"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout)["path"] == str(expected)
+    assert not (tmp_path / "bytecode" / project.relative_to("/")).exists()
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])

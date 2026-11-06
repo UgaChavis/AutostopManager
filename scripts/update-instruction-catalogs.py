@@ -10,6 +10,9 @@ import re
 import sys
 import tomllib
 
+if __name__ == "__main__" and any(arg == "--resolve-skill" or arg.startswith("--resolve-skill=") for arg in sys.argv[1:]):
+    sys.dont_write_bytecode = True
+
 import yaml
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -185,6 +188,29 @@ def selected_skills(project, codex):
     return result
 
 
+def resolve_skill(project, codex, name):
+    """Resolve one exact selected skill without changing the pinned project root."""
+    project = Path(project)
+    if not project.is_absolute() or project.resolve(strict=True) != project:
+        raise ValueError("project_root_not_physical")
+    if not isinstance(name, str) or not name or len(name) > 160 or name != name.strip():
+        raise ValueError("skill_name_invalid")
+    project_skills = project / ".agents/skills"
+    if (project_skills.exists() or project_skills.is_symlink()) and not project_skills.resolve(
+        strict=True
+    ).is_relative_to(project):
+        raise ValueError("project_skill_outside_root")
+    matches = [entry for entry in selected_skills(project, Path(codex)) if entry["name"] == name]
+    if not matches:
+        raise ValueError("skill_not_selected")
+    if len(matches) != 1:
+        raise ValueError("skill_ambiguous")
+    selected = matches[0]["path"].resolve(strict=True)
+    if matches[0]["group"] == "AutoStop Manager" and not selected.is_relative_to(project):
+        raise ValueError("project_skill_outside_root")
+    return selected
+
+
 def project_skill_entries(project):
     """Canonical repository entries, independent of one host's skill selectors."""
     boundary = (project / ".agents/skills").resolve()
@@ -214,6 +240,8 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "",
         "Внешние пакеты: Gmail, Windsor.ai, GitHub, Build Web Apps, Codex Security, OpenAI Developers, Plugin Management и Visualize. Входы берутся из manifest установленного пакета; пакет без навыков остаётся доступен через свои инструменты. Старые версии кеша, вложенные справочники и шаблоны не индексируются. Наличие инструкции не подтверждает доступность коннектора.",
         "",
+        "Перед чтением внешнего навыка разреши его точное имя без записи: `python3 <физический_корень_задания>/scripts/update-instruction-catalogs.py --resolve-skill <имя>`. Табличный путь — срез; при ошибке не угадывай версию. Проектные навыки читай из закреплённого корня задания.",
+        "",
         "Общие правила, профильные навыки и технические справочники проекта — в [A5](A5.md); порядок работы ролей — в [M1](M1.md) и [M2](M2.md).",
         "",
     ]
@@ -232,6 +260,8 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние входы выбираются по manifest установленного пакета. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
         "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи на хосте: `python scripts/update-instruction-catalogs.py --check`; переносимая проверка проектной части: `python scripts/update-instruction-catalogs.py --check --project-only`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
+        "",
+        "Перед чтением внешнего навыка разреши точное имя: `python3 <физический_корень_задания>/scripts/update-instruction-catalogs.py --resolve-skill <имя>`. Табличные пути — срез; при ошибке не угадывай версию.",
         "",
         "## AutoStop Manager",
         "",
@@ -317,11 +347,23 @@ def check_project_catalogs(project=PROJECT):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    operation.add_argument("--resolve-skill", metavar="NAME", help="Read-only exact selected skill path")
     parser.add_argument(
         "--project-only", action="store_true", help="Check repository sections without host Codex files"
     )
     args = parser.parse_args()
+    if args.resolve_skill is not None:
+        if args.project_only:
+            parser.error("--project-only cannot be used with --resolve-skill")
+        try:
+            path = resolve_skill(PROJECT, CODEX, args.resolve_skill)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            print(json.dumps({"ok": False, "error": "skill_resolution_failed"}))
+            return 1
+        print(json.dumps({"ok": True, "name": args.resolve_skill, "path": str(path)}, ensure_ascii=False))
+        return 0
     if args.project_only:
         if not args.check:
             parser.error("--project-only requires --check; host catalogs must not be overwritten")
