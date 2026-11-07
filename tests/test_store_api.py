@@ -4,6 +4,7 @@ import io
 import json
 import threading
 import base64
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.client import IncompleteRead
 from unittest.mock import Mock
@@ -14,6 +15,12 @@ import pytest
 
 import autostop_manager.store_api as store_api_module
 from autostop_manager.store_api import MAX_STORE_LIMIT, StoreApiClient
+from autostop_manager.store_change_feed_contract import (
+    STORE_CHANGE_FEED_COMPATIBILITY_ENTITIES,
+    STORE_CHANGE_FEED_SAFE_REF_ACCESS,
+    STORE_CHANGE_FEED_SOURCES,
+    STORE_CHANGE_KINDS,
+)
 
 
 class _Response:
@@ -927,6 +934,207 @@ def test_real_app_digest_status_distribution_list_passes_snake_case_contract(mon
         {"status": "IN_PROGRESS", "count": 2},
         {"status": "READY", "count": 1},
     ]
+
+
+def _feed_ref(entity="store_marketplace_publication_policy", *, deleted=False):
+    item = {
+        "entity": entity,
+        "id": "synthetic-1",
+        "entity_type": entity,
+        "entity_id": "synthetic-1",
+        "deleted": deleted,
+        "change_kind": "deleted" if deleted else "updated",
+        "updated_at": "2026-11-06T00:00:00+00:00",
+    }
+    if entity in STORE_CHANGE_FEED_COMPATIBILITY_ENTITIES:
+        return item
+    item["compact_ref"] = True
+    if entity in STORE_CHANGE_FEED_SAFE_REF_ACCESS:
+        item.update(safe_ref_only=True, detail_access=STORE_CHANGE_FEED_SAFE_REF_ACCESS[entity])
+    else:
+        table, primary_key = STORE_CHANGE_FEED_SOURCES[entity]
+        item["owner_read"] = {
+            "transport": "store_owner_api",
+            "capability_source": "live_openapi",
+            "source_table": table,
+            "primary_key": primary_key,
+            "entity_id": item["id"],
+        }
+        if entity in {"store_cart_item", "store_favorite_item"}:
+            item["owner_read"]["resolve_exact_via"] = "get_customer_admin_detail"
+    return item
+
+
+@pytest.mark.parametrize("entity", sorted({*STORE_CHANGE_FEED_SOURCES, "store_state"}))
+@pytest.mark.parametrize("deleted", [False, True])
+def test_digest_accepts_current_feed_refs_without_expanding_business_reads(monkeypatch, entity, deleted):
+    item = _feed_ref(entity, deleted=deleted)
+    payload = _envelope(items=[item], changes=[item])
+    payload["page"]["replay_cursor"] = "cursor-page-replay"
+    request = Mock(return_value=_Response(payload))
+    monkeypatch.setattr(store_api_module, "urlopen", request)
+
+    result = _client().digest()
+
+    assert result["ok"] is True
+    assert result["items"] == result["changes"] == [item]
+    assert result["page"]["replay_cursor"] == "cursor-page-replay"
+    request.assert_called_once()
+    if entity not in store_api_module.STORE_ENTITIES:
+        with pytest.raises(ValueError, match="unsupported store entity"):
+            _client().search(entity=entity)
+        with pytest.raises(ValueError, match="unsupported store entity"):
+            _client().entity_context(entity=entity, entity_id="synthetic-1")
+        request.assert_called_once()
+
+
+@pytest.mark.parametrize("change_kind", sorted(STORE_CHANGE_KINDS))
+def test_digest_tombstone_accepts_original_change_kind_when_row_is_now_missing(monkeypatch, change_kind):
+    item = {**_feed_ref("store_order", deleted=True), "change_kind": change_kind}
+    item["related_refs"] = [{"entity_type": "store_customer", "entity_id": "synthetic-customer"}]
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[item])))
+    assert _client().digest()["items"] == [item]
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_digest_summary_accepts_changed_quote_feed_projection_and_tombstone(monkeypatch, deleted):
+    item = _feed_ref("store_quote_request", deleted=deleted)
+    if not deleted:
+        item.pop("deleted")
+        item["status"] = "WAITING_FOR_QUOTE"
+    payload = _envelope(items=[item], changes=[item], summary={"changed_quote_requests": [item]})
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+
+    result = _client().digest()
+
+    assert result["ok"] is True
+    assert result["summary"]["changed_quote_requests"] == [item]
+
+
+def test_digest_summary_preserves_legacy_quote_projection(monkeypatch):
+    item = {"entity": "store_quote_request", "id": "legacy-quote", "status": "WAITING_FOR_QUOTE"}
+    payload = _envelope(summary={"changed_quote_requests": [item]})
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+    assert _client().digest()["summary"]["changed_quote_requests"] == [item]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"entity": "store_order", "id": "legacy-order", "status": "READY"},
+        _feed_ref("store_order"),
+        _feed_ref("store_marketplace_publication_policy"),
+        {**_feed_ref("store_quote_request"), "customer_email": "private@example.test"},
+    ],
+)
+def test_digest_summary_rejects_foreign_entities_and_private_fields_without_retry(monkeypatch, item):
+    request = Mock(return_value=_Response(_envelope(summary={"changed_quote_requests": [item]})))
+    monkeypatch.setattr(store_api_module, "urlopen", request)
+
+    result = _client(max_read_attempts=3).digest()
+
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
+    assert result["items"] == result["changes"] == []
+    request.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "entity,related_entities",
+    [
+        ("store_marketplace_publication_policy", ["store_marketplace_account", "store_part"]),
+        ("store_cart_item", ["store_customer", "store_part"]),
+        ("store_part_crossreference", ["store_part", "store_part"]),
+        ("store_service_principal_credential", ["store_service_principal"]),
+    ],
+)
+def test_digest_accepts_bounded_exact_parent_refs(monkeypatch, entity, related_entities):
+    item = _feed_ref(entity)
+    item["related_refs"] = [
+        {"entity_type": related_entity, "entity_id": f"synthetic-parent-{index}"}
+        for index, related_entity in enumerate(related_entities)
+    ]
+    if "owner_read" in item:
+        item["owner_read"]["related_refs"] = deepcopy(item["related_refs"])
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[item])))
+    assert _client().digest()["items"] == [item]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"entity": "store_part"},
+        {"entity_type": "store_customer_session"},
+        {"id": "different-id"},
+        {"entity_id": "x" * 121},
+        {"entity_id": 5},
+        {"entity_id": "line\nbreak"},
+        {"updated_at": None},
+        {"updated_at": "2026-11-06T00:00:00"},
+        {"updated_at": "not-a-datetime"},
+        {"change_kind": "unknown"},
+        {"change_kind": ["updated"]},
+        {"deleted": 1},
+        {"compact_ref": False},
+        {"safe_ref_only": True},
+        {"customer_email": "private@example.test"},
+        {"payload_json": {"private": "value"}},
+        {"related_refs": []},
+        {"related_refs": [{"entity_type": "store_customer", "entity_id": "unexpected-relation"}]},
+        {"related_refs": [{"entity_type": "store_part", "entity_id": 1}]},
+        {"related_refs": [{"entity_type": "store_part", "entity_id": "p", "phone": "private"}]},
+        {"related_refs": [{"entity_type": "store_part", "entity_id": "p"}] * 3},
+        {"owner_read": None},
+    ],
+)
+def test_digest_rejects_malformed_or_private_compact_refs_without_retry(monkeypatch, invalid):
+    item = {**_feed_ref(), **invalid}
+    request = Mock(return_value=_Response(_envelope(items=[item], changes=[item])))
+    monkeypatch.setattr(store_api_module, "urlopen", request)
+    result = _client(max_read_attempts=3).digest()
+    assert result["summary"]["error_code"] == "store_response_schema_invalid"
+    assert result["items"] == result["changes"] == []
+    request.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"transport": "direct_http"},
+        {"capability_source": "cached_schema"},
+        {"source_table": "customers"},
+        {"primary_key": "phone"},
+        {"entity_id": "other-id"},
+        {"url": "https://untrusted.example.test"},
+        {"method": "DELETE"},
+        {"resolve_exact_via": "delete_customer"},
+        {"related_refs": [{"entity_type": "store_part", "entity_id": "unmatched-parent"}]},
+    ],
+)
+def test_digest_owner_descriptor_must_match_the_exact_safe_ref(monkeypatch, invalid):
+    item = _feed_ref()
+    item["owner_read"].update(invalid)
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[item])))
+    assert _client().digest()["summary"]["error_code"] == "store_response_schema_invalid"
+
+
+@pytest.mark.parametrize("invalid", [{"safe_ref_only": False}, {"detail_access": "full"}, {"owner_read": {}}])
+def test_digest_security_refs_do_not_advertise_row_read_access(monkeypatch, invalid):
+    item = {**_feed_ref("store_audit_log"), **invalid}
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[item])))
+    assert _client().digest()["summary"]["error_code"] == "store_response_schema_invalid"
+
+
+def test_feed_metadata_remains_digest_only_and_changes_are_validated_independently(monkeypatch):
+    item = _feed_ref("store_order")
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(_envelope(items=[item])))
+    assert _client().search(entity="store_order")["summary"]["error_code"] == "store_response_schema_invalid"
+    assert (
+        _client().entity_context(entity="store_order", entity_id=item["id"])["summary"]["error_code"]
+        == "store_response_schema_invalid"
+    )
+    payload = _envelope(items=[item], changes=[{**_feed_ref(), "private_text": "hidden"}])
+    monkeypatch.setattr(store_api_module, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+    assert _client().digest()["summary"]["error_code"] == "store_response_schema_invalid"
 
 
 @pytest.mark.parametrize(
