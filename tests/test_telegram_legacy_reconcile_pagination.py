@@ -25,8 +25,9 @@ def dispatcher_for(pages):
     calls = []
 
     async def request(operation, **kwargs):
-        if operation == "job_execution_slot":
-            return {"job": None}
+        if operation == "job_execution_slots":
+            assert kwargs == {}
+            return {"jobs": []}
         assert operation == "job_active"
         calls.append(kwargs["after_job_id"])
         return pages[kwargs["after_job_id"]]
@@ -34,6 +35,8 @@ def dispatcher_for(pages):
     dispatcher = object.__new__(wake.DurableWakeDispatcher)
     dispatcher.jobs = SimpleNamespace(request=request, changed=asyncio.Event())
     dispatcher.inbox_status = {"compatibility_hold": True}
+    dispatcher.executions = {}
+    dispatcher.unsettled = {}
     dispatcher._reconcile_job = AsyncMock()
     dispatcher.stop_proof_verified = True
     return dispatcher, calls

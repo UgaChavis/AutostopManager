@@ -280,6 +280,11 @@ def test_equal_timestamps_keep_fifo_tie_order_and_do_not_mix_peers(queue: Telegr
     assert job is not None and job["event_ids"] == [first, next_same_peer]
     assert job["peer_id"] == 17
     _assert_bindings(queue, [different_peer], None)
+    other = _claim(queue)
+    assert other is not None and other["peer_id"] == 18
+    assert other["event_ids"] == [different_peer]
+    _assert_bindings(queue, [first, next_same_peer], job["job_id"])
+    _assert_bindings(queue, [different_peer], other["job_id"])
     before = _snapshot(queue)
     assert _claim(queue) is None
     assert _snapshot(queue) == before

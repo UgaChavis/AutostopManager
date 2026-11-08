@@ -112,7 +112,7 @@ Work CLI: пользователь `autostop-work-telegram`, физически�
 | `job-peer-thread-prepare`, `job-peer-thread-read`, `job-peer-thread-bind`, `job-peer-thread-unknown` | Root-only подготовка, точная сверка и сохранение текущей беседы клиента; неизвестное создание не повторяется. |
 | `job-peer-thread-read-peer` | Root-only чтение привязки по точному числовому peer без создания задания; сохраняй старую связь в приватный receipt перед очисткой. |
 | `job-peer-thread-forget-missing` | Root-only очистка подтверждённо отсутствующей ready-беседы по точному CAS при паузе и пустой очереди; события, задания и эффекты сохраняются. |
-| `job-execution-slot`, `job-execution-proof` | Глобальный слот и положительное доказательство завершения точного исполнения; status не заменяет proof. |
+| `job-execution-slot`, `job-execution-slots`, `job-execution-proof`, `job-progress` | Точный слот, список слотов, доказательство остановки и продление по прогрессу своего задания; status не заменяет proof. |
 | `job-status`, `job-active`, `job-health` | Состояние заданий и публикация здоровья. |
 | `job-owner-control` | Совместимый read-only вызов: после прежних проверок lease/revision/claimed возвращает `handled=false`, не читает сообщение и не исполняет управляющее действие. |
 | `job-needs-review`, `job-resolve`, `job-release`, `job-import-legacy` | Сверка, ручное разрешение, безопасное освобождение до запуска и точный импорт старых ссылок. |

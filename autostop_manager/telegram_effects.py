@@ -76,7 +76,12 @@ class _EffectLane:
     """
 
     def __init__(
-        self, *, capacity: int | None = None, queue_seconds: float | None = None, cleanup_seconds: float = 10.0
+        self,
+        *,
+        capacity: int | None = None,
+        queue_seconds: float | None = None,
+        cleanup_seconds: float = 10.0,
+        on_progress: Callable[[], None] | None = None,
     ) -> None:
         self.capacity = capacity
         self.queue_seconds = queue_seconds
@@ -88,6 +93,7 @@ class _EffectLane:
         self.closed = False
         self.active_job_id: str | None = None
         self._progress_event = asyncio.Event()
+        self._on_progress = on_progress
 
     @property
     def progress_event(self) -> asyncio.Event:
@@ -98,6 +104,8 @@ class _EffectLane:
         previous = self._progress_event
         self._progress_event = asyncio.Event()
         previous.set()
+        if self._on_progress is not None:
+            self._on_progress()
 
     @property
     def queued(self) -> int:
@@ -236,13 +244,17 @@ class EffectExecutor:
         self.capacity = capacity
         self.queue_seconds = queue_seconds
         self.cleanup_seconds = cleanup_seconds
+        self._progress_event = asyncio.Event()
         self._service = self._new_lane()
         self._lanes: dict[str, _EffectLane] = {}
         self.closed = False
 
     def _new_lane(self) -> _EffectLane:
         return _EffectLane(
-            capacity=self.capacity, queue_seconds=self.queue_seconds, cleanup_seconds=self.cleanup_seconds
+            capacity=self.capacity,
+            queue_seconds=self.queue_seconds,
+            cleanup_seconds=self.cleanup_seconds,
+            on_progress=self._signal_progress,
         )
 
     @property
@@ -251,7 +263,12 @@ class EffectExecutor:
 
     @property
     def progress_event(self) -> asyncio.Event:
-        return self._service.progress_event
+        return self._progress_event
+
+    def _signal_progress(self) -> None:
+        previous = self._progress_event
+        self._progress_event = asyncio.Event()
+        previous.set()
 
     @property
     def active(self) -> bool:
