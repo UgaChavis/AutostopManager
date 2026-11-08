@@ -6459,15 +6459,19 @@ def send_local_request(
     *,
     timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
-    if timeout_seconds is None:
-        timeout_seconds = rpc_budget(request)
-    if isinstance(timeout_seconds, bool):
-        raise BridgeError("bridge_timeout_invalid")
     try:
+        # The computed budget includes the server's per-page history budget and
+        # reply margin. Keep the stricter legacy limit for explicit overrides.
+        automatic = timeout_seconds is None
+        if automatic:
+            timeout_seconds = rpc_budget(request)
+        if isinstance(timeout_seconds, bool):
+            raise BridgeError("bridge_timeout_invalid")
         timeout_value = float(timeout_seconds)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise BridgeError("bridge_timeout_invalid") from exc
-    if not 1 <= timeout_value <= MAX_LOCAL_REQUEST_TIMEOUT_SECONDS:
+    maximum = threading.TIMEOUT_MAX if automatic else MAX_LOCAL_REQUEST_TIMEOUT_SECONDS
+    if not math.isfinite(timeout_value) or not 1 <= timeout_value <= maximum:
         raise BridgeError("bridge_timeout_invalid")
     deadline = time.monotonic() + timeout_value
 

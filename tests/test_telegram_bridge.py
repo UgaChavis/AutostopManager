@@ -4370,11 +4370,135 @@ def test_local_request_accepts_only_bounded_timeout_values(monkeypatch, tmp_path
     ) == {"ok": True}
     assert len(timeouts) == 3 and timeouts[0] == 135.0
     assert 0 < timeouts[2] <= timeouts[1] <= timeouts[0]
-    for invalid in (False, 0, 181, "not-a-timeout"):
+    for invalid in (False, 0, 181, "not-a-timeout", float("inf"), float("nan")):
         with pytest.raises(BridgeError, match="bridge_timeout_invalid"):
             telegram_bridge.send_local_request(
                 tmp_path / "bridge.sock", {"operation": "status"}, timeout_seconds=invalid
             )
+
+
+@pytest.mark.parametrize("operation", ["send", "send_photo", "send_document", "job_handoff"])
+@pytest.mark.parametrize(("mode", "pages", "expected"), [("apply", 1, 205), ("apply", 7, 445), ("dry_run", 4, 195)])
+def test_job_effect_uses_full_automatic_rpc_budget(monkeypatch, tmp_path, operation, mode, pages, expected) -> None:
+    timeouts = []
+    sent = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, value):
+            timeouts.append(value)
+
+        def connect(self, _path):
+            pass
+
+        def sendall(self, data):
+            sent.append(json.loads(data))
+
+        def recv(self, _size):
+            return b'{"ok":true}\n'
+
+    monkeypatch.setattr(telegram_bridge.socket, "socket", lambda *_args: Socket())
+    request = {"operation": operation, "mode": mode, "job_id": "synthetic-job", "history_pages": pages}
+    assert telegram_bridge.send_local_request(tmp_path / "bridge.sock", request) == {"ok": True}
+    assert sent == [request]
+    assert timeouts[0] == expected
+    assert 0 < timeouts[-1] <= timeouts[0]
+
+
+def test_work_cli_send_uses_automatic_job_budget(monkeypatch, capsys) -> None:
+    requests = []
+    timeouts = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, value):
+            timeouts.append(value)
+
+        def connect(self, _path):
+            pass
+
+        def sendall(self, data):
+            requests.append(json.loads(data))
+
+        def recv(self, _size):
+            return b'{"ok":true}\n'
+
+    monkeypatch.setattr(telegram_bridge.socket, "socket", lambda *_args: Socket())
+    assert (
+        telegram_bridge.main(
+            [
+                "--account",
+                "work",
+                "send",
+                "--peer",
+                "10",
+                "--text",
+                "test",
+                "--mode",
+                "apply",
+                "--job-id",
+                "synthetic-job",
+                "--lease",
+                "test-lease",
+                "--revision",
+                "1",
+                "--kind",
+                "result",
+                "--history-pages",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["ok"]
+    assert len(requests) == 1 and requests[0]["job_id"] == "synthetic-job"
+    assert timeouts[0] == 205
+
+
+def test_automatic_rpc_budget_rejects_overflow_before_connect(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(telegram_bridge.socket, "socket", lambda *_args: pytest.fail("socket must not be opened"))
+    request = {"operation": "send", "mode": "apply", "job_id": "synthetic-job", "history_pages": 10**400}
+    with pytest.raises(BridgeError, match="bridge_timeout_invalid"):
+        telegram_bridge.send_local_request(tmp_path / "bridge.sock", request)
+
+
+def test_job_effect_timeout_does_not_repeat_send(monkeypatch, tmp_path) -> None:
+    writes = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def settimeout(self, _value):
+            pass
+
+        def connect(self, _path):
+            pass
+
+        def sendall(self, data):
+            writes.append(data)
+
+        def recv(self, _size):
+            raise TimeoutError("response lost")
+
+    monkeypatch.setattr(telegram_bridge.socket, "socket", lambda *_args: Socket())
+    request = {"operation": "send", "mode": "apply", "job_id": "synthetic-job", "history_pages": 1}
+    with pytest.raises(BridgeError, match="bridge_unavailable"):
+        telegram_bridge.send_local_request(tmp_path / "bridge.sock", request)
+    assert len(writes) == 1
 
 
 def test_code_login_keeps_phone_code_and_identity_out_of_result(monkeypatch, tmp_path) -> None:
