@@ -1658,7 +1658,6 @@ class BridgeJobs:
         self.connected = False
         self.generation = -1
         self.changed = asyncio.Event()
-        self.owner_changed = asyncio.Event()
         self.listener: asyncio.Task[None] | None = None
         self.stopping = False
         self.last_error: str | None = None
@@ -1699,7 +1698,6 @@ class BridgeJobs:
     def _transport_lost(self) -> None:
         self.connected = False
         self.changed.set()
-        self.owner_changed.set()
         # Reconnect the subscription even when only the independent RPC socket
         # lost its response. Its next snapshot authorizes a fresh ledger read.
         if self.subscription_writer is not None:
@@ -1794,10 +1792,6 @@ class BridgeJobs:
                     self.generation = generation
                     if changed:
                         self.changed.set()
-                    # Owner delivery is independent of a long-running client
-                    # turn. Heartbeats also allow a repaired local role store
-                    # to resume a pending delivery without another message.
-                    self.owner_changed.set()
             except (OSError, TimeoutError, TransportLost):
                 self.connected = False
                 self.changed.set()
@@ -1821,119 +1815,7 @@ class BridgeJobs:
     async def close(self) -> None:
         self.stopping = True
         self.changed.set()
-        self.owner_changed.set()
         await _cancel_task_until(self.listener, asyncio.get_running_loop().time() + 1, self.cleanup_tasks)
-
-
-class OwnerEventRouter:
-    """Deliver exact trusted owner refs to M1; never run its goal in the client slot."""
-
-    def __init__(self, jobs: BridgeJobs, config: WakeConfig) -> None:
-        self.jobs = jobs
-        self.config = config
-        self.stopping = False
-        self.last_error: str | None = None
-        self.delivered = 0
-        self.retry_at = 0.0
-
-    async def deliver_pending(self) -> int:
-        from autostop_manager.role_coordination import read_owner_receipt, submit_owner_event
-
-        response = await self.jobs.request("job_owner_pending")
-        pending = response.get("events")
-        if not isinstance(pending, list) or len(pending) > 50:
-            raise WakeError("wake_owner_queue_invalid")
-        root, revision = self.config.instruction_root, self.config.instruction_revision
-        if not isinstance(root, str) or not isinstance(revision, str):
-            raise WakeError("wake_instruction_bundle_required")
-        validate_instruction_bundle(root, revision)
-        count = 0
-        for event in pending:
-            event_id = event.get("event_id") if isinstance(event, dict) else None
-            if not isinstance(event_id, str) or INBOUND_EVENT_ID_PATTERN.fullmatch(event_id) is None:
-                raise WakeError("wake_owner_queue_invalid")
-            receipt = await asyncio.to_thread(read_owner_receipt, event_id)
-            if receipt is None:
-                receipt = await asyncio.to_thread(
-                    submit_owner_event,
-                    event_id,
-                    event_ids=[event_id],
-                    instruction_root=root,
-                    instruction_revision=revision,
-                )
-            verified = await asyncio.to_thread(read_owner_receipt, event_id)
-            if (
-                not isinstance(receipt, dict)
-                or not isinstance(verified, dict)
-                or not receipt.get("receipt_id")
-                or verified.get("receipt_id") != receipt["receipt_id"]
-                or verified.get("event_id") != event_id
-                or verified.get("event_ids") != [event_id]
-                or verified.get("role") != "M1"
-                or verified.get("status") not in {"queued", "running", "completed", "failed", "unknown"}
-            ):
-                raise WakeError("wake_owner_receipt_invalid")
-            route_root, route_revision = verified.get("instruction_root"), verified.get("instruction_revision")
-            if not isinstance(route_root, str) or not isinstance(route_revision, str):
-                raise WakeError("wake_owner_receipt_invalid")
-            validate_instruction_bundle(route_root, route_revision)
-            routed = await self.jobs.request(
-                "job_owner_routed",
-                event_id=event_id,
-                receipt=verified,
-                instruction_root=route_root,
-                instruction_revision=route_revision,
-            )
-            proof = routed.get("receipt")
-            if (
-                not isinstance(proof, dict)
-                or proof.get("receipt_id") != verified["receipt_id"]
-                or proof.get("event_id") != event_id
-                or proof.get("outcome") != "routed"
-            ):
-                raise WakeError("wake_owner_receipt_invalid")
-            count += 1
-        self.delivered += count
-        return count
-
-    async def reconcile_completed(self) -> None:
-        from autostop_manager.role_coordination import read_owner_receipt
-
-        response = await self.jobs.request("job_owner_unfinished")
-        pending = response.get("events")
-        if not isinstance(pending, list) or len(pending) > 50:
-            raise WakeError("wake_owner_queue_invalid")
-        for event in pending:
-            event_id = event.get("event_id") if isinstance(event, dict) else None
-            if not isinstance(event_id, str) or INBOUND_EVENT_ID_PATTERN.fullmatch(event_id) is None:
-                raise WakeError("wake_owner_queue_invalid")
-            receipt = await asyncio.to_thread(read_owner_receipt, event_id)
-            if receipt and receipt.get("status") == "completed":
-                if receipt.get("receipt_id") != event.get("receipt_id"):
-                    raise WakeError("wake_owner_receipt_invalid")
-                await self.jobs.request("job_owner_completed", event_id=event_id, receipt=receipt)
-
-    async def run(self) -> None:
-        while not self.stopping:
-            await self.jobs.owner_changed.wait()
-            self.jobs.owner_changed.clear()
-            if self.stopping:
-                return
-            if (
-                not self.jobs.connected
-                or not (self.jobs.snapshot.get("owner_pending") or self.jobs.snapshot.get("owner_routes_unfinished"))
-                or asyncio.get_running_loop().time() < self.retry_at
-            ):
-                continue
-            try:
-                await self.deliver_pending()
-                await self.reconcile_completed()
-                self.last_error = None
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - local role failures must not stop client processing or leak context.
-                self.last_error = "wake_owner_delivery_pending"
-                self.retry_at = asyncio.get_running_loop().time() + 60
 
 
 def _job_status_entity(response: dict[str, Any]) -> dict[str, Any]:
@@ -2099,8 +1981,6 @@ class DurableWakeDispatcher:
         self._stage_timings = _StageTimings()
         # Work Telegram has only client traffic. Trusted control comes from
         # Codex, never from a Telegram sender or the owner's display name.
-        self.owner_router: OwnerEventRouter | None = None
-        self.owner_router_task: asyncio.Task[None] | None = None
         # Each running job owns its app connection and stop proof. The bridge,
         # bootstrap connection and scheduler remain shared.
         self.parent: DurableWakeDispatcher | None = None
@@ -2226,8 +2106,6 @@ class DurableWakeDispatcher:
             "queue_can_advance": queue_reason is None,
             "queue_block_reason": queue_reason,
             "stage_timings": self._stage_timings.snapshot(),
-            "owner_routing_error": None if self.owner_router is None else self.owner_router.last_error,
-            "owner_routed": 0 if self.owner_router is None else self.owner_router.delivered,
         }
 
     def start(self) -> None:
@@ -2235,8 +2113,6 @@ class DurableWakeDispatcher:
         self.supervisor = asyncio.create_task(self.app.supervise())
         self.bootstrap_supervisor = self.supervisor
         self.jobs.start()
-        if self.owner_router is not None:
-            self.owner_router_task = asyncio.create_task(self.owner_router.run())
         self._start_worker()
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
 
@@ -3363,10 +3239,6 @@ class DurableWakeDispatcher:
         with suppress(WakeError):
             await self.pause(persist=False)
         deadline = asyncio.get_running_loop().time() + 5
-        if self.owner_router is not None:
-            self.owner_router.stopping = True
-        with suppress(TimeoutError):
-            await _cancel_task_until(self.owner_router_task, deadline, self.cleanup_tasks)
         # Pause may fail on bridge IPC before reaching its owned task cleanup.
         for task in (self.worker, self.execution_task):
             with suppress(TimeoutError):

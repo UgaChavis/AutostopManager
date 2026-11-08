@@ -57,7 +57,6 @@ WRITE_OPERATIONS = frozenset(
         "archive",
         "set_global_hold",
         "role_action",
-        "role_owner_submit",
     }
 )
 OPERATIONS = READ_OPERATIONS | WRITE_OPERATIONS
@@ -401,7 +400,7 @@ class AutomationControlService:
         if operation in WRITE_OPERATIONS and not _can_manage(actor):
             raise AutomationError("automation_permission_denied")
         if (
-            operation in {"set_global_hold", "role_owner_submit"}
+            operation == "set_global_hold"
             or (operation == "preview" and payload.get("target_operation") == "set_global_hold")
         ) and actor["kind"] != "system":
             raise AutomationError("automation_permission_denied")
@@ -412,8 +411,6 @@ class AutomationControlService:
             try:
                 if operation == "role_read":
                     return roles.read(**dict(payload))
-                if operation == "role_owner_submit":
-                    return roles.submit_owner_event(**dict(payload))
                 return roles.action(
                     **dict(payload),
                     idempotency_key=str(request.get("idempotency_key") or ""),
@@ -519,10 +516,6 @@ class AutomationControlService:
                 updated["name"] = policy.display_name
                 return {"changed": True, "system_timer": updated}
             job_id = _required_text(payload, "job_id", maximum=64)
-            from .automation_registry import ROLE_TEMPLATES
-
-            if self.store._require_job(connection, job_id)["template_id"] in ROLE_TEMPLATES:
-                raise AutomationError("automation_role_control_required")
             if operation == "set_enabled":
                 if payload.get("enabled") is True and self.readiness_provider is not None:
                     readiness = self._provided_readiness()

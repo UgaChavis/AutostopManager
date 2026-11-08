@@ -555,8 +555,8 @@ def register_manager_tools(  # noqa: C901
     @server.tool(
         name="manager_roles",
         description=(
-            "Read M1/M2 exact chat bindings, independent duty state, tasks, questions, approval receipts and working notes. "
-            "Reads do not start duties or initialize role storage. Business source records remain in CRM/Telegram. "
+            "Read the manual M1/M2 task, question, approval and knowledge registry. "
+            "Reads never start chats, goals or background work and do not initialize role storage. Business records remain in CRM/Telegram. "
             "Use reference_id for one task/question/approval or owner event receipt. Read M1/M2 instructions first."
         ),
         annotations=ToolAnnotations(
@@ -579,10 +579,8 @@ def register_manager_tools(  # noqa: C901
         name="manager_role_action",
         description=(
             "CONTROL: Change one M1/M2 role, task, question, concrete approval or working note through the existing controller. "
-            "Requires explicit actor, idempotency_key and expected_revision for existing objects. bind takes thread_id; "
-            "start/stop are independent, M1 may start M2; stop_all uses role M1 plus payload.m2_revision. "
-            "bind host_id must match this configured executor host; other hosts are unsupported. "
-            "sleep takes seconds 1..3600. checkpoint takes text. "
+            "Requires explicit actor, idempotency_key and expected_revision for existing objects. "
+            "No chat binding, duty, goal or background execution is supported. checkpoint takes text. "
             "task_create takes title/objective/resource/acceptance; task_claim/result/accept/cancel takes id; "
             "task_create supports urgent. task_result also result/verification/artifact_ref/release_required/source_state/deployment_state/installed_revision; "
             "task_accept takes verification; task_return takes reason for concrete rework. "
@@ -602,11 +600,6 @@ def register_manager_tools(  # noqa: C901
     )
     def manager_role_action_tool(
         operation: Literal[
-            "bind",
-            "start",
-            "stop",
-            "stop_all",
-            "sleep",
             "checkpoint",
             "task_create",
             "task_claim",
@@ -622,7 +615,6 @@ def register_manager_tools(  # noqa: C901
             "note",
             "learn",
             "permission_record",
-            "reconcile_turn",
         ],
         role: Literal["M1", "M2"],
         actor: Literal["owner", "M1", "M2"],

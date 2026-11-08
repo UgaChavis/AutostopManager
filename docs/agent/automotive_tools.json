@@ -7102,7 +7102,7 @@
       "also_used_in": [],
       "classification": "outside",
       "title": "manager_roles",
-      "purpose": "Состояние кабинетов M1/M2, задачи, согласования и рабочие знания",
+      "purpose": "Ручной реестр задач, вопросов, согласований и знаний M1/M2",
       "provider_id": "manager",
       "primary_data_source": "Manager role tables in the existing scheduler registry; exact source references",
       "execution_kind": "composed",
@@ -7129,7 +7129,7 @@
       "limitations": [
         "Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.",
         "Рабочие знания и наблюдения не расширяют полномочия.",
-        "Обе роли после установки OFF; чтение не запускает дежурство."
+        "Реестр не закрепляет чаты, не создаёт цели и не запускает фоновую работу."
       ],
       "example": {},
       "invalid_example": {
@@ -7147,7 +7147,7 @@
       "also_used_in": [],
       "classification": "outside",
       "title": "manager_role_action",
-      "purpose": "Управление дежурствами, поручениями M1/M2 и конкретными согласованиями владельца",
+      "purpose": "Ручное ведение задач, решений и рабочих знаний M1/M2",
       "provider_id": "manager",
       "primary_data_source": "Manager role tables in the existing scheduler registry; exact source references",
       "execution_kind": "composed",
@@ -7174,7 +7174,7 @@
       "limitations": [
         "Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.",
         "Рабочие знания и наблюдения не расширяют полномочия.",
-        "Обе роли после установки OFF; чтение не запускает дежурство."
+        "Реестр не закрепляет чаты, не создаёт цели и не запускает фоновую работу."
       ],
       "example": {
         "operation": "note",

@@ -5170,47 +5170,8 @@ def _handle_owner_routing_control(
                 "owner_routes_unfinished": len(inbox.owner_routes_unfinished(limit=100)),
             },
         }
-    if operation == "job_owner_pending":
-        owner_peer_id = _owner_peer_id(config)
-        return {"ok": True, "events": inbox.owner_pending(owner_peer_id) if owner_peer_id else []}
-    if operation == "job_owner_unfinished":
-        return {"ok": True, "events": inbox.owner_routes_unfinished()}
-    if operation == "job_owner_completed":
-        receipt = request.get("receipt")
-        event_id = str(request.get("event_id") or "")
-        if (
-            not isinstance(receipt, dict)
-            or not isinstance(receipt.get("receipt_id"), str)
-            or receipt.get("event_id") != event_id
-            or receipt.get("event_ids") != [event_id]
-            or receipt.get("role") != "M1"
-            or receipt.get("status") != "completed"
-        ):
-            raise BridgeError("owner_routing_receipt_invalid")
-        completed = inbox.complete_owner_route(event_id, receipt["receipt_id"])
-        monitor.changed()
-        return {"ok": True, "receipt": completed}
-    if operation == "job_owner_routed":
-        receipt = request.get("receipt")
-        event_id = str(request.get("event_id") or "")
-        if (
-            not isinstance(receipt, dict)
-            or not isinstance(receipt.get("receipt_id"), str)
-            or receipt.get("event_id") != event_id
-            or receipt.get("event_ids") != [event_id]
-            or receipt.get("role") != "M1"
-            or receipt.get("status") not in {"queued", "running", "completed", "failed", "unknown"}
-        ):
-            raise BridgeError("owner_routing_receipt_invalid")
-        routed = inbox.route_owner_event(
-            event_id=event_id,
-            owner_peer_id=cast(int, _owner_peer_id(config, required=True)),
-            receipt_id=receipt["receipt_id"],
-            instruction_root=str(request.get("instruction_root") or ""),
-            instruction_revision=str(request.get("instruction_revision") or ""),
-        )
-        monitor.changed()
-        return {"ok": True, "receipt": routed}
+    if operation in {"job_owner_pending", "job_owner_unfinished", "job_owner_completed", "job_owner_routed"}:
+        raise BridgeError("owner_routing_retired")
     return None
 
 

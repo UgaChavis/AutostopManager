@@ -10,7 +10,7 @@
 
 Внутренний RPC `job_peer_thread_rotate` переводит точную текущую привязку в создание новой по ожидаемым ID и revision; это не публичная CLI-команда. Новый ID подтверждается штатными bind и readback.
 
-Trusted owner binding задаёт только точного получателя служебных уведомлений. Имя, username и текст Telegram не дают управляющих полномочий. Управление M1/M2 и клиентскими указаниями приходит из доверенного Codex. Дежурства независимы и не включаются от клиентского события. Personal не запускает рабочий worker.
+Trusted owner binding задаёт только точного получателя служебных уведомлений. Имя, username и текст Telegram не дают управляющих полномочий. Роли M1/M2 и клиентские указания выбираются из доверенного Codex. Ручной реестр M1/M2 не запускает исполнителя от клиентского события. Personal не запускает рабочий worker.
 
 Комплект правил выбирается по закреплённым за заданием физическому корню и ревизии, с проверкой содержимого и зависимостей по manifest. Перед новым idle-ходом wake добавляет проверенные AGENTS, B2/B4 и клиентский скилл доверенным developer-сообщением через `thread/inject_items`; история не заменяет этот комплект. Проектные пути `instruction_ref`, `playbook`, `source_catalog` и аналогичные ссылки инструментов разрешаются от этого root; относительные Markdown-ссылки — от каталога исходного документа внутри того же комплекта. Базовые и индивидуальные developer instructions сохраняются. Служебные start/resume/reconnect используют одинаковый профиль: автоматическое чтение AGENTS из cwd и автоматический каталог всех навыков скрыты двумя скалярными настройками. `skills.config` не заменяется: прежние индивидуальные selectors, enabled-состояния и настройки доступа сохраняются. Нужные навыки читаются явно через A4 или пути выбранного комплекта; MCP-инструменты доступны по прежним правилам. Общий Codex config и cwd не изменяются; профиль и проверка комплекта — [Manager runtime](manager-runtime.md).
 
@@ -150,13 +150,13 @@ Duty: `scripts/set-work-telegram-duty.sh --enable|--disable|--status [--expected
 
 ## Automation Center
 
-Управление выполняется по поручению в кабинете или доверенном управляющем чате Codex. Транспортный `job-owner-control` остаётся совместимым no-op. Все входящие рабочего Telegram являются клиентскими сообщениями. CLI, UI и штатные управляющие инструменты Automation Center сохраняются.
+Управление выполняется по поручению в доверенном управляющем чате Codex. Транспортный `job-owner-control` остаётся совместимым no-op. Все входящие рабочего Telegram являются клиентскими сообщениями. CLI, UI и штатные управляющие инструменты Automation Center сохраняются.
 
 Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` и `/run/autostop-manager-automation/control.sock`. `manager_automations` поддерживает `status`, `templates`, `readiness`; `manager_automation_control` — `preview`, `create_from_template`, `set_enabled`, `set_schedule`, `run_now`, `test_notification`, `archive`. Актуальные schemas — tools/list.
 
 Локальный `python -m autostop_manager.automation_control` принимает `--payload` JSON, `--idempotency-key`, `--expected-revision`; socket protocol — `autostop.manager.automation-control.v1`. Проверяются peer UID/роль, revision и idempotency. Preview не выполняет предлагаемое guarded действие и не меняет desired_state/revision существующего задания. Preview existing job, status и readiness могут создавать, обновлять или восстанавливать техническую схему registry; legacy migration добавляет/заполняет технические поля jobs/runtime/controller. upgraded_at фиксирует создание записи компонента или смену версии; repair текущей версии сохраняет эту метку, полностью актуальный registry повторный вызов не меняет. Preview создания из template и templates не обращаются к registry. Остальные изменения требуют точной job/revision/key и readback; `run_now` и `test_notification` ставят отложенный внешний эффект в runs/outbox. Служебный `set_global_hold` доступен system actor только в release procedure.
 
-Кабинеты используют socket-операции `role_read` (чтение через `manager_roles`) и `role_action` (изменение через `manager_role_action` с actor/key/revision). Исторический `role_owner_submit` принимает только system actor; рабочий Telegram не создаёт через него новых поручений. Тексты не повышают полномочия. Полный контракт — [кабинеты M1/M2](manager-roles.md).
+Ручной реестр использует socket-операции `role_read` (чтение через `manager_roles`) и `role_action` (изменение через `manager_role_action` с actor/key/revision). Он сохраняет задачи и решения без пробуждения чатов или управления целями. Рабочий Telegram не создаёт управляющих поручений. Полный контракт — [роли и ручной реестр M1/M2](manager-roles.md).
 
 - `crm_digest_v1` — allowlisted singleton template, по умолчанию OFF. Он читает CRM change feed за окно и может отправить owner сводку через work Telegram. Расписание/timezone читай из `status.jobs[].schedule`, не из имени или старого снимка. Не включай ради smoke; справка конструктора сама не запускает job.
   HTTP к CRM ограничен одним deadline на заголовки и декодированное тело: 10 секунд для операций, 2 секунды для readiness.
@@ -168,7 +168,7 @@ Scheduler владеет `/var/lib/autostop-manager-scheduler/registry.sqlite3` 
   Навсегда зависший DNS оставит процесс в
   `stopping`: системный `TimeoutStopSec=30s` может завершить его принудительно, что не является успешным drain. Direct source использует
   отдельный default pool. Controller heartbeat не продлевает lease задания; fencing и точный pending ACK сохраняются для штатного readback.
-- `m1_duty_v1` и `m2_duty_v1` — singleton jobs короткого пробуждения кабинетов, первоначально OFF. Центр показывает проекцию RoleStore: `source_role`, `control_mode=read_only`, ON/OFF, следующий запуск и ошибку. Управление — через `manager_role_action`; generic preview возвращает locked, generic изменения отклоняются. Отдельный ограниченный loop выполняет dispatch/reconcile, постоянная цель не занимает последовательную очередь scheduler.
+- M1/M2 не являются автоматизациями. Ручной реестр задач и решений не создаёт scheduler jobs, dispatch или ходы Codex. Пользователь выбирает роль и движение к цели в текущем чате.
 - `database_backup` и `app_watchdog` — system timers с `control_mode=read_only`: G1 показывает drift, не меняет их.
 - `managed_pc_health`, `managed_pc_fleet_health`, `managed_pc_pending_cleanup` имеют `control_mode=managed`; изменение требует своего текущего scope/revision.
 

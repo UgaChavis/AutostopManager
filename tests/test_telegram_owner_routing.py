@@ -5,12 +5,10 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-import threading
 
 import pytest
 
-from autostop_manager import role_coordination, telegram_bridge as bridge, telegram_wake as wake
-from autostop_manager.role_coordination import RoleStore
+from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 
 
@@ -31,7 +29,6 @@ def runtime(tmp_path, monkeypatch):
     monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
     config = bridge.TelegramConfig(123456, "a" * 32, state_dir=tmp_path, socket_path=tmp_path / "bridge.sock")
     monkeypatch.setattr(bridge, "_owner_peer_id", lambda _config, **_kwargs: OWNER)
-    monkeypatch.setattr(wake, "validate_instruction_bundle", lambda _root, _revision: None)
     yield inbox, monitor, config, clock
     inbox.close()
 
@@ -162,119 +159,6 @@ def test_owner_source_exact_read_after_routing_preserves_reply_reference(runtime
             )
         )
     assert len(reads) == 1
-
-
-class OwnerJobs:
-    def __init__(self, inbox, monitor, config):
-        self.inbox, self.monitor, self.config = inbox, monitor, config
-        self.connected = True
-        self.owner_changed = asyncio.Event()
-        self.calls = []
-        self.fail_after_commit = False
-
-    @property
-    def snapshot(self):
-        return {
-            "owner_pending": len(self.inbox.owner_pending(OWNER)),
-            "owner_routes_unfinished": len(self.inbox.owner_routes_unfinished()),
-        }
-
-    async def request(self, operation, **payload):
-        self.calls.append(operation)
-        result = await bridge._handle_job_control(
-            object(), self.config, {"operation": operation, **payload}, self.monitor
-        )
-        if operation == "job_owner_routed" and self.fail_after_commit:
-            self.fail_after_commit = False
-            raise OSError("synthetic lost bridge receipt")
-        return result
-
-
-@pytest.mark.parametrize("loss", ["submit", "bridge"])
-def test_lost_receipt_reuses_same_durable_event_and_never_starts_client(runtime, tmp_path, monkeypatch, loss):
-    inbox, monitor, config, _ = runtime
-    owner = inbox.record(OWNER, 1)
-    store = RoleStore(tmp_path / "roles.sqlite3")
-    submissions = []
-
-    def submit(event_id, **payload):
-        submissions.append(event_id)
-        receipt = store.submit_owner_event(event_id, **payload)
-        if loss == "submit":
-            raise OSError("synthetic receipt lost after commit")
-        return receipt
-
-    monkeypatch.setattr(role_coordination, "submit_owner_event", submit)
-    monkeypatch.setattr(role_coordination, "read_owner_receipt", store.owner_event_receipt)
-
-    async def scenario():
-        jobs = OwnerJobs(inbox, monitor, config)
-        jobs.fail_after_commit = loss == "bridge"
-        router = wake.OwnerEventRouter(
-            jobs, wake.WakeConfig("synthetic", instruction_root=ROOT, instruction_revision=REVISION)
-        )
-        with pytest.raises(OSError):
-            await router.deliver_pending()
-        assert inbox.event_state(owner) == ("open" if loss == "submit" else "routed")
-        router.config = wake.WakeConfig(
-            "synthetic", instruction_root="/test/next-snapshot", instruction_revision="b" * 40
-        )
-        assert await router.deliver_pending() == (1 if loss == "submit" else 0)
-        assert inbox.event_state(owner) == "routed"
-        routed_job = inbox.read_job(inbox.owner_route_receipt(owner)["job_id"])
-        assert (routed_job["instruction_root"], routed_job["instruction_revision"]) == (ROOT, REVISION)
-        assert await router.deliver_pending() == 0
-        assert submissions == [owner]
-        assert inbox.execution_slot() is None
-        assert store.role_state("M1")["desired_state"] == "off"
-        assert store.role_state("M2")["desired_state"] == "off"
-
-    asyncio.run(scenario())
-
-
-def test_owner_route_failure_does_not_block_client_loop(runtime, monkeypatch):
-    inbox, monitor, config, _ = runtime
-    owner = inbox.record(OWNER, 1)
-    client = inbox.record(43, 2)
-    started, release = threading.Event(), threading.Event()
-
-    def unavailable(_event_id, **_payload):
-        started.set()
-        release.wait(2)
-        raise OSError("synthetic scheduler offline")
-
-    monkeypatch.setattr(role_coordination, "submit_owner_event", unavailable)
-    monkeypatch.setattr(role_coordination, "read_owner_receipt", lambda _event_id: None)
-
-    async def scenario():
-        jobs = OwnerJobs(inbox, monitor, config)
-        router = wake.OwnerEventRouter(
-            jobs, wake.WakeConfig("synthetic", instruction_root=ROOT, instruction_revision=REVISION)
-        )
-        jobs.owner_changed.set()
-        task = asyncio.create_task(router.run())
-        try:
-            for _ in range(100):
-                if started.is_set():
-                    break
-                await asyncio.sleep(0.001)
-            assert started.is_set()
-            assert claim(inbox)["event_ids"] == [client]
-            assert not release.is_set()
-            release.set()
-            for _ in range(100):
-                if router.last_error:
-                    break
-                await asyncio.sleep(0.001)
-            assert router.last_error == "wake_owner_delivery_pending"
-            assert inbox.event_state(owner) == "open"
-        finally:
-            release.set()
-            router.stopping = True
-            jobs.owner_changed.set()
-            await task
-
-    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

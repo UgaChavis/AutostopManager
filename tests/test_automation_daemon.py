@@ -456,7 +456,7 @@ def test_production_wires_digest_and_reports_live_dependency_readiness(monkeypat
 
     daemon = AutomationDaemon.production(store=AutomationStore(tmp_path / "manager.sqlite3"))
 
-    assert set(daemon.executors) == {"crm_digest_v1", "m1_duty_v1", "m2_duty_v1"}
+    assert set(daemon.executors) == {"crm_digest_v1"}
     assert [source.timeout_seconds for source in sources] == [10, 2]
     assert sources[0].admission is daemon._crm_http_admission
     assert sources[1].admission is daemon._crm_readiness_admission
@@ -498,7 +498,7 @@ def test_production_reports_invalid_crm_configuration_without_building_executor(
 
     daemon = AutomationDaemon.production(store=AutomationStore(tmp_path / "manager.sqlite3"))
 
-    assert set(daemon.executors) == {"m1_duty_v1", "m2_duty_v1"}
+    assert set(daemon.executors) == set()
     assert daemon.readiness_provider()["checks"]["crm_change_feed"] == "automation_crm_config_invalid"
     assert daemon.readiness_provider()["ready"] is False
 

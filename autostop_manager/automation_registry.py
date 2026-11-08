@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .config import get_automation_db_path
 
 
-AUTOMATION_SCHEMA_VERSION = 7
+AUTOMATION_SCHEMA_VERSION = 8
 MIN_INTERVAL_MINUTES = 5
 MAX_INTERVAL_MINUTES = 24 * 60
 MAX_JOBS = 100
@@ -76,8 +76,8 @@ class AutomationTemplate:
                 "maximum_every_minutes": self.maximum_every_minutes,
             },
             "notification_channel": self.notification_channel,
-            "control_mode": "read_only" if self.template_id in ROLE_TEMPLATES else "managed",
-            "source_role": ROLE_TEMPLATES.get(self.template_id),
+            "control_mode": "managed",
+            "source_role": None,
         }
 
 
@@ -93,18 +93,6 @@ AUTOMATION_TEMPLATES: dict[str, AutomationTemplate] = {
         notification_channel="owner_telegram",
     )
 }
-ROLE_TEMPLATES = {"m1_duty_v1": "M1", "m2_duty_v1": "M2"}
-for _template_id, _role in ROLE_TEMPLATES.items():
-    AUTOMATION_TEMPLATES[_template_id] = AutomationTemplate(
-        template_id=_template_id,
-        name=f"{_role}: дежурство {'директора' if _role == 'M1' else 'инженера'}",
-        singleton=True,
-        default_every_minutes=5,
-        minimum_every_minutes=5,
-        maximum_every_minutes=60,
-        description="Короткое пробуждение закреплённого кабинета. Управление через manager_role_action; состояние принадлежит роли.",
-        notification_channel="role_context",
-    )
 
 
 def utc_now() -> datetime:
@@ -557,6 +545,13 @@ class AutomationStore:
                 """,
                 (now,),
             )
+
+            from .role_coordination import RoleError, RoleStore
+
+            try:
+                RoleStore._prepare(connection)
+            except RoleError as exc:
+                raise AutomationError(str(exc)) from None
 
     def schema_version(self) -> int:
         self.initialize()
@@ -1108,8 +1103,8 @@ class AutomationStore:
         return {
             "job_id": row["job_id"],
             "template_id": row["template_id"],
-            "control_mode": "read_only" if row["template_id"] in ROLE_TEMPLATES else "managed",
-            "source_role": ROLE_TEMPLATES.get(row["template_id"]),
+            "control_mode": "managed",
+            "source_role": None,
             "name": row["name"],
             "desired_state": row["desired_state"],
             "actual_state": row["actual_state"],
@@ -1383,16 +1378,6 @@ class AutomationStore:
         if target_operation in {"set_enabled", "set_schedule", "archive", "run_now", "test_notification"}:
             job_id = str(target_payload.get("job_id") or "")
             current = self.status(job_id=job_id)["jobs"][0]
-            if current["template_id"] in ROLE_TEMPLATES:
-                return {
-                    "target_operation": target_operation,
-                    "would_change": False,
-                    "allowed": False,
-                    "locked": True,
-                    "current": current,
-                    "reason": "automation_role_control_required",
-                    "external_effects": [],
-                }
             proposed: dict[str, Any] = {"job_id": job_id}
             external_effects: list[str] = []
             if target_operation == "set_enabled":

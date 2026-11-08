@@ -123,6 +123,6 @@ def test_role_tools_have_explicit_read_and_control_contracts():
     assert controller.annotations.destructiveHint is True
     assert controller.annotations.idempotentHint is False
     assert {"operation", "role", "actor", "idempotency_key"} <= set(controller.parameters["required"])
-    assert {"start", "stop", "stop_all", "task_return", "approval_consume"} <= set(
-        controller.parameters["properties"]["operation"]["enum"]
-    )
+    operations = set(controller.parameters["properties"]["operation"]["enum"])
+    assert {"task_claim", "task_return", "approval_consume"} <= operations
+    assert not operations & {"bind", "start", "stop", "stop_all", "sleep", "reconcile_turn"}
