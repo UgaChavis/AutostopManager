@@ -6463,7 +6463,7 @@ def send_local_request(
         # The computed budget includes the server's per-page history budget and
         # reply margin. Keep the stricter legacy limit for explicit overrides.
         automatic = timeout_seconds is None
-        if automatic:
+        if timeout_seconds is None:
             timeout_seconds = rpc_budget(request)
         if isinstance(timeout_seconds, bool):
             raise BridgeError("bridge_timeout_invalid")
