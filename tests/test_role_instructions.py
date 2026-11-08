@@ -667,6 +667,77 @@ def test_exact_external_lookup_ignores_unrelated_broken_package(tmp_path, monkey
         catalogs.selected_skills(project, codex)
 
 
+@pytest.mark.parametrize("system_target", [True, False])
+def test_exact_host_lookup_ignores_unrelated_malformed_entry(tmp_path, monkeypatch, capsys, system_target):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    system, user = codex / "skills/.system", codex / "skills"
+    target_root, broken_root = (system, user) if system_target else (user, system)
+    target = skill(target_root / "requested/SKILL.md", "requested")
+    write(broken_root / "unrelated-draft/SKILL.md", "# Unfinished unrelated skill\n")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+    assert code == 0 and output["skill"]["path"] == str(target)
+    with pytest.raises(ValueError, match="Incomplete skill metadata"):
+        catalogs.selected_skills(project, codex)
+
+
+def test_exact_host_lookup_does_not_ignore_malformed_requested_entry(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/requested/SKILL.md", "# Broken requested skill\n")
+
+    with pytest.raises(ValueError, match="Incomplete skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+
+def test_exact_host_lookup_preserves_ambiguity_between_user_and_system(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    skill(codex / "skills/alias/SKILL.md", "requested")
+    write(codex / "skills/unrelated-draft/SKILL.md", "# Unfinished unrelated skill\n")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+    assert (code, output) == (1, {"ok": False, "error": "skill_ambiguous"})
+
+
+def test_exact_host_lookup_preserves_metadata_name_alias(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    target = skill(codex / "skills/.system/different-directory/SKILL.md", "requested")
+    write(codex / "skills/unrelated-draft/SKILL.md", "# Unfinished unrelated skill\n")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+    assert code == 0 and output["skill"]["path"] == str(target)
+
+
+@pytest.mark.parametrize("description", ["", "description: [broken]\n"])
+def test_exact_host_lookup_rejects_broken_requested_alias(tmp_path, monkeypatch, capsys, description):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", f"---\nname: requested\n{description}---\n# Broken alias\n")
+
+    with pytest.raises(ValueError, match="Incomplete skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+
+def test_exact_host_lookup_ignores_broken_alias_with_other_name(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    target = skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", "---\nname: other\ndescription: [broken]\n---\n# Other\n")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+    assert code == 0 and output["skill"]["path"] == str(target)
+
+
 def test_external_lookup_supports_installed_drive_and_host_skills_without_overriding_disablement(
     tmp_path, monkeypatch, capsys
 ):

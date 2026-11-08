@@ -63,6 +63,12 @@ def code(value):
     return delimiter + value + delimiter
 
 
+class SkillMetadataError(ValueError):
+    def __init__(self, message, skill_name):
+        super().__init__(message)
+        self.skill_name = skill_name
+
+
 def metadata(path):
     text = read_instruction_bytes(path).decode("utf-8")
     lines = document_source_lines(text)
@@ -76,6 +82,12 @@ def metadata(path):
     if not isinstance(header, dict) or any(
         not isinstance(header.get(key), str) or not header[key].strip() for key in ("name", "description")
     ):
+        # Keep a valid logical identity even if the rest of its metadata is
+        # broken: the directory name is not authoritative for skill aliases.
+        if isinstance(header, dict) and isinstance(header.get("name"), str) and header["name"].strip():
+            raise SkillMetadataError(
+                "Incomplete skill metadata: " + str(path), re.sub(r"\s+", " ", header["name"]).strip()
+            )
         raise ValueError("Incomplete skill metadata: " + str(path))
     return {key: re.sub(r"\s+", " ", header[key]).strip() for key in ("name", "description")}
 
@@ -166,7 +178,7 @@ def _installed_skill_location(package, codex, config):
     return root, version
 
 
-def selected_skills(project, codex, *, group=None):
+def selected_skills(project, codex, *, group=None, requested_name=None):
     config_file = codex / "config.toml"
     config = tomllib.loads(config_file.read_text()) if config_file.is_file() else {}
     disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
@@ -185,15 +197,30 @@ def selected_skills(project, codex, *, group=None):
     result = []
     for group, root, boundary in roots:
         for path in sorted(root.glob("*/SKILL.md")):
-            if path.resolve() in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
+            try:
+                resolved = path.resolve()
+                if resolved in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
+                    continue
+                # Validate each entry, not just the manifest's skills directory;
+                # a symlink may otherwise read another installed version or host file.
+                if not resolved.is_relative_to(boundary):
+                    raise ValueError("Outside-package skill: " + str(path))
+                info = metadata(path)
+            except (OSError, RuntimeError, ValueError) as exc:
+                # A malformed unrelated draft must not hide a valid exact
+                # match. Keep catalogs strict, and never skip the requested
+                # entry. Valid aliases still participate in ambiguity checks.
+                if (
+                    requested_name is None
+                    or path.parent.name == requested_name.rsplit(":", 1)[-1]
+                    or getattr(exc, "skill_name", None) == requested_name.rsplit(":", 1)[-1]
+                ):
+                    raise
                 continue
-            # Validate each entry, not just the manifest's skills directory;
-            # a symlink may otherwise read another installed version or host file.
-            if not path.resolve().is_relative_to(boundary):
-                raise ValueError("Outside-package skill: " + str(path))
-            info = metadata(path)
             name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
             if disabled_names.intersection({name, info["name"]}):
+                continue
+            if requested_name is not None and name != requested_name:
                 continue
             result.append({"group": group, "path": path, "name": name, "description": info["description"]})
     return result
@@ -355,7 +382,9 @@ def main():
         group = requested.split(":", 1)[0] if ":" in requested else "Codex"
         selected = [
             skill
-            for skill in selected_skills(PROJECT, CODEX, group=group if requested else None)
+            for skill in selected_skills(
+                PROJECT, CODEX, group=group if requested else None, requested_name=requested or None
+            )
             if skill["group"] != "AutoStop Manager"
         ]
         if args.list_external_skills:
