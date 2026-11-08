@@ -2910,6 +2910,7 @@ class DurableWakeDispatcher:
                 continue
             if job["job_id"] not in self.executions and job["job_id"] not in self.unsettled:
                 self._launch(job, recovering=True)
+        await self._prune_unsettled(rows)
         if self.inbox_status.get("compatibility_hold"):
             cursor = None
             seen_cursors: set[str] = set()
@@ -2931,6 +2932,41 @@ class DurableWakeDispatcher:
             else:
                 raise WakeError("wake_job_status_invalid")
             raise WakeError("wake_legacy_context_requires_review")
+
+    async def _prune_unsettled(self, slots: list[dict[str, Any]], *, deadline: float | None = None) -> None:
+        """Discard only local executions whose exact durable stop was verified."""
+        if deadline is None:
+            deadline = asyncio.get_running_loop().time() + CONNECT_TIMEOUT
+        slotted = {row["job_id"] for row in slots}
+        for job_id, child in list(self.unsettled.items()):
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            local = child.current_job
+            if job_id in slotted or local is None:
+                continue
+            if child.execution_task is not None and not child.execution_task.done():
+                continue
+            if any(not task.done() for tasks in (child.cleanup_tasks, child.app.cleanup_tasks) for task in tasks):
+                continue
+            try:
+                stored = _job_entity(
+                    await _await_until(self.jobs.request("job_read", job_id=job_id), deadline, self.cleanup_tasks)
+                )
+                if (
+                    stored is None
+                    or stored.get("job_id") != job_id
+                    or stored.get("peer_id") != local.get("peer_id")
+                    or stored.get("state") not in {"completed", "released", "waiting_control"}
+                    or stored.get("execution_proof") not in {"completed", "failed", "interrupted", "not_started"}
+                    or stored.get("thread_id") != local.get("thread_id")
+                    or stored.get("turn_id") != local.get("turn_id")
+                ):
+                    continue
+                await child._retire_peer(deadline)
+            except (OSError, TimeoutError, WakeError):
+                continue
+            if self.unsettled.get(job_id) is child:
+                self.unsettled.pop(job_id)
 
     def _launch(self, job: dict[str, Any], *, recovering: bool = False) -> None:
         job_id = job["job_id"]
@@ -3204,6 +3240,7 @@ class DurableWakeDispatcher:
                     raise
 
             results = await asyncio.gather(*(stop_job(row) for row in rows), return_exceptions=True)
+            await self._prune_unsettled(rows, deadline=deadline)
             if any(isinstance(result, BaseException) for result in results) or self.unsettled:
                 raise WakeError("wake_pause_outcome_unknown")
             if self.bootstrap_app.active_turn is not None or self.bootstrap_app.outcome_unknown:

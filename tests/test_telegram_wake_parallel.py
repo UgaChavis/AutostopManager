@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from websockets.asyncio.server import unix_serve
@@ -150,6 +151,207 @@ def test_unknown_proof_holds_only_its_peer(tmp_path, bundle, monkeypatch):
                     assert len([row for row in inbox.execution_slots() if row["peer_id"] == 101]) == 1
                 finally:
                     await dispatcher.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("exact_binding", [True, False])
+def test_reviewed_unsettled_job_releases_only_exact_local_execution(tmp_path, bundle, monkeypatch, exact_binding):
+    async def scenario():
+        with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
+            inbox.duty_set(True)
+            inbox.record(101, 1)
+            job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
+            app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
+            app.connected = True
+            app.ready_event.set()
+            app.resume = AsyncMock(return_value="idle")
+            jobs = FakeJobs(inbox)
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), jobs)
+
+            async def fail_select(_self, _job):
+                raise wake.WakeError("synthetic_peer_failure")
+
+            async def fail_proof(_self, _job, _deadline, _code=None):
+                raise wake.WakeError("wake_pause_outcome_unknown")
+
+            original_proof = wake.DurableWakeDispatcher._proof
+            monkeypatch.setattr(wake.DurableWakeDispatcher, "_select_peer", fail_select)
+            monkeypatch.setattr(wake.DurableWakeDispatcher, "_proof", fail_proof)
+            dispatcher._launch(job)
+            await asyncio.gather(*(task for _child, task in list(dispatcher.executions.values())))
+            child = dispatcher.unsettled[job["job_id"]]
+            assert child.execution_task.done() and inbox.execution_slot(job_id=job["job_id"]) is not None
+            with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
+                await dispatcher.pause()
+            assert inbox.read_job(job["job_id"])["execution_proof"] is None
+
+            monkeypatch.setattr(wake.DurableWakeDispatcher, "_proof", original_proof)
+            exact = inbox.read_job(job["job_id"])
+            proven = inbox.finish_execution(
+                job_id=exact["job_id"],
+                lease=exact["lease"],
+                expected_revision=exact["revision"],
+                proof_kind="not_started",
+                local_tasks_done=True,
+            )
+            resolved = inbox.resolve_job(
+                job_id=proven["job_id"],
+                lease=proven["lease"],
+                expected_revision=proven["revision"],
+                decision="retry_no_effects",
+                effects_reviewed=True,
+            )
+            assert resolved["state"] == "released" and resolved["lease"] != job["lease"]
+            assert not inbox.execution_slots()
+            if not exact_binding:
+                child.current_job = child.current_job | {"turn_id": "unconfirmed-other-turn"}
+                with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
+                    await dispatcher.pause()
+                assert job["job_id"] in dispatcher.unsettled
+                child.current_job = child.current_job | {"turn_id": None}
+            await dispatcher.pause()
+            assert not dispatcher.unsettled and dispatcher.stop_proof_verified
+            inbox.duty_set(False)
+            await dispatcher.resume_execution()
+            assert dispatcher.enabled and not inbox.status()["execution_paused"]
+            await dispatcher.close()
+
+    asyncio.run(scenario())
+
+
+def test_completed_proof_retires_old_connection_during_normal_work(tmp_path, bundle, monkeypatch):
+    original_proof = wake.DurableWakeDispatcher._proof
+
+    async def fail_proof(self, job, deadline, code=None):
+        if job["peer_id"] == 101:
+            raise wake.WakeError("wake_pause_outcome_unknown")
+        await original_proof(self, job, deadline, code)
+
+    monkeypatch.setattr(wake.DurableWakeDispatcher, "_proof", fail_proof)
+
+    async def scenario():
+        server = MockServer(peer_threads=True, strict_peer_lifecycle=True, complete=True)
+        socket = str(tmp_path / "app.sock")
+        with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
+            inbox.duty_set(True)
+            inbox.record(101, 1)
+            jobs = FakeJobs(inbox, finish=True)
+            async with unix_serve(server.handle, socket, compression=None):
+                app = wake.AppServer(
+                    wake.WakeConfig(
+                        THREAD, app_socket=socket, instruction_root=str(bundle), instruction_revision=REVISION
+                    )
+                )
+                dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), jobs)
+                dispatcher.start()
+                try:
+                    await until(lambda: bool(dispatcher.unsettled))
+                    job_id, child = next(iter(dispatcher.unsettled.items()))
+                    old_app = child.app
+                    job = inbox.read_job(job_id)
+                    assert child.execution_task.done() and old_app is not app and old_app.connected
+                    assert server.turn_statuses[job["turn_id"]] == "completed"
+                    inbox.finish_execution(
+                        job_id=job_id,
+                        lease=job["lease"],
+                        expected_revision=job["revision"],
+                        proof_kind="terminal",
+                        local_tasks_done=True,
+                        thread_id=job["thread_id"],
+                        turn_id=job["turn_id"],
+                        terminal_status="completed",
+                    )
+                    jobs.changed.set()
+                    await until(lambda: job_id not in dispatcher.unsettled)
+                    assert child.app is app and not old_app.connected and old_app.pausing
+                    await dispatcher.pause()
+                    await dispatcher.resume_execution()
+                    assert dispatcher.enabled and not inbox.status()["execution_paused"]
+                finally:
+                    await dispatcher.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reason", ["slot", "proof", "binding", "peer", "state", "task", "cleanup", "read"])
+def test_unsettled_cleanup_fails_closed_without_exact_evidence(reason):
+    async def scenario():
+        local = {
+            "job_id": "job-1",
+            "lease": "lease",
+            "revision": 1,
+            "event_ids": ["inbound-1"],
+            "peer_id": 101,
+            "thread_id": "thread",
+            "turn_id": "turn",
+        }
+        stored = local | {"state": "completed", "execution_proof": "completed"}
+        if reason == "proof":
+            stored["execution_proof"] = None
+        elif reason == "binding":
+            stored["turn_id"] = "other-turn"
+        elif reason == "peer":
+            stored["peer_id"] = 102
+        elif reason == "state":
+            stored["state"] = "needs_review"
+
+        class Jobs:
+            async def request(self, operation, **_kwargs):
+                assert operation == "job_read"
+                if reason == "read":
+                    raise OSError("synthetic read failure")
+                return {"job": stored}
+
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        parent = wake.DurableWakeDispatcher(app, os.geteuid(), Jobs())
+        child = wake.DurableWakeDispatcher(app, os.geteuid(), parent.jobs)
+        child.parent = parent
+        child.current_job = local
+        child._retire_peer = AsyncMock()
+        parent.unsettled[local["job_id"]] = child
+        pending = None
+        if reason in {"task", "cleanup"}:
+            pending = asyncio.create_task(asyncio.Event().wait())
+            if reason == "task":
+                child.execution_task = pending
+            else:
+                child.cleanup_tasks.add(pending)
+        try:
+            await parent._prune_unsettled([stored] if reason == "slot" else [])
+            assert parent.unsettled[local["job_id"]] is child
+            child._retire_peer.assert_not_awaited()
+        finally:
+            if pending is not None:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_unsettled_read_obeys_pause_deadline():
+    async def scenario():
+        local = {
+            "job_id": "job-1",
+            "lease": "lease",
+            "revision": 1,
+            "event_ids": ["inbound-1"],
+            "peer_id": 101,
+            "thread_id": None,
+            "turn_id": None,
+        }
+
+        class Jobs:
+            async def request(self, _operation, **_kwargs):
+                await asyncio.Event().wait()
+
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        parent = wake.DurableWakeDispatcher(app, os.geteuid(), Jobs())
+        child = wake.DurableWakeDispatcher(app, os.geteuid(), parent.jobs)
+        child.current_job = local
+        parent.unsettled[local["job_id"]] = child
+        await asyncio.wait_for(parent._prune_unsettled([], deadline=asyncio.get_running_loop().time() + 0.02), 1)
+        assert parent.unsettled[local["job_id"]] is child
 
     asyncio.run(scenario())
 
