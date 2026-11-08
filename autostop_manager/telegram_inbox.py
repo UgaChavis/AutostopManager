@@ -1477,6 +1477,47 @@ class TelegramInbox:
             "created": True,
         }
 
+    def rotate_peer_thread(
+        self,
+        *,
+        job_id: str,
+        lease: str,
+        expected_revision: int,
+        expected_thread_id: str,
+        expected_peer_thread_revision: int,
+    ) -> dict[str, Any]:
+        """Reserve a replacement for a confirmed archived or missing peer thread."""
+        _token(expected_thread_id, "inbox_thread_invalid")
+        _positive(expected_peer_thread_revision, "inbox_revision_invalid")
+        key = secrets.token_urlsafe(32)
+        with self._write():
+            job = self._lease(job_id, lease, expected_revision)
+            if (
+                job["state"] != "claimed"
+                or job["context_mode"] != "peer_v1"
+                or job["thread_id"] is not None
+                or job["turn_id"] is not None
+                or job["execution_proof"] is not None
+            ):
+                raise InboxError("inbox_peer_thread_state_invalid")
+            self._require_execution(job)
+            self.require_client_send_allowed(job["peer_id"])
+            if self._db.execute(
+                "SELECT 1 FROM jobs WHERE peer_id=? AND job_id<>? AND "
+                "(state IN ('claimed','start_intent','running','needs_review') "
+                "OR (state='waiting_control' AND execution_proof IS NULL)) LIMIT 1",
+                (job["peer_id"], job_id),
+            ).fetchone():
+                raise InboxError("inbox_peer_thread_recovery_required")
+            changed = self._db.execute(
+                "UPDATE peer_threads SET state='creating',thread_id=NULL,creation_key=?,revision=revision+1 "
+                "WHERE peer_id=? AND state='ready' AND thread_id=? AND revision=?",
+                (key, job["peer_id"], expected_thread_id, expected_peer_thread_revision),
+            )
+            if changed.rowcount != 1:
+                raise InboxError("inbox_peer_thread_conflict")
+        return {**(self.read_peer_thread(job_id) or {}), "created": True}
+
     def bind_peer_thread(
         self,
         *,

@@ -19,6 +19,14 @@ def archive_message(thread_id=THREAD):
     return f"session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
 
 
+@pytest.mark.parametrize("code", [-32600.0, "-32600", None, -32603])
+def test_archive_and_missing_require_exact_integer_rpc_code(code):
+    app = wake.AppServer(wake.WakeConfig(THREAD))
+    for message in (archive_message(), f"no rollout found for thread id {THREAD}", f"thread not loaded: {THREAD}"):
+        rejection = app._rpc_rejection({"code": code, "message": message})
+        assert not rejection.archived_thread and rejection.missing_method is None
+
+
 class ArchiveServer:
     def __init__(self, *, archived=True):
         self.archived = archived
@@ -191,7 +199,8 @@ def test_archive_or_lost_readiness_during_committed_intent_never_starts_model(tm
                 assert held["thread_id"] == THREAD and held["turn_id"] is None
                 assert held["effects"] == [] and inbox.event_state(event) == "open"
                 assert app.generation == generation and app.connected
-                assert dispatcher.app.outcome_unknown and dispatcher.app.active_turn is None
+                assert not dispatcher.app.outcome_unknown and dispatcher.app.active_turn is None
+                assert held["execution_proof"] == "not_started"
                 assert server.methods().count("turn/start") == 0
                 assert "thread/unarchive" not in server.methods()
                 assert held["reason_code"] == (

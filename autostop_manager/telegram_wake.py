@@ -84,9 +84,10 @@ class TransportLost(WakeError):
 class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
 
-    def __init__(self, code: str, *, archived_thread: bool = False) -> None:
+    def __init__(self, code: str, *, archived_thread: bool = False, missing_method: str | None = None) -> None:
         super().__init__(code)
         self.archived_thread = archived_thread
+        self.missing_method = missing_method
 
 
 class KnownTurnFailed(WakeError):
@@ -441,6 +442,8 @@ class AppServer:
         self.lifecycle: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue(MAX_TURN_NOTIFICATIONS)
         self.last_lifecycle: tuple[str, str | None] | None = None
         self.worker_archived = False
+        self.client_peer = False
+        self.peer_unavailable: str | None = None
         self.thread_archive_sequence = 0
         self.resumed_settings: dict[str, Any] = {}
         self.resume_overrides: dict[str, Any] = {}
@@ -693,6 +696,9 @@ class AppServer:
         self._notice_thread_change(params)
         self.thread_archive_sequence += 1
         self.worker_archived = True
+        if self.client_peer and not (self.active_turn or self.outcome_unknown or self.failed_turn is not None):
+            self.peer_unavailable = "archived"
+            return
         self.ready_event.clear()
         if self.active_turn or self.outcome_unknown or self.failed_turn is not None:
             self.block("codex_thread_archived")
@@ -772,6 +778,25 @@ class AppServer:
         # retaining turn items or unrelated manual turns.
         self.events.put_nowait({"method": method, "params": {"turn": {"id": turn["id"], "status": turn.get("status")}}})
 
+    def _rpc_rejection(self, error: Any) -> RPCRejected:
+        code = error.get("code") if isinstance(error, dict) else None
+        self.last_rpc_error_code = code if type(code) is int else None
+        message = error.get("message") if isinstance(error, dict) and type(code) is int and code == -32600 else None
+        thread_id = self.config.thread_id
+        archived = isinstance(message, str) and message in {
+            f"session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first.",
+            f"thread {thread_id} is archived",
+        }
+        missing_method = (
+            {
+                f"no rollout found for thread id {thread_id}": "thread/resume",
+                f"thread not loaded: {thread_id}": "thread/read",
+            }.get(message)
+            if isinstance(message, str)
+            else None
+        )
+        return RPCRejected("codex_rpc_rejected", archived_thread=archived, missing_method=missing_method)
+
     async def _read(self, websocket: Any, generation: int) -> None:
         from websockets.exceptions import WebSocketException
 
@@ -786,21 +811,7 @@ class AppServer:
                     future = self.pending.get(message["id"])
                     if future is not None and not future.done():
                         if "error" in message:
-                            error = message["error"]
-                            code = error.get("code") if isinstance(error, dict) else None
-                            self.last_rpc_error_code = code if type(code) is int else None
-                            archive_messages = {
-                                f"session {self.config.thread_id} is archived. Run `codex unarchive "
-                                f"{self.config.thread_id}` to unarchive it first.",
-                                f"thread {self.config.thread_id} is archived",
-                            }
-                            archived = (
-                                type(code) is int
-                                and code == -32600
-                                and isinstance(error.get("message"), str)
-                                and error["message"] in archive_messages
-                            )
-                            future.set_exception(RPCRejected("codex_rpc_rejected", archived_thread=archived))
+                            future.set_exception(self._rpc_rejection(message["error"]))
                         else:
                             future.set_result(message.get("result"))
                 elif "id" in message:
@@ -857,6 +868,20 @@ class AppServer:
         try:
             result = await self.request("thread/resume", params)
         except RPCRejected as exc:
+            if self.client_peer and not (self.active_turn or self.outcome_unknown or self.failed_turn is not None):
+                if exc.archived_thread:
+                    self.worker_archived = True
+                    self.peer_unavailable = "archived"
+                    return "unavailable"
+                if exc.missing_method == "thread/resume":
+                    try:
+                        await self.request("thread/read", {"threadId": self.config.thread_id, "includeTurns": False})
+                    except RPCRejected as read_exc:
+                        if read_exc.missing_method == "thread/read":
+                            self.worker_archived = True
+                            self.peer_unavailable = "missing"
+                            return "unavailable"
+                    raise WakeError("codex_thread_resume_rejected") from None
             if not exc.archived_thread:
                 raise WakeError("codex_thread_resume_rejected") from exc
             await self._unarchive_idle_worker()
@@ -911,6 +936,7 @@ class AppServer:
             raise WakeError("wake_worker_settings_mismatch")
         self.collaboration_mode = result.get("collaborationMode")
         self.worker_archived = False
+        self.peer_unavailable = None
         return str(status["type"])
 
     def peer_start_params(self, *, instruction_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1005,6 +1031,19 @@ class AppServer:
             if sequence != self.thread_notification_sequence:
                 continue
             await self.thread_changed.wait()
+
+    async def peer_status(self) -> str:
+        """Recheck a peer after reconnect without treating transport errors as deletion."""
+        for attempt in range(3):
+            await self.ensure_ready()
+            try:
+                return await self.resume(allow_active=True)
+            except (TransportLost, OSError, TimeoutError):
+                if attempt == 2 or not self.managed or self.pausing or self.blocked:
+                    raise
+                self.ready_event.clear()
+                self.disconnected.set()
+        raise WakeError("codex_transport_failed_or_unknown")
 
     def block(self, error: str) -> None:
         self.blocked = True
@@ -1181,7 +1220,8 @@ class AppServer:
                         raise WakeError("codex_paused")
                     self.last_rpc_error_code = None
                     resume_generation = self.generation
-                    await self.resume()
+                    if await self.resume() == "unavailable":
+                        raise WakeError("codex_thread_archived")
                     if self.pausing:
                         raise WakeError("codex_paused")
                     if self.blocked:
@@ -2248,6 +2288,7 @@ class DurableWakeDispatcher:
         if bundle is not None:
             config = replace(config, instruction_root=bundle.root, instruction_revision=bundle.revision)
         app = AppServer(config)
+        app.client_peer = True
         if verify_settings:
             app.resume_overrides = self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
             app.resume_overrides.pop("ephemeral")
@@ -2258,6 +2299,8 @@ class DurableWakeDispatcher:
         self.supervisor = asyncio.create_task(app.supervise())
         self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
         await _await_until(app.ensure_ready(), deadline, self.cleanup_tasks)
+        if not verify_settings and app.peer_unavailable:
+            raise WakeError("codex_thread_archived")
         if verify_settings:
             expected = self.bootstrap_app.resumed_settings
             mode = expected.get("collaborationMode")
@@ -2293,6 +2336,41 @@ class DurableWakeDispatcher:
         ):
             raise WakeError("wake_peer_thread_invalid")
 
+    async def _check_archived_peer_idle(self, thread_id: str) -> None:
+        """Do not replace an archived thread with an unfinished external turn."""
+        thread = rpc_entity(
+            await self.app.request("thread/read", {"threadId": thread_id, "includeTurns": False}), "thread"
+        )
+        if (
+            thread["id"] != thread_id
+            or thread.get("ephemeral")
+            or thread.get("cwd") != self.app.config.project_dir
+            or thread.get("status", {}).get("type") not in {"idle", "notLoaded"}
+        ):
+            raise WakeError("codex_thread_archive_target_invalid")
+        result = await self.app.request(
+            "thread/turns/list",
+            {"threadId": thread_id, "itemsView": "notLoaded", "sortDirection": "desc", "limit": 1},
+        )
+        turns = result.get("data") if isinstance(result, dict) else None
+        cursor = result.get("nextCursor") if isinstance(result, dict) else None
+        if (
+            not isinstance(turns, list)
+            or len(turns) > 1
+            or (cursor is not None and (not isinstance(cursor, str) or not cursor or not turns))
+        ):
+            raise WakeError("codex_turn_metadata_invalid")
+        if turns and (
+            not isinstance(turns[0], dict)
+            or not isinstance(turns[0].get("id"), str)
+            or not turns[0]["id"]
+            or turns[0].get("status") not in {"completed", "failed", "interrupted"}
+        ):
+            raise WakeError("codex_thread_archive_requires_review")
+        await self.app.peer_status()
+        if self.app.peer_unavailable != "archived":
+            raise WakeError("codex_thread_archive_changed")
+
     async def _select_peer(self, job: dict[str, Any]) -> None:
         if job.get("context_mode") != "peer_v1":
             raise WakeError("wake_legacy_context_requires_review")
@@ -2303,6 +2381,29 @@ class DurableWakeDispatcher:
         mapping = response.get("peer_thread")
         if not isinstance(mapping, dict):
             raise WakeError("wake_peer_thread_invalid")
+        if mapping.get("state") == "ready":
+            thread_id = mapping.get("thread_id")
+            revision = mapping.get("revision")
+            if not isinstance(thread_id, str) or type(revision) is not int:
+                raise WakeError("wake_peer_thread_invalid")
+            await self._use_thread(thread_id, bundle=bundle, instruction_config=instruction_config)
+            # Recheck even a warm connection: deletion or archiving may have
+            # happened while this peer was idle or the service was offline.
+            await self.app.peer_status()
+            if self.app.peer_unavailable is None:
+                return
+            if self.app.peer_unavailable == "archived":
+                await self._check_archived_peer_idle(thread_id)
+            await self._retire_peer(asyncio.get_running_loop().time() + CONNECT_TIMEOUT)
+            response = await self.jobs.request(
+                "job_peer_thread_rotate",
+                **self._guard(job),
+                expected_thread_id=thread_id,
+                expected_peer_thread_revision=revision,
+            )
+            mapping = response.get("peer_thread")
+            if not isinstance(mapping, dict):
+                raise WakeError("wake_peer_thread_invalid")
         if mapping.get("state") == "creating":
             key = mapping.get("creation_key")
             if not isinstance(key, str):
@@ -2377,6 +2478,8 @@ class DurableWakeDispatcher:
         ):
             raise WakeError("wake_peer_thread_unknown")
         await self._use_thread(mapping["thread_id"], bundle=bundle, instruction_config=instruction_config)
+        if self.app.peer_unavailable is not None:
+            raise WakeError("wake_peer_thread_unknown")
 
     async def _check_bootstrap_idle(self) -> None:
         if self.bootstrap_checked:

@@ -108,6 +108,7 @@ class FakeJobs:
             assert arguments.pop("worker_protocol") == wake.WORKER_PROTOCOL
         peer_functions = {
             "job_peer_thread_prepare": self.inbox.prepare_peer_thread,
+            "job_peer_thread_rotate": self.inbox.rotate_peer_thread,
             "job_peer_thread_read": self.inbox.read_peer_thread,
             "job_peer_thread_bind": self.inbox.bind_peer_thread,
             "job_peer_thread_unknown": self.inbox.mark_peer_thread_unknown,

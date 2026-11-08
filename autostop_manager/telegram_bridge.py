@@ -4937,6 +4937,16 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
         )
         monitor.changed()
         return {"ok": True, "peer_thread": mapping}
+    if operation == "job_peer_thread_rotate":
+        arguments = _job_arguments(request)
+        _require_native_outcome_known(monitor, inbox.read_job(arguments["job_id"])["peer_id"])
+        mapping = inbox.rotate_peer_thread(
+            **arguments,
+            expected_thread_id=str(request.get("expected_thread_id") or ""),
+            expected_peer_thread_revision=_job_revision(request.get("expected_peer_thread_revision")),
+        )
+        monitor.changed()
+        return {"ok": True, "peer_thread": mapping}
     if operation in {"job_peer_thread_prepare", "job_peer_thread_bind", "job_peer_thread_unknown"}:
         arguments = _job_arguments(request)
         if operation == "job_peer_thread_prepare":

@@ -68,6 +68,8 @@ class MockServer:
         self.strict_peer_lifecycle = strict_peer_lifecycle
         self.materialized_threads = {THREAD}
         self.archived_threads = set()
+        self.deleted_threads = set()
+        self.missing_rollout_threads = set()
         self.thread_settings = {}
         self.thread_configs = {}
         self.peer_resume_overrides = {}
@@ -145,6 +147,22 @@ class MockServer:
 
     async def _peer_lifecycle(self, socket, msg, thread_id):
         method = msg["method"]
+        if method == "thread/resume" and thread_id in self.missing_rollout_threads:
+            error = f"no rollout found for thread id {thread_id}"
+            await socket.send(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": error}}))
+            return False
+        if method == "thread/resume" and thread_id in self.archived_threads:
+            error = f"session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+            await socket.send(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": error}}))
+            return False
+        if thread_id in self.deleted_threads and method in {"thread/resume", "thread/read"}:
+            error = (
+                f"no rollout found for thread id {thread_id}"
+                if method == "thread/resume"
+                else f"thread not loaded: {thread_id}"
+            )
+            await socket.send(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": error}}))
+            return False
         if self.strict_peer_lifecycle and method == "thread/start":
             self._resume_peer_settings(thread_id, msg["params"])
         if (
