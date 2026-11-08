@@ -64,21 +64,26 @@ def code(value):
 
 
 class SkillMetadataError(ValueError):
-    def __init__(self, message, skill_name):
+    def __init__(self, message, skill_name=None, *, identity_unknown=False):
         super().__init__(message)
         self.skill_name = skill_name
+        self.identity_unknown = identity_unknown
 
 
 def metadata(path):
     text = read_instruction_bytes(path).decode("utf-8")
     lines = document_source_lines(text)
     end = next((index for index, line in enumerate(lines[1:], 1) if line.rstrip(" \t") == "---"), None)
-    if not lines or lines[0].rstrip(" \t") != "---" or end is None:
+    if not lines or lines[0].rstrip(" \t") != "---":
         raise ValueError("Incomplete skill metadata: " + str(path))
+    if end is None:
+        raise SkillMetadataError("Incomplete skill metadata: " + str(path), identity_unknown=True)
     try:
         header = yaml.safe_load("\n".join(lines[1:end]))
     except yaml.YAMLError:
-        raise ValueError("Invalid skill metadata: " + str(path)) from None
+        # Invalid YAML cannot establish an alias identity. Do not infer one
+        # from individual lines: tags, anchors and escaped keys are ambiguous.
+        raise SkillMetadataError("Invalid skill metadata: " + str(path), identity_unknown=True) from None
     if not isinstance(header, dict) or any(
         not isinstance(header.get(key), str) or not header[key].strip() for key in ("name", "description")
     ):
@@ -207,13 +212,14 @@ def selected_skills(project, codex, *, group=None, requested_name=None):
                     raise ValueError("Outside-package skill: " + str(path))
                 info = metadata(path)
             except (OSError, RuntimeError, ValueError) as exc:
-                # A malformed unrelated draft must not hide a valid exact
-                # match. Keep catalogs strict, and never skip the requested
-                # entry. Valid aliases still participate in ambiguity checks.
+                # Plain drafts must not hide an exact match. A damaged YAML
+                # header may hide a matching alias, so never skip its unknown
+                # identity. Valid aliases still participate in ambiguity checks.
                 if (
                     requested_name is None
                     or path.parent.name == requested_name.rsplit(":", 1)[-1]
                     or getattr(exc, "skill_name", None) == requested_name.rsplit(":", 1)[-1]
+                    or getattr(exc, "identity_unknown", False)
                 ):
                     raise
                 continue

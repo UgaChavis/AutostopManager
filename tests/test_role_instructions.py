@@ -738,6 +738,83 @@ def test_exact_host_lookup_ignores_broken_alias_with_other_name(tmp_path, monkey
     assert code == 0 and output["skill"]["path"] == str(target)
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "name: requested\ndescription: bad: yaml\n",
+        "description: bad: yaml\nname: requested\n",
+        '"name": "requested"\ndescription: bad: yaml\n',
+        "name: >-\n  requested\ndescription: bad: yaml\n",
+        "description: bad: yaml\nname: >-\n  requested\n",
+    ],
+)
+def test_exact_host_lookup_rejects_syntax_invalid_requested_alias(tmp_path, monkeypatch, capsys, header):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", f"---\n{header}---\n# Broken alias\n")
+
+    with pytest.raises(ValueError, match="Invalid skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "name: [requested\ndescription: text\n",
+        "broken: bad: yaml\n",
+        "name: other\nname: requested\ndescription: bad: yaml\n",
+        'description: "unfinished\nname: other\n',
+        "description: [unfinished\nname: other\n",
+        'description: &unfinished "unclosed\nname: other\n',
+        "description: &unfinished [\nname: other\n",
+        'description: !!str "unfinished\nname: other\n',
+        'name: other\n"na\\u006de": requested\ndescription: bad: yaml\n',
+        "name: other\n!!str name: requested\ndescription: bad: yaml\n",
+        "name: other\n? name\n: requested\ndescription: bad: yaml\n",
+    ],
+)
+def test_exact_host_lookup_rejects_unknown_or_ambiguous_syntax_invalid_alias(tmp_path, monkeypatch, capsys, header):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", f"---\n{header}---\n# Unknown identity\n")
+
+    with pytest.raises(ValueError, match="Invalid skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+
+def test_exact_host_lookup_rejects_alias_with_unclosed_frontmatter(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", "---\nname: requested\ndescription: Unclosed header\n")
+
+    with pytest.raises(ValueError, match="Incomplete skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "name: other\ndescription: bad: yaml\n",
+        "description: bad: yaml\nname: other\n",
+        "name: other\ndescription: |\n  name: requested\nbroken: bad: yaml\n",
+        "name: >-\n  other\ndescription: bad: yaml\n",
+    ],
+)
+def test_exact_host_lookup_rejects_syntax_invalid_alias_even_with_other_name(tmp_path, monkeypatch, capsys, header):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    skill(codex / "skills/.system/requested/SKILL.md", "requested")
+    write(codex / "skills/custom-alias/SKILL.md", f"---\n{header}---\n# Other identity\n")
+
+    with pytest.raises(ValueError, match="Invalid skill metadata"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "requested")
+    with pytest.raises(ValueError, match="Invalid skill metadata"):
+        catalogs.selected_skills(project, codex)
+
+
 def test_external_lookup_supports_installed_drive_and_host_skills_without_overriding_disablement(
     tmp_path, monkeypatch, capsys
 ):
