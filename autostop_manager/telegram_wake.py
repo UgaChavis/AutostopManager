@@ -2364,7 +2364,7 @@ class DurableWakeDispatcher:
             not isinstance(turns[0], dict)
             or not isinstance(turns[0].get("id"), str)
             or not turns[0]["id"]
-            or turns[0].get("status") not in {"completed", "failed", "interrupted"}
+            or turns[0].get("status") != "completed"
         ):
             raise WakeError("codex_thread_archive_requires_review")
         await self.app.peer_status()

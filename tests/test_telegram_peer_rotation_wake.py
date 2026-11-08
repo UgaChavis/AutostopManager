@@ -204,6 +204,8 @@ def test_uncertain_missing_or_rejected_resume_keeps_old_binding_and_does_not_sta
     "history",
     [
         {"data": [{"id": "external-turn", "status": "inProgress"}], "nextCursor": None},
+        {"data": [{"id": "external-turn", "status": "failed"}], "nextCursor": None},
+        {"data": [{"id": "external-turn", "status": "interrupted"}], "nextCursor": None},
         {"data": [{"id": "external-turn", "status": "unknown"}], "nextCursor": None},
         {"data": [{"id": "external-turn"}], "nextCursor": None},
         {"data": "invalid", "nextCursor": None},
