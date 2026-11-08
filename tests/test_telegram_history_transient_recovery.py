@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from test_telegram_bridge_durable import Client, _job, _message, _runtime
+from test_telegram_bridge_durable import Client, _job, _message, _read_full_history_and_confirm, _runtime
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError
@@ -79,6 +79,7 @@ async def phase(phases):
 
 async def finish_first(client, config, monitor):
     job = _job(monitor)
+    await _read_full_history_and_confirm(client, config, monitor, job)
     done = (
         await bridge._handle_job_operation(
             client,

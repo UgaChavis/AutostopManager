@@ -9,7 +9,16 @@ import os
 import sqlite3
 
 import pytest
-from test_telegram_bridge_durable import Client, MediaClient, _job, _media_request, _message, _runtime, _send
+from test_telegram_bridge_durable import (
+    Client,
+    MediaClient,
+    _job,
+    _media_request,
+    _message,
+    _read_full_history_and_confirm,
+    _runtime,
+    _send,
+)
 from test_telegram_human_control import close_turn, guard, manual
 
 from autostop_manager import telegram_bridge as bridge
@@ -45,6 +54,15 @@ def control(monitor, action, text=None):
 
 
 async def send_result(client, config, monitor, job):
+    try:
+        monitor.inbox.execution_authority(job_id=job["job_id"], lease=job["lease"], expected_revision=job["revision"])
+        bridge._require_current_guidance(monitor, monitor.inbox.read_job(job["job_id"]))
+    except (InboxError, bridge.BridgeError):
+        pass
+    else:
+        context = monitor.context_jobs.get(job["job_id"])
+        if context is None or not context["complete"]:
+            await _read_full_history_and_confirm(client, config, monitor, job)
     request = {
         "operation": "send",
         "job_id": job["job_id"],
@@ -527,7 +545,7 @@ def test_schema4_failed_orphan_with_completed_replacement_does_not_revive_on_mig
     fresh = monitor.record(_message(104)) if fresh_before_reopen else None
     path = close_as_schema4(inbox, schema_version=schema_version)
     with TelegramInbox(path) as restored:
-        assert restored.status()["schema_version"] == 7
+        assert restored.status()["schema_version"] == 8
         assert restored.read_job(original["job_id"]) == historical
         assert restored.read_job(replacement["job_id"]) == replacement_before
         assert restored.event_state(first) == restored.event_state(followup) == "reply_verified"
@@ -839,7 +857,7 @@ def test_actual_dispatcher_rpc_keeps_migrated_peer_review_without_infrastructure
                     claim = {
                         "instruction_root": "/test/snapshot",
                         "instruction_revision": "a" * 40,
-                        "worker_protocol": 2,
+                        "worker_protocol": 3,
                     }
                     assert (await jobs.request("job_claim", **claim))["job"] is None
                     restored.record(43, 200)
@@ -870,7 +888,7 @@ def test_schema5_existing_unknown_hold_keeps_its_facts_and_gets_safe_default_mar
     )
     path = close_as_schema4(inbox, schema_version=5)
     with TelegramInbox(path) as restored:
-        assert restored.status()["schema_version"] == 7
+        assert restored.status()["schema_version"] == 8
         assert restored.read_job(job["job_id"]) == before
         assert before["effects_review_required"] == 0
         assert restored.event_state(event) == "open"
@@ -888,7 +906,7 @@ def test_schema6_review_marker_is_rejected_by_schema5_writer_before_mutation(tmp
     monitor.record(_message(102))
     path = close_as_schema4(inbox, schema_version=5)
     with TelegramInbox(path) as current:
-        assert current._meta("schema_version") == "7"
+        assert current._meta("schema_version") == "8"
         assert current.read_job(old["job_id"])["effects_review_required"] == 1
         before = list(current._db.iterdump())
     # The version check is the old writer's unchanged native admission gate;
@@ -942,6 +960,7 @@ def test_already_answered_requires_supplied_verified_answer_not_ack_or_claim(
             job = _job(monitor)
             client = Client([incoming])
             receipt_keys = []
+            await _read_full_history_and_confirm(client, config, monitor, job)
             if delivery:
                 request = {
                     "operation": "send",

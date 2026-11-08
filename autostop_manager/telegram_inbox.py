@@ -22,9 +22,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 7
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
-WORKER_PROTOCOL_VERSION = 2
+INBOX_SCHEMA_VERSION = 8
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8)
+WORKER_PROTOCOL_VERSION = 3
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
 
@@ -255,11 +255,11 @@ class TelegramInbox:
                 peer_id INTEGER PRIMARY KEY REFERENCES peers(peer_id),
                 thread_id TEXT UNIQUE, creation_key TEXT NOT NULL UNIQUE,
                 state TEXT NOT NULL CHECK(state IN ('creating','ready','creation_unknown')),
-                revision INTEGER NOT NULL
+                revision INTEGER NOT NULL, reviewed_turn_id TEXT
             );
             CREATE TABLE IF NOT EXISTS global_slot (
-                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id), lease TEXT NOT NULL,
+                job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
+                peer_id INTEGER NOT NULL UNIQUE REFERENCES peers(peer_id), lease TEXT NOT NULL,
                 phase TEXT NOT NULL CHECK(phase IN ('claimed','start_intent','running','manual'))
             );
             CREATE TABLE IF NOT EXISTS owner_routes (
@@ -285,6 +285,38 @@ class TelegramInbox:
             CREATE INDEX IF NOT EXISTS effects_peer_unknown ON effects(peer_id) WHERE attempted=1 AND verified=0;
                 """
             )
+            peer_columns = {row[1] for row in self._db.execute("PRAGMA table_info(peer_threads)")}
+            if "reviewed_turn_id" not in peer_columns:
+                self._db.execute("ALTER TABLE peer_threads ADD COLUMN reviewed_turn_id TEXT")
+                # Completed manual recovery is durable evidence of explicit
+                # review in schema 7. Never infer review from an empty ledger.
+                old_job_columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
+                if {"manual_recovery", "execution_proof"} <= old_job_columns:
+                    self._db.execute(
+                        "UPDATE peer_threads SET reviewed_turn_id=(SELECT turn_id FROM jobs "
+                        "WHERE jobs.peer_id=peer_threads.peer_id AND jobs.thread_id=peer_threads.thread_id "
+                        "AND jobs.state='completed' AND jobs.manual_recovery=1 "
+                        "AND jobs.execution_proof IN ('failed','interrupted') AND jobs.turn_id IS NOT NULL "
+                        "ORDER BY jobs.updated_at DESC,jobs.rowid DESC LIMIT 1)"
+                    )
+            slot_columns = {row[1] for row in self._db.execute("PRAGMA table_info(global_slot)")}
+            if "singleton" in slot_columns:
+                self._db.execute(
+                    "CREATE TABLE global_slot_v8 (job_id TEXT PRIMARY KEY REFERENCES jobs(job_id), "
+                    "peer_id INTEGER NOT NULL UNIQUE REFERENCES peers(peer_id), lease TEXT NOT NULL, "
+                    "phase TEXT NOT NULL CHECK(phase IN ('claimed','start_intent','running','manual')))"
+                )
+                self._db.execute(
+                    "INSERT INTO global_slot_v8 SELECT s.job_id,j.peer_id,s.lease,s.phase "
+                    "FROM global_slot s JOIN jobs j ON j.job_id=s.job_id"
+                )
+                if (
+                    self._db.execute("SELECT COUNT(*) FROM global_slot").fetchone()[0]
+                    != self._db.execute("SELECT COUNT(*) FROM global_slot_v8").fetchone()[0]
+                ):
+                    raise InboxError("inbox_schema_invalid")
+                self._db.execute("DROP TABLE global_slot")
+                self._db.execute("ALTER TABLE global_slot_v8 RENAME TO global_slot")
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)")}
             additions = {
                 "deadline_at": "TEXT",
@@ -405,12 +437,14 @@ class TelegramInbox:
         return int(self._meta("generation"))
 
     @contextmanager
-    def _write(self) -> Iterator[None]:
+    def _write(self, *, changed_only: bool = False) -> Iterator[None]:
         try:
             with self._db:
                 self._db.execute("BEGIN IMMEDIATE")
+                before = self._db.total_changes
                 yield
-                self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='generation'")
+                if not changed_only or self._db.total_changes != before:
+                    self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='generation'")
             self._secure_files()
         except sqlite3.Error:
             raise InboxError("inbox_storage_failed") from None
@@ -936,13 +970,15 @@ class TelegramInbox:
 
     def job_status(self) -> dict[str, Any]:
         counts = dict(self._db.execute("SELECT state,COUNT(*) FROM jobs GROUP BY state"))
-        slot = self._db.execute(
-            "SELECT jobs.job_id,jobs.deadline_at,jobs.state,global_slot.phase AS slot_phase "
-            "FROM global_slot JOIN jobs USING(job_id) WHERE singleton=1"
-        ).fetchone()
+        slots = list(
+            self._db.execute(
+                "SELECT jobs.job_id,jobs.deadline_at,jobs.state,global_slot.phase AS slot_phase "
+                "FROM global_slot JOIN jobs USING(job_id) ORDER BY jobs.created_at,jobs.job_id"
+            )
+        )
         return {
             "active_jobs": sum(counts.get(state, 0) for state in ACTIVE_STATES)
-            + int(slot is not None and slot["state"] == "waiting_control"),
+            + sum(slot["state"] == "waiting_control" for slot in slots),
             "waiting_control_jobs": counts.get("waiting_control", 0),
             "needs_review_jobs": counts.get("needs_review", 0),
             "completed_jobs": counts.get("completed", 0),
@@ -953,9 +989,10 @@ class TelegramInbox:
             ).fetchone()[0],
             "schema_version": INBOX_SCHEMA_VERSION,
             "worker_protocol": WORKER_PROTOCOL_VERSION,
-            "context_mode": "serial_peer_v1",
+            "context_mode": "parallel_peer_v1",
+            "active_slots": [{key: slot[key] for key in ("job_id", "deadline_at", "slot_phase")} for slot in slots],
             "global_slot": (
-                {key: slot[key] for key in ("job_id", "deadline_at", "slot_phase")} if slot is not None else None
+                {key: slots[0][key] for key in ("job_id", "deadline_at", "slot_phase")} if len(slots) == 1 else None
             ),
             "compatibility_hold": self._compatibility_hold(),
             "held_peers": self._db.execute(
@@ -975,11 +1012,39 @@ class TelegramInbox:
             is not None
         )
 
-    def execution_slot(self) -> dict[str, Any] | None:
-        row = self._db.execute("SELECT job_id,phase FROM global_slot WHERE singleton=1").fetchone()
-        if row is None:
-            return None
-        return {**self.read_job(row["job_id"]), "slot_phase": row["phase"]}
+    def execution_slots(self) -> list[dict[str, Any]]:
+        return [
+            {**self.read_job(row["job_id"]), "slot_phase": row["phase"]}
+            for row in self._db.execute("SELECT job_id,phase FROM global_slot ORDER BY rowid")
+        ]
+
+    def execution_slot(self, *, job_id: str | None = None, peer_id: int | None = None) -> dict[str, Any] | None:
+        if job_id is not None:
+            self._job_row(job_id)
+        if peer_id is not None:
+            _positive(peer_id, "inbound_peer_invalid")
+        slots = [
+            slot
+            for slot in self.execution_slots()
+            if (job_id is None or slot["job_id"] == job_id) and (peer_id is None or slot["peer_id"] == peer_id)
+        ]
+        if len(slots) > 1:
+            raise InboxError("inbox_execution_ambiguous")
+        return slots[0] if slots else None
+
+    def progress(self, *, job_id: str, lease: str) -> dict[str, Any]:
+        """Extend an unexpired lease only when the executor observes progress."""
+        _token(lease, "inbox_lease_invalid")
+        job = self._job_row(job_id)
+        if not hmac.compare_digest(job["lease"], lease):
+            raise InboxError("inbox_lease_mismatch")
+        if job["state"] not in {"running", "completed", "waiting_control"} or job["manual_recovery"]:
+            raise InboxError("inbox_effect_state_invalid")
+        self._require_execution(job)
+        deadline = _timestamp(datetime.fromisoformat(self._now()) + timedelta(seconds=REQUEST_DEADLINE_SECONDS))
+        with self._write():
+            self._db.execute("UPDATE jobs SET deadline_at=MAX(deadline_at,?) WHERE job_id=?", (deadline, job_id))
+        return self.read_job(job_id)
 
     def configure_instructions(self, instruction_root: str, instruction_revision: str) -> None:
         """Set the bridge's validated physical capture snapshot for new holds."""
@@ -1060,34 +1125,35 @@ class TelegramInbox:
         if self._meta("duty_enabled") != "1" or self._meta("execution_paused") == "1":
             return None
         self._promote_boundary_holds(instruction_root, instruction_revision)
-        if self.execution_slot() is not None or self._compatibility_hold():
+        if self._compatibility_hold():
             return None
-        first = self._db.execute(
-            "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
-            "AND (? IS NULL OR events.peer_id<>?) "
-            "AND NOT EXISTS (SELECT 1 FROM client_controls WHERE client_controls.peer_id=events.peer_id "
-            "AND state<>'active') "
-            "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.peer_id=events.peer_id "
-            "AND jobs.state IN ('claimed','start_intent','running','needs_review')) "
-            "AND NOT EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=events.peer_id "
-            "AND peer_threads.state<>'ready') ORDER BY received_at,events.rowid LIMIT 1",
-            (exclude_peer_id, exclude_peer_id),
-        ).fetchone()
-        if first is None:
-            return None
-        upper = _timestamp(datetime.fromisoformat(first["received_at"]) + timedelta(seconds=300))
-        rows = list(
-            self._db.execute(
-                "SELECT sequence FROM events WHERE state='open' AND job_id IS NULL AND peer_id=? "
-                "AND received_at BETWEEN ? AND ? ORDER BY received_at,rowid LIMIT ?",
-                (first["peer_id"], first["received_at"], upper, 5),
+        with self._write(changed_only=True):
+            first = self._db.execute(
+                "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
+                "AND (? IS NULL OR events.peer_id<>?) "
+                "AND NOT EXISTS (SELECT 1 FROM client_controls WHERE client_controls.peer_id=events.peer_id "
+                "AND state<>'active') "
+                "AND NOT EXISTS (SELECT 1 FROM global_slot WHERE global_slot.peer_id=events.peer_id) "
+                "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.peer_id=events.peer_id "
+                "AND jobs.state IN ('claimed','start_intent','running','needs_review')) "
+                "AND NOT EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=events.peer_id "
+                "AND peer_threads.state<>'ready') ORDER BY received_at,events.rowid LIMIT 1",
+                (exclude_peer_id, exclude_peer_id),
+            ).fetchone()
+            if first is None:
+                return None
+            upper = _timestamp(datetime.fromisoformat(first["received_at"]) + timedelta(seconds=300))
+            rows = list(
+                self._db.execute(
+                    "SELECT sequence FROM events WHERE state='open' AND job_id IS NULL AND peer_id=? "
+                    "AND received_at BETWEEN ? AND ? ORDER BY received_at,rowid LIMIT ?",
+                    (first["peer_id"], first["received_at"], upper, 5),
+                )
             )
-        )
-        job_id = "job-" + secrets.token_hex(16)
-        lease = secrets.token_urlsafe(32)
-        now = self._now()
-        deadline = _timestamp(datetime.fromisoformat(now) + timedelta(seconds=REQUEST_DEADLINE_SECONDS))
-        with self._write():
+            job_id = "job-" + secrets.token_hex(16)
+            lease = secrets.token_urlsafe(32)
+            now = self._now()
+            deadline = _timestamp(datetime.fromisoformat(now) + timedelta(seconds=REQUEST_DEADLINE_SECONDS))
             self._db.execute(
                 "INSERT INTO jobs(job_id,peer_id,state,revision,lease,context_revision,instruction_root,"
                 "instruction_revision,created_at,updated_at,deadline_at,execution_revision,context_mode) "
@@ -1105,7 +1171,7 @@ class TelegramInbox:
                     int(self._meta("execution_revision")),
                 ),
             )
-            self._db.execute("INSERT INTO global_slot VALUES (1,?,?,'claimed')", (job_id, lease))
+            self._db.execute("INSERT INTO global_slot VALUES (?,?,?,'claimed')", (job_id, first["peer_id"], lease))
             self._db.executemany("UPDATE events SET job_id=? WHERE sequence=?", [(job_id, row[0]) for row in rows])
         return self.read_job(job_id)
 
@@ -1146,7 +1212,16 @@ class TelegramInbox:
             )
         ]
 
-    def observe_outgoing(self, peer_id: int, message_id: int, *, native_origin: str | None = None) -> str:
+    def observe_outgoing(
+        self,
+        peer_id: int,
+        message_id: int,
+        *,
+        native_origin: str | None = None,
+        history_job_id: str | None = None,
+        history_lease: str | None = None,
+        history_revision: int | None = None,
+    ) -> str:
         """Transport-authenticated self messages are context, never inbound work.
 
         An unresolved agent effect prevents attributing an unmatched message to
@@ -1154,6 +1229,22 @@ class TelegramInbox:
         """
         _positive(peer_id, "inbound_peer_invalid")
         _positive(message_id, "inbound_message_invalid")
+        historical = False
+        if any(value is not None for value in (history_job_id, history_lease, history_revision)):
+            if (
+                not isinstance(history_job_id, str)
+                or not isinstance(history_lease, str)
+                or type(history_revision) is not int
+            ):
+                raise InboxError("inbox_execution_slot_mismatch")
+            job = self._lease(history_job_id, history_lease, history_revision)
+            if job["state"] != "running" or job["peer_id"] != peer_id:
+                raise InboxError("inbox_execution_slot_mismatch")
+            self._require_execution(job)
+            earliest = self._db.execute(
+                "SELECT MIN(message_id) FROM events WHERE job_id=?", (history_job_id,)
+            ).fetchone()[0]
+            historical = earliest is not None and message_id < earliest
         existing = self._db.execute(
             "SELECT origin FROM outgoing_observations WHERE peer_id=? AND message_id=?", (peer_id, message_id)
         ).fetchone()
@@ -1184,7 +1275,7 @@ class TelegramInbox:
                     "UPDATE outgoing_observations SET origin=? WHERE peer_id=? AND message_id=?",
                     (origin, peer_id, message_id),
                 )
-                if origin == "human":
+                if origin == "human" and not historical:
                     self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
             return origin
         with self._write():
@@ -1192,7 +1283,7 @@ class TelegramInbox:
             self._db.execute(
                 "INSERT INTO outgoing_observations VALUES (?,?,?,?)", (peer_id, message_id, self._now(), origin)
             )
-            if origin == "human":
+            if origin == "human" and not historical:
                 self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
         return origin
 
@@ -1337,7 +1428,7 @@ class TelegramInbox:
         return job
 
     def _require_execution(self, job: sqlite3.Row) -> None:
-        slot = self._db.execute("SELECT * FROM global_slot WHERE singleton=1").fetchone()
+        slot = self._db.execute("SELECT * FROM global_slot WHERE job_id=?", (job["job_id"],)).fetchone()
         if slot is None or slot["job_id"] != job["job_id"] or not hmac.compare_digest(slot["lease"], job["lease"]):
             raise InboxError("inbox_execution_slot_mismatch")
         paused = self._meta("execution_paused") == "1"
@@ -1393,6 +1484,9 @@ class TelegramInbox:
             raise InboxError("inbox_execution_stale") from exc
         if snapshot.get("peer_context_revision") != current["peer_context_revision"]:
             raise InboxError("inbox_context_stale")
+        # A verified progress notification may extend the same execution lease.
+        snapshot = {key: value for key, value in snapshot.items() if key != "deadline_at"}
+        current = {key: value for key, value in current.items() if key != "deadline_at"}
         if snapshot != current:
             raise InboxError("inbox_execution_stale")
 
@@ -1467,7 +1561,10 @@ class TelegramInbox:
             return {**existing, "created": False}
         key = secrets.token_urlsafe(32)
         with self._write():
-            self._db.execute("INSERT INTO peer_threads VALUES (?,NULL,?,'creating',1)", (job["peer_id"], key))
+            self._db.execute(
+                "INSERT INTO peer_threads(peer_id,thread_id,creation_key,state,revision) VALUES (?,NULL,?,'creating',1)",
+                (job["peer_id"], key),
+            )
         return {
             "peer_id": job["peer_id"],
             "thread_id": None,
@@ -1510,7 +1607,7 @@ class TelegramInbox:
             ).fetchone():
                 raise InboxError("inbox_peer_thread_recovery_required")
             changed = self._db.execute(
-                "UPDATE peer_threads SET state='creating',thread_id=NULL,creation_key=?,revision=revision+1 "
+                "UPDATE peer_threads SET state='creating',thread_id=NULL,creation_key=?,reviewed_turn_id=NULL,revision=revision+1 "
                 "WHERE peer_id=? AND state='ready' AND thread_id=? AND revision=?",
                 (key, job["peer_id"], expected_thread_id, expected_peer_thread_revision),
             )
@@ -1550,7 +1647,7 @@ class TelegramInbox:
                 or job["execution_proof"] != "not_started"
                 or job["thread_id"] is not None
                 or job["turn_id"] is not None
-                or self.execution_slot() is not None
+                or self.execution_slots()
                 or self._db.execute(
                     "SELECT 1 FROM effects WHERE job_id=? AND (attempted=1 OR verified=1) LIMIT 1", (job_id,)
                 ).fetchone()
@@ -1600,7 +1697,7 @@ class TelegramInbox:
             or job["execution_proof"] != "not_started"
             or job["thread_id"] is not None
             or job["turn_id"] is not None
-            or self.execution_slot() is not None
+            or self.execution_slots()
             or self._db.execute("SELECT 1 FROM effects WHERE job_id=? LIMIT 1", (job_id,)).fetchone()
         ):
             raise InboxError("inbox_peer_thread_recovery_required")
@@ -1611,7 +1708,7 @@ class TelegramInbox:
             raise InboxError("inbox_peer_thread_conflict")
         with self._write():
             changed = self._db.execute(
-                "UPDATE peer_threads SET state='ready',thread_id=?,creation_key=?,revision=revision+1 "
+                "UPDATE peer_threads SET state='ready',thread_id=?,creation_key=?,reviewed_turn_id=NULL,revision=revision+1 "
                 "WHERE peer_id=? AND (state='ready' OR (state='creation_unknown' AND ?)) "
                 "AND thread_id=? AND revision=?",
                 (
@@ -1707,7 +1804,7 @@ class TelegramInbox:
             return self.read_job(job_id)
         if job["revision"] != expected_revision:
             raise InboxError("inbox_revision_conflict")
-        slot = self._db.execute("SELECT * FROM global_slot WHERE singleton=1").fetchone()
+        slot = self._db.execute("SELECT * FROM global_slot WHERE job_id=?", (job["job_id"],)).fetchone()
         legacy = job["context_mode"] == "legacy" and job["state"] in ACTIVE_STATES
         if slot is None:
             if not legacy or proof_kind != "terminal":
@@ -1841,7 +1938,7 @@ class TelegramInbox:
             job["state"] != "needs_review"
             or job["execution_proof"] != "not_started"
             or job["effects_review_required"]
-            or self.execution_slot() is not None
+            or self.execution_slot(peer_id=job["peer_id"]) is not None
         ):
             raise InboxError("inbox_failure_recovery_unsafe")
         if self._db.execute(
@@ -2199,12 +2296,21 @@ class TelegramInbox:
                     "UPDATE client_controls SET guidance_pending=0,guidance_count=0 WHERE peer_id=? AND revision=?",
                     (job["peer_id"], guidance_revision),
                 )
+            if job["manual_recovery"] and job["execution_proof"] in {"failed", "interrupted"} and not waiting_control:
+                self._remember_reviewed_turn(job)
             if job["manual_recovery"] and job["execution_proof"] is not None:
                 self._db.execute("DELETE FROM global_slot WHERE job_id=? AND phase='manual'", (job_id,))
             self._prune()
         return self.read_job(job_id)
 
     finish = result
+
+    def _remember_reviewed_turn(self, job: sqlite3.Row) -> None:
+        if job["thread_id"] and job["turn_id"] and job["execution_proof"] in {"failed", "interrupted"}:
+            self._db.execute(
+                "UPDATE peer_threads SET reviewed_turn_id=? WHERE peer_id=? AND thread_id=? AND state='ready'",
+                (job["turn_id"], job["peer_id"], job["thread_id"]),
+            )
 
     def resolve_job(
         self,
@@ -2224,7 +2330,7 @@ class TelegramInbox:
             raise InboxError("inbox_resolution_pause_required")
         if job["execution_proof"] is None:
             raise InboxError("inbox_execution_proof_required")
-        if self.execution_slot() is not None:
+        if self.execution_slot(peer_id=job["peer_id"]) is not None:
             raise InboxError("inbox_execution_slot_mismatch")
         if self._db.execute(
             "SELECT 1 FROM effects WHERE job_id=? AND attempted=1 AND verified=0 LIMIT 1", (job_id,)
@@ -2249,10 +2355,11 @@ class TelegramInbox:
                 (new_lease, int(self._meta("execution_revision")), int(state == "running"), job_id),
             )
             if state == "released":
+                self._remember_reviewed_turn(job)
                 self._db.execute("DELETE FROM effects WHERE job_id=? AND attempted=0 AND verified=0", (job_id,))
                 self._db.execute("UPDATE events SET job_id=NULL WHERE job_id=?", (job_id,))
             else:
-                self._db.execute("INSERT INTO global_slot VALUES (1,?,?,'manual')", (job_id, new_lease))
+                self._db.execute("INSERT INTO global_slot VALUES (?,?,?,'manual')", (job_id, job["peer_id"], new_lease))
         return self.read_job(job_id)
 
     def duty_set(self, enabled: bool, *, at: str | None = None) -> dict[str, Any]:

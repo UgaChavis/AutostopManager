@@ -14,7 +14,7 @@ from websockets.asyncio.server import unix_serve
 
 from autostop_manager import telegram_wake as wake
 from autostop_manager.telegram_inbox import TelegramInbox
-from test_telegram_wake_durable import FakeJobs, REVISION, bind_test_peer, new_inbox, stop_dispatcher
+from test_telegram_wake_durable import FakeJobs, REVISION, active_child, bind_test_peer, new_inbox, stop_dispatcher
 from test_telegram_wake_durable import bundle as bundle
 from telegram_wake_fakes import THREAD, MockServer, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
@@ -121,14 +121,16 @@ def test_rpc_eof_reconnects_subscription_and_keeps_worker_alive(tmp_path, bundle
                             "execution_revision": 1,
                             "active_jobs": 0,
                             "pending": 0,
-                            "worker_protocol": 2,
-                            "context_mode": "serial_peer_v1",
+                            "worker_protocol": 3,
+                            "context_mode": "parallel_peer_v1",
                             "global_slot": None,
                             "compatibility_hold": False,
                         },
                     }
                 elif operation == "job_active":
                     response = {"ok": True, "jobs": [], "next_job_id": None}
+                elif operation == "job_execution_slots":
+                    response = {"ok": True, "jobs": []}
                 else:
                     response = {"ok": True, "job": None}
                 writer.write(json.dumps(response).encode() + b"\n")
@@ -187,6 +189,7 @@ def test_permanent_bridge_failure_holds_until_explicit_resume(tmp_path, bundle, 
         app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
         app.connected = True
         app.ready_event.set()
+        app.resume = AsyncMock(return_value="idle")
         dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
         dispatcher._start_worker()
         jobs.changed.set()
@@ -259,7 +262,7 @@ def test_pause_interrupts_only_confirmed_owned_turn_and_reads_terminal_metadata(
             dispatcher.start()
             try:
                 await until(lambda: bool(inbox.active_jobs()) and inbox.active_jobs()[0]["state"] == "running")
-                owned_app = dispatcher.app
+                owned_app = active_child(dispatcher).app
                 owned = owned_app.active_turn
                 thread = owned_app.config.thread_id
                 await dispatcher.pause()
@@ -394,7 +397,7 @@ def test_pause_recovers_committed_binding_after_lost_reply(tmp_path, bundle, rep
                     assert inbox.execution_slot() is None
                 assert server.counter == 1 and inbox.status()["execution_paused"] is True
                 assert inbox.read_job(job["job_id"])["state"] == "needs_review"
-                assert any(operation in {"job_active", "job_execution_slot"} for operation, _args in jobs.calls)
+                assert any(operation == "job_execution_slots" for operation, _args in jobs.calls)
             finally:
                 execution.cancel()
                 await asyncio.gather(execution, return_exceptions=True)
@@ -555,19 +558,18 @@ def test_unchanged_unbound_review_job_does_not_repeat_incident_notifications(tmp
         app = wake.AppServer(wake.WakeConfig(THREAD, instruction_root=str(bundle), instruction_revision=REVISION))
         app.connected = True
         app.ready_event.set()
+        app.resume = AsyncMock(return_value="idle")
         dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
         dispatcher._start_worker()
         try:
             jobs.changed.set()
-            await until(lambda: dispatcher.last_health == ("held", "codex_turn_outcome_unknown"))
-            incident = inbox.pending_notifications()[0]
-            inbox.notification_verified(incident["notification_id"], "receipt-error")
+            await until(lambda: job["job_id"] in dispatcher.unsettled)
             for _ in range(5):
                 jobs.changed.set()
                 await asyncio.sleep(0.02)
-            assert jobs.health == [{"component": "codex", "state": "held", "error_code": "codex_turn_outcome_unknown"}]
+            assert not any(item["state"] == "held" for item in jobs.health)
             assert inbox.pending_notifications() == []
-            assert inbox.read_incident(incident["incident_id"])["recovered_at"] is None
+            assert sum(operation == "job_needs_review" for operation, _args in jobs.calls) <= 1
             assert inbox.active_jobs()[0]["state"] == "needs_review"
         finally:
             await stop_dispatcher(dispatcher)
@@ -713,7 +715,9 @@ def test_warm_error_while_start_intent_commits_prevents_model_start(tmp_path, bu
                                 }
                             )
                         )
-                        await until(lambda: dispatcher.app.blocked)
+                        await until(
+                            lambda: active_child(dispatcher) is not None and active_child(dispatcher).app.blocked
+                        )
                     return response
 
             jobs = ErrorBeforeIntentReply(inbox)
@@ -723,8 +727,8 @@ def test_warm_error_while_start_intent_commits_prevents_model_start(tmp_path, bu
                 await until(lambda: bool(inbox.active_jobs()) and inbox.active_jobs()[0]["state"] == "needs_review")
                 job = inbox.active_jobs()[0]
                 assert job["thread_id"] != THREAD and job["turn_id"] is None
-                assert dispatcher.app.recovery_error == "codex_thread_system_error"
-                assert not dispatcher.status()["ready"] and server.counter == 0
+                assert job["reason_code"] == "codex_thread_system_error"
+                assert dispatcher.status()["ready"] and server.counter == 0
                 assert not any(call.get("method") == "turn/start" for call in server.calls)
             finally:
                 await stop_dispatcher(dispatcher)

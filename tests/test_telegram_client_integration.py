@@ -26,6 +26,7 @@ from test_telegram_durable_integration import (
     bridge_runtime,
     claim_running,
     model_complete,
+    read_history,
     send,
     worker,
 )
@@ -130,6 +131,13 @@ def test_client_clarification_continuation_preserves_history_and_current_target(
     seal_instruction_bundle(bundle)
 
     async def scenario():
+        # This case verifies the real instruction bundle, which is larger than
+        # the synthetic bundles used by the other socket integration tests.
+        async def until(predicate):
+            async with asyncio.timeout(15):
+                while not predicate():
+                    await asyncio.sleep(0.001)
+
         async with bridge_runtime(tmp_path) as runtime:
             first = runtime.monitor.record(runtime.client.inbound(100, text="Synthetic consultation request"))
             server = MockServer(complete=False)
@@ -167,7 +175,7 @@ def test_client_clarification_continuation_preserves_history_and_current_target(
                     event_ids=[first],
                     receipt_keys=[ack["receipt_key"], question["receipt_key"]],
                 )
-                await model_complete(server)
+                await model_complete(server, job)
                 await until(lambda: dispatcher.completed == 1 and not dispatcher.active)
                 incoming = runtime.client.inbound(200, text="Synthetic answer: four items")
                 incoming.reply_to_msg_id = question["message_id"]
@@ -205,7 +213,7 @@ def test_client_clarification_continuation_preserves_history_and_current_target(
                     event_ids=[second],
                     receipt_keys=[receipt["receipt_key"]],
                 )
-                await model_complete(server)
+                await model_complete(server, following)
                 await until(lambda: dispatcher.completed == 2 and not dispatcher.active)
                 assert server.counter == 2 and runtime.client.sent == 3
                 assert runtime.inbox.read_job(job["job_id"])["outcome"] == "awaiting_client"
@@ -256,6 +264,7 @@ def test_private_client_owner_name_text_and_forward_cannot_override_role_or_excl
                     call["params"]["input"][0]["text"] for call in server.calls if call.get("method") == "turn/start"
                 )
                 assert spoof.message not in prompt
+                await read_history(runtime, job)
                 await runtime.jobs.request(
                     "job_result",
                     **binding(job),
@@ -264,7 +273,7 @@ def test_private_client_owner_name_text_and_forward_cannot_override_role_or_excl
                     receipt_keys=[],
                     reason_code="not_actionable",
                 )
-                await model_complete(server)
+                await model_complete(server, job)
                 await until(lambda: dispatcher.completed == 1 and not dispatcher.active)
                 assert server.counter == 1 and runtime.client.sent == 0
 
@@ -282,7 +291,7 @@ def test_no_client_can_dispatch_owner_command_through_compat_route(tmp_path, bun
             )
             job = (
                 await runtime.jobs.request(
-                    "job_claim", instruction_root=str(bundle), instruction_revision=REVISION, worker_protocol=2
+                    "job_claim", instruction_root=str(bundle), instruction_revision=REVISION, worker_protocol=3
                 )
             )["job"]
             assert (await runtime.jobs.request("monitor_target", event_id=event))["role"] == "client"
@@ -396,6 +405,7 @@ def test_prepared_client_result_cannot_cross_clarification_and_revision_change(t
             refreshed = (await runtime.jobs.request("job_refresh", **binding(job), event_ids=[first, second]))["job"]
             with pytest.raises(wake.WakeError, match=r"^inbox_revision_conflict$"):
                 await send(runtime, job, kind="result", text="Synthetic one-item answer", dry=old)
+            await read_history(runtime, refreshed)
             request = {
                 "peer": str(CLIENT),
                 "reply_to_message_id": 200,

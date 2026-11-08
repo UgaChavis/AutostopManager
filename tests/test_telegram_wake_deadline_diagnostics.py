@@ -112,8 +112,14 @@ def test_local_recovery_timeout_keeps_unknown_effect_and_execution_slot(tmp_path
             assert inbox.read_effect(effect_key) == unknown_effect
             assert unknown_effect["attempted"] and not unknown_effect["verified"]
             assert inbox.execution_slot()["job_id"] == job["job_id"]
+            inbox.record(123, 2)
             inbox.record(124, 2)
-            assert inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40) is None
+            other = inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40)
+            assert other["peer_id"] == 124
+            inbox.release_job(**dispatcher._guard(other))
+            assert (
+                inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40, exclude_peer_id=124) is None
+            )
             assert not dispatcher.deadline_exceeded
             assert not dispatcher.stop_proof_verified and dispatcher.terminal_stop_pending
             assert dispatcher.request_deadline - asyncio.get_running_loop().time() > 1190
@@ -160,8 +166,15 @@ def test_overall_expiry_keeps_slot_until_late_cleanup_and_explicit_stop_proof(tm
                 assert dispatcher.cleanup_pending and dispatcher.terminal_stop_pending
                 assert not dispatcher.stop_proof_verified
                 assert inbox.execution_slot()["job_id"] == job["job_id"]
+                inbox.record(123, 2)
                 inbox.record(124, 2)
-                assert inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40) is None
+                other = inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40)
+                assert other["peer_id"] == 124
+                inbox.release_job(**dispatcher._guard(other))
+                assert (
+                    inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40, exclude_peer_id=124)
+                    is None
+                )
 
                 release_cleanup.set()
                 await asyncio.wait_for(asyncio.gather(dispatcher.execution_task, return_exceptions=True), 1)

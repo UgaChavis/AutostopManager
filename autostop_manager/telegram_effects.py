@@ -1,4 +1,4 @@
-"""Bounded serial effect execution; local control never waits for this lane."""
+"""Independent client effect lanes; local control never waits for network work."""
 
 from __future__ import annotations
 
@@ -11,6 +11,12 @@ from typing import Any
 
 def server_budget(request: dict[str, Any]) -> float:
     operation = str(request.get("operation") or "")
+    pages = request.get("history_pages", 1)
+    if request.get("job_id") and operation in {"send", "send_photo", "send_document", "job_handoff"}:
+        if type(pages) is not int or pages < 1:
+            pages = 1
+        base = 20.0 if request.get("mode") == "dry_run" else 150.0
+        return base + 40.0 * pages
     if operation in {"monitor_voice_stage", "owner_event_voice_stage"}:
         return 120.0
     if operation == "job_result" and request.get("reason_code") == "human_answered":
@@ -39,7 +45,7 @@ def server_budget(request: dict[str, Any]) -> float:
 
 def rpc_budget(request: dict[str, Any]) -> float:
     budget = server_budget(request)
-    return {2.0: 5.0, 20.0: 30.0, 60.0: 75.0, 120.0: 135.0, 150.0: 165.0}[budget]
+    return 5.0 if budget == 2.0 else budget + (10.0 if budget == 20.0 else 15.0)
 
 
 class EffectQueueError(ValueError):
@@ -62,14 +68,16 @@ def _observe(future: asyncio.Future[Any]) -> None:
         future.exception()
 
 
-class EffectExecutor:
-    """One owned consumer, eight queued requests, bounded wait and cleanup.
+class _EffectLane:
+    """One owned consumer, request deadlines and bounded cleanup.
 
     Disconnecting a waiter never cancels an already issued external effect.
     An uncooperative task stops the lane instead of overlapping another send.
     """
 
-    def __init__(self, *, capacity: int = 8, queue_seconds: float = 5.0, cleanup_seconds: float = 10.0) -> None:
+    def __init__(
+        self, *, capacity: int | None = None, queue_seconds: float | None = None, cleanup_seconds: float = 10.0
+    ) -> None:
         self.capacity = capacity
         self.queue_seconds = queue_seconds
         self.cleanup_seconds = cleanup_seconds
@@ -110,7 +118,7 @@ class EffectExecutor:
         if self.closed or self.failed.is_set():
             raise EffectQueueError("bridge_effects_held")
         self._pending = deque(item for item in self._pending if not item.future.done())
-        if self.active and len(self._pending) >= self.capacity:
+        if self.active and self.capacity is not None and len(self._pending) >= self.capacity:
             raise EffectQueueError("bridge_busy")
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
@@ -121,7 +129,7 @@ class EffectExecutor:
             self._worker = asyncio.create_task(self._consume(item), name="telegram-effects")
         else:
             self._pending.append(item)
-            item.queued_until = loop.time() + min(self.queue_seconds, timeout)
+            item.queued_until = loop.time() + min(self.queue_seconds or timeout, timeout)
             item.expiry = loop.call_at(item.queued_until, self._expire, item)
         try:
             return await asyncio.shield(future)
@@ -213,3 +221,72 @@ class EffectExecutor:
             done, _ = await asyncio.wait({self._operation}, timeout=self.cleanup_seconds)
             if not done:
                 self.failed.set()
+
+
+class EffectExecutor:
+    """Serialize each job independently, retaining a separate service lane.
+
+    A disconnected caller cannot cancel a started effect. A client whose
+    operation ignores cancellation holds only its own lane until readback.
+    """
+
+    def __init__(
+        self, *, capacity: int | None = None, queue_seconds: float | None = None, cleanup_seconds: float = 10.0
+    ) -> None:
+        self.capacity = capacity
+        self.queue_seconds = queue_seconds
+        self.cleanup_seconds = cleanup_seconds
+        self._service = self._new_lane()
+        self._lanes: dict[str, _EffectLane] = {}
+        self.closed = False
+
+    def _new_lane(self) -> _EffectLane:
+        return _EffectLane(
+            capacity=self.capacity, queue_seconds=self.queue_seconds, cleanup_seconds=self.cleanup_seconds
+        )
+
+    @property
+    def failed(self) -> asyncio.Event:
+        return self._service.failed
+
+    @property
+    def progress_event(self) -> asyncio.Event:
+        return self._service.progress_event
+
+    @property
+    def active(self) -> bool:
+        return self._service.active or any(lane.active for lane in self._lanes.values())
+
+    @property
+    def queued(self) -> int:
+        return self._service.queued + sum(lane.queued for lane in self._lanes.values())
+
+    def has_job_work(self, job_id: str) -> bool:
+        return self._service.has_job_work(job_id) or any(lane.has_job_work(job_id) for lane in self._lanes.values())
+
+    async def submit(
+        self,
+        factory: Callable[[], Awaitable[Any]],
+        *,
+        timeout: float,
+        job_id: str | None = None,
+        lane_key: str | None = None,
+    ) -> Any:
+        if self.closed or self.failed.is_set():
+            raise EffectQueueError("bridge_effects_held")
+        key = lane_key or (f"job:{job_id}" if job_id else None)
+        lane = self._service if key is None else self._lanes.setdefault(key, self._new_lane())
+        try:
+            return await lane.submit(factory, timeout=timeout, job_id=job_id)
+        finally:
+            if key is not None and lane._worker is not None:
+
+                def prune(_task: asyncio.Task[None]) -> None:
+                    if not lane.active and not lane.failed.is_set() and self._lanes.get(key) is lane:
+                        self._lanes.pop(key, None)
+
+                lane._worker.add_done_callback(prune)
+
+    async def close(self) -> None:
+        self.closed = True
+        await asyncio.gather(self._service.close(), *(lane.close() for lane in self._lanes.values()))

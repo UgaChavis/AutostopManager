@@ -72,8 +72,9 @@ def test_close_running_job_finishes_owned_tasks_and_keeps_unknown_slot(
                 try:
                     await until(lambda: bool(inbox.active_jobs()) and inbox.active_jobs()[0]["state"] == "running")
                     job = inbox.active_jobs()[0]
-                    original_deadline = dispatcher.request_deadline
-                    original_current = dispatcher.current_job
+                    child, child_task = dispatcher.executions[job["job_id"]]
+                    original_deadline = child.request_deadline
+                    original_current = child.current_job
                     effect_key = None
                     if bridge_unavailable:
                         effect_key = inbox.reserve_effect(
@@ -90,7 +91,7 @@ def test_close_running_job_finishes_owned_tasks_and_keeps_unknown_slot(
                     jobs.connected = not bridge_unavailable
                     await asyncio.wait_for(dispatcher.close(), 2)
                     await asyncio.sleep(0)
-                    assert dispatcher.worker.done() and dispatcher.execution_task.done()
+                    assert dispatcher.worker.done() and child_task.done() and child.execution_task.done()
                     assert all(
                         task is None or task.done()
                         for task in (
@@ -109,8 +110,10 @@ def test_close_running_job_finishes_owned_tasks_and_keeps_unknown_slot(
                         assert stored["execution_proof"] is None
                         assert inbox.execution_slot()["job_id"] == job["job_id"]
                         assert inbox.read_effect(effect_key) == unknown_effect
-                        assert dispatcher.current_job is original_current
-                        assert dispatcher.request_deadline == original_deadline
+                        assert child.current_job is original_current
+                        assert child.request_deadline == original_deadline
+                        assert dispatcher.unsettled[job["job_id"]] is child
+                        assert child.terminal_stop_pending and not child.stop_proof_verified
                         assert dispatcher.terminal_stop_pending and not dispatcher.stop_proof_verified
                         assert jobs.calls[calls_before:] == []
                         assert not any(call.get("method") == "turn/interrupt" for call in server.calls)
@@ -118,6 +121,7 @@ def test_close_running_job_finishes_owned_tasks_and_keeps_unknown_slot(
                         assert stored["execution_proof"] == "interrupted"
                         assert inbox.execution_slot() is None
                         assert dispatcher.current_job is None and dispatcher.request_deadline is None
+                        assert child.stop_proof_verified and not child.terminal_stop_pending
                         assert dispatcher.stop_proof_verified and not dispatcher.terminal_stop_pending
                 finally:
                     await cancel_owned(dispatcher.worker, dispatcher.execution_task, unrelated)

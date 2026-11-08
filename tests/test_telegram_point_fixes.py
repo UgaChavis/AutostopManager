@@ -7,7 +7,17 @@ import pytest
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError
-from test_telegram_bridge_durable import Client, MediaClient, _job, _media_request, _message, _readback, _runtime, _send
+from test_telegram_bridge_durable import (
+    Client,
+    MediaClient,
+    _job,
+    _media_request,
+    _message,
+    _read_full_history_and_confirm,
+    _readback,
+    _runtime,
+    _send,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +113,7 @@ def test_new_inbound_during_final_exact_rpc_revokes_all_send_kinds(tmp_path, mon
                 return result
 
         client = ArrivingClient(rows)
+        await _read_full_history_and_confirm(client, config, monitor, job)
         payload = (
             {"operation": "send", "peer": "42", "text": "draft", "mode": "dry_run"}
             if operation == "send"
@@ -149,7 +160,7 @@ def test_restart_revokes_unattempted_draft_but_receipt_readback_survives_edit(tm
         try:
             draft = await _send(client, config, monitor, job, kind="result", text="draft")
             restarted = bridge.DurableInboundMonitor(monitor.inbox, enabled=True)
-            with pytest.raises(bridge.BridgeError, match="context_snapshot_unavailable"):
+            with pytest.raises(bridge.BridgeError, match="context_history_incomplete"):
                 await _send(client, config, restarted, job, kind="result", text="draft", mode="apply", dry=draft)
             assert client.sent == 0
             sent = await _send(client, config, monitor, job, kind="result", text="draft", mode="apply", dry=draft)

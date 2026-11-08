@@ -115,7 +115,6 @@ _MONITOR_VOICE_EXPIRY_TASKS: set[asyncio.Task[None]] = set()
 _PHONE_RESOLVE_LAST_AT = 0.0
 _EFFECT_EXECUTORS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, EffectExecutor] = weakref.WeakKeyDictionary()
 _BACKGROUND_NOTIFICATIONS: set[asyncio.Task[None]] = set()
-_READ_SLOTS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
 
 
 @dataclass(frozen=True)
@@ -149,7 +148,11 @@ def _bind_event_execution(request: dict[str, Any], monitor: InboundMonitor | Non
         or not isinstance(monitor, DurableInboundMonitor)
     ):
         return request
-    slot = monitor.inbox.execution_slot()
+    try:
+        event = monitor.inbox.resolve(str(request.get("event_id") or ""))
+    except InboxError:
+        return request
+    slot = monitor.inbox.execution_slot(peer_id=event.peer_id)
     if slot is None or request.get("event_id") not in slot["event_ids"]:
         return request
     return request | {"job_id": slot["job_id"], "lease": slot["lease"], "revision": slot["revision"]}
@@ -157,6 +160,16 @@ def _bind_event_execution(request: dict[str, Any], monitor: InboundMonitor | Non
 
 def _request_budget(request: dict[str, Any], monitor: InboundMonitor | None) -> float:
     budget = server_budget(request)
+    if request.get("job_id") and request.get("operation") in {"send", "send_photo", "send_document", "job_handoff"}:
+        if isinstance(monitor, DurableInboundMonitor):
+            context = monitor.context_jobs.get(str(request["job_id"]))
+            if context is not None and context["complete"]:
+                pages = request.get("history_pages", 1)
+                if type(pages) is not int or pages != context["pages"]:
+                    raise BridgeError("history_pages_mismatch")
+        # The current lease is checked before and after every network chunk.
+        # Its deadline may be renewed while this RPC is making progress.
+        return budget
     if budget <= 2.0 or request.get("operation") in {
         "job_effect_readback",
         "owner_notification_readback",
@@ -623,27 +636,47 @@ class DurableInboundMonitor(InboundMonitor):
         # Only fingerprints/locators in RAM.  Restart intentionally revokes an
         # unattempted draft: its used-context snapshot cannot be reconstructed.
         self.context_messages: dict[int, dict[int, str | None]] = {}
-        self.context_effects: set[str] = set()
-        self.context_job: str | None = None
-        self.context_peer: int | None = None
-        self.context_revision: int | None = None
-        self.context_overflow = False
+        self.context_jobs: dict[str, dict[str, Any]] = {}
 
     def begin_context(self, job: dict[str, Any]) -> None:
-        if self.context_job == job["job_id"]:
-            if self.context_revision != job["context_revision"]:
-                self.context_effects.clear()
-                self.context_revision = job["context_revision"]
+        active = {slot["job_id"] for slot in self.inbox.execution_slots()}
+        for identifier in self.context_jobs.keys() - active:
+            del self.context_jobs[identifier]
+        current = self.context_jobs.get(job["job_id"])
+        if current is not None and current["lease"] == job["lease"]:
+            if current["revision"] != job["context_revision"]:
+                current.update(
+                    revision=job["context_revision"],
+                    effects=set(),
+                    started=False,
+                    complete=False,
+                    cursor=None,
+                    receipt=None,
+                    end_reached=False,
+                    pages=0,
+                )
             return
+        for identifier, state in list(self.context_jobs.items()):
+            if state["peer"] == job["peer_id"]:
+                del self.context_jobs[identifier]
         covered = {self.inbox.resolve(event_id).message_id for event_id in job["event_ids"]}
         previous = self.context_messages.get(job["peer_id"], {})
         self.context_messages[job["peer_id"]] = {
             identifier: version for identifier, version in previous.items() if identifier in covered
         }
-        self.context_effects.clear()
-        self.context_job, self.context_peer = job["job_id"], job["peer_id"]
-        self.context_revision = job["context_revision"]
-        self.context_overflow = False
+        self.context_jobs[job["job_id"]] = {
+            "peer": job["peer_id"],
+            "lease": job["lease"],
+            "revision": job["context_revision"],
+            "effects": set(),
+            "started": False,
+            "complete": False,
+            "cursor": None,
+            "receipt": None,
+            "reading": False,
+            "end_reached": False,
+            "pages": 0,
+        }
 
     @staticmethod
     def context_fingerprint(message: Any) -> str:
@@ -668,10 +701,10 @@ class DurableInboundMonitor(InboundMonitor):
         if type(peer_id) is not int or peer_id <= 0 or type(message_id) is not int or message_id <= 0:
             return
         if peer_id not in self.context_messages:
-            # The execution slot is global; never evict its current context.
-            active = self.inbox.execution_slot()
+            # Retain every active peer; only inactive cached contexts are evictable.
+            active = {job["peer_id"] for job in self.inbox.execution_slots()}
             if len(self.context_messages) >= 64:
-                victim = next((peer for peer in self.context_messages if not active or peer != active["peer_id"]), None)
+                victim = next((peer for peer in self.context_messages if peer not in active), None)
                 if victim is not None:
                     del self.context_messages[victim]
             self.context_messages[peer_id] = {}
@@ -680,20 +713,17 @@ class DurableInboundMonitor(InboundMonitor):
         if invalidate and message_id in versions and versions[message_id] != digest:
             self.inbox.invalidate_context(peer_id, message_ids=[message_id])
             self.changed()
-        if message_id not in versions and len(versions) >= 1000:
-            if self.context_peer == peer_id:
-                # Never lose an inbound locator because RAM context is full.
-                # Only drafting/sending is held until this job is reviewed.
-                self.context_overflow = True
-                return
-            del versions[next(iter(versions))]
         versions[message_id] = digest
 
-    def observe_packet(self, messages: list[Any], *, record_incoming: bool = False) -> None:
-        active = self.inbox.execution_slot()
-        if active is not None:
-            self.begin_context(active)
+    def observe_packet(
+        self, messages: list[Any], *, record_incoming: bool = False, history_job: dict[str, Any] | None = None
+    ) -> None:
         peers = {getattr(message, "chat_id", None) for message in messages if message is not None}
+        for peer in peers:
+            if type(peer) is int and peer > 0:
+                active = self.inbox.execution_slot(peer_id=peer)
+                if active is not None:
+                    self.begin_context(active)
         origins = {
             peer: _native_outgoing_origins(self.config, peer)
             for peer in peers
@@ -711,7 +741,9 @@ class DurableInboundMonitor(InboundMonitor):
             if bool(getattr(message, "out", False)):
                 peer_id = getattr(message, "chat_id", None)
                 self.observe_self_message(
-                    message, native_origins=origins.get(peer_id) if type(peer_id) is int else None
+                    message,
+                    native_origins=origins.get(peer_id) if type(peer_id) is int else None,
+                    history_job=history_job,
                 )
             elif record_incoming:
                 self.record(message)
@@ -735,7 +767,7 @@ class DurableInboundMonitor(InboundMonitor):
                 # after restart when the prior fingerprint is unavailable.
                 self.inbox.invalidate_context(peer, message_ids=sorted(identifiers))
                 peer_versions = self.context_messages.get(peer)
-                if peer_versions is None and len(self.context_messages) < 64:
+                if peer_versions is None:
                     peer_versions = self.context_messages[peer] = {}
                 if peer_versions is not None:
                     for identifier in identifiers:
@@ -756,18 +788,16 @@ class DurableInboundMonitor(InboundMonitor):
     ) -> None:
         versions = self.context_messages.setdefault(peer_id, {})
         job = self.inbox.read_job(job_id)
-        if self.context_overflow:
-            raise BridgeError("context_snapshot_too_large")
         identifiers = set(versions)
         identifiers.update(extra_ids or [])
         identifiers.update(self.inbox.resolve(event_id).message_id for event_id in job["event_ids"])
-        if len(identifiers) > 1000:
-            raise BridgeError("context_snapshot_too_large")
         ordered = sorted(identifiers)
-        collected: list[Any] = []
         for start in range(0, len(ordered), 100):
             batch = ordered[start : start + 100]
-            result = await client.get_messages(entity, ids=batch)
+            _check_effect_authority()
+            async with asyncio.timeout(20):
+                result = await client.get_messages(entity, ids=batch)
+            _check_effect_authority()
             rows = list(result or [])
             found: dict[int, Any] = {}
             for message in rows:
@@ -784,7 +814,16 @@ class DurableInboundMonitor(InboundMonitor):
                 if identifier not in versions:
                     versions[identifier] = "unavailable"
             self.deleted(missing, peer_id)
-            collected.extend(found.values())
+            for message in found.values():
+                if message.id == anchor_id:
+                    if (
+                        not refresh_anchor
+                        and message.id in versions
+                        and versions[message.id] != self.context_fingerprint(message)
+                    ):
+                        raise BridgeError("contract_reply_source_changed")
+                    self.remember_context(message, invalidate=refresh_anchor)
+            self.observe_packet(list(found.values()), history_job=job)
         if final_recent:
             # Preserve the last-message guard after the exact-ID RPCs too:
             # newly arrived locators were absent from that original ID set.
@@ -794,22 +833,15 @@ class DurableInboundMonitor(InboundMonitor):
                     raise BridgeError("inbound_target_mismatch")
                 if not bool(getattr(message, "out", False)) and message.id != anchor_id:
                     self.record(message)
-            collected = list({message.id: message for message in [*collected, *recent]}.values())
-        for message in collected:
-            if message.id == anchor_id:
-                # Preserve apply's signed reply-source error. A new dry-run
-                # must first fence a changed, previously read source so the
-                # caller rereads/refreshes the job before preparing its reply.
-                if (
-                    not refresh_anchor
-                    and message.id in versions
-                    and versions[message.id] != self.context_fingerprint(message)
-                ):
-                    raise BridgeError("contract_reply_source_changed")
-                self.remember_context(message, invalidate=refresh_anchor)
-        self.observe_packet(collected)
+            self.observe_packet(recent, history_job=job)
 
-    def observe_self_message(self, message: Any, *, native_origins: tuple[set[int], bool] | None = None) -> str | None:
+    def observe_self_message(
+        self,
+        message: Any,
+        *,
+        native_origins: tuple[set[int], bool] | None = None,
+        history_job: dict[str, Any] | None = None,
+    ) -> str | None:
         peer_id, message_id = getattr(message, "chat_id", None), getattr(message, "id", None)
         if (
             not bool(getattr(message, "out", False))
@@ -831,7 +863,16 @@ class DurableInboundMonitor(InboundMonitor):
             if self.config is not None
             else None
         )
-        origin = self.inbox.observe_outgoing(peer_id, message_id, native_origin=native_origin)
+        history = (
+            {
+                "history_job_id": history_job["job_id"],
+                "history_lease": history_job["lease"],
+                "history_revision": history_job["revision"],
+            }
+            if history_job is not None and history_job["peer_id"] == peer_id
+            else {}
+        )
+        origin = self.inbox.observe_outgoing(peer_id, message_id, native_origin=native_origin, **history)
         self.changed()
         return origin
 
@@ -3164,10 +3205,20 @@ async def _handle_send_voice(
     return response | {"message_id": message_id, "replayed": previous is not None, "verified": True}
 
 
-async def _handle_download(client: Any, config: TelegramConfig, request: dict[str, Any]) -> dict[str, Any]:
+async def _handle_download(
+    client: Any, config: TelegramConfig, request: dict[str, Any], *, inbound_monitor: InboundMonitor | None = None
+) -> dict[str, Any]:
     peer, message_id, mode, idempotency_key = validate_download_request(request)
     entity, target = await _resolve_peer(client, peer)
+    if request.get("job_id"):
+        if not isinstance(inbound_monitor, DurableInboundMonitor):
+            raise BridgeError("durable_inbox_disabled")
+        job = inbound_monitor.inbox.read_job(str(request["job_id"]))
+        if target["kind"] != "private" or target["id"] != job["peer_id"]:
+            raise BridgeError("inbound_target_mismatch")
+    _check_effect_authority()
     message = await client.get_messages(entity, ids=message_id)
+    _check_effect_authority()
     if (
         message is None
         or type(getattr(message, "id", None)) is not int
@@ -3243,19 +3294,23 @@ async def _handle_download(client: Any, config: TelegramConfig, request: dict[st
         }
 
     content = await client.download_media(message, file=bytes)
+    _check_effect_authority()
     if not isinstance(content, bytes):
         raise BridgeError("download_failed")
     if metadata["size_bytes"] != len(content):
         raise BridgeError("download_size_mismatch")
     _validate_download_content(content, mime_type=metadata["mime_type"], suffix=metadata["suffix"])
+    # Another peer's lane may have committed this key during the download.
+    # No await may occur between this check and saving the ledger entry.
+    idempotency = _load_idempotency(idempotency_path)
+    if idempotency_key in idempotency:
+        raise BridgeError("idempotency_key_conflict")
     saved_path, digest, owned_inode = _save_private_download(
         content,
         message_id=message_id,
         suffix=metadata["suffix"],
         inbox_dir=config.socket_path.parent / "inbox",
     )
-    # Exact readback of another effect may have committed while downloading.
-    idempotency = _load_idempotency(idempotency_path)
     idempotency[idempotency_key] = {
         "operation": "download_media",
         "peer_id": target["id"],
@@ -3630,6 +3685,9 @@ async def _bind_job_send(
         raise InboxError("inbox_effect_target_invalid")
     monitor.begin_context(job)
     monitor.inbox.require_current_context(str(request.get("job_id") or ""))
+    context = monitor.context_jobs[job["job_id"]]
+    if not context["complete"]:
+        raise BridgeError("context_history_incomplete")
     # This catches an update already present in Telegram before dry-run whose
     # event handler has not yet run.  Bodies are used transiently, never stored.
     recent = await client.get_messages(entity, limit=MAX_INBOUND_MONITOR_CONTEXT_MESSAGES)
@@ -3663,12 +3721,10 @@ async def _bind_job_send(
         reply_to_message_id=reply_to_message_id,
     )
     effect = monitor.inbox.read_effect(effect_key)
-    if request.get("mode") == "apply" and not effect["attempted"] and effect_key not in monitor.context_effects:
+    if request.get("mode") == "apply" and not effect["attempted"] and effect_key not in context["effects"]:
         raise BridgeError("context_snapshot_unavailable")
     if request.get("mode") != "apply":
-        # There are at most 128 slots in one live job. Old snapshots have no
-        # authority after a new global execution slot takes over.
-        monitor.context_effects.add(effect_key)
+        context["effects"].add(effect_key)
     return {"effect_key": effect_key}
 
 
@@ -4340,7 +4396,15 @@ async def _handle_operation(
         request.get("job_id")
         and isinstance(inbound_monitor, DurableInboundMonitor)
         and operation
-        in {"send", "send_photo", "send_document", "send_owner_notification", "job_handoff", "monitor_voice_stage"}
+        in {
+            "send",
+            "send_photo",
+            "send_document",
+            "send_owner_notification",
+            "job_handoff",
+            "monitor_voice_stage",
+            "download",
+        }
     ):
         # A recorded unknown attempt keeps precedence over a newer pause/deadline.
         key = str(request.get("idempotency_key") or "")
@@ -4496,10 +4560,46 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         if before is not None and (type(before) is not int or before <= 0):
             raise BridgeError("history_cursor_invalid")
         entity, target = await _resolve_peer(client, peer)
+        context = None
+        authority = None
+        if request.get("job_id"):
+            if not isinstance(inbound_monitor, DurableInboundMonitor):
+                raise BridgeError("durable_inbox_disabled")
+            job_id = str(request["job_id"])
+            authority = inbound_monitor.inbox.execution_authority(
+                job_id=job_id,
+                lease=str(request.get("lease") or ""),
+                expected_revision=_job_revision(request.get("revision")),
+            )
+            job = inbound_monitor.inbox.read_job(job_id)
+            if target["id"] != job["peer_id"] or target["kind"] != "private":
+                raise BridgeError("inbound_target_mismatch")
+            inbound_monitor.inbox.require_current_context(job_id)
+            inbound_monitor.begin_context(job)
+            context = inbound_monitor.context_jobs[job_id]
+            if context["reading"]:
+                raise BridgeError("history_read_in_progress")
+            if before is None:
+                context.update(started=True, complete=False, cursor=None, receipt=None, end_reached=False, pages=0)
+            elif (
+                not context["started"]
+                or context["complete"]
+                or before != context["cursor"]
+                or not isinstance(request.get("history_receipt"), str)
+                or not context["receipt"]
+                or not hmac.compare_digest(request["history_receipt"], context["receipt"])
+            ):
+                raise BridgeError("history_sequence_invalid")
         arguments = {"limit": limit + 1}
         if before is not None:
             arguments["offset_id"] = before
-        page = list(await client.get_messages(entity, **arguments))
+        if context is not None:
+            context["reading"] = True
+        try:
+            page = list(await client.get_messages(entity, **arguments))
+        finally:
+            if context is not None:
+                context["reading"] = False
         if any(
             type(getattr(message, "id", None)) is not int
             or message.id <= 0
@@ -4512,7 +4612,14 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         has_more = len(page) > limit
         messages = page[:limit]
         if isinstance(inbound_monitor, DurableInboundMonitor):
-            inbound_monitor.observe_packet(messages)
+            inbound_monitor.observe_packet(messages, history_job=job if context is not None else None)
+        if context is not None and authority is not None:
+            assert isinstance(inbound_monitor, DurableInboundMonitor)
+            inbound_monitor.inbox.check_execution_authority(authority)
+            context["cursor"] = messages[-1].id if has_more and messages else None
+            context["end_reached"] = not has_more
+            context["receipt"] = secrets.token_urlsafe(24)
+            context["pages"] += 1
         rows = []
         for message in reversed(messages):
             text, sensitive_content_redacted = redact_sensitive_message_text(str(message.message or ""))
@@ -4532,13 +4639,17 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
                     else None,
                 }
             )
-        return {
+        result = {
             "ok": True,
             "target": target,
             "messages": rows,
             "has_more": has_more,
             "next_before_message_id": rows[0]["id"] if has_more and rows else None,
         }
+        if context is not None:
+            result["history_receipt"] = context["receipt"]
+            result["history_pages"] = context["pages"]
+        return result
 
     if operation == "send":
         peer, text, mode, idempotency_key, reply_to_message_id = validate_send_request(request)
@@ -4566,7 +4677,7 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         return await _handle_send_voice(client, config, request, inbound_monitor=inbound_monitor)
 
     if operation == "download":
-        return await _handle_download(client, config, request)
+        return await _handle_download(client, config, request, inbound_monitor=inbound_monitor)
 
     if operation == "discard_download":
         path = Path(str(request.get("path") or ""))
@@ -4656,6 +4767,32 @@ async def _verify_human_answer(client: Any, monitor: DurableInboundMonitor, job:
             raise BridgeError("inbox_human_evidence_required")
 
 
+def _require_result_history(
+    monitor: DurableInboundMonitor,
+    job: dict[str, Any],
+    request: dict[str, Any],
+    receipt_keys: list[str],
+    *,
+    verified_answer: bool,
+    delivered_question: bool,
+) -> None:
+    if request.get("outcome") != "no_reply_needed":
+        return
+    covered_receipt = any(effect["verified"] and effect["receipt_key"] in receipt_keys for effect in job["effects"])
+    if (
+        job.get("manual_recovery")
+        or delivered_question
+        or verified_answer
+        or covered_receipt
+        or request.get("reason_code") in {"paused", "human_takeover", "already_answered"}
+    ):
+        return
+    monitor.begin_context(job)
+    monitor.inbox.require_current_context(job["job_id"])
+    if not monitor.context_jobs[job["job_id"]]["complete"]:
+        raise BridgeError("context_history_incomplete")
+
+
 async def _handle_job_operation(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any]:
@@ -4665,7 +4802,7 @@ async def _handle_job_operation(
     if control is not None:
         return control
     if operation == "job_claim":
-        if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 2:
+        if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 3:
             raise BridgeError("worker_protocol_unsupported")
         if _effect_executor().closed or _effect_executor().failed.is_set():
             raise BridgeError("bridge_effects_held")
@@ -4706,6 +4843,14 @@ async def _handle_job_operation(
             executor = _effect_executor()
             if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
                 raise BridgeError("inbox_execution_effect_active")
+        _require_result_history(
+            monitor,
+            current_job,
+            request,
+            receipt_keys,
+            verified_answer=verified_answer,
+            delivered_question=delivered_question,
+        )
         if request.get("outcome") == "handoff":
             _require_job_handoff_receipts(config, inbox, request)
         if request.get("reason_code") == "human_answered":
@@ -4966,7 +5111,31 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
     if operation == "job_peer_thread_read":
         return {"ok": True, "peer_thread": inbox.read_peer_thread(str(request.get("job_id") or ""))}
     if operation == "job_execution_slot":
-        return {"ok": True, "job": inbox.execution_slot()}
+        return {"ok": True, "job": inbox.execution_slot(job_id=request.get("job_id"), peer_id=request.get("peer_id"))}
+    if operation == "job_execution_slots":
+        return {"ok": True, "jobs": inbox.execution_slots()}
+    if operation == "job_progress":
+        return {
+            "ok": True,
+            "job": inbox.progress(job_id=str(request.get("job_id") or ""), lease=str(request.get("lease") or "")),
+        }
+    if operation == "job_history_confirm":
+        arguments = _job_arguments(request)
+        inbox.execution_authority(**arguments)
+        job = inbox.read_job(arguments["job_id"])
+        inbox.require_current_context(job["job_id"])
+        monitor.begin_context(job)
+        context = monitor.context_jobs[job["job_id"]]
+        receipt = request.get("history_receipt")
+        if (
+            not context["end_reached"]
+            or not isinstance(receipt, str)
+            or not context["receipt"]
+            or not hmac.compare_digest(receipt, context["receipt"])
+        ):
+            raise BridgeError("context_history_incomplete")
+        context["complete"] = True
+        return {"ok": True, "history_complete": True, "history_pages": context["pages"]}
     if operation == "job_execution_proof":
         executor = _effect_executor()
         if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
@@ -5417,17 +5586,10 @@ async def _serve_client_request(
                 response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
         else:
             budget = _request_budget(request, inbound_monitor)
-            loop = asyncio.get_running_loop()
-            if server_budget(request) >= 20:
-                if budget <= 0:
-                    raise InboxError("inbox_execution_deadline")
-                slots = _READ_SLOTS.setdefault(loop, asyncio.Semaphore(2))
-                async with asyncio.timeout(budget):
-                    async with slots:
-                        response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
-            else:
-                async with asyncio.timeout(budget):
-                    response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
+            if budget <= 0:
+                raise InboxError("inbox_execution_deadline")
+            async with asyncio.timeout(budget):
+                response = await _handle_operation(client, config, request, inbound_monitor=inbound_monitor)
     except BridgeError as exc:
         response = {"ok": False, "error": exc.code}
     except InboxError as exc:
@@ -6453,7 +6615,7 @@ def build_parser() -> argparse.ArgumentParser:
     claim = subparsers.add_parser("job-claim")
     claim.add_argument("--instruction-root", required=True)
     claim.add_argument("--instruction-revision", required=True)
-    claim.add_argument("--worker-protocol", type=int, default=2)
+    claim.add_argument("--worker-protocol", type=int, default=3)
     job_read = subparsers.add_parser("job-read")
     job_read.add_argument("--job-id", required=True)
     client_control = subparsers.add_parser("job-client-control")
@@ -6466,7 +6628,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     client_control.add_argument("--expected-control-revision", type=int)
     client_control.add_argument("--text")
-    subparsers.add_parser("job-execution-slot")
+    slot = subparsers.add_parser("job-execution-slot")
+    slot.add_argument("--job-id")
+    slot.add_argument("--peer-id", type=int)
+    subparsers.add_parser("job-execution-slots")
+    progress = subparsers.add_parser("job-progress")
+    progress.add_argument("--job-id", required=True)
+    progress.add_argument("--lease", required=True)
+    history_confirm = subparsers.add_parser("job-history-confirm")
+    history_confirm.add_argument("--job-id", required=True)
+    history_confirm.add_argument("--lease", required=True)
+    history_confirm.add_argument("--expected-revision", type=int, required=True)
+    history_confirm.add_argument("--history-receipt", required=True)
     peer_read = subparsers.add_parser("job-peer-thread-read")
     peer_read.add_argument("--job-id", required=True)
     peer_read_by_peer = subparsers.add_parser("job-peer-thread-read-peer")
@@ -6555,6 +6728,7 @@ def build_parser() -> argparse.ArgumentParser:
             job_command.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
             job_command.add_argument("--contract-token", default="")
             job_command.add_argument("--idempotency-key", default="")
+            job_command.add_argument("--history-pages", type=int, default=1)
         elif command == "job-effect-readback":
             job_command.add_argument("--effect-key", required=True)
             job_command.add_argument("--message-id", type=int, default=None)
@@ -6570,6 +6744,10 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--peer", required=True)
     read.add_argument("--limit", type=int, default=20)
     read.add_argument("--before-message-id", type=int, default=None)
+    read.add_argument("--job-id", default="")
+    read.add_argument("--lease", default="")
+    read.add_argument("--revision", type=int)
+    read.add_argument("--history-receipt")
     send = subparsers.add_parser("send")
     send.add_argument("--peer", required=True)
     send.add_argument("--text", required=True)
@@ -6582,6 +6760,7 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--revision", type=int, default=None)
     send.add_argument("--kind", choices=["ack", "result", "clarification", "handoff"], default=None)
     send.add_argument("--effect-slot", type=int, default=0)
+    send.add_argument("--history-pages", type=int, default=1)
     send_owner_notification = subparsers.add_parser("send-owner-notification")
     send_owner_notification.add_argument("--text", required=True)
     send_owner_notification.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
@@ -6622,6 +6801,7 @@ def build_parser() -> argparse.ArgumentParser:
         media_send.add_argument("--revision", type=int, default=None)
         media_send.add_argument("--kind", choices=["ack", "result", "clarification", "handoff"], default=None)
         media_send.add_argument("--effect-slot", type=int, default=0)
+        media_send.add_argument("--history-pages", type=int, default=1)
         media_send.add_argument("--reply-to-message-id", type=int, default=0)
     download = subparsers.add_parser("download")
     download.add_argument("--peer", required=True)
@@ -6629,6 +6809,9 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     download.add_argument("--contract-token", default="")
     download.add_argument("--idempotency-key", default="")
+    download.add_argument("--job-id", default="")
+    download.add_argument("--lease", default="")
+    download.add_argument("--revision", type=int)
     discard_download = subparsers.add_parser("discard-download")
     discard_download.add_argument("--file", required=True, type=Path)
     return parser
@@ -6714,6 +6897,8 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
         "peer_id",
         "action",
         "expected_control_revision",
+        "history_receipt",
+        "history_pages",
     ):
         if hasattr(args, name):
             request[name] = getattr(args, name)
@@ -6814,6 +6999,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                 request.update({"peer": args.peer, "limit": args.limit})
                 if args.before_message_id is not None:
                     request["before_message_id"] = args.before_message_id
+                if args.job_id:
+                    request.update({"job_id": args.job_id, "lease": args.lease, "revision": args.revision})
+                    if args.history_receipt:
+                        request["history_receipt"] = args.history_receipt
             elif args.command == "send":
                 request.update(
                     {
@@ -6833,6 +7022,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                             "revision": args.revision,
                             "kind": args.kind,
                             "effect_slot": args.effect_slot,
+                            "history_pages": args.history_pages,
                         }
                     )
             elif args.command == "send-owner-notification":
@@ -6911,6 +7101,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "idempotency_key": args.idempotency_key,
                     }
                 )
+                if args.job_id:
+                    request.update({"job_id": args.job_id, "lease": args.lease, "revision": args.revision})
             elif args.command == "discard-download":
                 request.update({"operation": "discard_download", "path": str(args.file)})
             if args.command in {"send-photo", "send-document"} and args.job_id:
@@ -6921,6 +7113,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "revision": args.revision,
                         "kind": args.kind,
                         "effect_slot": args.effect_slot,
+                        "history_pages": args.history_pages,
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )

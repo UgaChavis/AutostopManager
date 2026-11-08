@@ -57,7 +57,7 @@ def test_notification_backpressure_preserves_intent_and_delivers_after_progress(
 
     async def scenario():
         async with asyncio.timeout(3):
-            executor = EffectExecutor(queue_seconds=0.02 if backpressure == "timeout" else 5)
+            executor = EffectExecutor(capacity=8, queue_seconds=0.02 if backpressure == "timeout" else 5)
             monkeypatch.setattr(bridge, "_effect_executor", lambda: executor)
             entered, release = asyncio.Event(), asyncio.Event()
             iterations = asyncio.Queue()

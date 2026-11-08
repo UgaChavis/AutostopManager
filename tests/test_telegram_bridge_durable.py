@@ -8,6 +8,7 @@ import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from test_telegram_bridge import _minimal_pdf
@@ -53,12 +54,16 @@ class Client:
     async def __call__(self, _request):
         return SimpleNamespace(pts=self.update_revision, qts=0, seq=self.update_revision)
 
-    async def get_messages(self, _entity, *, ids=None, limit=None):
+    async def get_messages(self, _entity, *, ids=None, limit=None, offset_id=None):
         if isinstance(ids, list):
             return [self.messages.get(identifier) for identifier in ids]
         if ids is not None:
             return self.messages.get(ids)
-        rows = sorted(self.messages.values(), key=lambda message: message.id, reverse=True)
+        rows = sorted(
+            (message for message in self.messages.values() if offset_id is None or message.id < offset_id),
+            key=lambda message: message.id,
+            reverse=True,
+        )
         return rows[:limit]
 
     async def send_message(self, entity, text, **kwargs):
@@ -236,7 +241,47 @@ def _job(monitor, *, running=True):
     return job
 
 
+async def _read_full_history_and_confirm(client, config, monitor, job):
+    async def resolve(_client, peer):
+        return int(peer), {"id": int(peer), "kind": "private"}
+
+    request = {
+        "operation": "read",
+        "peer": str(job["peer_id"]),
+        "limit": 100,
+        "job_id": job["job_id"],
+        "lease": job["lease"],
+        "revision": job["revision"],
+    }
+    with patch.object(bridge, "_resolve_peer", resolve):
+        while True:
+            page = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
+            if not page["has_more"]:
+                break
+            request["before_message_id"] = page["next_before_message_id"]
+            request["history_receipt"] = page["history_receipt"]
+    await bridge._handle_operation(
+        client,
+        config,
+        {
+            "operation": "job_history_confirm",
+            "job_id": job["job_id"],
+            "lease": job["lease"],
+            "expected_revision": job["revision"],
+            "history_receipt": page["history_receipt"],
+        },
+        inbound_monitor=monitor,
+    )
+
+
 async def _send(client, config, monitor, job, *, kind, text, mode="dry_run", dry=None, slot=0):
+    context = monitor.context_jobs.get(job["job_id"])
+    if (
+        mode == "dry_run"
+        and kind != "handoff"
+        and (context is None or not context["complete"] or context["revision"] != job["context_revision"])
+    ):
+        await _read_full_history_and_confirm(client, config, monitor, job)
     request = {
         "job_id": job["job_id"],
         "lease": job["lease"],
@@ -447,6 +492,7 @@ def test_old_verified_handoff_effect_requires_exact_native_owner_ledger(tmp_path
     config, monitor = _runtime(tmp_path)
     monitor.record(_message(100))
     job = _job(monitor)
+    asyncio.run(_read_full_history_and_confirm(Client([_message(100)]), config, monitor, job))
     digest = hashlib.sha256(b"Synthetic handoff").hexdigest()
     effect_key = monitor.inbox.reserve_effect(
         job_id=job["job_id"],
@@ -530,6 +576,7 @@ def test_raw_markdown_caption_keeps_verified_job_media_receipt(tmp_path, monkeyp
     monitor.record(source)
     job = _job(monitor)
     client = MarkdownDefaultClient([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
 
     async def resolve(_client, _peer):
         return 42, {"id": 42, "kind": "private"}
@@ -634,6 +681,7 @@ def test_job_media_contract_binds_reply_source(tmp_path, monkeypatch, operation,
     monitor.record(second)
     job = _job(monitor)
     client = MediaClient([source, second])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
 
     async def resolve(_client, _peer):
         return 42, {"id": 42, "kind": "private"}
@@ -681,6 +729,7 @@ def test_job_media_contract_binds_reply_source(tmp_path, monkeypatch, operation,
             }
         )["job"]
         request |= {"revision": job["revision"]}
+        asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
     refreshed = call(request)
     apply = request | {
         "mode": "apply",
@@ -718,6 +767,7 @@ def test_job_media_verifies_result_but_cannot_forge_handoff(tmp_path, monkeypatc
     monitor.record(source)
     job = _job(monitor)
     client = MediaClient([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
 
     async def resolve(_client, _peer):
         return 42, {"id": 42, "kind": "private"}
@@ -989,6 +1039,7 @@ def test_media_effect_readback_uses_native_intent_and_exact_receipt(tmp_path, mo
     monitor.record(source)
     job = _job(monitor)
     client = ReadbackClient([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
 
     async def resolve(_client, _peer):
         return 42, {"id": 42, "kind": "private"}
@@ -1037,6 +1088,7 @@ def test_unknown_media_effect_rejects_content_with_matching_metadata(tmp_path, m
     monitor.record(source)
     job = _job(monitor)
     client = ReadbackClient([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
 
     async def resolve(_client, _peer):
         return 42, {"id": 42, "kind": "private"}
@@ -1077,6 +1129,7 @@ def test_unknown_handoff_cannot_claim_another_identical_owner_message(tmp_path, 
     monitor.record(source)
     job = _job(monitor)
     client = Client([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
     monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: 84)
 
     async def resolve(_client, peer):
@@ -1149,6 +1202,7 @@ def test_handoff_effect_readback_requires_current_owner_and_exact_message(tmp_pa
     monitor.record(source)
     job = _job(monitor)
     client = ReadbackClient([source])
+    asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
     owner_id = 84
     monkeypatch.setattr(bridge, "_owner_peer_id", lambda *_args, **_kwargs: owner_id)
 
@@ -1894,6 +1948,7 @@ def test_capacity_gap_sends_one_incident_then_recovers_after_room_is_freed(tmp_p
         await bridge._deliver_incident_notifications(client, config, monitor)
         assert monitor.reconcile_requested.is_set() is False and client.sent == 1
         job = _job(monitor)
+        await _read_full_history_and_confirm(Client([source, missing]), config, monitor, job)
         result = await bridge._handle_job_operation(
             client,
             config,
@@ -2003,6 +2058,7 @@ def source_media_reply(tmp_path, monkeypatch):
         monitor.record(source)
         job = _job(monitor)
         client = SourceMediaClient([source])
+        asyncio.run(_read_full_history_and_confirm(client, config, monitor, job))
         payload = (
             {"operation": "send", "peer": "42", "text": "Synthetic answer", "mode": "dry_run"}
             if operation == "send"

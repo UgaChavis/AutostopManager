@@ -65,8 +65,8 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
 
     async def scenario():
         status = {
-            "worker_protocol": 2,
-            "context_mode": "serial_peer_v1",
+            "worker_protocol": 3,
+            "context_mode": "parallel_peer_v1",
             "enabled": blocker == "execution_only",
             "execution_paused": blocker != "intake_only",
             "active_jobs": 0,

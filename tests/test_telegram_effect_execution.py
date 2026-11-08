@@ -29,9 +29,9 @@ def isolated(monkeypatch):
     monkeypatch.setattr(bridge, "_config_for_account", forbidden)
 
 
-def test_effect_queue_has_one_active_eight_fifo_and_rejects_overflow():
+def test_explicit_effect_capacity_preserves_fifo_and_rejects_overflow():
     async def scenario():
-        executor = EffectExecutor()
+        executor = EffectExecutor(capacity=8)
         entered, release = asyncio.Event(), asyncio.Event()
         order = []
 
@@ -148,14 +148,14 @@ def test_cancellation_resistant_send_holds_lane_until_actual_cleanup(monkeypatch
 
         with pytest.raises(EffectQueueError, match="bridge_effect_timeout"):
             await executor.submit(uncooperative, timeout=0.02, job_id="job-A")
-        assert cancelled.is_set() and executor.failed.is_set()
+        assert cancelled.is_set() and not executor.failed.is_set()
         assert executor.has_job_work("job-A")
         monkeypatch.setattr(bridge, "_effect_executor", lambda: executor)
         monitor = SimpleNamespace(inbox=SimpleNamespace())
         with pytest.raises(bridge.BridgeError, match="inbox_execution_effect_active"):
             bridge._job_execution_control({"operation": "job_execution_proof", "job_id": "job-A"}, monitor)
         with pytest.raises(EffectQueueError, match="bridge_effects_held"):
-            await executor.submit(uncooperative, timeout=1)
+            await executor.submit(uncooperative, timeout=1, job_id="job-A")
         release.set()
         await executor.close()
 
@@ -329,7 +329,38 @@ def _job_runtime(tmp_path, monkeypatch):
         "effect_slot": 0,
         "reply_to_message_id": 100,
     }
-    return config, monitor, job, Client([source]), payload
+    client = Client([source])
+
+    async def history():
+        page = await bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "read",
+                "peer": "42",
+                "limit": 100,
+                "job_id": job["job_id"],
+                "lease": job["lease"],
+                "revision": job["revision"],
+            },
+            inbound_monitor=monitor,
+        )
+        assert page["has_more"] is False
+        await bridge._handle_operation(
+            client,
+            config,
+            {
+                "operation": "job_history_confirm",
+                "job_id": job["job_id"],
+                "lease": job["lease"],
+                "expected_revision": job["revision"],
+                "history_receipt": page["history_receipt"],
+            },
+            inbound_monitor=monitor,
+        )
+
+    asyncio.run(history())
+    return config, monitor, job, client, payload
 
 
 def _voice_runtime(tmp_path, monkeypatch, *, manual=False):
@@ -515,7 +546,7 @@ def test_queued_voice_keeps_admission_revision_and_does_not_adopt_refresh(tmp_pa
             return b"OggSsynthetic"
 
         monkeypatch.setattr(client, "download_media", download, raising=False)
-        active = asyncio.create_task(bridge._effect_executor().submit(busy, timeout=1))
+        active = asyncio.create_task(bridge._effect_executor().submit(busy, timeout=1, job_id=job["job_id"]))
         await entered.wait()
         caller = asyncio.create_task(
             _local_request(

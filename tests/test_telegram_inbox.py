@@ -107,7 +107,7 @@ def test_sqlite_storage_is_private_durable_and_one_writer(tmp_path: Path, clock:
     generation = first.generation
     assert first._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert first._db.execute("PRAGMA synchronous").fetchone()[0] == 2
-    assert first._meta("schema_version") == "7"
+    assert first._meta("schema_version") == "8"
     assert path.parent.stat().st_mode & 0o777 == 0o700
     for suffix in ("", "-wal", "-shm", ".lock"):
         assert Path(str(path) + suffix).stat().st_mode & 0o777 == 0o600
@@ -151,7 +151,7 @@ def test_schema_v1_upgrade_preserves_pending_identity_effects_context_and_pause(
         peer_context = old._peer_revision(1)
         windows = old.duty_windows()
     with TelegramInbox(path, clock=clock) as upgraded:
-        assert upgraded._meta("schema_version") == "7"
+        assert upgraded._meta("schema_version") == "8"
         assert upgraded.read_job(job["job_id"]) == before_job
         assert upgraded.events() == before_events
         assert upgraded.require_open(first).message_id == 1
@@ -171,7 +171,7 @@ def test_unknown_schema_is_rejected_before_registry_or_journal_mutations(tmp_pat
     path.parent.mkdir()
     with sqlite3.connect(path) as future:
         future.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        future.execute("INSERT INTO metadata VALUES ('schema_version','8')")
+        future.execute("INSERT INTO metadata VALUES ('schema_version','9')")
         future.execute("CREATE TABLE future_state (value TEXT)")
         future.execute("INSERT INTO future_state VALUES ('synthetic')")
         before = list(future.iterdump())
@@ -202,7 +202,7 @@ def test_failed_v1_upgrade_rolls_back_defaults_and_schema_version(tmp_path: Path
         assert list(unchanged.iterdump()) == before
         unchanged.execute("DROP TRIGGER fail_upgrade")
     with TelegramInbox(path, clock=clock) as recovered:
-        assert recovered._meta("schema_version") == "7"
+        assert recovered._meta("schema_version") == "8"
         assert recovered.require_open(event).message_id == 1
         assert recovered.status()["execution_paused"] is False
 
@@ -344,6 +344,7 @@ def test_claim_batches_only_same_peer_and_five_minute_window(inbox: TelegramInbo
     assert len(job["event_ids"]) == 5
     assert late not in job["event_ids"]
     assert all(inbox.resolve(ref).peer_id == 1 for ref in job["event_ids"])
+    assert claim(inbox)["peer_id"] == 2
     assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
 
 
@@ -488,7 +489,8 @@ def test_known_running_turn_and_intake_survive_restart_without_replay(tmp_path: 
         assert current["effects"][0]["receipt_key"] == ack
         assert restored.record(3, 3)
         assert restored.status()["open_events"] == 3
-        assert restored.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+        assert claim(restored)["peer_id"] == 2
+        assert claim(restored)["peer_id"] == 3
 
 
 def test_acknowledgement_does_not_close_request_or_allow_final_completion(inbox: TelegramInbox) -> None:
@@ -1313,3 +1315,170 @@ def test_database_does_not_have_message_or_media_columns(inbox: TelegramInbox) -
             for row in read_only.execute(f"PRAGMA table_info({table})")
         }
     assert columns.isdisjoint({"text", "body", "media", "transcript", "name", "vin", "phone"})
+
+
+def test_parallel_claims_and_restart_are_isolated_by_peer(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "parallel.sqlite3"
+    with TelegramInbox(path, clock=clock) as inbox:
+        inbox.duty_set(True)
+        for peer in range(1, 6):
+            inbox.record(peer, 1)
+        jobs = [claim(inbox) for _ in range(5)]
+        assert {job["peer_id"] for job in jobs} == set(range(1, 6))
+        inbox.record(1, 2)
+        assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+        assert len(inbox.execution_slots()) == len(inbox.status()["active_slots"]) == 5
+        with pytest.raises(InboxError, match="inbox_execution_ambiguous"):
+            inbox.execution_slot()
+    with TelegramInbox(path, clock=clock) as inbox:
+        assert {slot["job_id"] for slot in inbox.execution_slots()} == {job["job_id"] for job in jobs}
+        assert inbox.execution_slot(peer_id=1)["job_id"] == jobs[0]["job_id"]
+        assert inbox.execution_slot(job_id=jobs[1]["job_id"])["peer_id"] == 2
+        inbox.recover_on_startup()
+        assert inbox.read_job(jobs[0]["job_id"])["state"] == "released"
+        assert claim(inbox)["peer_id"] == 1
+
+
+def test_progress_extends_only_the_unexpired_running_lease(inbox: TelegramInbox, clock: Clock) -> None:
+    inbox.record(1, 1)
+    job = running(inbox)
+    snapshot = inbox.execution_authority(**guard(job))
+    clock.advance(600)
+    progress = inbox.progress(job_id=job["job_id"], lease=job["lease"])
+    assert progress["revision"] == job["revision"]
+    assert progress["deadline_at"] > job["deadline_at"]
+    inbox.check_execution_authority(snapshot)
+    clock.advance(1199)
+    inbox.progress(job_id=job["job_id"], lease=job["lease"])
+    clock.advance(1200)
+    with pytest.raises(InboxError, match="inbox_execution_deadline"):
+        inbox.progress(job_id=job["job_id"], lease=job["lease"])
+
+
+def test_schema7_migrates_active_slot_and_rejects_old_writer(tmp_path: Path, clock: Clock, monkeypatch) -> None:
+    import autostop_manager.telegram_inbox as inbox_module
+
+    path = tmp_path / "inbox" / "migration.sqlite3"
+    with TelegramInbox(path, clock=clock) as inbox:
+        inbox.duty_set(True)
+        inbox.record(1, 1)
+        job = running(inbox)
+        effect = receipt(inbox, job, "ack")
+        event_ids = job["event_ids"]
+        with inbox._db:
+            inbox._db.execute("ALTER TABLE global_slot RENAME TO slot8")
+            inbox._db.execute(
+                "CREATE TABLE global_slot (singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+                "job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id), lease TEXT NOT NULL, "
+                "phase TEXT NOT NULL CHECK(phase IN ('claimed','start_intent','running','manual')))"
+            )
+            inbox._db.execute("INSERT INTO global_slot SELECT 1,job_id,lease,phase FROM slot8")
+            inbox._db.execute("DROP TABLE slot8")
+            inbox._db.execute("ALTER TABLE peer_threads DROP COLUMN reviewed_turn_id")
+            inbox._db.execute("UPDATE metadata SET value='7' WHERE key='schema_version'")
+    with TelegramInbox(path, clock=clock) as migrated:
+        assert migrated.execution_slot(job_id=job["job_id"])["turn_id"] == "turn-1"
+        assert migrated.read_job(job["job_id"])["event_ids"] == event_ids
+        assert migrated.read_job(job["job_id"])["effects"][0]["receipt_key"] == effect
+        assert migrated.read_peer_thread(job["job_id"])["thread_id"] == job["thread_id"]
+        assert migrated.read_peer_thread(job["job_id"])["reviewed_turn_id"] is None
+        assert migrated.status()["schema_version"] == 8
+    monkeypatch.setattr(inbox_module, "SUPPORTED_INBOX_SCHEMA_VERSIONS", (1, 2, 3, 4, 5, 6, 7))
+    with pytest.raises(InboxError, match="inbox_open_failed"):
+        TelegramInbox(path, clock=clock)
+
+
+def test_reviewed_failed_turn_proof_survives_pruning_and_clears_on_rotation(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "reviewed.sqlite3"
+    with TelegramInbox(path, clock=clock) as inbox:
+        inbox.duty_set(True)
+        inbox.record(1, 1)
+        job = running(inbox)
+        stopped = review_stopped(inbox, job)
+        assert inbox.read_peer_thread(job["job_id"])["reviewed_turn_id"] is None
+        manual = inbox.resolve_job(**guard(stopped), decision="continue_bound_turn", effects_reviewed=True)
+        assert inbox.read_peer_thread(job["job_id"])["reviewed_turn_id"] is None
+        inbox.result(
+            **guard(manual),
+            outcome="no_reply_needed",
+            event_ids=job["event_ids"],
+            receipt_keys=[],
+            reason_code="not_actionable",
+        )
+        assert inbox.read_peer_thread(job["job_id"])["reviewed_turn_id"] == "turn-1"
+        inbox.advance_checkpoint(1, 1)
+        clock.advance(8 * 86400)
+        inbox.prune()
+        with pytest.raises(InboxError, match="inbox_job_unavailable"):
+            inbox.read_job(job["job_id"])
+    with TelegramInbox(path, clock=clock) as inbox:
+        assert inbox.read_peer_thread_by_peer(1)["reviewed_turn_id"] == "turn-1"
+        inbox.set_execution_paused(paused=False, expected_revision=inbox.status()["execution_revision"])
+        inbox.record(1, 2)
+        new_job = claim(inbox)
+        mapping = inbox.read_peer_thread(new_job["job_id"])
+        rotated = inbox.rotate_peer_thread(
+            **guard(new_job), expected_thread_id=mapping["thread_id"], expected_peer_thread_revision=mapping["revision"]
+        )
+        assert rotated["reviewed_turn_id"] is None
+
+
+def test_historical_outgoing_does_not_invalidate_current_job_but_new_message_does(inbox: TelegramInbox) -> None:
+    inbox.record(1, 10)
+    job = running(inbox)
+    snapshot = inbox.execution_authority(**guard(job))
+    historical = {"history_job_id": job["job_id"], "history_lease": job["lease"], "history_revision": job["revision"]}
+    assert inbox.observe_outgoing(1, 5, **historical) == "human"
+    inbox.check_execution_authority(snapshot)
+    with pytest.raises(InboxError):
+        inbox.observe_outgoing(2, 5, **historical)
+    with pytest.raises(InboxError):
+        inbox.observe_outgoing(1, 4, **(historical | {"history_lease": "wrong"}))
+    assert inbox.observe_outgoing(1, 11, **historical) == "human"
+    with pytest.raises(InboxError, match="inbox_context_stale"):
+        inbox.check_execution_authority(snapshot)
+
+
+def test_schema7_migrates_only_explicitly_reviewed_completed_turn(tmp_path: Path, clock: Clock) -> None:
+    path = tmp_path / "inbox" / "review-migration.sqlite3"
+    with TelegramInbox(path, clock=clock) as inbox:
+        inbox.duty_set(True)
+        inbox.record(1, 1)
+        job = running(inbox)
+        stopped = review_stopped(inbox, job)
+        manual = inbox.resolve_job(**guard(stopped), decision="continue_bound_turn", effects_reviewed=True)
+        inbox.result(
+            **guard(manual),
+            outcome="no_reply_needed",
+            event_ids=job["event_ids"],
+            receipt_keys=[],
+            reason_code="not_actionable",
+        )
+        with inbox._db:
+            inbox._db.execute("ALTER TABLE peer_threads DROP COLUMN reviewed_turn_id")
+            inbox._db.execute("UPDATE metadata SET value='7' WHERE key='schema_version'")
+    with TelegramInbox(path, clock=clock) as inbox:
+        assert inbox.read_peer_thread_by_peer(1)["reviewed_turn_id"] == "turn-1"
+
+
+def test_progress_after_result_requires_slot_and_grants_no_effect_authority(inbox: TelegramInbox, clock: Clock) -> None:
+    event = inbox.record(1, 1)
+    job = running(inbox)
+    done = inbox.result(
+        **guard(job), outcome="no_reply_needed", event_ids=[event], receipt_keys=[], reason_code="not_actionable"
+    )
+    clock.advance(60)
+    renewed = inbox.progress(job_id=done["job_id"], lease=done["lease"])
+    assert renewed["deadline_at"] > done["deadline_at"] and renewed["revision"] == done["revision"]
+    with pytest.raises(InboxError, match="inbox_job_not_active"):
+        inbox.execution_authority(**guard(done))
+    inbox.finish_execution(
+        **guard(done),
+        proof_kind="terminal",
+        thread_id=done["thread_id"],
+        turn_id=done["turn_id"],
+        terminal_status="completed",
+        local_tasks_done=True,
+    )
+    with pytest.raises(InboxError, match="inbox_execution_slot_mismatch"):
+        inbox.progress(job_id=done["job_id"], lease=done["lease"])

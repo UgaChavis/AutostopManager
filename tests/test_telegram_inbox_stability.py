@@ -65,10 +65,12 @@ def test_verified_business_result_does_not_release_execution(inbox):
     inbox.verify_effect(effect_key=key, receipt_key=key, message_id=100)
     done = inbox.result(**guard(job), outcome="answered", event_ids=[first], receipt_keys=[key])
     assert done["state"] == "completed"
-    assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+    second = claim(inbox)
+    assert second["peer_id"] == 2
+    assert inbox.execution_slot(job_id=job["job_id"])["job_id"] == job["job_id"]
     proved = terminal(inbox, done)
-    assert proved["state"] == "completed" and inbox.execution_slot() is None
-    assert claim(inbox)["peer_id"] == 2
+    assert proved["state"] == "completed" and inbox.execution_slot(job_id=job["job_id"]) is None
+    assert inbox.execution_slot(job_id=second["job_id"]) is not None
 
 
 def test_pause_revokes_authority_before_an_effect_is_reserved(inbox):
@@ -133,10 +135,9 @@ def test_claim_deadline_and_exact_binding_survive_reopen(tmp_path, clock):
         assert restored["thread_id"] == THREAD and restored["turn_id"] == "owned-turn"
         assert queue.execution_slot()["job_id"] == job["job_id"]
         queue.record(2, 1)
-        assert queue.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+        assert claim(queue)["peer_id"] == 2
         restored = terminal(queue, restored, "interrupted")
         assert restored["state"] == "needs_review"
-        assert claim(queue)["peer_id"] == 2
 
 
 def test_late_turn_binding_never_releases_an_unknown_execution(inbox):
@@ -149,7 +150,8 @@ def test_late_turn_binding_never_releases_an_unknown_execution(inbox):
     job = inbox.needs_review(**guard(job), reason_code="codex_start_outcome_unknown")
     with pytest.raises(InboxError, match="inbox_execution_proof_invalid"):
         inbox.finish_execution(**guard(job), proof_kind="not_started", local_tasks_done=True)
-    assert inbox.claim(instruction_root=ROOT, instruction_revision=REVISION) is None
+    other = claim(inbox)
+    assert other["peer_id"] == 2
     job = inbox.bind_turn(**guard(job), turn_id="late-exact-turn")
     with pytest.raises(InboxError, match="inbox_execution_proof_invalid"):
         inbox.finish_execution(
@@ -174,7 +176,7 @@ def test_late_turn_binding_never_releases_an_unknown_execution(inbox):
     generation = inbox.generation
     assert terminal(inbox, job, "interrupted") == proved
     assert inbox.generation == generation
-    assert claim(inbox)["peer_id"] == 2
+    assert inbox.execution_slot(job_id=other["job_id"]) is not None
 
 
 def test_terminal_peer_quarantine_allows_other_peers_in_order(inbox):
@@ -437,7 +439,7 @@ def test_real_legacy_schema_upgrade_preserves_unknowns_without_mapping_mixed_his
     job_id = legacy_database(path, version)
     with TelegramInbox(path, clock=clock) as queue:
         old = queue.read_job(job_id)
-        assert queue.status()["schema_version"] == 7 and queue.status()["worker_protocol"] == 2
+        assert queue.status()["schema_version"] == 8 and queue.status()["worker_protocol"] == 3
         assert queue.generation == 7 and old["revision"] == 3 and old["lease"] == "old-lease"
         assert old["context_revision"] == 3 and old["turn_id"] == "old-turn"
         assert old["context_mode"] == "legacy" and old["deadline_at"] is None

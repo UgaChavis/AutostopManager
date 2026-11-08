@@ -8,7 +8,7 @@ import hmac
 from types import SimpleNamespace
 
 import pytest
-from test_telegram_bridge_durable import Client, _job, _message, _runtime, _send
+from test_telegram_bridge_durable import Client, _job, _message, _read_full_history_and_confirm, _runtime, _send
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError
@@ -103,6 +103,7 @@ def test_human_answer_invalidates_draft_and_finishes_without_agent_receipt(tmp_p
                 return int(peer), {"id": int(peer), "kind": "private"}
 
             monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+            await _read_full_history_and_confirm(client, config, monitor, job)
             done = await bridge._handle_job_operation(
                 client,
                 config,
@@ -400,7 +401,7 @@ def test_schema3_reopen_preserves_pending_events_unknown_send_and_pause(tmp_path
         assert restored.read_job(job["job_id"]) == before
         assert restored.require_open(event).message_id == 100
         assert restored.status()["execution_paused"] is True
-        assert restored.status()["schema_version"] == 7
+        assert restored.status()["schema_version"] == 8
         with pytest.raises(InboxError, match="inbox_effect_outcome_unknown"):
             restored.result(
                 **guard(job),
@@ -504,6 +505,8 @@ def test_unknown_native_send_blocks_same_peer_new_effect_and_human_completion(tm
             assert monitor.observe_self_message(manual(101)) == "unresolved"
             assert monitor.observe_self_message(manual(102)) == "unresolved"
             client = Client([_message(100), manual(101), manual(102)])
+            job = inbox.refresh_job(**guard(job))
+            await _read_full_history_and_confirm(client, config, monitor, job)
             with pytest.raises(bridge.BridgeError, match="send_outcome_uncertain"):
                 await bridge._handle_operation(
                     client,
@@ -575,6 +578,7 @@ def test_native_telethon_outgoing_without_from_id_uses_authenticated_session(tmp
             return int(peer), {"id": int(peer), "kind": "private"}
 
         monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+        asyncio.run(_read_full_history_and_confirm(Client([outgoing]), config, monitor, job))
         done = asyncio.run(
             bridge._handle_job_operation(
                 Client([outgoing]),

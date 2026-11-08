@@ -232,7 +232,6 @@ def test_durable_reconnect_idle_proves_exact_turn_and_advances_other_peer(tmp_pa
         inbox = TelegramInbox(tmp_path / "db" / "synthetic.sqlite3")
         inbox.duty_set(True)
         first_event = inbox.record(101, 1)
-        second_event = inbox.record(202, 1)
         jobs = CompleteLaterJobs(inbox)
         recovered = asyncio.Event()
         original_metadata = wake.AppServer._turn_metadata
@@ -256,10 +255,10 @@ def test_durable_reconnect_idle_proves_exact_turn_and_advances_other_peer(tmp_pa
                 server.thread_statuses[server.turn_threads["1"]] = "active"
                 server.release_start.set()
                 await asyncio.wait_for(recovered.wait(), 3)
-                app = dispatcher.app
-                first = inbox.execution_slot()
+                first = inbox.execution_slot(peer_id=101)
+                app = dispatcher.executions[first["job_id"]][0].app
                 assert app.reconnect_attempts >= 1 and first["turn_id"] == "1"
-                assert first["execution_proof"] is None and inbox.resolve(second_event).peer_id == 202
+                assert first["execution_proof"] is None
                 assert server.counter == 1
                 unknown = None
                 if terminal != "completed":
@@ -273,12 +272,19 @@ def test_durable_reconnect_idle_proves_exact_turn_and_advances_other_peer(tmp_pa
                         reply_to_message_id=1,
                     )
                     inbox.mark_effect_intent(unknown)
+                server.complete = True
+                second_event = inbox.record(202, 1)
+                jobs.changed.set()
+                await until(lambda: server.counter == 2 and inbox.event_state(second_event) == "no_reply_needed")
+                assert inbox.execution_slot(peer_id=101) is not None
                 server.turn_statuses["1"] = terminal
                 server.thread_statuses[app.config.thread_id] = "idle"
-                server.complete = True
-                await notice(server.sockets[-1], thread_id=app.config.thread_id)
+                peer_socket = next(
+                    sock for sock in reversed(server.sockets) if server.socket_threads.get(sock) == app.config.thread_id
+                )
+                await notice(peer_socket, thread_id=app.config.thread_id)
                 expected = 2 if terminal == "completed" else 1
-                await until(lambda: dispatcher.completed == expected and inbox.execution_slot() is None)
+                await until(lambda: dispatcher.completed == expected and not inbox.execution_slots())
                 stored = inbox.read_job(first["job_id"])
                 assert stored["execution_proof"] == terminal
                 assert server.counter == 2

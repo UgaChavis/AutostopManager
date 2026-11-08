@@ -10,7 +10,15 @@ import pytest
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError
-from test_telegram_bridge_durable import MediaClient, _job, _media_request, _message, _readback, _runtime
+from test_telegram_bridge_durable import (
+    MediaClient,
+    _job,
+    _media_request,
+    _message,
+    _read_full_history_and_confirm,
+    _readback,
+    _runtime,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +96,7 @@ def test_handoff_uses_client_context_and_keeps_owner_send_readback_and_replay(tm
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source, _message(50, peer=84, text="Owner's earlier conversation")])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = handoff_request(job)
         try:
             draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
@@ -118,6 +127,7 @@ def test_handoff_still_refuses_paused_or_changed_client_context(tmp_path, monkey
             monitor.record(row)
         job = _job(monitor)
         client = PeerScopedClient([*rows, _message(50, peer=84)])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = handoff_request(job)
         try:
             draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
@@ -147,6 +157,7 @@ def test_handoff_uses_source_control_instead_of_owners_client_case(tmp_path, mon
         monitor.record(owner_message)
         job = _job(monitor)
         client = PeerScopedClient([source, owner_message])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = handoff_request(job)
         try:
             if late:
@@ -184,6 +195,7 @@ def test_handoff_keeps_source_guidance_required_with_paused_owner_case(tmp_path,
         monitor.record(owner_message)
         job = _job(monitor)
         client = PeerScopedClient([source, owner_message])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         try:
             monitor.inbox.set_client_control(84, action="pause", expected_revision=0)
             monitor.inbox.set_client_control(42, action="context", expected_revision=0)
@@ -239,6 +251,7 @@ def test_handoff_preserves_owner_recipient_unknown_and_review_holds(tmp_path, mo
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source, owner_message])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         if hold == "native_unknown":
             bridge._save_idempotency(
                 config.state_dir / "idempotency.json",
@@ -275,6 +288,7 @@ def test_handoff_unknown_send_keeps_original_key_without_second_dispatch(tmp_pat
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source, _message(50, peer=84)])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = handoff_request(job)
         try:
             draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
@@ -305,6 +319,7 @@ def test_handoff_context_resolution_refuses_another_peer_or_unavailable_target(t
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source, _message(50, peer=84)])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = handoff_request(job)
         try:
             draft = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
@@ -343,6 +358,7 @@ def test_final_context_reread_preserves_concurrent_verified_receipt_and_new_entr
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         owner_message = _message(900, peer=84, out=True, text="Synthetic owner notification")
         owner_client = PeerScopedClient([owner_message])
         digest = hashlib.sha256(owner_message.message.encode()).hexdigest()
@@ -413,6 +429,7 @@ def test_exact_key_appearing_during_final_reread_is_never_overwritten_or_sent(tm
         monitor.record(source)
         job = _job(monitor)
         client = PeerScopedClient([source])
+        await _read_full_history_and_confirm(client, config, monitor, job)
         request = (
             {"operation": "send", "peer": "42", "text": "Synthetic client response", "mode": "dry_run"}
             if operation == "send"

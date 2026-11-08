@@ -96,7 +96,9 @@ class FakeJobs:
         if operation == "job_active":
             return {"ok": True, **self.inbox.active_job_page(**arguments)}
         if operation == "job_execution_slot":
-            return {"ok": True, "job": self.inbox.execution_slot()}
+            return {"ok": True, "job": self.inbox.execution_slot(**arguments)}
+        if operation == "job_execution_slots":
+            return {"ok": True, "jobs": self.inbox.execution_slots()}
         if operation == "job_read":
             return {"ok": True, "job": self.inbox.read_job(arguments["job_id"])}
         if operation == "job_health":
@@ -126,6 +128,7 @@ class FakeJobs:
             "job_release": self.inbox.release_job,
             "job_defer_failed": self.inbox.defer_failed_request,
             "job_execution_proof": self.inbox.finish_execution,
+            "job_progress": self.inbox.progress,
         }
         try:
             job = functions[operation](**arguments)
@@ -171,6 +174,10 @@ async def stop_dispatcher(dispatcher):
     await dispatcher.app.close()
 
 
+def active_child(dispatcher):
+    return next(iter(dispatcher.executions.values()))[0] if dispatcher.executions else None
+
+
 @pytest.mark.parametrize("status", [[], {}, None, 2, True])
 def test_turn_metadata_bad_status_is_fixed_error(status):
     async def scenario():
@@ -198,7 +205,13 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: dispatcher.execution_state == "waiting_thread" and server.resume_calls >= 4)
+                await until(
+                    lambda: (
+                        active_child(dispatcher) is not None
+                        and active_child(dispatcher).execution_state == "waiting_thread"
+                        and server.resume_calls >= 4
+                    )
+                )
                 calls = len(server.calls)
                 await asyncio.sleep(0.02)
                 assert len(server.calls) == calls
@@ -209,7 +222,7 @@ def test_busy_selected_worker_waits_manual_completion_without_poll_or_overlap(tm
                         {
                             "method": "turn/completed",
                             "params": {
-                                "threadId": dispatcher.app.config.thread_id,
+                                "threadId": active_child(dispatcher).app.config.thread_id,
                                 "turn": {"id": "manual", "status": "completed"},
                             },
                         }
@@ -336,7 +349,7 @@ def test_lost_start_response_survives_restart_without_replay(tmp_path, bundle):
             second = wake.DurableWakeDispatcher(later, 123, later_jobs)
             second.start()
             try:
-                await until(lambda: second.execution_state == "held")
+                await until(lambda: bool(second.unsettled))
                 assert server.counter == 1
                 assert reopened.status()["needs_review_jobs"] == 1
                 with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
@@ -366,7 +379,12 @@ def test_pause_returns_unstarted_claim_and_preserves_events(tmp_path, bundle):
             dispatcher = wake.DurableWakeDispatcher(app, 123, jobs)
             dispatcher.start()
             try:
-                await until(lambda: dispatcher.execution_state == "waiting_thread")
+                await until(
+                    lambda: (
+                        active_child(dispatcher) is not None
+                        and active_child(dispatcher).execution_state == "waiting_thread"
+                    )
+                )
                 await dispatcher.pause()
                 assert not dispatcher.enabled and not dispatcher.active
                 assert inbox.resolve(event_id) is not None
@@ -581,7 +599,7 @@ def test_binding_response_loss_reads_exact_committed_turn_and_never_replays(tmp_
                     )
                 )
                 job = inbox.active_jobs()[0]
-                assert job["turn_id"] == "1" and job["thread_id"] == dispatcher.app.config.thread_id
+                assert job["turn_id"] == "1" and job["thread_id"] == active_child(dispatcher).app.config.thread_id
                 assert job["thread_id"] != THREAD
                 assert server.counter == 1
                 current = inbox.read_job(job["job_id"])
@@ -799,24 +817,24 @@ def test_disconnect_during_manual_thread_wait_preserves_wait_and_reports_health(
             try:
                 await until(
                     lambda: (
-                        len(server.sockets) == 3 and dispatcher.app.ready_event.is_set() and server.resume_calls >= 6
+                        len(server.sockets) == 3
+                        and active_child(dispatcher) is not None
+                        and active_child(dispatcher).app.ready_event.is_set()
+                        and server.resume_calls >= 6
                     )
                 )
-                assert dispatcher.execution_state == "waiting_thread"
+                assert active_child(dispatcher).execution_state == "waiting_thread"
                 assert inbox.active_jobs()[0]["state"] == "claimed"
                 assert server.counter == 0
                 incidents = [item for item in jobs.health if item["state"] == "offline"]
-                assert incidents == [
-                    {"component": "codex", "state": "offline", "error_code": "codex_transport_failed_or_unknown"}
-                ]
-                assert any(item["state"] == "waiting_thread" and item["error_code"] is None for item in jobs.health)
+                assert not incidents  # One peer reconnect does not mark the shared backend offline.
                 server.peer_thread_status = "idle"
                 await server.sockets[-1].send(
                     json.dumps(
                         {
                             "method": "turn/completed",
                             "params": {
-                                "threadId": dispatcher.app.config.thread_id,
+                                "threadId": active_child(dispatcher).app.config.thread_id,
                                 "turn": {"id": "manual", "status": "completed"},
                             },
                         }

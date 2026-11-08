@@ -199,7 +199,7 @@ def test_bridge_heartbeat_refreshes_liveness_without_reclaiming(tmp_path, monkey
                 else:
                     assert request["operation"] == "job_status"
                     writer.write(
-                        b'{"ok":true,"status":{"pending_events":0,"execution_paused":false,"worker_protocol":2,"context_mode":"serial_peer_v1"}}\n'
+                        b'{"ok":true,"status":{"pending_events":0,"execution_paused":false,"worker_protocol":3,"context_mode":"parallel_peer_v1"}}\n'
                     )
                     await writer.drain()
             finally:
@@ -412,7 +412,6 @@ def test_completed_result_and_simultaneous_pauses_keep_slot_until_local_cleanup(
         with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
             inbox.duty_set(True)
             inbox.record(123, 1)
-            inbox.record(124, 2)
             job = inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40)
             bind_test_peer(inbox, job)
             job = inbox.start_intent(
@@ -460,6 +459,7 @@ def test_completed_result_and_simultaneous_pauses_keep_slot_until_local_cleanup(
             try:
                 assert not first.done() and not second.done()
                 assert inbox.execution_slot() is not None
+                inbox.record(123, 2)
                 assert inbox.claim(instruction_root=str(tmp_path), instruction_revision="a" * 40) is None
             finally:
                 release.set()

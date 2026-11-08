@@ -27,7 +27,10 @@ def idle(tmp_path):
         with inbox._write():
             for peer, thread, key in ((123, "old-thread", "old-key"), (456, "other-thread", "other-key")):
                 inbox._db.execute("INSERT INTO peers(peer_id) VALUES (?)", (peer,))
-                inbox._db.execute("INSERT INTO peer_threads VALUES (?,?,?,'ready',3)", (peer, thread, key))
+                inbox._db.execute(
+                    "INSERT INTO peer_threads(peer_id,thread_id,creation_key,state,revision) VALUES (?,?,?,'ready',3)",
+                    (peer, thread, key),
+                )
         pause(inbox)
         yield inbox
 
@@ -215,7 +218,9 @@ def test_lost_response_and_replay_with_another_key_cannot_remove_future_binding(
             idle.forget_missing_peer_thread(**(old | {"expected_creation_key": key}))
         assert state(idle) == before
     with idle._write():
-        idle._db.execute("INSERT INTO peer_threads VALUES (123,'new-thread','fresh-key','ready',3)")
+        idle._db.execute(
+            "INSERT INTO peer_threads(peer_id,thread_id,creation_key,state,revision) VALUES (123,'new-thread','fresh-key','ready',3)"
+        )
     before = state(idle)
     for key in ("old-key", "another-key"):
         with pytest.raises(InboxError, match=r"^inbox_peer_thread_conflict$"):

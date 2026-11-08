@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from unittest.mock import AsyncMock
 
 import pytest
 from instruction_bundle_fakes import create_instruction_bundle
@@ -31,6 +32,32 @@ def next_job(inbox, bundle):
     job = inbox.claim(instruction_root=str(bundle), instruction_revision=REVISION)
     assert job is not None and job["event_ids"] == [event]
     return job
+
+
+def _archived_review_case(terminal):
+    app = wake.AppServer(wake.WakeConfig("thread"))
+    app.peer_unavailable = "archived"
+    app.peer_status = AsyncMock()
+    app.request = AsyncMock(
+        side_effect=[
+            {"thread": {"id": "thread", "cwd": app.config.project_dir, "ephemeral": False, "status": {"type": "idle"}}},
+            {"data": [{"id": "turn", "status": terminal}], "nextCursor": None},
+        ]
+    )
+    dispatcher = wake.DurableWakeDispatcher(app, os.geteuid())
+    return app, dispatcher
+
+
+@pytest.mark.parametrize("terminal", ["failed", "interrupted"])
+def test_archived_failed_turn_requires_exact_reviewed_marker(terminal):
+    async def scenario():
+        _app, dispatcher = _archived_review_case(terminal)
+        await dispatcher._check_archived_peer_idle("thread", "turn")
+        _app, dispatcher = _archived_review_case(terminal)
+        with pytest.raises(wake.WakeError, match="codex_thread_archive_requires_review"):
+            await dispatcher._check_archived_peer_idle("thread", "different")
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("mode", ["active", "archived", "deleted"])

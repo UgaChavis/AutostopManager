@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import av
 import pytest
 from test_telegram_bridge import _minimal_pdf
-from test_telegram_bridge_durable import _job
+from test_telegram_bridge_durable import _job, _read_full_history_and_confirm
 from test_telegram_send_voice import _ogg_audio
 
 from autostop_manager import telegram_bridge as bridge
@@ -150,6 +150,13 @@ def media_case(tmp_path, monkeypatch):
 
 
 def _invoke(case, request, *, monitor=None):
+    if (
+        isinstance(monitor, bridge.DurableInboundMonitor)
+        and request.get("job_id")
+        and request.get("mode", "dry_run") == "dry_run"
+    ):
+        job = monitor.inbox.read_job(request["job_id"])
+        asyncio.run(_read_full_history_and_confirm(case.client, case.config, monitor, job))
     return asyncio.run(bridge._handle_operation(case.client, case.config, request, inbound_monitor=monitor))
 
 

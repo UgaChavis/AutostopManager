@@ -12,7 +12,7 @@ import pytest
 from instruction_bundle_fakes import create_instruction_bundle
 from telegram_wake_fakes import THREAD, MockServer, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
-from test_telegram_wake_durable import FakeJobs, new_inbox, stop_dispatcher
+from test_telegram_wake_durable import FakeJobs, active_child, new_inbox, stop_dispatcher
 from websockets.asyncio.server import unix_serve
 
 from autostop_manager import instruction_bundle as bundles
@@ -120,9 +120,7 @@ def test_canonical_policy_precedes_generation_and_preserves_execution_settings(t
             assert server.effective_config == before
             status = dispatcher.status()
             assert status["instruction_sha256"] == status["instruction_protocol_sha256"]
-            assert status["instruction_bundle_sha256"] == bundles.load_instruction_bundle(root, REVISION).sha256
             assert status["instruction_root"] == str(root)
-            assert status["instruction_delivery_state"] == "acknowledged"
             assert status["instruction_model_context_verified"] is False
 
     asyncio.run(scenario())
@@ -134,10 +132,10 @@ def test_reconnect_keeps_config_and_does_not_inject_or_replay_until_new_job(tmp_
         server.effective_config = {"skills": {"config": restrictions()}}
         async with running(tmp_path, pinned, server) as (inbox, jobs, dispatcher):
             await until(lambda: dispatcher.completed == 1)
+            peer_thread = server.created_threads[0]
             old_sockets = len(server.sockets)
-            peer_thread = dispatcher.app.config.thread_id
-            await dispatcher.app.websocket.close()
-            await until(lambda: len(server.sockets) > old_sockets and dispatcher.app.ready_event.is_set())
+            await dispatcher.bootstrap_app.websocket.close()
+            await until(lambda: len(server.sockets) > old_sockets and dispatcher.bootstrap_app.ready_event.is_set())
             assert server.counter == 1
             assert len([call for call in server.calls if call["method"] == "thread/inject_items"]) == 1
             params = [
@@ -161,7 +159,13 @@ def test_busy_peer_does_not_receive_instruction_append_until_idle(tmp_path, pinn
         server = MockServer(peer_threads=True)
         server.peer_thread_status = "active"
         async with running(tmp_path, pinned, server) as (_inbox, _jobs, dispatcher):
-            await until(lambda: dispatcher.execution_state == "waiting_thread" and server.resume_calls >= 4)
+            await until(
+                lambda: (
+                    active_child(dispatcher) is not None
+                    and active_child(dispatcher).execution_state == "waiting_thread"
+                    and server.resume_calls >= 4
+                )
+            )
             assert not any(call["method"] in {"thread/inject_items", "turn/start"} for call in server.calls)
             server.peer_thread_status = "idle"
             await server.sockets[-1].send(
@@ -169,7 +173,7 @@ def test_busy_peer_does_not_receive_instruction_append_until_idle(tmp_path, pinn
                     {
                         "method": "turn/completed",
                         "params": {
-                            "threadId": dispatcher.app.config.thread_id,
+                            "threadId": active_child(dispatcher).app.config.thread_id,
                             "turn": {"id": "manual", "status": "completed"},
                         },
                     }
@@ -190,8 +194,9 @@ def test_foreign_turn_after_idle_proof_prevents_append_and_generation(tmp_path, 
             async def request(self, operation, **arguments):
                 response = await super().request(operation, **arguments)
                 if operation == "job_start_intent":
-                    sequence = dispatcher.app.thread_notification_sequence
-                    peer = dispatcher.app.config.thread_id
+                    peer_app = active_child(dispatcher).app
+                    sequence = peer_app.thread_notification_sequence
+                    peer = peer_app.config.thread_id
                     server.thread_statuses[peer] = "active"
                     await server.sockets[-1].send(
                         json.dumps(
@@ -201,7 +206,7 @@ def test_foreign_turn_after_idle_proof_prevents_append_and_generation(tmp_path, 
                             }
                         )
                     )
-                    await until(lambda: dispatcher.app.thread_notification_sequence > sequence)
+                    await until(lambda: peer_app.thread_notification_sequence > sequence)
                 return response
 
         jobs = ChangingJobs(inbox)

@@ -8,7 +8,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from test_telegram_bridge_durable import Client, _job, _message, _runtime, _send
+from test_telegram_bridge_durable import Client, _job, _message, _read_full_history_and_confirm, _runtime, _send
 from test_telegram_bridge_durable import synthetic_state_request as synthetic_state_request
 from test_telegram_human_control import close_turn, guard, manual
 from test_telegram_wake_durable import FakeJobs
@@ -177,11 +177,13 @@ def test_parked_request_reopen_before_proof_keeps_exact_wake_recovery(tmp_path, 
             app._turn_metadata = AsyncMock(return_value="completed")
             jobs = FakeJobs(restored)
             dispatcher = wake.DurableWakeDispatcher(app, 0, jobs)
-            monkeypatch.setattr(dispatcher, "_use_thread", AsyncMock())
+            monkeypatch.setattr(wake.DurableWakeDispatcher, "_use_thread", AsyncMock())
             await dispatcher._reconcile_active()
+            child, task = dispatcher.executions[job["job_id"]]
+            await task
             app._wait_turn.assert_awaited_once()
             app._turn_metadata.assert_awaited_with(parked["turn_id"])
-            assert restored.execution_slot() is None and dispatcher.stop_proof_verified
+            assert restored.execution_slot() is None and child.stop_proof_verified
             assert restored.read_job(job["job_id"])["execution_proof"] == "completed"
             assert restored.active_jobs() == [] and restored.active_job_page()["jobs"] == []
             assert dispatcher.failed == 0
@@ -191,8 +193,8 @@ def test_parked_request_reopen_before_proof_keeps_exact_wake_recovery(tmp_path, 
                 app.active_turn = parked["turn_id"]
                 app.active_event_id = event
                 app.outcome_unknown = True
-                await dispatcher._proof(parked, asyncio.get_running_loop().time() + 5)
-                assert dispatcher.stop_proof_verified and not app.outcome_unknown
+                await child._proof(parked, asyncio.get_running_loop().time() + 5)
+                assert child.stop_proof_verified and not app.outcome_unknown
             if not resume_before_recovery:
                 assert restored.read_job(job["job_id"])["state"] == "waiting_control"
                 restored.set_client_control(42, action="resume", expected_revision=1)
@@ -245,6 +247,7 @@ def test_completed_guidance_is_consumed_by_native_result_and_does_not_block_afte
                 client, config, {"operation": "job_read", "job_id": job["job_id"]}, monitor
             )
             assert state["job"]["trusted_guidance"][0]["text"] == "Option B"
+            await _read_full_history_and_confirm(client, config, monitor, job)
             dry = await bridge._handle_operation(client, config, request, inbound_monitor=monitor)
             sent = await bridge._handle_operation(
                 client,
@@ -276,6 +279,7 @@ def test_completed_guidance_is_consumed_by_native_result_and_does_not_block_afte
             client.messages[102] = question
             monitor.record(question)
             following = _job(monitor)
+            await _read_full_history_and_confirm(client, config, monitor, following)
             dry = await bridge._handle_operation(
                 client,
                 config,
@@ -373,6 +377,7 @@ def test_pause_after_verified_delivery_finishes_truthfully_without_resend(tmp_pa
                     client, config, monitor, job, kind="result", text="Synthetic complete answer", mode="apply", dry=dry
                 )
             else:
+                await _read_full_history_and_confirm(client, config, monitor, job)
                 request = {
                     "operation": "job_handoff",
                     **guard(job),
@@ -452,6 +457,8 @@ def test_human_answer_completion_batches_exact_reads_with_network_rpc_budget(tmp
                     return await super().get_messages(*args, **kwargs)
 
             client = DelayedClient([incoming, *human])
+            await _read_full_history_and_confirm(client, config, monitor, job)
+            client.reads = 0
             request = {
                 "operation": "job_result",
                 **guard(job),

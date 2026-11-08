@@ -403,24 +403,21 @@ def test_retained_cleanup_stays_inflight_until_real_exit_and_still_needs_proof(t
                     await release.wait()
 
             dispatcher._select_peer = preparation
-            original_await = wake._await_until
             original_proof = dispatcher._proof
 
             async def unavailable_proof(*_args):
                 clock.advance(3)
                 raise TimeoutError("synthetic unavailable proof")
 
-            async def stop_at_gate(operation, deadline, retained):
-                if operation is dispatcher.execution_task:
-                    await entered.wait()
-                    clock.advance(5)
-                    operation.cancel()
-                    wake._retain_cleanup(operation, retained)
-                    await cleanup_entered.wait()
-                    raise TimeoutError
-                return await original_await(operation, deadline, retained)
+            async def stop_at_gate(_job):
+                await entered.wait()
+                clock.advance(5)
+                dispatcher.execution_task.cancel()
+                wake._retain_cleanup(dispatcher.execution_task, dispatcher.cleanup_tasks)
+                await cleanup_entered.wait()
+                raise TimeoutError
 
-            monkeypatch.setattr(wake, "_await_until", stop_at_gate)
+            monkeypatch.setattr(dispatcher, "_wait_execution", stop_at_gate)
             monkeypatch.setattr(dispatcher, "_proof", unavailable_proof)
             try:
                 await asyncio.wait_for(dispatcher._execute(job), 2)
