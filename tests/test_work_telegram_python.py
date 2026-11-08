@@ -33,6 +33,7 @@ def runtime(tmp_path):
     shell(
         fake_bin / "systemctl",
         'case "$*" in\n'
+        '  *MainPID*) printf "%s\\n" "$ACTIVE_PID";;\n'
         '  *ExecStart*) case "$*" in *wake.service*) module=telegram_wake;; *) module=telegram_bridge;; esac\n'
         '    printf "{ path=%s ; argv[]=instant -B -m autostop_manager.%s daemon ; ignore_errors=no ; }\\n" "$ACTIVE_PYTHON" "$module";;\n'
         "  is-active*) exit 0;;\n"
@@ -186,3 +187,102 @@ def test_voice_self_check_executes_with_the_active_release_and_runtime(runtime):
         "autostop_manager.telegram_monitor_voice",
         "--self-check",
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "error"),
+    [
+        ("run-work-telegram-media.sh", ["self-check"], "media_release_mismatch=true"),
+        ("run-work-telegram-monitor-voice.sh", ["--self-check"], "monitor_voice_release_mismatch=true"),
+    ],
+)
+def test_old_pinned_wrapper_refuses_new_current(runtime, name, arguments, error):
+    scripts, env, _, tmp_path = runtime
+    old_release = scripts.parent.parent / "old-revision"
+    old_scripts = old_release / "scripts"
+    old_scripts.mkdir(parents=True)
+    old_script = old_scripts / name
+    old_script.write_text((scripts / name).read_text())
+
+    result = subprocess.run(["bash", str(old_script), *arguments], env=env, capture_output=True, text=True, timeout=15)
+
+    assert result.returncode == 1
+    assert error in result.stderr
+    assert not (tmp_path / "command").exists()
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "error"),
+    [
+        ("run-work-telegram-media.sh", ["transcribe", "--file", "FILE"], "media_release_mismatch=true"),
+        ("run-work-telegram-monitor-voice.sh", ["--event-id", "inbound-1"], "monitor_voice_release_mismatch=true"),
+    ],
+)
+def test_work_requires_same_release_as_running_bridge(runtime, name, arguments, error):
+    scripts, env, python, tmp_path = runtime
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    media = inbox / "voice.ogg"
+    media.write_text("synthetic")
+    path = scripts / name
+    path.write_text(path.read_text().replace('inbox_dir="/run/autostop-work-telegram/inbox"', f'inbox_dir="{inbox}"'))
+    arguments = [str(media) if value == "FILE" else value for value in arguments]
+    shell(python, 'printf "%s\\n" "$PYTHONPATH" "$@" > "$COMMAND_LOG"\nprintf \'{"ok":true}\\n\'\n')
+    old_release = scripts.parent.parent / "old-revision"
+    old_release.mkdir()
+
+    for process_dir, expected_return in ((old_release, 1), (scripts.parent, 0)):
+        bridge = subprocess.Popen(["sleep", "30"], cwd=process_dir)
+        try:
+            result = subprocess.run(
+                ["bash", str(path), *arguments],
+                env={**env, "ACTIVE_PID": str(bridge.pid)},
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        finally:
+            bridge.terminate()
+            bridge.wait(timeout=5)
+        assert result.returncode == expected_return, result.stderr
+        if expected_return:
+            assert error in result.stderr
+            assert not (tmp_path / "command").exists()
+        else:
+            assert (tmp_path / "command").exists()
+
+
+def test_standalone_media_wrapper_is_matching_self_check_only(runtime):
+    scripts, env, _, tmp_path = runtime
+    installed = tmp_path / "sbin/autostop-work-telegram-media"
+    installed.parent.mkdir()
+    source = scripts / "run-work-telegram-media.sh"
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    media = inbox / "voice.ogg"
+    media.write_text("synthetic")
+    source.write_text(
+        source.read_text()
+        .replace("/usr/local/sbin/autostop-work-telegram-media", str(installed))
+        .replace('inbox_dir="/run/autostop-work-telegram/inbox"', f'inbox_dir="{inbox}"')
+    )
+    installed.write_text(source.read_text())
+
+    result = subprocess.run(["bash", str(installed), "self-check"], env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    (tmp_path / "command").unlink()
+    result = subprocess.run(
+        ["bash", str(installed), "transcribe", "--file", str(media)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1
+    assert "media_release_mismatch=true" in result.stderr
+    assert not (tmp_path / "command").exists()
+    installed.write_text(installed.read_text() + "\n# stale wrapper\n")
+    result = subprocess.run(["bash", str(installed), "self-check"], env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 1
+    assert "media_release_mismatch=true" in result.stderr
+    assert not (tmp_path / "command").exists()

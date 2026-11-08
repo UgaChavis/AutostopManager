@@ -1,8 +1,23 @@
 # Хосты, службы и резервные копии
 
-MNG1 — прикладной сервер `vps26457.mnogoweb.in`: AutoStop Manager, CRM, Store, Telegram, G1, J1, Nginx и PostgreSQL. Source: `/opt/AutostopManager`, `/opt/autostopcrm`, `/opt/autostopapp`. Installed Manager: `/opt/autostop-manager-releases/current`; Store: `/opt/autostop-app`. Каталоги Git и installed runtime имеют разные роли.
+MNG1 — прикладной сервер `vps26457.mnogoweb.in`: AutoStop Manager, CRM, Store, Telegram, G1, J1, Nginx и PostgreSQL. Для разработки Manager выбирай актуальный checkout или worktree; `/opt/AutostopManager` также содержит действующие данные и настройки. Source CRM и Store: `/opt/autostopcrm`, `/opt/autostopapp`. Installed Manager: `/opt/autostop-manager-releases/current`; Store: `/opt/autostop-app`. Каталоги Git и installed runtime имеют разные роли.
 
-Основной VPN — MNG2 (раньше MNJ2), резервный — `fst.kz`; текущий доступ к MNG2 не подтверждён. Перед VPN работой установи точную текущую identity и SSH-доступ; это отдельный scope. Старый alias и `/root/AutostopVPN/repo` на MNG1 не доказывают доступ к MNG2. Для FST используй [VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md), проверяя hostname/container и клиентскую связь отдельно. VPN исключён из обычного прикладного выпуска.
+Основной VPN — MNG2 (раньше MNJ2), резервный — `fst.kz`. Перед VPN работой установи точную текущую identity и SSH-доступ; это отдельный scope. Старый alias и `/root/AutostopVPN/repo` на MNG1 не доказывают доступ к MNG2. Для FST используй [VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md), проверяя hostname/container и клиентскую связь отдельно. VPN исключён из обычного прикладного выпуска.
+
+## Подключения с MNG1
+
+Снимок проверки от **09.11.2026**: root на MNG1 успешно подключился по SSH через профили `/root/.ssh/config`. Это не гарантия текущей доступности или разрешение на действия. Перед порученной работой проверь адресата, вход и фактические права; не выводи секреты и не копируй приватные ключи в проект.
+
+| Команда на MNG1 | Подтверждённая цель на дату проверки |
+| --- | --- |
+| `ssh home-pc` | Домашний Windows `DESKTOP-BUSO4I8`, пользователь `codexadmin`; обратный туннель через MNG1, административный токен проверен. |
+| `ssh autostop-pc` | Рабочий Windows `DESKTOP-7RAOHT7`, пользователь `9860606`; обратный туннель через MNG1, административный токен проверен. |
+| `ssh mng2-from-mng1` | MNG2 `vps28681.mnogoweb.in`, пользователь `root`. |
+| `ssh mng3-from-mng1` | MNG3 `vps29817.mnogoweb.in`, пользователь `root`. |
+
+Для MNG2/MNG3 настроены отдельные ключи MNG1 и проверка ключей хостов через `/root/.ssh/known_hosts_autostop_mng`; вход ограничен исходным IP MNG1 на дату проверки. При изменении IP или ошибке проверки ключа выясни причину, не отключая проверку. Доступ к ПК зависит от обратного туннеля; при работе заново проверь hostname, пользователя и, если требуется, административный токен. Для серверов проверь hostname и пользователя. Права на подключение не расширяют само поручение на изменение данных, служб или VPN.
+
+В реестре AutoStop Remote есть ещё три регистрации старого протокола, включая компьютер механиков: на дату снимка они были недоступны, полноценный SSH не подтверждён. Пилот AutoStop Remote 3 на компьютере механика ещё не проводился; регистрации не считать работающими подключениями.
 
 ## Ревизии и проверки
 

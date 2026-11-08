@@ -4,6 +4,7 @@ from datetime import datetime, UTC
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -94,9 +95,9 @@ def test_catalogs_do_not_import_or_recursively_index_retired_packages(tmp_path):
     a4, a5, counts = catalogs.build_catalogs(project, codex, "2026-10-01")
 
     assert len(counts["project_paths"]) == 8
-    assert counts["skills"] == 9  # project + system + seven enabled selected packages
-    assert counts["documents"] == 16
-    assert counts["codex_documents"] == 8
+    assert counts["skills"] == 13  # project + system + eleven enabled selected packages
+    assert counts["documents"] == 20
+    assert counts["codex_documents"] == 12
     assert "M1.md" in a5 and "M2.md" in a5
     assert retired.relative_to(project).as_posix() not in a5
     assert (project / "docs/agent/modules/A5.md").read_text() == before
@@ -580,6 +581,111 @@ def test_catalogs_allow_skill_alias_within_selected_manifest_version(tmp_path):
     entry.symlink_to(target)
 
     assert [s["path"] for s in catalogs.selected_skills(tmp_path / "project", tmp_path)] == [entry]
+
+
+def _list_external_skills(monkeypatch, capsys, project, codex, *names):
+    before = {p: p.read_bytes() for root in (project, codex) for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(catalogs, "PROJECT", project)
+    monkeypatch.setattr(catalogs, "CODEX", codex)
+    monkeypatch.setattr("sys.argv", ["update-instruction-catalogs.py", "--list-external-skills", *names])
+    result = catalogs.main()
+    output = json.loads(capsys.readouterr().out)
+    after = {p: p.read_bytes() for root in (project, codex) for p in root.rglob("*") if p.is_file()}
+    assert after == before
+    return result, output
+
+
+def test_external_skills_follow_installed_version_without_changing_catalog(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    write(project / "AGENTS.md", "# AutoStop\n")
+    project_skill = skill(project / ".agents/skills/project/SKILL.md", "project")
+    version_one = installed_package(codex, "github", version="1")
+    first = skill(version_one / "skills/current/SKILL.md", "current")
+    a4_before, a5_before, _ = catalogs.build_catalogs(project, codex, "2026-11-09")
+
+    for catalog in (a4_before, a5_before):
+        assert "github:current" in catalog
+        assert str(first) not in catalog
+        assert str(version_one) not in catalog
+    assert "[project](../../../.agents/skills/project/SKILL.md)" in a4_before
+    assert project_skill.is_file()
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex)
+    assert code == 0 and output["ok"] is True
+    assert [entry["name"] for entry in output["skills"]] == ["github:current"]
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+    assert code == 0 and output["ok"] is True
+    assert output["skill"]["name"] == "github:current"
+    assert output["skill"]["path"] == str(first)
+
+    shutil.rmtree(version_one)
+    version_two = installed_package(codex, "github", version="2")
+    second = skill(version_two / "skills/current/SKILL.md", "current")
+    a4_after, a5_after, _ = catalogs.build_catalogs(project, codex, "2026-11-09")
+    assert (a4_after, a5_after) == (a4_before, a5_before)
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+    assert code == 0 and output["ok"] is True
+    assert output["skill"]["path"] == str(second)
+    assert not first.exists()
+
+
+def test_external_skills_refuse_missing_disabled_and_ambiguous_entries(tmp_path, monkeypatch, capsys):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    root = installed_package(codex, "github")
+    skill(root / "skills/current/SKILL.md", "current")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:missing")
+    assert (code, output) == (1, {"ok": False, "error": "skill_not_found"})
+    write(codex / "config.toml", '[plugins."github@openai-curated-remote"]\nenabled=false\n')
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+    assert (code, output) == (1, {"ok": False, "error": "skill_not_found"})
+
+    write(codex / "config.toml", '[plugins."github@openai-curated-remote"]\nenabled=true\n')
+    skill(root / "skills/duplicate/SKILL.md", "current")
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+    assert (code, output) == (1, {"ok": False, "error": "skill_ambiguous"})
+    installed_package(codex, "github", version="2")
+    with pytest.raises(ValueError, match="Specify current package version"):
+        _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+
+
+@pytest.mark.parametrize("broken", ["ambiguous_versions", "invalid_metadata"])
+def test_exact_external_lookup_ignores_unrelated_broken_package(tmp_path, monkeypatch, capsys, broken):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    target = skill(installed_package(codex, "github") / "skills/current/SKILL.md", "current")
+    other = installed_package(codex, "openai-developers", version="1")
+    if broken == "ambiguous_versions":
+        installed_package(codex, "openai-developers", version="2")
+    else:
+        write(other / "skills/broken/SKILL.md", "invalid metadata")
+
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
+    assert code == 0 and output["skill"]["path"] == str(target)
+    with pytest.raises(ValueError):
+        catalogs.selected_skills(project, codex)
+
+
+def test_external_lookup_supports_installed_drive_and_host_skills_without_overriding_disablement(
+    tmp_path, monkeypatch, capsys
+):
+    project, codex = tmp_path / "project", tmp_path / "codex"
+    project.mkdir()
+    drive = skill(installed_package(codex, "google-drive") / "skills/google-docs/SKILL.md", "google-docs")
+    custom = skill(codex / "skills/custom/SKILL.md", "custom")
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "google-drive:google-docs")
+    assert code == 0 and output["skill"]["path"] == str(drive)
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "custom")
+    assert code == 0 and output["skill"]["path"] == str(custom)
+    write(
+        codex / "config.toml",
+        '[[skills.config]]\nname="custom"\nenabled=false\n[plugins."google-drive@openai-curated"]\nenabled=false\n',
+    )
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "google-drive:google-docs")
+    assert (code, output) == (1, {"ok": False, "error": "skill_not_found"})
+    code, output = _list_external_skills(monkeypatch, capsys, project, codex, "custom")
+    assert (code, output) == (1, {"ok": False, "error": "skill_not_found"})
 
 
 def test_catalog_check_preserves_recorded_date_after_day_or_year_rollover(tmp_path, monkeypatch):
