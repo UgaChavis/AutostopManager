@@ -330,11 +330,12 @@ def test_role_action_revision_keeps_original_wire_type_before_control(native_ser
             server,
             "manager_role_action",
             {
-                "operation": "start",
+                "operation": "checkpoint",
                 "role": "M1",
                 "actor": "owner",
-                "idempotency_key": "synthetic-role-start",
+                "idempotency_key": "synthetic-role-checkpoint",
                 "expected_revision": revision,
+                "payload": {"text": "Synthetic manual checkpoint"},
             },
         )
     )
@@ -355,18 +356,26 @@ def test_role_action_integer_revision_reaches_control_exactly_once(native_server
             build_server(),
             "manager_role_action",
             {
-                "operation": "start",
+                "operation": "checkpoint",
                 "role": "M1",
                 "actor": "owner",
-                "idempotency_key": "synthetic-role-start",
+                "idempotency_key": "synthetic-role-checkpoint",
                 "expected_revision": 2,
-                "payload": {},
+                "payload": {"text": "Synthetic manual checkpoint"},
             },
         )
     )
     assert result.isError is False
     assert len(calls) == 1
     args, kwargs = calls[0]
-    assert args == ("role_action", {"operation": "start", "role": "M1", "actor": "owner", "payload": {}})
+    assert args == (
+        "role_action",
+        {
+            "operation": "checkpoint",
+            "role": "M1",
+            "actor": "owner",
+            "payload": {"text": "Synthetic manual checkpoint"},
+        },
+    )
     assert type(kwargs["expected_revision"]) is int
     assert kwargs["expected_revision"] == 2
