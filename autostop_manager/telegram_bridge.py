@@ -4771,19 +4771,16 @@ def _require_result_history(
     monitor: DurableInboundMonitor,
     job: dict[str, Any],
     request: dict[str, Any],
-    receipt_keys: list[str],
     *,
     verified_answer: bool,
     delivered_question: bool,
 ) -> None:
     if request.get("outcome") != "no_reply_needed":
         return
-    covered_receipt = any(effect["verified"] and effect["receipt_key"] in receipt_keys for effect in job["effects"])
     if (
         job.get("manual_recovery")
         or delivered_question
         or verified_answer
-        or covered_receipt
         or request.get("reason_code") in {"paused", "human_takeover", "already_answered"}
     ):
         return
@@ -4847,7 +4844,6 @@ async def _handle_job_operation(
             monitor,
             current_job,
             request,
-            receipt_keys,
             verified_answer=verified_answer,
             delivered_question=delivered_question,
         )

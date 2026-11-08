@@ -10,12 +10,14 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
+from instruction_bundle_fakes import create_instruction_bundle
 
 from autostop_manager import telegram_bridge
 from autostop_manager import telegram_owner
@@ -541,8 +543,7 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
     assert "--no-start" in text
     assert "work runtime releases require --no-start as an explicit lifecycle guard" in text
     assert "missing work Telegram service requires a clean first release" in text
-    assert "inbound_restored=" in text
-    assert "outbound=ready" in text
+    assert 'echo "activation=stopped"' in text
     assert '"${media_wrapper_path}" self-check' in text
     assert '"${current_link}/scripts/run-work-telegram-monitor-voice.sh" --self-check >/dev/null || return 1' in text
     assert text.index('"${media_wrapper_path}" self-check') < text.index(
@@ -560,8 +561,9 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="deploy-script fixture requires its root-only path")
+@pytest.mark.parametrize("previous_manager", [False, True])
 @pytest.mark.parametrize(
-    ("active_state", "unit_state", "voice_exit", "inbound_intent"),
+    ("active_state", "unit_state", "reload_fails", "inbound_intent"),
     [
         ("inactive", "disabled", 1, False),
         ("inactive", "disabled", 0, False),
@@ -573,8 +575,8 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
         ("inactive", "masked", 0, False),
     ],
 )
-def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
-    tmp_path, active_state, unit_state, voice_exit, inbound_intent
+def test_work_deploy_stays_stopped_and_rolls_back_failed_activation(
+    tmp_path, active_state, unit_state, reload_fails, inbound_intent, previous_manager
 ) -> None:
     source = tmp_path / "source"
     remote = tmp_path / "origin.git"
@@ -591,6 +593,17 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     monitor_env = tmp_path / "monitor.env"
     automation_group_helper_called = tmp_path / "automation-group-helper-called"
     source.mkdir()
+    create_instruction_bundle(source)
+    package = source / "autostop_manager"
+    package.mkdir()
+    for name in (
+        "__init__.py",
+        "instruction_bundle.py",
+        "instruction_inventory.py",
+        "document_links.py",
+        "markdown_links.py",
+    ):
+        shutil.copy(ROOT / "autostop_manager" / name, package / name)
     for relative_path, content in {
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
         "scripts/ensure-automation-group.sh": (
@@ -599,7 +612,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "scripts/install-codex-wake.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/set-work-telegram-duty.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-media.sh": "#!/usr/bin/env bash\nexit 0\n",
-        "scripts/run-work-telegram-monitor-voice.sh": f"#!/usr/bin/env bash\nexit {voice_exit}\n",
+        "scripts/run-work-telegram-monitor-voice.sh": "#!/usr/bin/env bash\nexit 1\n",
         "deploy/telegram/faster-whisper-small.sha256": "fixture-model-manifest\n",
     }.items():
         path = source / relative_path
@@ -653,7 +666,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     model_link.parent.mkdir()
     model_link.symlink_to(previous_model)
 
-    previous_release = release_root / "previous"
+    previous_release = (tmp_path / "manager-releases" if previous_manager else release_root) / "previous"
     (previous_release / "deploy" / "systemd").mkdir(parents=True)
     (previous_release / "scripts").mkdir()
     previous_unit = "[Service]\nExecStart=/bin/false\n"
@@ -691,6 +704,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "    count=0\n"
         '    [[ -f "$FAKE_SYSTEMCTL_COUNT_FILE" ]] && count=$(cat "$FAKE_SYSTEMCTL_COUNT_FILE")\n'
         "    printf '%s' $((count + 1)) > \"$FAKE_SYSTEMCTL_COUNT_FILE\"\n"
+        '    [[ "$count" != 0 || "$FAKE_FAIL_RELOAD" != 1 ]] || exit 1\n'
         "    exit 0\n"
         "    ;;\n"
         "esac\n"
@@ -714,6 +728,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         'media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"': f'media_wrapper_path="{media_wrapper_path}"',
         'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor_env}"',
         'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "control.lock"}"',
+        "/opt/AutostopManager/.venv/bin/python": sys.executable,
         "/var/lib/autostop-work-telegram/inbound.sqlite3": str(tmp_path / "inbound.sqlite3"),
     }
     for old, new in replacements.items():
@@ -737,25 +752,26 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
             "FAKE_UNIT_STATE_PATH": str(unit_state_path),
             "FAKE_INBOUND_EXPECTED": "true" if inbound_intent else "false",
             "FAKE_AUTOMATION_GROUP_HELPER_CALLED": str(automation_group_helper_called),
+            "FAKE_FAIL_RELOAD": str(reload_fails),
         },
     )
 
     assert automation_group_helper_called.read_text(encoding="utf-8") == "called"
-    coherent_lifecycle = (active_state, unit_state) in {("active", "enabled"), ("inactive", "disabled")}
+    coherent_lifecycle = active_state == "inactive" and unit_state in {"disabled", "enabled"}
     if not coherent_lifecycle:
         assert completed.returncode == 1
-        assert "lifecycle must be active-enabled or legacy inactive-disabled" in completed.stderr
+        assert "work Telegram service must be stopped before deployment" in completed.stderr
         assert not daemon_reload_count.exists()
-    elif voice_exit == 0:
+    elif reload_fails == 0:
         assert completed.returncode == 0, completed.stderr
-        assert "outbound=ready" in completed.stdout
-        assert f"inbound_restored={str(inbound_intent).lower()}" in completed.stdout
+        assert "activation=stopped" in completed.stdout
         assert (release_root / "current").resolve() != previous_release
         assert venv_link.resolve() == candidate_runtime / "venv"
         assert model_link.resolve() == candidate_runtime / "model"
         assert daemon_reload_count.read_text(encoding="utf-8") == "1"
-        assert active_state_path.read_text(encoding="utf-8") == "active"
-        assert unit_state_path.read_text(encoding="utf-8") == "enabled"
+        assert active_state_path.read_text(encoding="utf-8") == "inactive"
+        assert unit_state_path.read_text(encoding="utf-8") == unit_state
+        assert (release_root / "current" / "MANIFEST.sha256").is_file()
         assert monitor_env.exists() is inbound_intent
         duty_controller = release_root / "current" / "scripts" / "set-work-telegram-duty.sh"
         wake_installer = release_root / "current" / "scripts" / "install-codex-wake.sh"

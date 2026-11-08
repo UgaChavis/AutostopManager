@@ -45,6 +45,86 @@ def test_wake_installer_rollback_restores_prior_config_or_removes_new_file(tmp_p
         assert config.read_text(encoding="utf-8") == prior_config
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="installer requires root-owned synthetic release")
+@pytest.mark.parametrize("manager_snapshot", [False, True])
+@pytest.mark.parametrize("wake_state", ["inactive", "activating"])
+def test_wake_install_only_does_not_start_or_call_codex(tmp_path: Path, manager_snapshot, wake_state):
+    releases = tmp_path / "work-releases"
+    manager_releases = tmp_path / "manager-releases"
+    release = (manager_releases if manager_snapshot else releases) / "snapshot"
+    units = release / "deploy/systemd"
+    units.mkdir(parents=True)
+    for name in ("autostop-codex-start.service", "autostop-codex-wake.service"):
+        (units / name).write_text("[Service]\nExecStart=/bin/true\n")
+    (release / "REVISION").write_text("a" * 40 + "\n")
+    (release / "MANIFEST.sha256").write_text("fixture\n")
+    releases.mkdir(exist_ok=True)
+    (releases / "current").symlink_to(release)
+    installed = tmp_path / "systemd"
+    installed.mkdir()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config = config_dir / "wake.json"
+    config.write_text('{"synthetic":"unchanged"}\n')
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text(
+        '#!/bin/sh\necho "systemctl $*" >> "$TEST_CALLS"\n'
+        'case "$*" in *LoadState*) echo loaded ;; *ActiveState*) echo "$TEST_WAKE_STATE" ;; esac\n'
+    )
+    (fake_bin / "systemd-analyze").write_text('#!/bin/sh\necho "verify" >> "$TEST_CALLS"\n')
+    python = fake_bin / "python"
+    python.write_text('#!/bin/sh\necho "python $1" >> "$TEST_CALLS"\n[ "$1" = -c ]\n')
+    codex = fake_bin / "codex"
+    codex.write_text('#!/bin/sh\necho "codex" >> "$TEST_CALLS"\nexit 1\n')
+    for path in (systemctl, fake_bin / "systemd-analyze", python, codex):
+        path.chmod(0o755)
+    source = (ROOT / "scripts/install-codex-wake.sh").read_text()
+    substitutions = {
+        "/opt/autostop-work-telegram-releases": str(releases),
+        "/opt/autostop-manager-releases": str(manager_releases),
+        "/etc/systemd/system": str(installed),
+        "/etc/autostop-work-telegram": str(config_dir),
+        "/opt/AutostopManager/.venv/bin/python": str(python),
+        "/usr/local/bin/codex": str(codex),
+    }
+    for before, after in substitutions.items():
+        source = source.replace(before, after)
+    script = tmp_path / "installer.sh"
+    script.write_text(source)
+    result = subprocess.run(
+        ["bash", str(script), "--no-start"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "TEST_CALLS": str(calls),
+            "TEST_WAKE_STATE": wake_state,
+        },
+    )
+    if wake_state != "inactive":
+        assert result.returncode == 1 and "codex_wake_service_must_be_inactive" in result.stderr
+        assert not (installed / "autostop-codex-wake.service").exists()
+        assert config.read_text() == '{"synthetic":"unchanged"}\n'
+        return
+    assert result.returncode == 0, result.stderr
+    assert "codex_wake_installed=true" in result.stdout
+    assert (installed / "autostop-codex-wake.service").is_file()
+    assert (installed / "autostop-codex-start.service").is_file()
+    assert config.read_text() == '{"synthetic":"unchanged"}\n'
+    assert calls.read_text().splitlines() == [
+        "systemctl show --property=LoadState --value autostop-codex-wake.service",
+        "systemctl show --property=ActiveState --value autostop-codex-wake.service",
+        "python -c",
+        "verify",
+        "systemctl daemon-reload",
+    ]
+
+
 def test_automation_unit_is_local_only_and_hardened():
     unit = (ROOT / "deploy/systemd/autostop-manager-scheduler.service").read_text(encoding="utf-8")
 

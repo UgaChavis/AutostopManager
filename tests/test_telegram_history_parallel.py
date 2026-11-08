@@ -6,7 +6,7 @@ import pytest
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_inbox import InboxError
-from test_telegram_bridge_durable import _job, _message, _runtime
+from test_telegram_bridge_durable import Client, _job, _message, _runtime, _send
 from test_telegram_point_fixes import HistoryClient
 
 
@@ -344,6 +344,51 @@ def test_long_revalidation_allows_progress_renewal_and_scales_budget(tmp_path):
             finally:
                 bridge._EFFECT_AUTHORITY.reset(token)
             assert datetime.now(UTC) > datetime.fromisoformat(deadline)
+        finally:
+            monitor.inbox.close()
+
+    asyncio.run(run())
+
+
+def test_old_ack_cannot_bypass_history_after_new_client_message(tmp_path):
+    async def run():
+        config, monitor = _runtime(tmp_path)
+        first = _message(100)
+        first_id = monitor.record(first)
+        job = _job(monitor)
+        client = Client([first])
+        try:
+            dry = await _send(client, config, monitor, job, kind="ack", text="received")
+            ack = await _send(client, config, monitor, job, kind="ack", text="received", mode="apply", dry=dry)
+            second = _message(102, text="new client question")
+            client.messages[second.id] = second
+            second_id = monitor.record(second)
+            job = monitor.inbox.refresh_job(
+                job_id=job["job_id"],
+                lease=job["lease"],
+                expected_revision=job["revision"],
+                event_ids=[first_id, second_id],
+            )
+            request = {
+                "operation": "job_result",
+                "job_id": job["job_id"],
+                "lease": job["lease"],
+                "expected_revision": job["revision"],
+                "outcome": "no_reply_needed",
+                "event_ids": [first_id, second_id],
+                "receipt_keys": [ack["receipt_key"]],
+                "reason_code": "not_actionable",
+            }
+            with pytest.raises(bridge.BridgeError, match="context_history_incomplete"):
+                await bridge._handle_job_operation(client, config, request, monitor)
+            assert monitor.inbox.event_state(first_id) == monitor.inbox.event_state(second_id) == "open"
+            page = await read_page(client, config, monitor, job)
+            assert not page["has_more"]
+            await confirm(client, config, monitor, job, page["history_receipt"])
+            result = await bridge._handle_job_operation(client, config, request, monitor)
+            assert result["job"]["state"] == "completed"
+            assert monitor.inbox.event_state(first_id) == monitor.inbox.event_state(second_id) == "no_reply_needed"
+            assert client.sent == 1
         finally:
             monitor.inbox.close()
 

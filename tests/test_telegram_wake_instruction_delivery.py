@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+import hashlib
 import json
 import os
 
@@ -100,6 +101,9 @@ def test_canonical_policy_precedes_generation_and_preserves_execution_settings(t
             assert (root / ".agents/skills/manage-autostop-client/SKILL.md").read_text() in policy
             assert "STALE_POLICY_FROM_CWD" not in policy and "STALE_CLIENT_SKILL_FROM_CWD" not in policy
             assert "$manage-autostop-client" not in turn["input"][0]["text"]
+            prompt = turn["input"][0]["text"]
+            assert str(root / "docs/agent/modules/B1.md") in prompt
+            assert "всю доступную историю с исходящими прочитай и подтверди по B1" in prompt
             assert turn["effort"] == "xhigh"
             for call in server.calls:
                 if call["method"] in {"thread/start", "thread/resume", "turn/start"}:
@@ -120,6 +124,11 @@ def test_canonical_policy_precedes_generation_and_preserves_execution_settings(t
             assert server.effective_config == before
             status = dispatcher.status()
             assert status["instruction_sha256"] == status["instruction_protocol_sha256"]
+            assert (
+                status["instruction_protocol_sha256"]
+                == hashlib.sha256(wake.job_instruction_template().encode()).hexdigest()
+            )
+            assert wake.job_instruction_template().startswith("durable-job-v3:client-routing:")
             assert status["instruction_root"] == str(root)
             assert status["instruction_model_context_verified"] is False
 

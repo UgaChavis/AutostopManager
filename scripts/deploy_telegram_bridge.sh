@@ -131,7 +131,6 @@ previous_work_model=""
 work_runtime_switched=0
 current_link="${release_root}/current"
 previous_release="$(readlink -f "${current_link}" 2>/dev/null || true)"
-work_service_was_active=0
 work_inbound_expected=0
 
 if [[ "${account}" == "work" ]]; then
@@ -148,13 +147,24 @@ if [[ "${account}" == "work" ]]; then
     }
     work_active_state="$(systemctl show --property=ActiveState --value "${service_unit}")"
     work_unit_file_state="$(systemctl show --property=UnitFileState --value "${service_unit}")"
-    if [[ "${work_active_state}" == "active" && "${work_unit_file_state}" == "enabled" ]]; then
-      work_service_was_active=1
-    elif [[ "${work_active_state}" != "inactive" \
-      || ( "${work_unit_file_state}" != "disabled" && "${work_unit_file_state}" != "disabled-runtime" ) ]]; then
-      echo "ERROR: work Telegram service lifecycle must be active-enabled or legacy inactive-disabled" >&2
+    if [[ "${work_active_state}" != "inactive" \
+      || ( "${work_unit_file_state}" != "enabled" && "${work_unit_file_state}" != "disabled" \
+        && "${work_unit_file_state}" != "disabled-runtime" ) ]]; then
+      echo "ERROR: work Telegram service must be stopped before deployment" >&2
       exit 1
     fi
+  fi
+  wake_load="$(systemctl show --property=LoadState --value autostop-codex-wake.service 2>/dev/null)" || {
+    echo "ERROR: work Telegram wake state is unavailable" >&2
+    exit 1
+  }
+  wake_state="$(systemctl show --property=ActiveState --value autostop-codex-wake.service 2>/dev/null)" || {
+    echo "ERROR: work Telegram wake state is unavailable" >&2
+    exit 1
+  }
+  if [[ "${wake_load}" != "not-found" && ( "${wake_load}" != "loaded" || "${wake_state}" != "inactive" ) ]]; then
+    echo "ERROR: work Telegram wake must be stopped before deployment" >&2
+    exit 1
   fi
   if [[ -e "${monitor_env}" || -L "${monitor_env}" ]]; then
     [[ -f "${monitor_env}" && ! -L "${monitor_env}" \
@@ -308,6 +318,29 @@ chown -R root:root "${staging_dir}"
 find "${staging_dir}" -type d -exec chmod 0755 {} +
 find "${staging_dir}" -type f -exec chmod 0644 {} +
 if [[ "${account}" == "work" ]]; then
+  /usr/bin/python3 - "${staging_dir}" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+rows = []
+for path in sorted(root.rglob("*")):
+    if path.is_file() and not path.is_symlink() and path.name != "MANIFEST.sha256":
+        name = path.relative_to(root).as_posix()
+        if any(char in name for char in "\\\r\n"):
+            raise SystemExit("release_manifest_invalid")
+        rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {name}\n")
+(root / "MANIFEST.sha256").write_text("".join(rows), encoding="utf-8")
+PY
+  chmod 0644 "${staging_dir}/MANIFEST.sha256"
+  env PYTHONPATH="${staging_dir}" PYTHONSAFEPATH=1 /opt/AutostopManager/.venv/bin/python -c '
+from pathlib import Path
+import sys
+from autostop_manager.instruction_bundle import load_instruction_bundle
+root = Path(sys.argv[1])
+load_instruction_bundle(root, sys.argv[2], allowed_roots=(root.parent,))
+' "${staging_dir}" "${revision}"
   duty_controller_source="${staging_dir}/scripts/set-work-telegram-duty.sh"
   wake_installer_source="${staging_dir}/scripts/install-codex-wake.sh"
   media_wrapper_source="${staging_dir}/scripts/run-work-telegram-media.sh"
@@ -353,17 +386,6 @@ bridge_ready() {
     && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
     && grep -Eq "\"inbound_enabled\":[[:space:]]*$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)" \
       <<<"${status}"
-}
-
-start_work_bridge() {
-  systemctl enable --now "${service_unit}" || return 1
-  for _attempt in $(seq 1 15); do
-    if bridge_ready; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
 }
 
 restore_media_wrapper() {
@@ -485,6 +507,10 @@ rollback() {
       echo "durable_inbox_rollback_incompatible=true" >&2
       return 1
     fi
+    if [[ "${no_start:-0}" -eq 1 ]]; then
+      restore_previous_release_assets
+      return $?
+    fi
     systemctl stop "${service_unit}" || return 1
   fi
   restore_previous_release_assets || return 1
@@ -525,20 +551,10 @@ if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${release_dir}"; 
   exit 1
 fi
 
-if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
-  if ! systemctl stop "${service_unit}"; then
-    echo "ERROR: work Telegram transport did not enter the bounded release stop" >&2
-    exit 1
-  fi
-fi
-
 if ! activate_new_release_assets; then
   restore_succeeded=0
   if restore_previous_release_assets; then
     restore_succeeded=1
-  fi
-  if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
-    start_work_bridge || restore_succeeded=0
   fi
   if [[ "${restore_succeeded}" -eq 1 ]]; then
     echo "ERROR: Telegram release activation failed; previous release assets restored" >&2
@@ -553,9 +569,6 @@ if ! install_current_media_wrapper; then
   if restore_previous_release_assets; then
     restore_succeeded=1
   fi
-  if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
-    start_work_bridge || restore_succeeded=0
-  fi
   if [[ "${restore_succeeded}" -eq 1 ]]; then
     echo "ERROR: work media sandbox wrapper install failed; previous release assets restored" >&2
   else
@@ -565,26 +578,9 @@ if ! install_current_media_wrapper; then
 fi
 
 if [[ "${account}" == "work" ]]; then
-  if ! start_work_bridge; then
-    if rollback; then
-      echo "ERROR: work Telegram bridge readiness failed; previous release restored" >&2
-    else
-      echo "ERROR: work Telegram bridge readiness failed; no previous Telegram release exists" >&2
-    fi
-    exit 1
-  fi
-  if ! transcription_runtime_ready; then
-    if rollback; then
-      echo "ERROR: local Telegram transcription runtime failed; previous release assets restored" >&2
-    else
-      echo "ERROR: local Telegram transcription runtime failed; previous runtime was not fully restored" >&2
-    fi
-    exit 1
-  fi
   echo "telegram_bridge_deployed=true"
   echo "account=work"
-  echo "outbound=ready"
-  echo "inbound_restored=$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)"
+  echo "activation=stopped"
   cleanup_initial_release_backups
   exit 0
 fi
