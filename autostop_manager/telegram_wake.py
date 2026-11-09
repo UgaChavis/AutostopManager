@@ -3297,6 +3297,14 @@ async def daemon(config: WakeConfig | None = None) -> None:
         # Load after acquiring the same lock used by offline pin updates.
         if config is None:
             config = WakeConfig.load(CONFIG_PATH)
+        runtime_root = Path(__file__).resolve().parents[1]
+        if runtime_root.parent in INSTRUCTION_RELEASE_ROOTS:
+            try:
+                runtime_revision = (runtime_root / "REVISION").read_text(encoding="ascii").strip()
+            except (OSError, UnicodeError) as exc:
+                raise WakeError("wake_instruction_bundle_invalid") from exc
+            if (config.instruction_root, config.instruction_revision) != (str(runtime_root), runtime_revision):
+                raise WakeError("wake_instruction_release_mismatch")
         await owner.prepare()
         app = AppServer(config)
         dispatcher = DurableWakeDispatcher(app, pwd.getpwnam("autostop-work-telegram").pw_uid)

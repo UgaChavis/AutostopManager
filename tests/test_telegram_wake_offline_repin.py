@@ -146,3 +146,38 @@ def test_daemon_loads_configuration_after_acquiring_socket_lock(pinned_setup, mo
     owner = wake._WakeSocketOwner(wake.SOCKET_PATH)
     owner.acquire()
     owner.close()
+
+
+def test_installed_daemon_rejects_stale_instruction_pin(pinned_setup, monkeypatch):
+    config_path, _old, new = pinned_setup
+    original = config_path.read_bytes()
+    wake.SOCKET_PATH.parent.mkdir()
+    monkeypatch.setattr(wake, "__file__", str(new / "autostop_manager" / "telegram_wake.py"))
+
+    async def no_prepare(_owner):
+        pytest.fail("stale instructions must be rejected before preparing a listener")
+
+    monkeypatch.setattr(wake._WakeSocketOwner, "prepare", no_prepare)
+    with pytest.raises(wake.WakeError, match="wake_instruction_release_mismatch"):
+        asyncio.run(wake.daemon())
+    assert config_path.read_bytes() == original
+    owner = wake._WakeSocketOwner(wake.SOCKET_PATH)
+    owner.acquire()
+    owner.close()
+
+
+def test_installed_daemon_accepts_exact_instruction_pin(pinned_setup, monkeypatch):
+    config_path, _old, new = pinned_setup
+    monkeypatch.setattr(wake, "__file__", str(new / "autostop_manager" / "telegram_wake.py"))
+    digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+    async def stop_after_pin_verification(_owner):
+        raise wake.WakeError("runtime_pin_verified")
+
+    async def scenario():
+        await wake.setup_task(instruction_root=str(new), instruction_revision="b" * 40, expected_config_sha256=digest)
+        monkeypatch.setattr(wake._WakeSocketOwner, "prepare", stop_after_pin_verification)
+        with pytest.raises(wake.WakeError, match="runtime_pin_verified"):
+            await wake.daemon()
+
+    asyncio.run(scenario())
