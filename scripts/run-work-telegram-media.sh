@@ -82,6 +82,21 @@ release_dir="$(readlink -f -- "${release_root}" 2>/dev/null || true)"
   || "${release_dir}" == /opt/autostop-manager-releases/* ) && -d "${release_dir}" && ! -L "${release_dir}" ]] \
   || { echo "media_runtime_unavailable=true" >&2; exit 1; }
 
+script_path="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+if [[ "$(dirname -- "${script_path}")" != "${release_dir}/scripts" ]]; then
+  # The installer keeps a standalone copy solely for its pre-start self-check.
+  [[ "${self_check}" -eq 1 && "${script_path}" == /usr/local/sbin/autostop-work-telegram-media ]] \
+    && cmp -s -- "${script_path}" "${release_dir}/scripts/run-work-telegram-media.sh" \
+    || { echo "media_release_mismatch=true" >&2; exit 1; }
+fi
+
+if [[ "${self_check}" -ne 1 ]]; then
+  bridge_pid="$(timeout 10 systemctl show --property=MainPID --value autostop-work-telegram.service 2>/dev/null || true)"
+  [[ "${bridge_pid}" =~ ^[1-9][0-9]*$ ]] || { echo 'media_release_mismatch=true' >&2; exit 1; }
+  bridge_root="$(readlink -f -- "/proc/${bridge_pid}/cwd" 2>/dev/null || true)"
+  [[ "${bridge_root}" == "${release_dir}" ]] || { echo 'media_release_mismatch=true' >&2; exit 1; }
+fi
+
 venv_python="$(bash "${release_dir}/scripts/work-telegram-python.sh" bridge)" || exit 1
 
 command=(

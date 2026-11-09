@@ -98,9 +98,13 @@ EXTERNAL_SKILL_PACKAGES = frozenset(
         "windsor-ai",
         "github",
         "build-web-apps",
+        "cloud-environment",
         "codex-security",
+        "defense-factory",
+        "google-drive",
         "openai-developers",
         "plugin-management",
+        "sites",
         "visualize",
     }
 )

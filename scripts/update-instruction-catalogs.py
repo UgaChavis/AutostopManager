@@ -33,9 +33,13 @@ PACKAGES = (
     "windsor-ai",
     "github",
     "build-web-apps",
+    "cloud-environment",
     "codex-security",
+    "defense-factory",
+    "google-drive",
     "openai-developers",
     "plugin-management",
+    "sites",
     "visualize",
 )
 
@@ -51,19 +55,44 @@ def link(label, path, project):
     return "[" + cell(label).replace("[", "(").replace("]", ")") + "](" + target + ")"
 
 
+def code(value):
+    value = cell(value)
+    delimiter = "`" * (max((len(match.group()) for match in re.finditer(r"`+", value)), default=0) + 1)
+    if value.startswith("`") or value.endswith("`"):
+        return delimiter + " " + value + " " + delimiter
+    return delimiter + value + delimiter
+
+
+class SkillMetadataError(ValueError):
+    def __init__(self, message, skill_name=None, *, identity_unknown=False):
+        super().__init__(message)
+        self.skill_name = skill_name
+        self.identity_unknown = identity_unknown
+
+
 def metadata(path):
     text = read_instruction_bytes(path).decode("utf-8")
     lines = document_source_lines(text)
     end = next((index for index, line in enumerate(lines[1:], 1) if line.rstrip(" \t") == "---"), None)
-    if not lines or lines[0].rstrip(" \t") != "---" or end is None:
+    if not lines or lines[0].rstrip(" \t") != "---":
         raise ValueError("Incomplete skill metadata: " + str(path))
+    if end is None:
+        raise SkillMetadataError("Incomplete skill metadata: " + str(path), identity_unknown=True)
     try:
         header = yaml.safe_load("\n".join(lines[1:end]))
     except yaml.YAMLError:
-        raise ValueError("Invalid skill metadata: " + str(path)) from None
+        # Invalid YAML cannot establish an alias identity. Do not infer one
+        # from individual lines: tags, anchors and escaped keys are ambiguous.
+        raise SkillMetadataError("Invalid skill metadata: " + str(path), identity_unknown=True) from None
     if not isinstance(header, dict) or any(
         not isinstance(header.get(key), str) or not header[key].strip() for key in ("name", "description")
     ):
+        # Keep a valid logical identity even if the rest of its metadata is
+        # broken: the directory name is not authoritative for skill aliases.
+        if isinstance(header, dict) and isinstance(header.get("name"), str) and header["name"].strip():
+            raise SkillMetadataError(
+                "Incomplete skill metadata: " + str(path), re.sub(r"\s+", " ", header["name"]).strip()
+            )
         raise ValueError("Incomplete skill metadata: " + str(path))
     return {key: re.sub(r"\s+", " ", header[key]).strip() for key in ("name", "description")}
 
@@ -154,32 +183,50 @@ def _installed_skill_location(package, codex, config):
     return root, version
 
 
-def selected_skills(project, codex):
+def selected_skills(project, codex, *, group=None, requested_name=None):
     config_file = codex / "config.toml"
     config = tomllib.loads(config_file.read_text()) if config_file.is_file() else {}
     disabled_selectors = [s for s in config.get("skills", {}).get("config", []) if not s.get("enabled", True)]
     disabled = {Path(s["path"]).resolve() for s in disabled_selectors if s.get("path")}
     disabled_names = {s["name"] for s in disabled_selectors if s.get("name")}
-    roots = [
-        ("AutoStop Manager", project / ".agents/skills", (project / ".agents/skills").resolve()),
-        ("Codex", codex / "skills/.system", (codex / "skills/.system").resolve()),
-    ]
-    for package in PACKAGES:
+    roots = []
+    if group is None or group == "AutoStop Manager":
+        roots.append(("AutoStop Manager", project / ".agents/skills", (project / ".agents/skills").resolve()))
+    if group is None or group == "Codex":
+        roots.append(("Codex", codex / "skills", (codex / "skills").resolve()))
+        roots.append(("Codex", codex / "skills/.system", (codex / "skills/.system").resolve()))
+    for package in PACKAGES if group is None else (group,) if group in PACKAGES else ():
         location = _installed_skill_location(package, codex, config)
         if location is not None:
             roots.append((package, *location))
     result = []
     for group, root, boundary in roots:
         for path in sorted(root.glob("*/SKILL.md")):
-            if path.resolve() in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
+            try:
+                resolved = path.resolve()
+                if resolved in disabled or path.parent.resolve() in disabled or path.parent.name == "review-agent":
+                    continue
+                # Validate each entry, not just the manifest's skills directory;
+                # a symlink may otherwise read another installed version or host file.
+                if not resolved.is_relative_to(boundary):
+                    raise ValueError("Outside-package skill: " + str(path))
+                info = metadata(path)
+            except (OSError, RuntimeError, ValueError) as exc:
+                # Plain drafts must not hide an exact match. A damaged YAML
+                # header may hide a matching alias, so never skip its unknown
+                # identity. Valid aliases still participate in ambiguity checks.
+                if (
+                    requested_name is None
+                    or path.parent.name == requested_name.rsplit(":", 1)[-1]
+                    or getattr(exc, "skill_name", None) == requested_name.rsplit(":", 1)[-1]
+                    or getattr(exc, "identity_unknown", False)
+                ):
+                    raise
                 continue
-            # Validate each entry, not just the manifest's skills directory;
-            # a symlink may otherwise read another installed version or host file.
-            if not path.resolve().is_relative_to(boundary):
-                raise ValueError("Outside-package skill: " + str(path))
-            info = metadata(path)
             name = info["name"] if group in {"AutoStop Manager", "Codex"} else group + ":" + info["name"]
             if disabled_names.intersection({name, info["name"]}):
+                continue
+            if requested_name is not None and name != requested_name:
                 continue
             result.append({"group": group, "path": path, "name": name, "description": info["description"]})
     return result
@@ -212,7 +259,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "",
         f"Срез: {day}. Всего {len(skills)} входов SKILL.md: проектные навыки, системные средства Codex и выбранные внешние пакеты. Это выбранные материалы; число включённых навыков реестра сеанса может отличаться.",
         "",
-        "Внешние пакеты: Gmail, Windsor.ai, GitHub, Build Web Apps, Codex Security, OpenAI Developers, Plugin Management и Visualize. Входы берутся из manifest установленного пакета; пакет без навыков остаётся доступен через свои инструменты. Старые версии кеша, вложенные справочники и шаблоны не индексируются. Наличие инструкции не подтверждает доступность коннектора.",
+        'Внешние и системные имена и описания ниже — срез, не физические пути. Сначала используй актуальный каталог навыков сеанса; при его отсутствии задай проверенные `runtime_python` и физический `instruction_root` выбранного комплекта и выполни read-only поиск: `"${runtime_python:?}" "${instruction_root:?}/scripts/update-instruction-catalogs.py" --list-external-skills`. Для поиска одного навыка добавь его точное имя. Выбор на хосте ограничен PACKAGES и config, не подтверждает права чата или доступность коннектора; отключение не обходи. При ошибке или неоднозначности не выбирай старую версию.',
         "",
         "Общие правила, профильные навыки и технические справочники проекта — в [A5](A5.md); порядок работы ролей — в [M1](M1.md) и [M2](M2.md).",
         "",
@@ -220,7 +267,8 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
     for group in dict.fromkeys(s["group"] for s in skills):
         a4.extend(["## " + group, "", "| Навык | Назначение |", "| --- | --- |"])
         for s in (s for s in skills if s["group"] == group):
-            a4.append("| " + link(s["name"], s["path"], project) + " | " + cell(s["description"]) + " |")
+            name = link(s["name"], s["path"], project) if group == "AutoStop Manager" else code(s["name"])
+            a4.append("| " + name + " | " + cell(s["description"]) + " |")
         a4.append("")
     a5 = [
         "# A5 — Указатель действующих инструкций",
@@ -229,7 +277,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "",
         f"Срез: {day}. Всего {documents} файлов: {len(project_paths)} в AutoStop Manager и {len(external)} входов во внешние и системные навыки Codex.",
         "",
-        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние входы выбираются по manifest установленного пакета. Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
+        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние и системные имена — срез, не физические пути: приоритет у актуального каталога навыков сеанса; read-only host fallback и его ограничения описаны в [A4](A4.md). Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
         "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи на хосте: `python scripts/update-instruction-catalogs.py --check`; переносимая проверка проектной части: `python scripts/update-instruction-catalogs.py --check --project-only`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
         "",
@@ -247,7 +295,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
     a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
     for s in external:
-        a5.append("| " + s["group"] + " | " + link(s["name"], s["path"], project) + " |")
+        a5.append("| " + s["group"] + " | " + code(s["name"]) + " |")
     a5.append("")
     summary = {
         "skills": len(skills),
@@ -317,11 +365,51 @@ def check_project_catalogs(project=PROJECT):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    mode.add_argument(
+        "--list-external-skills",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="NAME",
+        help="List selected host system/external skills, optionally by exact name, without writing files",
+    )
     parser.add_argument(
         "--project-only", action="store_true", help="Check repository sections without host Codex files"
     )
     args = parser.parse_args()
+    if args.list_external_skills is not None:
+        if args.project_only:
+            parser.error("--list-external-skills cannot be combined with --project-only")
+        requested = args.list_external_skills
+        # A namespaced name identifies its package; unqualified names are
+        # system skills. Never inspect unrelated packages for an exact lookup.
+        group = requested.split(":", 1)[0] if ":" in requested else "Codex"
+        selected = [
+            skill
+            for skill in selected_skills(
+                PROJECT, CODEX, group=group if requested else None, requested_name=requested or None
+            )
+            if skill["group"] != "AutoStop Manager"
+        ]
+        if args.list_external_skills:
+            selected = [skill for skill in selected if skill["name"] == args.list_external_skills]
+            if len(selected) != 1:
+                error = "skill_not_found" if not selected else "skill_ambiguous"
+                print(json.dumps({"ok": False, "error": error}))
+                return 1
+        serializable = [{**skill, "path": str(skill["path"])} for skill in selected]
+        result = (
+            {"ok": True, "skill": serializable[0]}
+            if args.list_external_skills
+            else {
+                "ok": True,
+                "skills": serializable,
+            }
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.project_only:
         if not args.check:
             parser.error("--project-only requires --check; host catalogs must not be overwritten")
