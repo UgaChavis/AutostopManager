@@ -3284,7 +3284,7 @@ async def local_request(request: dict[str, Any], path: Path = SOCKET_PATH) -> di
     return dict(await _await_until(exchange(), deadline, retained))
 
 
-async def daemon(config: WakeConfig) -> None:
+async def daemon(config: WakeConfig | None = None) -> None:
     reject_obsolete_runtime_config()
     owner = _WakeSocketOwner(SOCKET_PATH)
     owner.acquire()
@@ -3294,6 +3294,9 @@ async def daemon(config: WakeConfig) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stopping.set)
     try:
+        # Load after acquiring the same lock used by offline pin updates.
+        if config is None:
+            config = WakeConfig.load(CONFIG_PATH)
         await owner.prepare()
         app = AppServer(config)
         dispatcher = DurableWakeDispatcher(app, pwd.getpwnam("autostop-work-telegram").pw_uid)
@@ -3322,9 +3325,57 @@ async def daemon(config: WakeConfig) -> None:
                 owner.close()
 
 
-async def setup_task(*, probe: bool = False) -> dict[str, Any]:
+def _write_wake_config(config: WakeConfig, expected_sha256: str) -> None:
+    # Use the same stable lock for worker selection and offline pin changes.
+    lock_path = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection.lock")
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(lock_fd, "a") as selection_lock:
+        fcntl.flock(selection_lock, fcntl.LOCK_EX)
+        if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != expected_sha256:
+            raise WakeError("wake_config_changed")
+        temporary = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as target:
+                json.dump(asdict(config), target)
+                target.write("\n")
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, CONFIG_PATH)
+            directory_fd = os.open(CONFIG_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+async def setup_task(
+    *,
+    probe: bool = False,
+    instruction_root: str | None = None,
+    instruction_revision: str | None = None,
+    expected_config_sha256: str | None = None,
+) -> dict[str, Any]:
     if not probe and os.geteuid() != 0:
         raise WakeError("wake_setup_denied")
+    pin_args = (instruction_root, instruction_revision, expected_config_sha256)
+    if any(value is not None for value in pin_args):
+        if probe or not all(pin_args):
+            raise WakeError("wake_instruction_arguments_required")
+        assert instruction_root is not None and instruction_revision is not None and expected_config_sha256 is not None
+        SOCKET_PATH.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+        owner = _WakeSocketOwner(SOCKET_PATH)
+        owner.acquire()
+        try:
+            config = WakeConfig.load(CONFIG_PATH)
+            validate_instruction_bundle(instruction_root, instruction_revision)
+            config = replace(config, instruction_root=instruction_root, instruction_revision=instruction_revision)
+            _write_wake_config(config, expected_config_sha256)
+        finally:
+            owner.close()
+        return {"ok": True, "existing": True, "instruction_revision": instruction_revision}
     if not probe and CONFIG_PATH.exists():
         WakeConfig.load()
         return {"ok": True, "existing": True}
@@ -3425,30 +3476,7 @@ async def select_worker(
         if model is not None and app.resumed_model != model:
             raise WakeError("wake_worker_model_mismatch")
         await app.request("thread/name/set", {"threadId": ident, "name": WORKER_TASK_NAME})
-        # Keep the lock on a stable inode: publishing replaces CONFIG_PATH itself.
-        lock_path = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection.lock")
-        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        with os.fdopen(lock_fd, "a") as selection_lock:
-            fcntl.flock(selection_lock, fcntl.LOCK_EX)
-            # Guard again after RPCs. A concurrent configuration change is not overwritten.
-            if hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != expected_config_sha256:
-                raise WakeError("wake_config_changed")
-            temporary = CONFIG_PATH.with_name(CONFIG_PATH.name + ".worker-selection")
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                with os.fdopen(fd, "w") as target:
-                    json.dump(asdict(config), target)
-                    target.write("\n")
-                    target.flush()
-                    os.fsync(target.fileno())
-                os.replace(temporary, CONFIG_PATH)
-                directory_fd = os.open(CONFIG_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            finally:
-                temporary.unlink(missing_ok=True)
+        _write_wake_config(config, expected_config_sha256)
         return {"ok": True, "selected": True, "separate_worker": True, "instruction_revision": instruction_revision}
     finally:
         await app.close()
@@ -3485,7 +3513,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "daemon":
-            asyncio.run(daemon(WakeConfig.load()))
+            asyncio.run(daemon())
             return 0
         if args.command == "select-worker":
             if not all(
@@ -3502,7 +3530,14 @@ def main() -> int:
                 )
             )
         elif args.command in {"setup", "probe"}:
-            result = asyncio.run(setup_task(probe=args.command == "probe"))
+            result = asyncio.run(
+                setup_task(
+                    probe=args.command == "probe",
+                    instruction_root=args.instruction_root,
+                    instruction_revision=args.instruction_revision,
+                    expected_config_sha256=args.expected_config_sha256,
+                )
+            )
         elif args.command == "failed-context":
             result = asyncio.run(local_request({"operation": "failed_context"}))
         elif args.command == "recover-failed":

@@ -276,6 +276,15 @@ env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verif
 worker не являются обязательным шагом обычного обновления; специальные случаи —
 в [telegram-runtime.md](telegram-runtime.md).
 
+Для обновления инструкций без смены служебного чата сначала заверши либо удержи
+активные задания и останови wake. Из проверенного нового snapshot запусти
+`telegram_wake setup --instruction-root PHYSICAL_ROOT --instruction-revision SHA
+--expected-config-sha256 CONFIG_SHA256`, указав свежий SHA-256 файла
+`/etc/autostop-work-telegram/wake.json`. Команда проверяет граф инструкций,
+блокирует работающий wake, атомарно меняет только привязку и сохраняет остальные
+настройки. При несовпадении SHA перечитай конфигурацию, не повторяй вслепую.
+До возобновления независимо проверь сохранённый thread ID и новую привязку.
+
 Уже существующий hold или duty имеет владельца: обслуживание не даёт права снимать
 чужое удержание. До возобновления проверь scheduler/socket/readiness, managed timers,
 CRM/Telegram и исходные состояния управления. Неизвестный внешний эффект сначала
