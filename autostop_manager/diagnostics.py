@@ -67,6 +67,7 @@ MODULE_PARENTS: dict[str, str | None] = {
     "I1": None,
     "I2": None,
     "J1": None,
+    "K1": None,
     "M1": None,
     "M2": "M1",
 }
