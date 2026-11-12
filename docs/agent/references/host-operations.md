@@ -1,6 +1,6 @@
 # Хосты, службы и резервные копии
 
-MNG1 — прикладной сервер `vps26457.mnogoweb.in`: AutoStop Manager, CRM, Store, Telegram, G1, J1, Nginx и PostgreSQL. Для разработки Manager выбирай актуальный checkout или worktree; `/opt/AutostopManager` также содержит действующие данные и настройки. Source CRM и Store: `/opt/autostopcrm`, `/opt/autostopapp`. Installed Manager: `/opt/autostop-manager-releases/current`; Store: `/opt/autostop-app`. Каталоги Git и installed runtime имеют разные роли.
+MNG1 — прикладной сервер `vps26457.mnogoweb.in`: AutoStop Manager, CRM, Store, Telegram, G1, J1, [сайт автосервиса K1](../modules/K1.md), Nginx и PostgreSQL. Для разработки Manager выбирай актуальный checkout или worktree; `/opt/AutostopManager` также содержит действующие данные и настройки. Source CRM и Store: `/opt/autostopcrm`, `/opt/autostopapp`; отдельный source сайта: `/opt/autostop-website`. Installed Manager: `/opt/autostop-manager-releases/current`; Store: `/opt/autostop-app`; опубликованный сайт: `/var/www/autostop24/current`. Каталоги Git и installed runtime имеют разные роли.
 
 Основной VPN — MNG2 (раньше MNJ2), резервный — `fst.kz`. Перед VPN работой установи точную текущую identity и SSH-доступ; это отдельный scope. Старый alias и `/root/AutostopVPN/repo` на MNG1 не доказывают доступ к MNG2. Для FST используй [VPN skill](../../../.agents/skills/manage-fst-vpn/SKILL.md), проверяя hostname/container и клиентскую связь отдельно. VPN исключён из обычного прикладного выпуска.
 
@@ -34,6 +34,7 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 | `autostop-codex-start.service` | Codex boot daemon и App Server status; restart по разрешённому runbook. |
 | `autostop-j1.service`, `autostop-j1-browser.service` | Static probe; для browser ещё renderer/proxy, socket и revision-bound attestation. |
 | `autostopcrm`, `autostop-db`, `autostop-app` | Health + revision, private transport и API contract. |
+| `autostop24.ru`, Nginx site `autostop24-website` | Static release, publish receipt, TLS/redirect/HTTP и публичные маршруты; [порядок сайта](website-runtime.md). Сайт обновляется отдельно от приложений. |
 | `autostop-searxng`, optional browser containers | Container health и отдельные static/browser вызовы. Исторический `autostop-crawl4ai` не обязателен текущему runtime; перед старым rollback восстанови точный cold image по CRM runbook. |
 | `autostop24-db-backup.timer` | В 03:30 UTC новый Store helper сохраняет одну проверенную генерацию DB, files и settings в `/var/backups/autostop-current/store`; Result и manifest проверяются отдельно. Читаемость dump не заменяет локальное восстановление. |
 | `autostop-app-watchdog.timer` | Store deploy сам ставит pause/release; не включай timer вручную внутри deploy. |
