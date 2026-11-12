@@ -12,6 +12,7 @@ import pytest
 from test_telegram_bridge_durable import (
     Client,
     MediaClient,
+    User,
     _job,
     _media_request,
     _message,
@@ -30,7 +31,7 @@ from test_telegram_wake_durable import FakeJobs
 
 
 async def resolve(_client, _peer):
-    return 42, {"id": 42, "kind": "private"}
+    return User(42), {"id": 42, "kind": "private"}
 
 
 def direct_request(config, operation):
@@ -545,7 +546,7 @@ def test_schema4_failed_orphan_with_completed_replacement_does_not_revive_on_mig
     fresh = monitor.record(_message(104)) if fresh_before_reopen else None
     path = close_as_schema4(inbox, schema_version=schema_version)
     with TelegramInbox(path) as restored:
-        assert restored.status()["schema_version"] == 8
+        assert restored.status()["schema_version"] == 9
         assert restored.read_job(original["job_id"]) == historical
         assert restored.read_job(replacement["job_id"]) == replacement_before
         assert restored.event_state(first) == restored.event_state(followup) == "reply_verified"
@@ -888,7 +889,7 @@ def test_schema5_existing_unknown_hold_keeps_its_facts_and_gets_safe_default_mar
     )
     path = close_as_schema4(inbox, schema_version=5)
     with TelegramInbox(path) as restored:
-        assert restored.status()["schema_version"] == 8
+        assert restored.status()["schema_version"] == 9
         assert restored.read_job(job["job_id"]) == before
         assert before["effects_review_required"] == 0
         assert restored.event_state(event) == "open"
@@ -906,7 +907,7 @@ def test_schema6_review_marker_is_rejected_by_schema5_writer_before_mutation(tmp
     monitor.record(_message(102))
     path = close_as_schema4(inbox, schema_version=5)
     with TelegramInbox(path) as current:
-        assert current._meta("schema_version") == "8"
+        assert current._meta("schema_version") == "9"
         assert current.read_job(old["job_id"])["effects_review_required"] == 1
         before = list(current._db.iterdump())
     # The version check is the old writer's unchanged native admission gate;

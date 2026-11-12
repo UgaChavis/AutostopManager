@@ -10,6 +10,7 @@ from autostop_manager.telegram_inbox import InboxError
 from test_telegram_bridge_durable import (
     Client,
     MediaClient,
+    User,
     _job,
     _media_request,
     _message,
@@ -88,7 +89,7 @@ def test_final_revalidation_catches_change_during_anchor_read(tmp_path):
 @pytest.mark.parametrize("operation", ["send", "send_photo", "send_document"])
 def test_new_inbound_during_final_exact_rpc_revokes_all_send_kinds(tmp_path, monkeypatch, operation):
     async def resolve(_client, _peer):
-        return 42, {"id": 42, "kind": "private"}
+        return User(42), {"id": 42, "kind": "private"}
 
     monkeypatch.setattr(bridge, "_resolve_peer", resolve)
 
@@ -232,7 +233,7 @@ class HistoryClient(Client):
 @pytest.mark.parametrize("change", ["edit", "delete"])
 def test_used_older_history_is_revalidated_outside_recent_and_covered_refs(tmp_path, monkeypatch, outgoing, change):
     async def resolve(_client, _peer):
-        return 42, {"id": 42, "kind": "private"}
+        return User(42), {"id": 42, "kind": "private"}
 
     monkeypatch.setattr(bridge, "_resolve_peer", resolve)
 
@@ -275,7 +276,7 @@ def test_used_older_history_is_revalidated_outside_recent_and_covered_refs(tmp_p
 def test_history_pages_reach_old_agreement_without_gaps_or_cross_peer(tmp_path, monkeypatch):
     async def resolve(_client, peer):
         assert peer == "42"
-        return 42, {"id": 42, "kind": "private"}
+        return User(42), {"id": 42, "kind": "private"}
 
     monkeypatch.setattr(bridge, "_resolve_peer", resolve)
 

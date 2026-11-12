@@ -103,6 +103,7 @@ Work CLI: пользователь `autostop-work-telegram`, физически�
 | `owner-status`, `owner-configure` | Проверить привязку владельца; configure меняет её только по поручению и с readback. |
 | `dialogs`, `search`, `resolve-phone` | Разрешённый поиск диалога; не заменяет адресата рабочего события. |
 | `monitor-target`, `monitor-read`, `monitor-context`, `read` | Точный адресат, роль и разрешённый контекст; context не заменяет исходящие в read. |
+| `monitor-reclassify` | Root-only повторная проверка типа отправителя точного `identity_pending` события по Telegram; подтверждённый клиент поступает в клиентскую очередь, бот — в `bot_pending`. |
 | `owner-event-read` | Исторический owner-контракт; новые рабочие входящие обрабатываются по B2 как клиентские. |
 | `send`, `send-photo`, `send-document` | Dry-run/apply, исходный ключ, независимый readback; рабочий ответ связан с заданием и версией. |
 | `send-voice` | Только personal: приватный outbox OGG/Opus, 10 MiB/10 минут, точный числовой private peer; dry-run/apply и идемпотентность, фактические voice/MIME/duration/size и скачанные байты. |
