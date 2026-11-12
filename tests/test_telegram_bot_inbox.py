@@ -218,3 +218,58 @@ def test_source_validation_and_duty_exclusion(queue):
     with pytest.raises(InboxError, match="inbound_source_kind_conflict"):
         queue.record(1, 1, source_kind="bot")
     assert queue.record(1, 1, source_kind="unknown") == client
+
+
+def test_schema_eight_bot_reclassification_preserves_review_history(tmp_path):
+    path = tmp_path / "inbox" / "events.sqlite3"
+    with TelegramInbox(path) as inbox:
+        inbox.duty_set(True)
+        held = inbox.record(1, 1)
+        pending = inbox.record(1, 2)
+        client = inbox.record(2, 1)
+        with inbox._write():
+            inbox._hold_refs([held.removeprefix("inbound-")], 1, ROOT, REVISION, reason_code="previous_review")
+        original_job = inbox.active_jobs()[0]
+        with inbox._db:
+            inbox._db.execute("UPDATE metadata SET value='8' WHERE key='schema_version'")
+            inbox._db.execute("ALTER TABLE events DROP COLUMN sender_kind_verified")
+
+    with TelegramInbox(path) as inbox:
+        assert inbox.record(1, 1, source_kind="bot") == held
+        assert inbox.record(1, 2, source_kind="bot") == pending
+        assert inbox.event_state(held) == "open"
+        assert inbox.event_state(pending) == "bot_pending"
+        assert inbox.read_job(original_job["job_id"]) == original_job
+        assert inbox.status()["needs_review_jobs"] == 1
+        assert claim(inbox)["event_ids"] == [client]
+        with pytest.raises(InboxError, match="inbound_event_not_client"):
+            inbox.resolve(held)
+        generation = inbox.generation
+        assert inbox.record(1, 1, source_kind="bot") == held
+        assert inbox.generation == generation
+
+    with TelegramInbox(path) as inbox:
+        assert inbox.record(1, 1, source_kind="bot") == held
+        assert inbox.read_job(original_job["job_id"]) == original_job
+        # A later recovery may detach an old event from its holder. Its
+        # verified bot classification still excludes it from client claims.
+        with inbox._db:
+            inbox._db.execute("UPDATE events SET job_id=NULL WHERE peer_id=1")
+            inbox._db.execute("UPDATE jobs SET state='retired' WHERE peer_id=1")
+        assert claim(inbox) is None
+
+
+@pytest.mark.parametrize("schema", [8, 9])
+def test_verified_historical_clients_keep_source_conflict_guard(tmp_path, schema):
+    path = tmp_path / "inbox" / "events.sqlite3"
+    with TelegramInbox(path) as inbox:
+        inbox.duty_set(True)
+        event = inbox.record(1, 1)
+        with inbox._db:
+            inbox._db.execute("UPDATE metadata SET value=? WHERE key='schema_version'", (str(schema),))
+            inbox._db.execute("ALTER TABLE events DROP COLUMN sender_kind_verified")
+    with TelegramInbox(path) as inbox:
+        if schema == 8:
+            assert inbox.record(1, 1, source_kind="client") == event
+        with pytest.raises(InboxError, match="inbound_source_kind_conflict"):
+            inbox.record(1, 1, source_kind="bot")

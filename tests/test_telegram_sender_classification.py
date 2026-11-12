@@ -2,6 +2,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from autostop_manager.telegram_bridge import (
     DurableInboundMonitor,
     _capture_incoming_event,
@@ -118,9 +120,14 @@ def test_bot_read_acknowledge_and_unknown_reclassify(tmp_path):
         assert resolved["state"] == "open"
 
 
-def test_reconnect_recovery_keeps_bot_out_of_client_queue(tmp_path):
+@pytest.mark.parametrize("legacy_event", [False, True])
+def test_reconnect_recovery_keeps_bot_out_of_client_queue(tmp_path, legacy_event):
     with TelegramInbox(tmp_path / "inbox" / "events.sqlite3") as inbox:
         inbox.duty_set(True, at=(datetime.now(UTC) - timedelta(hours=1)).isoformat())
+        if legacy_event:
+            inbox.record(12, 4)
+            with inbox._db:
+                inbox._db.execute("UPDATE events SET sender_kind_verified=0")
         monitor = DurableInboundMonitor(inbox, enabled=True)
         monitor.reconciliation_transport_hook = lambda: True
         message = SimpleNamespace(
@@ -141,4 +148,5 @@ def test_reconnect_recovery_keeps_bot_out_of_client_queue(tmp_path):
         consumed, complete, blocked = asyncio.run(_reconcile_peer_history(Client(), User(12, bot=True), 12, monitor, 5))
         assert (consumed, complete, blocked) == (1, True, False)
         assert inbox.events()[0]["state"] == "bot_pending"
+        assert inbox.checkpoint(12) == 4
         assert inbox.claim(instruction_root="/opt/test-runtime", instruction_revision="a" * 40) is None

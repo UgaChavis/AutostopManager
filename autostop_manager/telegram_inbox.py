@@ -342,6 +342,10 @@ class TelegramInbox:
             if "content_revision" not in event_columns:
                 self._db.execute("ALTER TABLE events ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0")
                 self._db.execute("UPDATE events SET content_revision=context_revision")
+            if "sender_kind_verified" not in event_columns:
+                self._db.execute("ALTER TABLE events ADD COLUMN sender_kind_verified INTEGER NOT NULL DEFAULT 1")
+                if int(self._meta("schema_version")) < 9:
+                    self._db.execute("UPDATE events SET sender_kind_verified=0")
             effect_columns = {row[1] for row in self._db.execute("PRAGMA table_info(effects)")}
             if "event_coverage_sha256" not in effect_columns:
                 # Never infer legacy receipt coverage from a possibly refreshed job.
@@ -703,7 +707,23 @@ class TelegramInbox:
             if old["source_kind"] == "bot" and source_kind == "client":
                 raise InboxError("inbound_source_kind_conflict")
             if old["source_kind"] is None and source_kind == "bot":
-                raise InboxError("inbound_source_kind_conflict")
+                if old["sender_kind_verified"]:
+                    raise InboxError("inbound_source_kind_conflict")
+                # Before schema 9 every sender was implicitly a client. Keep
+                # original job/receipt history, including unresolved holds.
+                with self._write():
+                    self._db.execute("INSERT INTO nonclient_sources VALUES (?,'bot',0)", (old["sequence"],))
+                    self._db.execute(
+                        "UPDATE events SET sender_kind_verified=1,"
+                        "state=CASE WHEN state='open' AND job_id IS NULL THEN 'bot_pending' ELSE state END "
+                        "WHERE sequence=?",
+                        (old["sequence"],),
+                    )
+                    self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+                return f"inbound-{old['sequence']}"
+            if old["source_kind"] is None and source_kind == "client" and not old["sender_kind_verified"]:
+                with self._write():
+                    self._db.execute("UPDATE events SET sender_kind_verified=1 WHERE sequence=?", (old["sequence"],))
             if old["source_kind"] == "unknown" and source_kind != "unknown":
                 with self._write():
                     if source_kind == "bot":
@@ -1226,6 +1246,7 @@ class TelegramInbox:
         with self._write(changed_only=True):
             first = self._db.execute(
                 "SELECT events.* FROM events WHERE state='open' AND job_id IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM nonclient_sources WHERE nonclient_sources.sequence=events.sequence) "
                 "AND (? IS NULL OR events.peer_id<>?) "
                 "AND NOT EXISTS (SELECT 1 FROM client_controls WHERE client_controls.peer_id=events.peer_id "
                 "AND state<>'active') "
@@ -1242,6 +1263,7 @@ class TelegramInbox:
             rows = list(
                 self._db.execute(
                     "SELECT sequence FROM events WHERE state='open' AND job_id IS NULL AND peer_id=? "
+                    "AND NOT EXISTS (SELECT 1 FROM nonclient_sources WHERE nonclient_sources.sequence=events.sequence) "
                     "AND received_at BETWEEN ? AND ? ORDER BY received_at,rowid LIMIT ?",
                     (first["peer_id"], first["received_at"], upper, 5),
                 )
