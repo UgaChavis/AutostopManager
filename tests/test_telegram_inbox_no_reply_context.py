@@ -206,7 +206,7 @@ def test_schema6_receipts_migrate_without_guessed_coverage_and_reject_old_writer
         db.execute("ALTER TABLE effects DROP COLUMN event_coverage_sha256")
         db.execute("UPDATE metadata SET value='6' WHERE key='schema_version'")
     with TelegramInbox(path, clock=Clock()) as upgraded:
-        assert upgraded.status()["schema_version"] == 8
+        assert upgraded.status()["schema_version"] == 9
         effect = upgraded.read_effect(key)
         assert effect["verified"] and effect["event_coverage_sha256"] is None
         upgraded.set_client_control(42, action="pause", expected_revision=0)
