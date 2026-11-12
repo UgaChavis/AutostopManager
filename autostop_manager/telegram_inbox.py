@@ -22,8 +22,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-INBOX_SCHEMA_VERSION = 8
-SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8)
+INBOX_SCHEMA_VERSION = 9
+SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 WORKER_PROTOCOL_VERSION = 3
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
@@ -251,6 +251,11 @@ class TelegramInbox:
                 sequence TEXT PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
                 reason_code TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS nonclient_sources (
+                sequence TEXT PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
+                source_kind TEXT NOT NULL CHECK(source_kind IN ('bot','unknown')),
+                duty_ambiguous INTEGER NOT NULL CHECK(duty_ambiguous IN (0,1))
+            );
             CREATE TABLE IF NOT EXISTS peer_threads (
                 peer_id INTEGER PRIMARY KEY REFERENCES peers(peer_id),
                 thread_id TEXT UNIQUE, creation_key TEXT NOT NULL UNIQUE,
@@ -463,6 +468,28 @@ class TelegramInbox:
 
     def resolve(self, event_id: str) -> InboundReference:
         row = self._event_row(event_id)
+        if self._db.execute("SELECT 1 FROM nonclient_sources WHERE sequence=?", (row["sequence"],)).fetchone():
+            raise InboxError("inbound_event_not_client")
+        return InboundReference(int(row["sequence"]), row["peer_id"], row["message_id"], row["received_at"])
+
+    def resolve_identity_pending(self, event_id: str) -> InboundReference:
+        """Return the locator for trusted identity reconciliation, never its content."""
+        row = self._event_row(event_id)
+        source = self._db.execute(
+            "SELECT source_kind FROM nonclient_sources WHERE sequence=?", (row["sequence"],)
+        ).fetchone()
+        if row["state"] != "identity_pending" or source is None or source[0] != "unknown":
+            raise InboxError("inbound_identity_not_pending")
+        return InboundReference(int(row["sequence"]), row["peer_id"], row["message_id"], row["received_at"])
+
+    def resolve_bot_notification(self, event_id: str) -> InboundReference:
+        """Return only a pending bot locator for a trusted notification reader."""
+        row = self._event_row(event_id)
+        source = self._db.execute(
+            "SELECT source_kind FROM nonclient_sources WHERE sequence=?", (row["sequence"],)
+        ).fetchone()
+        if row["state"] != "bot_pending" or source is None or source[0] != "bot":
+            raise InboxError("inbound_event_not_bot_pending")
         return InboundReference(int(row["sequence"]), row["peer_id"], row["message_id"], row["received_at"])
 
     def event_state(self, event_id: str) -> str:
@@ -658,16 +685,37 @@ class TelegramInbox:
         received_at: str | None = None,
         *,
         timestamp_precision: str = "exact",
+        source_kind: str = "client",
     ) -> str | None:
-        """Commit one locator only inside an explicitly enabled duty window."""
+        """Commit a locator in a duty window; unknown identity stays out of client work."""
 
         _positive(peer_id, "inbound_peer_invalid")
         _positive(message_id, "inbound_message_invalid")
+        if not isinstance(source_kind, str) or source_kind not in {"client", "bot", "unknown"}:
+            raise InboxError("inbound_source_kind_invalid")
         timestamp = self._now() if received_at is None else _timestamp(received_at)
         old = self._db.execute(
-            "SELECT sequence FROM events WHERE peer_id=? AND message_id=?", (peer_id, message_id)
+            "SELECT events.*,nonclient_sources.source_kind,nonclient_sources.duty_ambiguous "
+            "FROM events LEFT JOIN nonclient_sources USING(sequence) WHERE peer_id=? AND message_id=?",
+            (peer_id, message_id),
         ).fetchone()
         if old is not None:
+            if old["source_kind"] == "bot" and source_kind == "client":
+                raise InboxError("inbound_source_kind_conflict")
+            if old["source_kind"] is None and source_kind == "bot":
+                raise InboxError("inbound_source_kind_conflict")
+            if old["source_kind"] == "unknown" and source_kind != "unknown":
+                with self._write():
+                    if source_kind == "bot":
+                        self._db.execute(
+                            "UPDATE nonclient_sources SET source_kind='bot' WHERE sequence=?", (old["sequence"],)
+                        )
+                        self._db.execute("UPDATE events SET state='bot_pending' WHERE sequence=?", (old["sequence"],))
+                    else:
+                        self._db.execute("DELETE FROM nonclient_sources WHERE sequence=?", (old["sequence"],))
+                        self._activate_client_event(
+                            old["sequence"], peer_id, message_id, old["received_at"], bool(old["duty_ambiguous"])
+                        )
             return f"inbound-{old['sequence']}"
         checkpoint = self.checkpoint(peer_id)
         if checkpoint is not None and message_id <= checkpoint:
@@ -679,51 +727,89 @@ class TelegramInbox:
         sequence = str(secrets.randbits(128) or 1)
         with self._write():
             self._prune()
-            count = self._db.execute("SELECT COUNT(*) FROM events WHERE state='open'").fetchone()[0]
+            count = self._db.execute(
+                "SELECT COUNT(*) FROM events WHERE state IN ('open','bot_pending','identity_pending')"
+            ).fetchone()[0]
             if count >= self._max_open_events:
                 self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='rejected_events'")
                 self._gap(peer_id, message_id, timestamp, "capacity")
                 rejected = True
             else:
                 self._db.execute("INSERT OR IGNORE INTO peers(peer_id) VALUES (?)", (peer_id,))
-                # Only proven unstarted turns may be retried on new input.
-                self._db.execute(
-                    "UPDATE events SET job_id=NULL WHERE peer_id=? AND state='open' AND job_id IN "
-                    "(SELECT job_id FROM jobs WHERE peer_id=? AND state='failed_waiting_input' "
-                    "AND execution_proof='not_started')",
-                    (peer_id, peer_id),
-                )
-                self._db.execute(
-                    "UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?",
-                    (peer_id,),
-                )
+                if source_kind != "client":
+                    # Any new message can make an active peer's history stale,
+                    # even when the locator must not become client work.
+                    self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
                 context = self._peer_revision(peer_id)
+                state = {"client": "open", "bot": "bot_pending", "unknown": "identity_pending"}[source_kind]
                 self._db.execute(
                     "INSERT INTO events(sequence,peer_id,message_id,received_at,state,context_revision,content_revision) "
-                    "VALUES (?,?,?,?,'open',?,?)",
-                    (sequence, peer_id, message_id, timestamp, context, context),
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (sequence, peer_id, message_id, timestamp, state, context, context),
                 )
-                owner_epoch = self._db.execute(
-                    "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (peer_id,)
-                ).fetchone()
-                if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
-                    owner_epoch = None
-                hold_reason = (
-                    "owner_role_transition_review_required"
-                    if owner_epoch and timestamp < owner_epoch[0]
-                    else "duty_boundary_ambiguous"
-                    if classification == "ambiguous"
-                    else None
-                )
-                if hold_reason:
-                    if self._instruction_pair is not None:
-                        self._hold_refs([sequence], peer_id, *self._instruction_pair, reason_code=hold_reason)
-                    else:
-                        self._db.execute("INSERT INTO boundary_holds VALUES (?,?)", (sequence, hold_reason))
-                        self._gap(peer_id, message_id, timestamp, "boundary_instruction_unavailable")
+                if source_kind == "client":
+                    self._activate_client_event(sequence, peer_id, message_id, timestamp, classification == "ambiguous")
+                else:
+                    self._db.execute(
+                        "INSERT INTO nonclient_sources VALUES (?,?,?)",
+                        (sequence, source_kind, int(classification == "ambiguous")),
+                    )
         if rejected:
             raise InboxError("inbound_monitor_full")
         return f"inbound-{sequence}"
+
+    def _activate_client_event(
+        self, sequence: str, peer_id: int, message_id: int, timestamp: str, duty_ambiguous: bool
+    ) -> None:
+        # Caller holds the write transaction. Use the original locator and duty decision.
+        self._db.execute(
+            "UPDATE events SET job_id=NULL WHERE peer_id=? AND state='open' AND job_id IN "
+            "(SELECT job_id FROM jobs WHERE peer_id=? AND state='failed_waiting_input' "
+            "AND execution_proof='not_started')",
+            (peer_id, peer_id),
+        )
+        self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
+        context = self._peer_revision(peer_id)
+        self._db.execute(
+            "UPDATE events SET state='open',context_revision=?,content_revision=? WHERE sequence=?",
+            (context, context, sequence),
+        )
+        owner_epoch = self._db.execute(
+            "SELECT started_at FROM owner_role_epochs WHERE peer_id=?", (peer_id,)
+        ).fetchone()
+        if self._db.execute("SELECT 1 FROM metadata WHERE key='work_client_only'").fetchone():
+            owner_epoch = None
+        hold_reason = (
+            "owner_role_transition_review_required"
+            if owner_epoch and timestamp < owner_epoch[0]
+            else "duty_boundary_ambiguous"
+            if duty_ambiguous
+            else None
+        )
+        if hold_reason:
+            if self._instruction_pair is not None:
+                self._hold_refs([sequence], peer_id, *self._instruction_pair, reason_code=hold_reason)
+            else:
+                self._db.execute("INSERT INTO boundary_holds VALUES (?,?)", (sequence, hold_reason))
+                self._gap(peer_id, message_id, timestamp, "boundary_instruction_unavailable")
+
+    def acknowledge_bot_notification(self, event_id: str) -> None:
+        """Complete only a known bot notification; retries are harmless."""
+        row = self._event_row(event_id)
+        source = self._db.execute(
+            "SELECT source_kind FROM nonclient_sources WHERE sequence=?", (row["sequence"],)
+        ).fetchone()
+        if source is None or source[0] != "bot":
+            raise InboxError("inbound_event_not_bot")
+        if row["state"] == "no_reply_needed":
+            return
+        if row["state"] != "bot_pending":
+            raise InboxError("inbound_event_not_bot_pending")
+        with self._write():
+            self._db.execute(
+                "UPDATE events SET state='no_reply_needed',completed_at=? WHERE sequence=? AND state='bot_pending'",
+                (self._now(), row["sequence"]),
+            )
 
     def import_event(
         self,
@@ -791,7 +877,10 @@ class TelegramInbox:
                     raise InboxError("inbound_import_conflict")
             else:
                 prepared.append((sequence, peer, message, at))
-        if self.status()["open_events"] + len(prepared) > self._max_open_events:
+        unfinished = self._db.execute(
+            "SELECT COUNT(*) FROM events WHERE state IN ('open','bot_pending','identity_pending')"
+        ).fetchone()[0]
+        if unfinished + len(prepared) > self._max_open_events:
             raise InboxError("inbound_monitor_full")
         if not prepared:
             return {
@@ -866,6 +955,7 @@ class TelegramInbox:
     def context(self, event_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
         if type(limit) is not int or not 1 <= limit <= 5:
             raise InboxError("inbound_context_limit_invalid")
+        self.resolve(event_id)
         anchor = self._event_row(event_id)
         lower = _timestamp(datetime.fromisoformat(anchor["received_at"]) - timedelta(seconds=300))
         upper = _timestamp(datetime.fromisoformat(anchor["received_at"]) + timedelta(seconds=300))
@@ -873,6 +963,7 @@ class TelegramInbox:
             "SELECT sequence,received_at,state FROM ("
             "SELECT rowid AS insertion_order,sequence,received_at,state FROM events "
             "WHERE peer_id=? AND received_at BETWEEN ? AND ? "
+            "AND NOT EXISTS (SELECT 1 FROM nonclient_sources WHERE nonclient_sources.sequence=events.sequence) "
             "ORDER BY CASE WHEN sequence=? THEN 0 ELSE 1 END,"
             "ABS(julianday(received_at)-julianday(?)),rowid LIMIT ?) "
             "ORDER BY received_at,insertion_order",
@@ -956,6 +1047,11 @@ class TelegramInbox:
             "retention": "protected_sqlite",
             "pending_events": counts.get("open", 0),
             "open_events": counts.get("open", 0),
+            "bot_pending_events": counts.get("bot_pending", 0),
+            "identity_pending_events": counts.get("identity_pending", 0),
+            "unfinished_events": counts.get("open", 0)
+            + counts.get("bot_pending", 0)
+            + counts.get("identity_pending", 0),
             "retained_events": sum(counts.values()),
             "reply_verified_events": counts.get("reply_verified", 0),
             "routed_events": counts.get("routed", 0),

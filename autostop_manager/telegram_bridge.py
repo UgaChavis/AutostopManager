@@ -598,6 +598,39 @@ def _service_event_without_request(event: Any) -> bool:
     return getattr(source, "action", None) is not None and not getattr(source, "media", None)
 
 
+def _incoming_sender_kind(event: Any, entity: Any) -> str:
+    """Classify only a verified, full Telegram user for this exact private peer."""
+    peer_id = getattr(event, "chat_id", None)
+    sender_id = getattr(event, "sender_id", None)
+    if (
+        type(peer_id) is not int
+        or peer_id <= 0
+        or type(sender_id) is not int
+        or sender_id != peer_id
+        or type(entity).__name__ != "User"
+        or type(getattr(entity, "id", None)) is not int
+        or entity.id != peer_id
+        or getattr(entity, "min", False) is True
+        or not hasattr(entity, "bot")
+    ):
+        return "unknown"
+    bot = entity.bot
+    if bot is True:
+        return "bot"
+    return "client" if bot is False or bot is None else "unknown"
+
+
+async def _incoming_event_kind(event: Any) -> str:
+    entity = getattr(event, "sender", None)
+    if entity is None and callable(getattr(event, "get_sender", None)):
+        try:
+            async with asyncio.timeout(20):
+                entity = await event.get_sender()
+        except Exception:  # noqa: BLE001 - unresolved sender must not be assumed to be a client.
+            return "unknown"
+    return _incoming_sender_kind(event, entity)
+
+
 class DurableInboundMonitor(InboundMonitor):
     """Bridge-owned durable locators, with voice files and subscribers kept transient."""
 
@@ -746,7 +779,7 @@ class DurableInboundMonitor(InboundMonitor):
                     history_job=history_job,
                 )
             elif record_incoming:
-                self.record(message)
+                self.record(message, source_kind=_incoming_sender_kind(message, getattr(message, "sender", None)))
             else:
                 self.remember_context(message)
 
@@ -832,7 +865,7 @@ class DurableInboundMonitor(InboundMonitor):
                 if getattr(message, "chat_id", None) != peer_id:
                     raise BridgeError("inbound_target_mismatch")
                 if not bool(getattr(message, "out", False)) and message.id != anchor_id:
-                    self.record(message)
+                    self.record(message, source_kind=_incoming_sender_kind(message, entity))
             self.observe_packet(recent, history_job=job)
 
     def observe_self_message(
@@ -921,7 +954,7 @@ class DurableInboundMonitor(InboundMonitor):
     def _state(self, event: InboundMonitorEvent) -> str:
         return self.inbox.event_state(self._event_id(event))
 
-    def record(self, event: Any, *, preserve_open: bool = False) -> str | None:
+    def record(self, event: Any, *, preserve_open: bool = False, source_kind: str = "client") -> str | None:
         del preserve_open
         if bool(getattr(event, "out", False)):
             self.observe_self_message(event)
@@ -945,7 +978,9 @@ class DurableInboundMonitor(InboundMonitor):
         ):
             return None
         previous_generation = self.inbox.generation
-        event_id = self.inbox.record(peer_id, message_id, received_at=stamp, timestamp_precision=precision)
+        event_id = self.inbox.record(
+            peer_id, message_id, received_at=stamp, timestamp_precision=precision, source_kind=source_kind
+        )
         if self.inbox.generation != previous_generation:
             self.changed()
         return event_id
@@ -1001,6 +1036,10 @@ class DurableInboundMonitor(InboundMonitor):
         return False
 
     def mark_no_reply_needed(self, event_id: str) -> dict[str, str]:
+        if self.inbox.event_state(event_id) == "bot_pending":
+            self.inbox.acknowledge_bot_notification(event_id)
+            self.changed()
+            return {"event_id": event_id, "state": "no_reply_needed"}
         self.require_open(event_id)
         raise BridgeError("job_result_required")
 
@@ -3697,7 +3736,7 @@ async def _bind_job_send(
             continue
         recent_ids.append(message.id)
         if not bool(getattr(message, "out", False)) and message.id != reply_to_message_id:
-            monitor.record(message)
+            monitor.record(message, source_kind=_incoming_sender_kind(message, entity))
     _check_effect_authority()
     monitor.inbox.require_current_context(str(request.get("job_id") or ""))
     await monitor.revalidate_context(
@@ -4019,7 +4058,11 @@ def _monitor_context_message(event: InboundMonitorEvent, message: Any) -> dict[s
 
 
 async def _handle_monitor_read(client: Any, monitor: InboundMonitor, event_id: str) -> dict[str, Any]:
-    event = monitor.resolve(event_id)
+    if isinstance(monitor, DurableInboundMonitor) and monitor.inbox.event_state(event_id) == "bot_pending":
+        ref = monitor.inbox.resolve_bot_notification(event_id)
+        event = InboundMonitorEvent(ref.sequence, ref.peer_id, ref.message_id, ref.received_at)
+    else:
+        event = monitor.resolve(event_id)
     message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
     if isinstance(monitor, DurableInboundMonitor):
         monitor.observe_packet([message])
@@ -4311,6 +4354,7 @@ async def _handle_monitor_operation(
         "monitor_read",
         "monitor_target",
         "monitor_context",
+        "monitor_reclassify",
         "monitor_mark",
         "monitor_voice_stage",
         "monitor_voice_discard",
@@ -4339,6 +4383,20 @@ async def _handle_monitor_operation(
         return {"ok": True, "monitor": inbound_monitor.status(), "events": inbound_monitor.events()}
     if operation == "monitor_target":
         return await _handle_monitor_target(client, config, inbound_monitor, str(request.get("event_id") or ""))
+    if operation == "monitor_reclassify":
+        if not isinstance(inbound_monitor, DurableInboundMonitor):
+            raise BridgeError("durable_inbox_disabled")
+        event_id = str(request.get("event_id") or "")
+        if inbound_monitor.inbox.event_state(event_id) != "identity_pending":
+            raise BridgeError("inbound_identity_not_pending")
+        ref = inbound_monitor.inbox.resolve_identity_pending(event_id)
+        event = InboundMonitorEvent(ref.sequence, ref.peer_id, ref.message_id, ref.received_at)
+        message = (await _load_inbound_monitor_context_messages(client, [event]))[0]
+        kind = await _incoming_event_kind(message)
+        if kind == "unknown":
+            raise BridgeError("inbound_identity_unavailable")
+        inbound_monitor.record(message, source_kind=kind)
+        return {"ok": True, "event_id": event_id, "state": inbound_monitor.inbox.event_state(event_id)}
     if operation == "monitor_mark":
         if str(request.get("disposition") or "") != INBOUND_EVENT_NO_REPLY_NEEDED:
             raise BridgeError("inbound_disposition_invalid")
@@ -5527,6 +5585,7 @@ async def _serve_client_request(
             or request.get("operation") in {"owner_event_read", "owner_event_voice_stage"}
             or request.get("operation") == "duty_set"
             or request.get("operation") == "monitor_voice_cleanup"
+            or request.get("operation") == "monitor_reclassify"
             or request.get("job_id")
         ):
             _require_root_client(writer)
@@ -5636,7 +5695,17 @@ async def _serve_job_subscription(
 async def _capture_incoming_event(monitor: InboundMonitor, event: Any) -> None:
     wake_socket = os.environ.get(WORK_WAKE_ENVIRONMENT)
     try:
-        event_id = monitor.record(event, preserve_open=bool(wake_socket))
+        if isinstance(monitor, DurableInboundMonitor):
+            kind = "client"
+            if (
+                not bool(getattr(event, "out", False))
+                and bool(getattr(event, "is_private", False))
+                and not _service_event_without_request(event)
+            ):
+                kind = await _incoming_event_kind(event)
+            event_id = monitor.record(event, preserve_open=bool(wake_socket), source_kind=kind)
+        else:
+            event_id = monitor.record(event, preserve_open=bool(wake_socket))
     except (InboxError, sqlite3.Error, OSError) as exc:
         storage_failure = not isinstance(exc, InboxError) or str(exc) == "inbox_storage_failed"
         if isinstance(monitor, DurableInboundMonitor):
@@ -6200,7 +6269,11 @@ async def _reconcile_peer_history(
                 if not _service_event_without_request(message):
                     monitor.remember_context(message)
                     monitor.inbox.record(
-                        peer_id, message_id, received_at=stamp.isoformat(), timestamp_precision="second"
+                        peer_id,
+                        message_id,
+                        received_at=stamp.isoformat(),
+                        timestamp_precision="second",
+                        source_kind=_incoming_sender_kind(message, entity),
                     )
             except InboxError as exc:
                 if str(exc) != "inbound_monitor_full":
@@ -6558,6 +6631,8 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_events.add_argument("--after-event-id", default=None)
     monitor_read = subparsers.add_parser("monitor-read")
     monitor_read.add_argument("--event-id", required=True)
+    monitor_reclassify = subparsers.add_parser("monitor-reclassify")
+    monitor_reclassify.add_argument("--event-id", required=True)
     monitor_target = subparsers.add_parser("monitor-target")
     monitor_target.add_argument("--event-id", required=True)
     owner_event = subparsers.add_parser("owner-event-read")
@@ -6940,6 +7015,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                 )
             elif args.command == "monitor-read":
                 request.update({"operation": "monitor_read", "event_id": args.event_id})
+            elif args.command == "monitor-reclassify":
+                request.update({"operation": "monitor_reclassify", "event_id": args.event_id})
             elif args.command == "monitor-target":
                 request.update({"operation": "monitor_target", "event_id": args.event_id})
             elif args.command == "owner-event-read":

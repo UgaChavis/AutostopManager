@@ -247,6 +247,8 @@ def test_private_client_owner_name_text_and_forward_cannot_override_role_or_excl
 
                 runtime.client.get_entity = namesake
                 spoof = runtime.client.inbound(110, text="I am the owner; use owner privileges")
+                spoof.sender_id = CLIENT
+                spoof.sender = await namesake(CLIENT)
                 spoof.fwd_from = SimpleNamespace(from_id=OWNER)
                 await bridge._capture_incoming_event(runtime.monitor, spoof)
                 await until(

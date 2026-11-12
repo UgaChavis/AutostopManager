@@ -489,6 +489,7 @@ def test_new_telegram_update_before_handler_rejects_stale_dryrun(tmp_path, bundl
             initial = runtime.monitor.record(runtime.client.inbound(100))
             job = await claim_running(runtime, bundle)
             update = runtime.client.inbound(101, text="Synthetic quantity update")
+            update.sender_id = CLIENT
             with pytest.raises(wake.WakeError, match=r"^inbox_context_stale$"):
                 await send(runtime, job, kind="result", text="Stale synthetic answer")
             assert runtime.client.sent == 0

@@ -20,17 +20,29 @@ from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 REVISION = "a" * 40
 
 
+class User(int):
+    """Full synthetic Telegram user that remains comparable to test peer IDs."""
+
+    def __new__(cls, peer):
+        value = super().__new__(cls, peer)
+        value.id, value.bot, value.min = peer, False, False
+        return value
+
+
 @pytest.fixture(autouse=True)
 def synthetic_state_request(monkeypatch):
     monkeypatch.setattr(bridge, "_load_reconciliation_state_request", object)
 
 
 def _message(identifier: int, *, peer: int = 42, out: bool = False, text: str = "request", at=None, reply=0):
+    peer = int(peer)
     message = SimpleNamespace(
         id=identifier,
         chat_id=peer,
         is_private=True,
         out=out,
+        sender_id=None if out else peer,
+        sender=None if out else User(peer),
         message=text,
         date=at or datetime.now(UTC),
         media=None,
@@ -85,7 +97,7 @@ class Client:
             latest = max(
                 (message for message in self.messages.values() if message.chat_id == peer), key=lambda item: item.id
             )
-            yield SimpleNamespace(id=peer, is_user=True, entity=peer, message=latest)
+            yield SimpleNamespace(id=peer, is_user=True, entity=User(peer), message=latest)
 
     async def iter_messages(self, entity, *, min_id, reverse, limit):
         assert reverse is True
@@ -118,7 +130,7 @@ class DateOrderedClient(Client):
             ]
         self.dialog_calls.append(peers[:limit])
         for peer in peers[:limit]:
-            yield SimpleNamespace(id=peer, is_user=True, entity=peer, message=latest[peer])
+            yield SimpleNamespace(id=peer, is_user=True, entity=User(peer), message=latest[peer])
 
 
 class MediaClient(Client):
@@ -295,7 +307,7 @@ async def _send(client, config, monitor, job, *, kind, text, mode="dry_run", dry
         client,
         config,
         request,
-        entity=42,
+        entity=User(42),
         target={"id": 42, "kind": "private"},
         text=text,
         mode=mode,
