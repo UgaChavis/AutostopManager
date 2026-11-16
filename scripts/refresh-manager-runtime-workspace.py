@@ -9,11 +9,13 @@ Git control files remain regular sealed bytes because Git ignores their symlinks
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -21,6 +23,8 @@ import tempfile
 
 BRANCH = "refs/heads/ops/runtime-workspace"
 CONTROLS = {".gitignore", ".gitattributes"}
+SHIM_MARKER = ".manager-runtime-shim.json"
+SHIM_SCHEMA = "autostop.manager.runtime-python-shim.v1"
 
 
 class Refused(RuntimeError):
@@ -92,6 +96,20 @@ def _service_python():
     return Path(match[1])
 
 
+def _python_probe(python, release):
+    code = (
+        "import json,sys,encodings;sys.path.insert(0,sys.argv[1]);import autostop_manager;"
+        "print(json.dumps({'prefix':sys.prefix,'module':autostop_manager.__file__,"
+        "'version':list(sys.version_info[:2]),'executable':sys.executable,'encodings':encodings.__file__}))"
+    )
+    proc = subprocess.run(
+        [str(python), "-I", "-B", "-c", code, str(release)], cwd="/tmp", capture_output=True, text=True, timeout=10
+    )
+    if proc.returncode:
+        raise Refused("runtime_import_failed")
+    return json.loads(proc.stdout)
+
+
 def _runtime(python, release, workspace):
     python = python.absolute()
     if python != _service_python().absolute():
@@ -102,16 +120,7 @@ def _runtime(python, release, workspace):
     _owned(venv, directory=True)
     _owned(venv / "pyvenv.cfg")
     _owned(python.resolve(strict=True))
-    code = (
-        "import json,sys;sys.path.insert(0,sys.argv[1]);import autostop_manager;"
-        "print(json.dumps({'prefix':sys.prefix,'module':autostop_manager.__file__}))"
-    )
-    proc = subprocess.run(
-        [str(python), "-I", "-B", "-c", code, str(release)], cwd="/tmp", capture_output=True, text=True, timeout=10
-    )
-    if proc.returncode:
-        raise Refused("runtime_import_failed")
-    probe = json.loads(proc.stdout)
+    probe = _python_probe(python, release)
     if Path(probe["prefix"]).resolve() != venv or not Path(probe["module"]).resolve().is_relative_to(release):
         raise Refused("runtime_import_mismatch")
     return {
@@ -120,7 +129,67 @@ def _runtime(python, release, workspace):
         "python_identity": _identity(python),
         "binary_identity": _identity(python.resolve()),
         "pyvenv_sha256": _hash((venv / "pyvenv.cfg").read_bytes()),
+        "version": probe["version"],
     }
+
+
+def _shim_files(plan):
+    version = ".".join(str(n) for n in plan["runtime"]["version"])
+    wrapper = ("#!/bin/sh\nexec " + shlex.quote(plan["runtime_python"]) + ' "$@"\n').encode()
+    marker = {
+        "schema": SHIM_SCHEMA,
+        "python": plan["runtime_python"],
+        "venv": plan["runtime_venv"],
+        "version": plan["runtime"]["version"],
+    }
+    return {
+        SHIM_MARKER: (0o644, (json.dumps(marker, sort_keys=True) + "\n").encode()),
+        **{f"bin/{name}": (0o755, wrapper) for name in {"python", "python3", "python" + version}},
+    }
+
+
+def _validate_managed_shim(path):
+    marker = json.loads((path / SHIM_MARKER).read_text())
+    if set(marker) != {"schema", "python", "venv", "version"} or marker["schema"] != SHIM_SCHEMA:
+        raise Refused("unknown_runtime_shim")
+    expected = _shim_files({"runtime_python": marker["python"], "runtime_venv": marker["venv"], "runtime": marker})
+    if {str(p.relative_to(path)) for p in path.rglob("*")} != {"bin", *expected}:
+        raise Refused("foreign_runtime_shim_entry")
+    _owned(path, directory=True)
+    _owned(path / "bin", directory=True)
+    for name, (mode, content) in expected.items():
+        info = _owned(path / name)
+        if info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != mode or (path / name).read_bytes() != content:
+            raise Refused("runtime_shim_changed")
+
+
+def _development_hook_guard(workspace):
+    hook = workspace / ".git/hooks/pre-commit"
+    if hook.is_file():
+        for line in hook.read_text().splitlines():
+            if line.startswith("INSTALL_PYTHON="):
+                value = line.removeprefix("INSTALL_PYTHON=").strip("\"'")
+                if value.startswith(str(workspace / ".venv/bin") + "/"):
+                    raise Refused("development_hook_requires_source_worktree_runtime")
+
+
+def _workspace_python_probe(plan):
+    result = {}
+    for name in sorted(_shim_files(plan)):
+        if not name.startswith("bin/"):
+            continue
+        try:
+            probe = _python_probe(Path(plan["workspace"]) / ".venv" / name, Path(plan["release"]["root"]))
+        except (OSError, ValueError, subprocess.SubprocessError, Refused) as exc:
+            raise Refused("lexical_python_probe_failed:" + name) from exc
+        if (
+            Path(probe["prefix"]).resolve() != Path(plan["runtime_venv"])
+            or probe["version"] != plan["runtime"]["version"]
+            or not Path(probe["module"]).resolve().is_relative_to(Path(plan["release"]["root"]))
+        ):
+            raise Refused("lexical_python_probe_mismatch:" + name)
+        result[name] = probe
+    return result
 
 
 def _release(link, workspace):
@@ -248,6 +317,7 @@ def build_plan(workspace, release_link, runtime_python):
         raise Refused("workspace_symlink")
     _owned(workspace, directory=True)
     _owned(workspace / ".git", directory=True)
+    _development_hook_guard(workspace)
     if (workspace / ".git/index.lock").exists():
         raise Refused("index_locked")
     common = Path(os.fsdecode(_git(workspace, "rev-parse", "--git-common-dir")).strip())
@@ -272,10 +342,14 @@ def build_plan(workspace, release_link, runtime_python):
     if not names or any(not (root / name).exists() for name in names):
         raise Refused("release_root_entry_missing")
     algorithm = _git(workspace, "rev-parse", "--show-object-format").decode().strip()
-    tracked = _tracked_state(workspace, old_names, records, algorithm)
+    tracked_names = [*old_names, *([".venv"] if any(Path(row[2]).parts[0] == ".venv" for row in records) else [])]
+    tracked = _tracked_state(workspace, tracked_names, records, algorithm)
     venv = workspace / ".venv"
     physical = venv.exists() and not venv.is_symlink()
-    if physical:
+    managed_shim = physical and head_ref == BRANCH and (venv / SHIM_MARKER).is_file() and ".venv" in tracked_names
+    if managed_shim:
+        _validate_managed_shim(venv)
+    elif physical:
         _owned(venv, directory=True)
         _owned(venv / "pyvenv.cfg")
     protected = _preserved(workspace, names)
@@ -293,11 +367,13 @@ def build_plan(workspace, release_link, runtime_python):
         "runtime_venv": runtime["venv"],
         "runtime": runtime,
         "old_entries": old_names,
+        "old_tracked_entries": tracked_names,
         "entries": names,
         "tracked_fingerprint": tracked,
         "preserved": protected,
         "legacy_venv_identity": _identity(venv) if venv.exists() or venv.is_symlink() else None,
-        "remove_legacy_venv_required": physical,
+        "remove_legacy_venv_required": physical and not managed_shim,
+        "managed_shim_before": managed_shim,
         "active_references": _references([workspace / n for n in [*names, ".venv"]]),
     }
 
@@ -330,6 +406,40 @@ def _lexists(path):
     return path.exists() or path.is_symlink()
 
 
+def _tree(workspace, entries):
+    return (
+        _git(
+            workspace,
+            "mktree",
+            "-z",
+            data=b"".join(
+                f"{mode} {kind} {oid}\t".encode() + os.fsencode(name) + b"\0"
+                for mode, kind, oid, name in sorted(entries, key=lambda row: os.fsencode(row[3]))
+            ),
+        )
+        .decode()
+        .strip()
+    )
+
+
+def _write_regular(path, content, mode):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "wb") as stream:
+        os.fchmod(stream.fileno(), mode)
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _rename_new(source, destination):
+    rename = ctypes.CDLL(None, use_errno=True).renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))
+
+
 class Conversion:
     """Move-only transaction; deletion starts after the verified Git commit."""
 
@@ -345,6 +455,7 @@ class Conversion:
         self.moved = []
         self.installed = {}
         self.control_bytes = {}
+        self.shim_identities = {}
         self.commit = None
         self.ref_published = False
         self.published_files = {}
@@ -365,28 +476,17 @@ class Conversion:
             raise Refused("index_changed")
         self.stage = Path(tempfile.mkdtemp(prefix=".manager-workspace-", dir=self.workspace.parent))
         entries = []
-        for name in [*self.plan["entries"], ".venv"]:
+        for name in self.plan["entries"]:
             content = (self.root / name).read_bytes() if name in CONTROLS else os.fsencode(self.target(name))
             oid = _git(self.workspace, "hash-object", "-w", "--stdin", data=content).decode().strip()
             entries.append(("100644" if name in CONTROLS else "120000", "blob", oid, name))
+        entries.append(("040000", "tree", self.shim_tree(), ".venv"))
         for row in _git(self.workspace, "ls-tree", "-z", self.plan["old_head"]).split(b"\0"):
             if row and row.split(b"\t", 1)[1] == b"data":
                 header, name = row.split(b"\t", 1)
                 mode, kind, oid = header.decode().split()
                 entries.append((mode, kind, oid, os.fsdecode(name)))
-        tree = (
-            _git(
-                self.workspace,
-                "mktree",
-                "-z",
-                data=b"".join(
-                    f"{mode} {kind} {oid}\t".encode() + os.fsencode(name) + b"\0"
-                    for mode, kind, oid, name in sorted(entries, key=lambda row: os.fsencode(row[3]))
-                ),
-            )
-            .decode()
-            .strip()
-        )
+        tree = _tree(self.workspace, entries)
         self.commit = (
             _git(
                 self.workspace,
@@ -401,9 +501,33 @@ class Conversion:
         )
         _git(self.workspace, "read-tree", self.commit, index=self.stage / "new-index")
         self.new_index = (self.stage / "new-index").read_bytes()
+        self.prepare_shim()
+
+    def prepare_shim(self):
+        with tempfile.TemporaryDirectory(prefix="shim-build-", dir=self.stage) as directory:
+            built = Path(directory) / "venv"
+            self.install_shim(built)
+            _validate_managed_shim(built)
+            _rename_new(built, self.stage / "new-shim")
+
+    def shim_tree(self):
+        bins, top = [], []
+        for name, (mode, content) in _shim_files(self.plan).items():
+            oid = _git(self.workspace, "hash-object", "-w", "--stdin", data=content).decode().strip()
+            (bins if name.startswith("bin/") else top).append(
+                ("100755" if mode & 0o111 else "100644", "blob", oid, Path(name).name)
+            )
+        return _tree(self.workspace, [*top, ("040000", "tree", _tree(self.workspace, bins), "bin")])
 
     def target(self, name):
-        return self.plan["runtime_venv"] if name == ".venv" else str(Path(self.plan["release_link"]) / name)
+        return str(Path(self.plan["release_link"]) / name)
+
+    def install_shim(self, path):
+        path.mkdir(mode=0o755)
+        (path / "bin").mkdir(mode=0o755)
+        for name, (mode, content) in _shim_files(self.plan).items():
+            _write_regular(path / name, content, mode)
+        self.shim_identities = {str(p.relative_to(path)): _identity(p) for p in [path, *path.rglob("*")]}
 
     def install_entries(self):
         for name in [*self.plan["entries"], ".venv"]:
@@ -411,11 +535,11 @@ class Conversion:
             if _lexists(path):
                 path.rename(self.stage / name)
                 self.moved.append(name)
-            if name in CONTROLS:
+            if name == ".venv":
+                _rename_new(self.stage / "new-shim", path)
+            elif name in CONTROLS:
                 self.control_bytes[name] = (self.root / name).read_bytes()
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(self.control_bytes[name])
+                _write_regular(path, self.control_bytes[name], 0o644)
             else:
                 path.symlink_to(self.target(name))
             self.installed[name] = _identity(path)
@@ -427,6 +551,7 @@ class Conversion:
             raise Refused("release_changed_during_conversion")
         if _runtime(Path(self.plan["runtime_python"]), self.root, self.workspace) != self.plan["runtime"]:
             raise Refused("runtime_changed_during_conversion")
+        self.result["lexical_python_probes"] = _workspace_python_probe(self.plan)
         if (
             _git(self.workspace, "for-each-ref", "--format=%(refname) %(objectname)").decode().splitlines()
             != self.plan["old_refs"]
@@ -481,9 +606,17 @@ class Conversion:
             raise Refused("preserved_metadata_changed")
         records = _records(self.workspace, self.plan["old_head"])
         algorithm = _git(self.workspace, "rev-parse", "--show-object-format").decode().strip()
-        _tracked_state(self.stage, self.plan["old_entries"], records, algorithm)
+        _tracked_state(self.stage, self.plan["old_tracked_entries"], records, algorithm)
         if _references([self.stage / name for name in self.moved]):
             raise Refused("staged_entries_in_use")
+        _validate_managed_shim(self.workspace / ".venv")
+        self.result["runtime_shim"] = {
+            "schema": SHIM_SCHEMA,
+            "python": self.plan["runtime_python"],
+            "files": {
+                name: {"mode": mode, "sha256": _hash(data)} for name, (mode, data) in _shim_files(self.plan).items()
+            },
+        }
         self.result.update(converted=True, new_head=self.commit, branch=BRANCH, preserved_verified=True)
         _private_json(
             self.receipt_dir / "committed.json",
@@ -508,9 +641,23 @@ class Conversion:
         path = self.workspace / name
         if not _lexists(path) or _identity(path) != self.installed[name]:
             return False
+        if name == ".venv":
+            identities = {str(p.relative_to(path)): _identity(p) for p in [path, *path.rglob("*")]}
+            return identities == self.shim_identities and all(
+                (path / name).read_bytes() == content for name, (_, content) in _shim_files(self.plan).items()
+            )
         if name in CONTROLS:
             return not path.is_symlink() and path.read_bytes() == self.control_bytes[name]
         return path.is_symlink() and os.readlink(path) == self.target(name)
+
+    def remove_installed(self, name):
+        path = self.workspace / name
+        if name == ".venv":
+            if not shutil.rmtree.avoids_symlink_attacks:
+                raise Refused("safe_rmtree_required")
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
     def _git_rollback_conflicts(self, *, ignore_owned_locks=False):
         conflicts = []
@@ -556,7 +703,7 @@ class Conversion:
             self._rollback_ref()
             for name in reversed(self.installed):
                 if self._ours(name):
-                    (self.workspace / name).unlink()
+                    self.remove_installed(name)
                 else:
                     conflicts.append(name)
             for name in reversed(self.moved):

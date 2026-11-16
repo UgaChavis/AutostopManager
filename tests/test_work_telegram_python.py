@@ -95,11 +95,15 @@ def test_missing_service_runtime_fails_without_a_checkout_fallback(runtime):
     assert not result.stdout
 
 
-def test_wake_installer_accepts_manager_release_and_uses_bridge_runtime(runtime):
+@pytest.mark.parametrize("work_aligned", [True, False])
+def test_wake_installer_requires_one_release_and_uses_bridge_runtime(runtime, work_aligned):
     scripts, env, python, tmp_path = runtime
     source = (ROOT / "scripts/install-codex-wake.sh").read_text().split("export PYTHONPATH", 1)[0]
     source = source.replace('[[ "${EUID}" -eq 0 ]]', "true")
-    source = source.replace("/opt/autostop-work-telegram-releases/current", str(scripts.parent.parent / "current"))
+    work_current = tmp_path / "work-current"
+    work_current.symlink_to(scripts.parent if work_aligned else tmp_path)
+    source = source.replace("/opt/autostop-work-telegram-releases/current", str(work_current))
+    source = source.replace("/opt/autostop-manager-releases/current", str(scripts.parent.parent / "current"))
     source = source.replace("/opt/autostop-manager-releases/*", f"{scripts.parent.parent}/*")
     source = source.replace('[[ "$(stat -c %U "$release")" == root ]]', "true")
     shell(
@@ -118,8 +122,13 @@ def test_wake_installer_accepts_manager_release_and_uses_bridge_runtime(runtime)
         text=True,
         timeout=15,
     )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(python)
+    if work_aligned:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(python)
+    else:
+        assert result.returncode == 1
+        assert result.stderr.strip() == "codex_wake_release_alias_mismatch=true"
+        assert not result.stdout
 
 
 def test_installed_wake_unit_preserves_effective_venv_entry_point(tmp_path):

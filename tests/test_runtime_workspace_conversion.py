@@ -131,7 +131,11 @@ def test_conversion_preserves_data_git_history_private_metadata_and_ignore(layou
             assert path.read_bytes() == (layout.release / name).read_bytes()
         else:
             assert path.is_symlink() and os.readlink(path) == str(layout.current / name)
-    assert layout.legacy.is_symlink() and layout.legacy.resolve() == layout.runtime
+    assert layout.legacy.is_dir() and not layout.legacy.is_symlink()
+    assert (layout.legacy / converter.SHIM_MARKER).is_file()
+    version = ".".join(str(n) for n in value["runtime"]["version"])
+    assert set(result["lexical_python_probes"]) == {"bin/python", "bin/python3", "bin/python" + version}
+    assert all(Path(p["prefix"]).resolve() == layout.runtime for p in result["lexical_python_probes"].values())
     assert git(layout.workspace, "check-ignore", ".env", "data/state.txt").splitlines() == [".env", "data/state.txt"]
     assert not git(layout.workspace, "status", "--porcelain", "--untracked-files=no")
     assert json.loads((layout.receipts / "after.json").read_text())["preserved_verified"]
@@ -229,10 +233,13 @@ def test_postcommit_partial_cleanup_failure_keeps_healthy_alias_workspace(layout
     removed = []
 
     def fail_second_directory(path, *args, **kwargs):
+        if Path(path).name not in {*value["old_entries"], ".venv"}:
+            return original(path, *args, **kwargs)
         if removed:
             raise OSError("synthetic cleanup failure after one real removal")
         original(path, *args, **kwargs)
         removed.append(str(path))
+        return None
 
     fail_second_directory.avoids_symlink_attacks = original.avoids_symlink_attacks
     monkeypatch.setattr(converter.shutil, "rmtree", fail_second_directory)
@@ -329,3 +336,91 @@ def test_owned_ops_branch_can_be_refreshed_without_venv_removal_flag(layout):
     result = converter.apply_plan(value, value["old_head"], layout.receipts.parent / "second-receipt")
     assert result["ok"] and not result["legacy_venv_removed"]
     assert git(layout.workspace, "rev-parse", "refs/heads/source") == layout.old
+
+
+def test_broken_future_lexical_python_rolls_back_before_commit_or_deletion(layout, monkeypatch):
+    original = converter._python_probe
+    old_identity = converter._identity(layout.legacy)
+
+    def fail_generic_alias(python, release):
+        if python == layout.legacy / "bin/python3":
+            raise converter.Refused("synthetic_portable_python_basename_failure")
+        return original(python, release)
+
+    monkeypatch.setattr(converter, "_python_probe", fail_generic_alias)
+    with pytest.raises(converter.Refused, match="lexical_python_probe_failed:bin/python3"):
+        apply(layout, remove_legacy_venv=True)
+    assert converter._identity(layout.legacy) == old_identity
+    assert (layout.workspace / "AGENTS.md").read_text() == "Old synthetic instructions\n"
+    assert git(layout.workspace, "rev-parse", "HEAD") == layout.old
+    assert not (layout.receipts / "committed.json").exists()
+    assert json.loads((layout.receipts / "after.json").read_text())["rollback_complete"]
+
+
+def test_own_shim_never_hides_foreign_files_on_refresh(layout):
+    assert apply(layout, remove_legacy_venv=True)["ok"]
+    private = layout.legacy / "private-untracked.txt"
+    private.write_text("Preserve foreign content\n")
+    with pytest.raises(converter.Refused, match="untracked_descendant"):
+        plan(layout)
+    assert private.read_text() == "Preserve foreign content\n"
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_development_hook_must_select_source_worktree_runtime(layout, portable):
+    python = '"$PROJECT_DIR/.venv/bin/python"' if portable else str(layout.legacy / "bin/python")
+    hook = layout.workspace / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/bash\nINSTALL_PYTHON=" + python + "\n")
+    if portable:
+        assert plan(layout)["old_head"] == layout.old
+    else:
+        with pytest.raises(converter.Refused, match="development_hook_requires_source_worktree_runtime"):
+            plan(layout)
+    assert not layout.receipts.exists()
+
+
+def test_shim_quotes_shared_python_path_and_preserves_arguments(layout, monkeypatch):
+    runtime = layout.runtime.with_name("cold venv with spaces")
+    layout.runtime.rename(runtime)
+    layout.runtime, layout.python = runtime, runtime / "bin/python"
+    monkeypatch.setattr(converter, "_service_python", lambda: layout.python)
+    assert apply(layout, remove_legacy_venv=True)["ok"]
+    args = ["space argument", "$literal; ' quoted"]
+    output = subprocess.check_output(
+        [
+            str(layout.legacy / "bin/python"),
+            "-I",
+            "-B",
+            "-c",
+            "import json,sys;print(json.dumps(sys.argv[1:]))",
+            *args,
+        ]
+    )
+    assert json.loads(output) == args
+
+
+def test_partial_shim_build_failure_never_changes_original_workspace(layout, monkeypatch):
+    value = plan(layout)
+    old_identity = converter._identity(layout.legacy)
+    index = (layout.workspace / ".git/index").read_bytes()
+    original = converter._write_regular
+    wrappers = 0
+
+    def fail_second_wrapper(path, content, mode):
+        nonlocal wrappers
+        if path.parent.name == "bin":
+            wrappers += 1
+            if wrappers == 2:
+                raise OSError("synthetic partial shim write")
+        return original(path, content, mode)
+
+    monkeypatch.setattr(converter, "_write_regular", fail_second_wrapper)
+    with pytest.raises(OSError, match="partial shim write"):
+        apply(layout, value, remove_legacy_venv=True)
+    assert wrappers == 2
+    assert converter._identity(layout.legacy) == old_identity
+    assert (layout.workspace / ".git/index").read_bytes() == index
+    assert git(layout.workspace, "rev-parse", "HEAD") == layout.old
+    assert (layout.workspace / "AGENTS.md").read_text() == "Old synthetic instructions\n"
+    assert not (layout.receipts / "committed.json").exists()
+    assert json.loads((layout.receipts / "after.json").read_text())["rollback_complete"]

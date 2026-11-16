@@ -3,7 +3,11 @@ set -Eeuo pipefail
 
 [[ "${EUID}" -eq 0 ]] || { echo 'run_as_root_required=true' >&2; exit 1; }
 [[ $# -eq 0 ]] || { echo "usage: $0" >&2; exit 2; }
-release="$(readlink -f /opt/autostop-work-telegram-releases/current)"
+release="$(readlink -f /opt/autostop-manager-releases/current)"
+[[ "$release" == "$(readlink -f /opt/autostop-work-telegram-releases/current)" ]] || {
+  echo 'codex_wake_release_alias_mismatch=true' >&2
+  exit 1
+}
 unit=/etc/systemd/system/autostop-codex-wake.service
 boot_unit=/etc/systemd/system/autostop-codex-start.service
 [[ ( "$release" == /opt/autostop-manager-releases/* || "$release" == /opt/autostop-work-telegram-releases/* ) && -d "$release" && ! -L "$release" ]]
