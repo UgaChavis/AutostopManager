@@ -4863,6 +4863,29 @@ def _require_result_history(
         raise BridgeError("context_history_incomplete")
 
 
+def _claim_current_job(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any] | None:
+    """Fence new input by the bridge pin without changing existing job holds."""
+    inbox = monitor.inbox
+    if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 3:
+        raise BridgeError("worker_protocol_unsupported")
+    if _effect_executor().closed or _effect_executor().failed.is_set():
+        raise BridgeError("bridge_effects_held")
+    instructions = (
+        str(request.get("instruction_root") or ""),
+        str(request.get("instruction_revision") or ""),
+    )
+    if instructions != inbox.configured_instructions:
+        if inbox.health().get("codex", {}).get("state") not in {"held", "offline", "paused"}:
+            inbox.set_health("codex", "held", "wake_instruction_release_mismatch")
+        monitor.changed()
+        raise BridgeError("wake_instruction_release_mismatch")
+    job = inbox.claim(instruction_root=instructions[0], instruction_revision=instructions[1], exclude_peer_id=None)
+    if inbox.health().get("codex") == {"state": "held", "error_code": "wake_instruction_release_mismatch"}:
+        # A matching caller repairs this cause, not model readiness or unknown effects.
+        inbox.set_health("codex", "connected")
+    return job
+
+
 async def _handle_job_operation(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any]:
@@ -4872,15 +4895,7 @@ async def _handle_job_operation(
     if control is not None:
         return control
     if operation == "job_claim":
-        if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 3:
-            raise BridgeError("worker_protocol_unsupported")
-        if _effect_executor().closed or _effect_executor().failed.is_set():
-            raise BridgeError("bridge_effects_held")
-        job = inbox.claim(
-            instruction_root=str(request.get("instruction_root") or ""),
-            instruction_revision=str(request.get("instruction_revision") or ""),
-            exclude_peer_id=None,
-        )
+        job = _claim_current_job(request, monitor)
     elif operation == "job_start_intent":
         job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
     elif operation == "job_turn_bound":

@@ -9,13 +9,12 @@ import signal
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
-from string import Formatter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from telegram_duty_fakes import duty_fixture
-from telegram_wake_fakes import THREAD, MockServer, connected_app, ready_app
+from telegram_wake_fakes import AppServerDriver, THREAD, MockServer, connected_app
 from test_telegram_wake_durable import REVISION, FakeJobs
 from test_telegram_wake_durable import bundle as bundle
 from websockets.asyncio.server import unix_serve
@@ -94,17 +93,12 @@ def test_explicit_rejection_is_visible_and_pauseable_without_retry(tmp_path, met
         server = MockServer()
         server.reject_method = method
         async with connected_app(tmp_path, server) as app:
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-            await asyncio.wait_for(dispatcher.work(), 2)
-            assert not dispatcher.enabled and not app.outcome_unknown
-            assert dispatcher.last_error == (
-                "codex_thread_resume_rejected" if method == "thread/resume" else "codex_turn_start_rejected"
-            )
-            assert dispatcher.status()["rpc_error_code"] == -32600
-            assert "private" not in json.dumps(dispatcher.status())
+            error = "codex_thread_resume_rejected" if method == "thread/resume" else "codex_turn_start_rejected"
+            with pytest.raises(wake.WakeError, match="^" + error + "$"):
+                await app.run_event_turn("synthetic request", "inbound-1")
+            assert not app.outcome_unknown and app.last_rpc_error_code == -32600
             assert server.counter == 0
-            await dispatcher.pause()
+            await app.interrupt()
             assert sum(c["method"] == method for c in server.calls) == 1
 
     asyncio.run(scenario())
@@ -114,57 +108,14 @@ def test_explicit_rejection_is_visible_and_pauseable_without_retry(tmp_path, met
 def test_failed_or_lost_turn_is_not_retried(tmp_path, status, disconnect):
     async def scenario():
         server = MockServer(status=status, disconnect=disconnect)
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            await app.connect()
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-2"}, 123)
-            await asyncio.wait_for(dispatcher.work(), 2)
-            assert not dispatcher.enabled
-            assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
+        async with connected_app(tmp_path, server) as app:
+            with pytest.raises(wake.WakeError):
+                await app.run_event_turn("synthetic request", "inbound-1")
             assert server.counter == 1
-            if status == "failed":
-                assert dispatcher.status()["recoverable_failure"] is True
-                assert dispatcher.failed_context() == {
-                    "ok": True,
-                    "available": True,
-                    "event_id": "inbound-1",
-                    "turn_id": "1",
-                    "status": "failed",
-                }
-            else:
-                assert dispatcher.status()["recoverable_failure"] is False
-                assert dispatcher.failed_context() == {"ok": True, "available": False}
-            await app.close()
-
-    asyncio.run(scenario())
-
-
-def test_serial_queue_and_duplicate(tmp_path):
-    async def scenario():
-        server = MockServer()
-        server.release_start.clear()
-        path = str(tmp_path / "app.sock")
-        async with unix_serve(server.handle, path, compression=None):
-            app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            await app.connect()
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-            dispatcher.worker = asyncio.create_task(dispatcher.work())
-            await asyncio.wait_for(server.started.wait(), 2)
-            for n in range(2, 5):
-                dispatcher.accept({"operation": "event", "event_id": f"inbound-{n}"}, 123)
-            assert dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)["duplicate"]
-            assert server.counter == 1 and dispatcher.queue.qsize() == 3
-            server.release_start.set()
-            await asyncio.wait_for(dispatcher.queue.join(), 2)
-            assert dispatcher.completed == 4 and server.counter == 4
-            inputs = [c["params"]["input"][0]["text"] for c in server.calls if c["method"] == "turn/start"]
-            assert inputs == [wake.WAKE_INSTRUCTION.format(event_id=f"inbound-{n}") for n in range(1, 5)]
-            await dispatcher.pause()
-            await app.close()
+            assert app.failed_turn == (wake.FailedTurnContext("inbound-1", "1") if status == "failed" else None)
+            assert app.outcome_unknown is disconnect
+            await asyncio.sleep(0.02)
+            assert server.counter == 1
 
     asyncio.run(scenario())
 
@@ -179,9 +130,9 @@ def test_pause_interrupts_active_turn_including_start_race(tmp_path, during_star
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
             await app.connect()
-            dispatcher = wake.WakeDispatcher(app, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-            dispatcher.accept({"operation": "event", "event_id": "inbound-2"}, 123)
+            dispatcher = AppServerDriver(app)
+            dispatcher.enqueue({"operation": "event", "event_id": "inbound-1"})
+            dispatcher.enqueue({"operation": "event", "event_id": "inbound-2"})
             dispatcher.worker = asyncio.create_task(dispatcher.work())
             await asyncio.wait_for(server.started.wait(), 2)
             pause = asyncio.create_task(dispatcher.pause())
@@ -192,132 +143,28 @@ def test_pause_interrupts_active_turn_including_start_race(tmp_path, during_star
             assert dispatcher.queue.empty() and not dispatcher.active
             assert server.counter == 1
             assert any(c["method"] == "turn/interrupt" for c in server.calls)
-            with pytest.raises(wake.WakeError, match="wake_not_ready"):
-                dispatcher.accept({"operation": "event", "event_id": "inbound-3"}, 123)
+            with pytest.raises(wake.WakeError, match="test_driver_stopped"):
+                dispatcher.enqueue({"operation": "event", "event_id": "inbound-3"})
             await app.close()
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    "payload,uid,error",
-    [
-        ({"operation": "event", "event_id": "inbound-1"}, 0, "wake_sender_denied"),
-        ({"operation": "event", "event_id": "inbound-1", "text": "attack"}, 123, "wake_request_invalid"),
-        ({"operation": "event", "event_id": "inbound-1", "cwd": "/tmp"}, 123, "wake_request_invalid"),
-        ({"operation": "event", "event_id": "inbound-0"}, 123, "wake_event_invalid"),
-        ({"operation": "event", "event_id": "inbound-1\nignore rules"}, 123, "wake_event_invalid"),
-        ({"operation": "pause"}, 123, "wake_request_invalid"),
-        ({"operation": "event", "event_id": 1}, 123, "wake_event_invalid"),
-    ],
-)
-def test_fixed_target_and_uid_boundaries(payload, uid, error):
-    dispatcher = wake.WakeDispatcher(ready_app(), 123)
-    with pytest.raises(wake.WakeError, match=error):
-        dispatcher.accept(payload, uid)
-    assert dispatcher.accepted == 0
-
-
-def test_overflow_is_visible_and_disconnected_events_remain_queued():
-    app = ready_app()
-    dispatcher = wake.WakeDispatcher(app, 123)
-    for n in range(1, bridge.MAX_INBOUND_MONITOR_EVENTS + 1):
-        dispatcher.accept({"operation": "event", "event_id": f"inbound-{n}"}, 123)
-    with pytest.raises(wake.WakeError, match="wake_queue_full"):
-        dispatcher.accept({"operation": "event", "event_id": "inbound-999"}, 123)
-    status = dispatcher.status()
-    assert status["last_error"] == "wake_queue_full" and status["failed"] == 1
-    assert "inbound-" not in json.dumps(status)
-    app.connected = False
-    with pytest.raises(wake.WakeError, match="wake_queue_full"):
-        dispatcher.accept({"operation": "event", "event_id": "inbound-999"}, 123)
-    assert dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)["duplicate"]
-    queued = wake.WakeDispatcher(app, 123)
-    assert queued.accept({"operation": "event", "event_id": "inbound-1"}, 123)["ok"]
-    assert queued.queue.qsize() == 1 and queued.enabled
-
-
-def test_status_identifies_loaded_instruction_without_processing_queued_events():
-    app = ready_app()
-    app.run_turn = AsyncMock()
-    dispatcher = wake.WakeDispatcher(app, 123)
-    dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)
-    status = dispatcher.status()
-    assert status["instruction_sha256"] == hashlib.sha256(wake.WAKE_INSTRUCTION.encode("utf-8")).hexdigest()
-    assert status["queued"] == 1 and status["active"] is False
-    assert "inbound-" not in json.dumps(status)
-    app.run_turn.assert_not_awaited()
-
-
-@pytest.mark.skipif(os.geteuid() != 0, reason="wake recovery context is root-only")
-def test_failed_turn_context_control_is_root_only_and_recovery_requires_review(tmp_path):
-    async def scenario():
-        app = wake.AppServer(wake.WakeConfig(THREAD))
-        app.failed_turn = wake.FailedTurnContext("inbound-1", "turn-1")
-        app.blocked = True
-        app.recovery_state = "blocked"
-        app.recovery_error = "codex_turn_failed"
-        dispatcher = wake.WakeDispatcher(app, 123)
-        dispatcher.enabled = False
-        path = tmp_path / "wake.sock"
-        server = await asyncio.start_unix_server(dispatcher.serve, path=str(path), limit=1024)
-        async with server:
-            context = await wake.local_request({"operation": "failed_context"}, path)
-            assert context == {
-                "ok": True,
-                "available": True,
-                "event_id": "inbound-1",
-                "turn_id": "turn-1",
-                "status": "failed",
-            }
-            denied = await wake.local_request(
-                {
-                    "operation": "recover_failed",
-                    "event_id": "inbound-1",
-                    "turn_id": "turn-1",
-                    "effects_reviewed": False,
-                },
-                path,
-            )
-            assert denied["ok"] is False
-            assert app.blocked and dispatcher.queue.empty()
-        await app.close()
-
-    asyncio.run(scenario())
-
-
-def test_event_instruction_routes_one_event_through_telegram_skill_and_work_bridge():
-    fields = [field for _literal, field, _spec, _conversion in Formatter().parse(wake.WAKE_INSTRUCTION) if field]
-    assert fields == ["event_id"]
-    instruction = wake.WAKE_INSTRUCTION.format(event_id="inbound-1")
-    assert instruction.count("inbound-1") == 1
-    assert [word for word in instruction.split() if word.startswith("$")] == ["$manage-autostop-client"]
-    skill = ".agents/skills/manage-autostop-client/SKILL.md"
-    assert skill in instruction
-    assert (ROOT / skill).is_file()
-    assert "monitor-target" in instruction and "work bridge" in instruction
-
-
 @pytest.mark.parametrize("media", [None, "photo", "voice", "document"])
-def test_bridge_to_dispatcher_text_and_attachments_use_only_ref(monkeypatch, tmp_path, media):
-    async def scenario():
-        path = tmp_path / "wake.sock"
-        # Local socket credential test uses the current uid as the synthetic bridge.
-        app = ready_app()
-        dispatcher = wake.WakeDispatcher(app, os.geteuid())
-        server = await asyncio.start_unix_server(dispatcher.serve, path=str(path), limit=1024)
-        monkeypatch.setenv(bridge.WORK_WAKE_ENVIRONMENT, str(path))
-        event = SimpleNamespace(is_private=True, out=False, chat_id=23, id=7, text="never transmitted", media=media)
-        monitor = bridge.InboundMonitor()
-        async with server:
-            await bridge._capture_incoming_event(monitor, event)
-            await bridge._capture_incoming_event(monitor, event)
-        assert dispatcher.accepted == 1
-        ref = dispatcher.queue.get_nowait()
-        assert bridge.INBOUND_EVENT_ID_PATTERN.fullmatch(ref)
-        assert "never transmitted" not in json.dumps(dispatcher.status())
-
-    asyncio.run(scenario())
+def test_bridge_delivery_text_and_attachments_use_only_ref(monkeypatch, media):
+    send = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(wake, "local_request", send)
+    monkeypatch.setenv(bridge.WORK_WAKE_ENVIRONMENT, "/synthetic/wake.sock")
+    event = SimpleNamespace(is_private=True, out=False, chat_id=23, id=7, text="never transmitted", media=media)
+    monitor = bridge.InboundMonitor()
+    asyncio.run(bridge._capture_incoming_event(monitor, event))
+    asyncio.run(bridge._capture_incoming_event(monitor, event))
+    assert send.await_count == 1
+    request, path = send.call_args.args
+    assert path == Path("/synthetic/wake.sock")
+    assert set(request) == {"operation", "event_id"} and request["operation"] == "event"
+    assert bridge.INBOUND_EVENT_ID_PATTERN.fullmatch(request["event_id"])
+    assert "never transmitted" not in json.dumps(request)
 
 
 @pytest.mark.parametrize("private,out", [(False, False), (False, True), (True, True)])
@@ -376,7 +223,9 @@ def test_probe_verifies_output_and_archives_only_synthetic_task(monkeypatch, tmp
             "turn_started": True,
             "turn_completed": True,
             "output_verified": True,
-            "instruction_sha256": hashlib.sha256(wake.WAKE_INSTRUCTION.encode("utf-8")).hexdigest(),
+            "instruction_sha256": hashlib.sha256(wake.job_instruction_template().encode()).hexdigest(),
+            "instruction_protocol_sha256": hashlib.sha256(wake.job_instruction_template().encode()).hexdigest(),
+            "instruction_delivery_state": "not_prepared",
         }
         start = next(c for c in server.calls if c.get("method") == "thread/start")
         assert start["params"]["sandbox"] == "read-only"
@@ -488,15 +337,9 @@ def test_event_on_active_owner_task_fails_closed_without_starting_or_interruptin
         server = MockServer()
         server.thread_status = "active"
         async with connected_app(tmp_path, server) as app:
-            dispatcher = wake.WakeDispatcher(app, 123)
-            for event_id in ("inbound-1", "inbound-2"):
-                dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
-            await asyncio.wait_for(dispatcher.work(), 2)
-            assert not dispatcher.enabled and dispatcher.failed == 1
-            assert dispatcher.last_error == "codex_thread_busy"
-            assert dispatcher.queue.qsize() == 1
+            with pytest.raises(wake.WakeError, match=r"^codex_thread_busy$"):
+                await app.run_event_turn("synthetic request", "inbound-1")
             assert not app.outcome_unknown and app.active_turn is None
-            await dispatcher.pause()
         assert [c["method"] for c in server.calls] == ["initialize", "initialized", "thread/resume"]
         assert server.counter == 0
 
@@ -504,43 +347,18 @@ def test_event_on_active_owner_task_fails_closed_without_starting_or_interruptin
 
 
 @pytest.mark.parametrize("result", [None, {}, {"turn": None}, {"turn": {}}, {"turn": {"id": 123}}])
-def test_malformed_start_stops_queue_and_preserves_unknown_outcome(result):
+def test_malformed_start_preserves_unknown_outcome_without_retry(result):
     async def scenario():
         app = wake.AppServer(wake.WakeConfig(THREAD))
         app.connected = True
         app.resume = AsyncMock()
         app.request = AsyncMock(return_value=result)
-        dispatcher = wake.WakeDispatcher(app, 123)
-        for event_id in ("inbound-1", "inbound-2"):
-            dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
-        await asyncio.wait_for(dispatcher.work(), 2)
-        assert not dispatcher.enabled and not dispatcher.active
-        assert dispatcher.failed == 1 and dispatcher.queue.qsize() == 1
-        assert dispatcher.last_error == "codex_rpc_response_invalid"
-        assert app.outcome_unknown
+        with pytest.raises(wake.WakeError, match=r"^codex_rpc_response_invalid$"):
+            await app.run_event_turn("synthetic request", "inbound-1")
+        assert app.outcome_unknown and app.active_turn is None
         app.request.assert_awaited_once()
         with pytest.raises(wake.WakeError, match="wake_pause_outcome_unknown"):
-            await dispatcher.pause()
-
-    asyncio.run(scenario())
-
-
-def test_unexpected_worker_failure_disables_without_leaking_payload_or_replaying():
-    async def scenario():
-        app = wake.AppServer(wake.WakeConfig(THREAD))
-        app.connected = True
-        app.run_turn = AsyncMock(side_effect=TypeError("private RPC payload"))
-        dispatcher = wake.WakeDispatcher(app, 123)
-        for event_id in ("inbound-1", "inbound-2"):
-            dispatcher.accept({"operation": "event", "event_id": event_id}, 123)
-        await asyncio.wait_for(dispatcher.work(), 2)
-        assert not dispatcher.enabled and dispatcher.failed == 1
-        assert dispatcher.queue.qsize() == 1
-        assert dispatcher.last_error == "wake_worker_failed"
-        assert "private" not in json.dumps(dispatcher.status())
-        app.run_turn.assert_awaited_once()
-        with pytest.raises(wake.WakeError, match="wake_not_ready"):
-            dispatcher.accept({"operation": "event", "event_id": "inbound-3"}, 123)
+            await app.interrupt()
 
     asyncio.run(scenario())
 
@@ -648,3 +466,25 @@ def test_duty_status_reports_transport_and_inbound_separately(tmp_path, scenario
         assert payload["state"] == scenario
     if log.exists():
         assert all(line.startswith("is-active ") for line in log.read_text().splitlines())
+
+
+@pytest.mark.parametrize("command", ["failed-context", "recover-failed"])
+def test_retired_ram_recovery_cli_rejects_before_any_transport(monkeypatch, command):
+    call = AsyncMock()
+    monkeypatch.setattr(wake, "local_request", call)
+    monkeypatch.setattr("sys.argv", ["telegram_wake", command])
+    with pytest.raises(SystemExit) as stopped:
+        wake.main()
+    assert stopped.value.code == 2
+    call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("command", ["status", "pause", "resume"])
+def test_durable_control_cli_keeps_request_and_failure_result(monkeypatch, capsys, command):
+    reply = {"ok": False, "error": "wake_cleanup_pending"}
+    call = AsyncMock(return_value=reply)
+    monkeypatch.setattr(wake, "local_request", call)
+    monkeypatch.setattr("sys.argv", ["telegram_wake", command])
+    assert wake.main() == 1
+    call.assert_awaited_once_with({"operation": command})
+    assert json.loads(capsys.readouterr().out) == reply

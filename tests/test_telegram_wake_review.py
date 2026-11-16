@@ -62,58 +62,28 @@ def test_prestart_resume_from_previous_connection_cannot_authorize_new_socket():
     asyncio.run(scenario())
 
 
-def test_recovery_burst_preserves_every_accepted_bridge_reference(monkeypatch, capsys):
+def test_bridge_burst_preserves_open_references_until_explicit_completion(monkeypatch, capsys):
     async def scenario():
         monitor = bridge.InboundMonitor()
-        app = wake.AppServer(wake.WakeConfig(THREAD))
-        dispatcher = wake.WakeDispatcher(app, 123)
-        release = asyncio.Event()
         accepted = []
-        processed = []
 
         async def deliver(request, path):
-            try:
-                result = dispatcher.accept(request, 123)
-            except wake.WakeError as exc:
-                return {"ok": False, "error": str(exc)}
             accepted.append(request["event_id"])
-            return result
-
-        async def process(text):
-            await release.wait()
-            event_id = next(word.rstrip(";") for word in text.split() if word.startswith("inbound-"))
-            monitor.require_open(event_id)
-            monitor.mark_no_reply_needed(event_id)
-            processed.append(event_id)
+            return {"ok": True}
 
         monkeypatch.setenv(bridge.WORK_WAKE_ENVIRONMENT, "/synthetic/wake.sock")
         monkeypatch.setattr(wake, "local_request", deliver)
-        app.run_turn = AsyncMock(side_effect=process)
-        dispatcher.worker = asyncio.create_task(dispatcher.work())
-        try:
-            for number in range(1, bridge.MAX_INBOUND_MONITOR_EVENTS + 3):
-                await bridge._capture_incoming_event(
-                    monitor, SimpleNamespace(is_private=True, out=False, chat_id=123, id=number)
-                )
-                await asyncio.sleep(0)
-            assert dispatcher.active and dispatcher.queue.qsize() == 31
-            assert len(accepted) == 32
-            assert monitor.status()["dropped_open_events"] == 0
-            assert monitor.status()["rejected_events"] == 2
-            for event_id in accepted:
-                monitor.require_open(event_id)
-            release.set()
-            await asyncio.wait_for(dispatcher.queue.join(), 1)
-            assert processed == accepted and dispatcher.completed == 32 and dispatcher.failed == 0
-            # A deliberately closed reference can be recycled; recovery of
-            # retained requests does not leave admission permanently full.
+        for number in range(1, bridge.MAX_INBOUND_MONITOR_EVENTS + 3):
             await bridge._capture_incoming_event(
-                monitor, SimpleNamespace(is_private=True, out=False, chat_id=123, id=35)
+                monitor, SimpleNamespace(is_private=True, out=False, chat_id=123, id=number)
             )
-            await asyncio.wait_for(dispatcher.queue.join(), 1)
-            assert len(processed) == 33 and monitor.status()["dropped_open_events"] == 0
-        finally:
-            await dispatcher.pause()
+        assert len(accepted) == 32
+        assert monitor.status()["dropped_open_events"] == 0 and monitor.status()["rejected_events"] == 2
+        for event_id in accepted:
+            monitor.require_open(event_id)
+            monitor.mark_no_reply_needed(event_id)
+        await bridge._capture_incoming_event(monitor, SimpleNamespace(is_private=True, out=False, chat_id=123, id=35))
+        assert len(accepted) == 33 and monitor.status()["dropped_open_events"] == 0
 
     asyncio.run(scenario())
     assert capsys.readouterr().err == "work_telegram_monitor_full=true\n" * 2
@@ -199,12 +169,10 @@ def test_transport_loss_sending_server_request_refusal_remains_reconnectable():
         app.active_turn = "synthetic-turn"
         app.outcome_unknown = True
         await app._read(app.websocket, app.generation)
-        dispatcher = wake.WakeDispatcher(app, 123)
         assert not app.blocked and app.recovery_state == "reconnecting"
         assert app.disconnected.is_set() and not app.ready_event.is_set()
         assert app.active_turn == "synthetic-turn" and app.outcome_unknown
-        assert dispatcher.status()["enabled"] and not dispatcher.status()["ready"]
-        assert dispatcher.accept({"operation": "event", "event_id": "inbound-1"}, 123)["ok"]
+        assert app.recovery_state == "reconnecting" and not app.ready_event.is_set()
 
     asyncio.run(scenario())
 
@@ -237,25 +205,13 @@ def test_malformed_frame_during_metadata_releases_worker_and_preserves_known_tur
         app.websocket = InvalidMetadataSocket()
         app.reader = asyncio.create_task(app._read(app.websocket, app.generation))
 
-        async def wait_known_turn(_text):
-            await app._wait_turn(1)
-
-        app.run_turn = AsyncMock(side_effect=wait_known_turn)
-        dispatcher = wake.WakeDispatcher(app, 123)
-        for number in (1, 2):
-            dispatcher.accept({"operation": "event", "event_id": f"inbound-{number}"}, 123)
-        dispatcher.worker = asyncio.create_task(dispatcher.work())
         try:
-            await asyncio.wait_for(dispatcher.worker, 1)
-            assert app.blocked and dispatcher.status()["recovery_state"] == "blocked"
-            assert not dispatcher.active and not dispatcher.enabled
-            assert dispatcher.failed == 1 and dispatcher.completed == 0 and dispatcher.queue.qsize() == 1
-            assert dispatcher.last_error == "codex_rpc_frame_invalid"
+            with pytest.raises(wake.WakeError, match=r"^codex_rpc_frame_invalid$"):
+                await asyncio.wait_for(app._wait_turn(1), 1)
+            assert app.blocked and app.recovery_state == "blocked"
             assert app.active_turn == "synthetic-turn" and app.outcome_unknown
-            app.run_turn.assert_awaited_once()
+            assert app.recovery_error == "codex_rpc_frame_invalid"
         finally:
-            dispatcher.worker.cancel()
-            await asyncio.gather(dispatcher.worker, return_exceptions=True)
             await app.close()
 
     asyncio.run(scenario())

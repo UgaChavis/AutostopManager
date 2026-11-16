@@ -824,6 +824,7 @@ def test_actual_dispatcher_rpc_keeps_migrated_peer_review_without_infrastructure
             holder = inbox.start_intent(**guard(holder), thread_id="test-thread")
         path = close_as_schema4(inbox)
         with TelegramInbox(path) as restored:
+            restored.configure_instructions("/test/snapshot", "a" * 40)
             monitor = bridge.DurableInboundMonitor(restored, enabled=True, config=config)
             client = Client([_message(100), _message(102)])
 

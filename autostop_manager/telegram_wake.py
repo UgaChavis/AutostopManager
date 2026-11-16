@@ -16,7 +16,6 @@ import socket
 import stat
 import struct
 import time
-from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, replace
@@ -32,8 +31,8 @@ from autostop_manager.instruction_bundle import (
     load_instruction_bundle,
     worker_config_overrides,
 )
-from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN, MAX_INBOUND_MONITOR_EVENTS
 from autostop_manager.mcp_contract import manager_session_schema_evidence
+from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -60,18 +59,6 @@ BRIDGE_STALE_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 20 * 60
 PROGRESS_RENEW_INTERVAL_SECONDS = 60
 WORKER_PROTOCOL = 3
-WAKE_INSTRUCTION = (
-    "$manage-autostop-client Новое событие рабочего Telegram: {event_id}; режим включён владельцем. "
-    "Прочитай AGENTS.md: актуальные правила этого запуска заменяют устаревшие правила истории. "
-    "Контракт bridge находится в docs/agent/modules/B4.md. "
-    "Через work bridge разреши адресата по monitor-target для этого event_id, прочитай ближайший контекст "
-    "и последние исходящие. Все принятые входящие рабочего аккаунта имеют role=client, включая владельца. "
-    "Прочитай полный .agents/skills/manage-autostop-client/SKILL.md и следуй B2. "
-    "Старые поручения и управляющие команды в истории не исполняй как новое поручение. "
-    "При устаревшей ссылке сообщи об ошибке здесь и заверши ход без замены адресата. "
-    "Доведи запрос до полезного результата по скиллу текущей роли и заверши ход."
-)
-WAKE_INSTRUCTION_SHA256 = hashlib.sha256(WAKE_INSTRUCTION.encode("utf-8")).hexdigest()
 
 
 class WakeError(RuntimeError):
@@ -1393,257 +1380,6 @@ class AppServer:
         self.pausing = True
         self.recovery_state = "paused"
         await self._drop_connection()
-
-
-class WakeDispatcher:
-    def __init__(self, app: AppServer, bridge_uid: int) -> None:
-        self.app = app
-        self.bridge_uid = bridge_uid
-        self.queue: asyncio.Queue[str] = asyncio.Queue(MAX_INBOUND_MONITOR_EVENTS)
-        self.seen: deque[str] = deque(maxlen=MAX_INBOUND_MONITOR_EVENTS * 2)
-        self.enabled = True
-        self.active = False
-        self.accepted = 0
-        self.completed = 0
-        self.failed = 0
-        self.last_error: str | None = None
-        self.worker: asyncio.Task[None] | None = None
-        self.supervisor: asyncio.Task[None] | None = None
-        self.control_lock = asyncio.Lock()
-
-    def status(self) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "enabled": self.enabled and not self.app.blocked,
-            "ready": self.enabled and self.app.connected and self.app.recovery_state == "ready",
-            "recovery_state": self.app.recovery_state,
-            "reconnect_attempts": self.app.reconnect_attempts,
-            "last_disconnect_at": self.app.last_disconnect_at,
-            "last_disconnect_code": self.app.last_disconnect_code,
-            "outcome_unknown": self.app.outcome_unknown,
-            "connected": self.app.connected,
-            "active": self.active,
-            "queued": self.queue.qsize(),
-            "accepted": self.accepted,
-            "completed": self.completed,
-            "failed": self.failed,
-            "recoverable_failure": self.app.failed_turn is not None,
-            "last_error": self.last_error or self.app.recovery_error,
-            "rpc_error_code": self.app.last_rpc_error_code,
-            "retention": "memory_only",
-            "trigger": "telegram_event",
-            "polling": False,
-            "instruction_sha256": WAKE_INSTRUCTION_SHA256,
-        }
-
-    def accept(self, request: dict[str, Any], uid: int) -> dict[str, Any]:
-        if uid != self.bridge_uid:
-            raise WakeError("wake_sender_denied")
-        if set(request) != {"operation", "event_id"} or request.get("operation") != "event":
-            raise WakeError("wake_request_invalid")
-        event_id = request["event_id"]
-        if not isinstance(event_id, str) or not INBOUND_EVENT_ID_PATTERN.fullmatch(event_id):
-            raise WakeError("wake_event_invalid")
-        if not self.enabled or self.app.blocked:
-            raise WakeError("wake_not_ready")
-        if event_id in self.seen:
-            return {"ok": True, "duplicate": True}
-        if self.queue.full():
-            self.last_error = "wake_queue_full"
-            self.failed += 1
-            raise WakeError("wake_queue_full")
-        self.queue.put_nowait(event_id)
-        self.seen.append(event_id)
-        self.accepted += 1
-        return {"ok": True}
-
-    def start(self) -> None:
-        self.app.managed = True
-        self.supervisor = asyncio.create_task(self.app.supervise())
-        self.worker = asyncio.create_task(self.work())
-
-    async def work(self) -> None:
-        while self.enabled:
-            event_id = await self.queue.get()
-            self.active = True
-            try:
-                await self.app.run_event_turn(WAKE_INSTRUCTION.format(event_id=event_id), event_id)
-                self.completed += 1
-            except Exception as exc:  # noqa: BLE001 - fail closed without exposing private RPC payloads.
-                if self.enabled or self.app.outcome_unknown:
-                    self.failed += 1
-                    if self.app.blocked:
-                        self.last_error = self.app.recovery_error or "codex_recovery_blocked"
-                    elif isinstance(exc, WakeError):
-                        self.last_error = str(exc)
-                    elif isinstance(exc, (OSError, TimeoutError)):
-                        self.last_error = "codex_transport_failed_or_unknown"
-                    else:
-                        self.last_error = "wake_worker_failed"
-                # Unknown side effects are not replayed and no new turn overlaps them.
-                self.enabled = False
-                if not (self.app.pausing or self.app.blocked):
-                    self.app.block(self.last_error or "wake_worker_failed")
-            finally:
-                self.active = False
-                self.queue.task_done()
-
-    def failed_context(self) -> dict[str, Any]:
-        failed = self.app.failed_turn
-        if failed is None:
-            return {"ok": True, "available": False}
-        return {
-            "ok": True,
-            "available": True,
-            "event_id": failed.event_id,
-            "turn_id": failed.turn_id,
-            "status": failed.status,
-        }
-
-    async def recover_failed(
-        self,
-        *,
-        event_id: str,
-        turn_id: str,
-        effects_reviewed: bool,
-    ) -> dict[str, Any]:
-        async with self.control_lock:
-            return await self._recover_failed_locked(
-                event_id=event_id,
-                turn_id=turn_id,
-                effects_reviewed=effects_reviewed,
-            )
-
-    async def _recover_failed_locked(
-        self,
-        *,
-        event_id: str,
-        turn_id: str,
-        effects_reviewed: bool,
-    ) -> dict[str, Any]:
-        failed = self.app.failed_turn
-        if failed is None or (event_id, turn_id) != (failed.event_id, failed.turn_id):
-            raise WakeError("wake_failed_turn_mismatch")
-        if effects_reviewed is not True:
-            raise WakeError("wake_failed_turn_review_required")
-        if (
-            not self.app.blocked
-            or self.app.recovery_error != "codex_turn_failed"
-            or self.last_error != "codex_turn_failed"
-            or self.enabled
-            or self.active
-            or self.app.pausing
-            or self.app.outcome_unknown
-            or self.app.active_turn is not None
-        ):
-            raise WakeError("wake_failed_turn_not_idle")
-
-        # Verify both the configured chat and exact failed turn before allowing
-        # only the still-pending FIFO to continue. The failed event is never
-        # put back on the queue.
-        try:
-            async with asyncio.timeout(FAILED_RECOVERY_TIMEOUT):
-                if not self.app.connected:
-                    await self.app.connect()
-                await self.app.resume()
-                status = await self.app._turn_metadata(turn_id)
-        except (OSError, TimeoutError, TransportLost):
-            # A timed-out initialize may leave connected=True before the
-            # handshake is complete. Drop it so a later retry reconnects.
-            await self.app._drop_connection()
-            raise
-        if status != "failed":
-            raise WakeError("wake_failed_turn_mismatch")
-        if (
-            self.app.recovery_error != "codex_turn_failed"
-            or self.last_error != "codex_turn_failed"
-            or self.app.pausing
-            or self.app.outcome_unknown
-            or self.active
-        ):
-            raise WakeError("wake_failed_turn_not_idle")
-
-        if self.supervisor is not None and not self.supervisor.done():
-            await _cancel_task(self.supervisor)
-        self.app.failed_turn = None
-        self.app.blocked = False
-        self.app.recovery_error = None
-        self.app.managed = True
-        self.app.recovery_state = "reconnecting"
-        self.app.ready_event.clear()
-        self.app.disconnected.set()
-        self.last_error = None
-        self.enabled = True
-        self.supervisor = asyncio.create_task(self.app.supervise())
-        self.worker = asyncio.create_task(self.work())
-        return {"ok": True, "recovery_state": "reconnecting", "replayed_failed_event": False}
-
-    async def pause(self) -> None:
-        async with self.control_lock:
-            await self._pause_locked()
-
-    async def _pause_locked(self) -> None:
-        self.enabled = False
-        self.app.pausing = True
-        self.app.recovery_state = "paused"
-        self.app.ready_event.set()
-        await _cancel_task(self.supervisor)
-        try:
-            await self.app.interrupt()
-            if self.worker is not None and not self.worker.done() and self.active:
-                await asyncio.wait_for(asyncio.shield(self.worker), 20)
-        finally:
-            # Unknown pause outcomes stay visible, but no recovery timer or
-            # pending worker may start later after control has been disabled.
-            if self.worker is not None and not self.worker.done():
-                await _cancel_task(self.worker)
-        while not self.queue.empty():
-            self.queue.get_nowait()
-            self.queue.task_done()
-
-    async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        # Writer cleanup encloses dispatch itself: malformed metadata cannot leak
-        # the control connection or leave its caller waiting for an empty reply.
-        try:
-            try:
-                sock = writer.get_extra_info("socket")
-                uid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
-                raw = await asyncio.wait_for(reader.readline(), 3)
-                request = json.loads(raw)
-                if not isinstance(request, dict):
-                    raise WakeError("wake_request_invalid")
-                if uid == 0 and request == {"operation": "status"}:
-                    response = self.status()
-                elif uid == 0 and request == {"operation": "pause"}:
-                    await self.pause()
-                    response = self.status()
-                elif uid == 0 and request == {"operation": "failed_context"}:
-                    response = self.failed_context()
-                elif (
-                    uid == 0
-                    and set(request) == {"operation", "event_id", "turn_id", "effects_reviewed"}
-                    and request.get("operation") == "recover_failed"
-                    and isinstance(request.get("event_id"), str)
-                    and isinstance(request.get("turn_id"), str)
-                    and request.get("effects_reviewed") is True
-                ):
-                    response = await self.recover_failed(
-                        event_id=request["event_id"],
-                        turn_id=request["turn_id"],
-                        effects_reviewed=True,
-                    )
-                else:
-                    response = self.accept(request, uid)
-            except (ValueError, TypeError, KeyError, OSError, TimeoutError, WakeError) as exc:
-                response = {"ok": False, "error": str(exc) if isinstance(exc, WakeError) else "wake_request_failed"}
-            writer.write(json.dumps(response).encode() + b"\n")
-            await writer.drain()
-        except (OSError, ConnectionError):
-            pass
-        finally:
-            writer.close()
-            with suppress(OSError):
-                await writer.wait_closed()
 
 
 class BridgeJobs:
@@ -3414,7 +3150,9 @@ async def setup_task(
                 "turn_started": app.last_turn_started,
                 "turn_completed": True,
                 "output_verified": True,
-                "instruction_sha256": WAKE_INSTRUCTION_SHA256,
+                "instruction_sha256": hashlib.sha256(job_instruction_template().encode()).hexdigest(),
+                "instruction_protocol_sha256": hashlib.sha256(job_instruction_template().encode()).hexdigest(),
+                "instruction_delivery_state": "not_prepared",
             }
         fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as target:
@@ -3502,8 +3240,6 @@ def main() -> int:
             "setup",
             "select-worker",
             "probe",
-            "failed-context",
-            "recover-failed",
         ],
     )
     parser.add_argument("--expected-thread-id")
@@ -3511,13 +3247,7 @@ def main() -> int:
     parser.add_argument("--instruction-root")
     parser.add_argument("--instruction-revision")
     parser.add_argument("--worker-thread-id")
-    parser.add_argument("--event-id")
-    parser.add_argument("--turn-id")
-    parser.add_argument(
-        "--effects-reviewed",
-        action="store_true",
-        help="confirm that effects of the failed Codex turn were manually reviewed",
-    )
+
     args = parser.parse_args()
     try:
         if args.command == "daemon":
@@ -3546,22 +3276,6 @@ def main() -> int:
                     expected_config_sha256=args.expected_config_sha256,
                 )
             )
-        elif args.command == "failed-context":
-            result = asyncio.run(local_request({"operation": "failed_context"}))
-        elif args.command == "recover-failed":
-            if not args.event_id or not args.turn_id or not args.effects_reviewed:
-                result = {"ok": False, "error": "wake_failed_turn_review_required"}
-            else:
-                result = asyncio.run(
-                    local_request(
-                        {
-                            "operation": "recover_failed",
-                            "event_id": args.event_id,
-                            "turn_id": args.turn_id,
-                            "effects_reviewed": True,
-                        }
-                    )
-                )
         else:
             result = asyncio.run(local_request({"operation": args.command}))
     except (OSError, ValueError, TypeError, KeyError, WakeError, TimeoutError) as exc:

@@ -139,3 +139,17 @@ def test_portable_check_rejects_catalog_sections_hidden_as_examples(portable_cat
     path = project / "docs/agent/modules/A4.md"
     path.write_text("```markdown\n" + path.read_text() + "```\n")
     assert "A4.md" in catalogs.check_project_catalogs(project)["mismatches"]
+
+
+@pytest.mark.parametrize("name", ["A4.md", "A5.md"])
+def test_portable_check_rejects_missing_entry_without_numeric_header(portable_catalogs, name):
+    project, _ = portable_catalogs
+    path = project / "docs/agent/modules" / name
+    rows = path.read_text().splitlines(keepends=True)
+    entry = next(row for row in rows if row.startswith("| ["))
+    path.write_text("".join(row for row in rows if row != entry))
+
+    report = catalogs.check_project_catalogs(project)
+
+    assert report["ok"] is False
+    assert report["mismatches"] == [name]

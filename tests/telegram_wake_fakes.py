@@ -307,6 +307,92 @@ class MockServer:
             await self._complete_turn(socket, method, thread_id)
 
 
+SYNTHETIC_EVENT_TEXT = "Synthetic AppServer transport test: {event_id}"
+
+
+class AppServerDriver:
+    """Test-only sequencing; AppServer owns RPC, reconnect and outcome guards.
+
+    There is no event admission/deduplication, policy prompt or recovery grant.
+    Tests retain pending requests solely to prove that a failed RPC cannot start
+    another turn. Production uses only DurableWakeDispatcher and bridge jobs.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.queue = asyncio.Queue()
+        self.enabled = True
+        self.active = False
+        self.completed = self.failed = 0
+        self.last_error = None
+        self.worker = self.supervisor = None
+
+    def enqueue(self, event):
+        if not self.enabled or self.app.blocked:
+            raise wake.WakeError("test_driver_stopped")
+        self.queue.put_nowait(event["event_id"])
+
+    def status(self):
+        app = self.app
+        return {
+            "enabled": self.enabled and not app.blocked,
+            "ready": self.enabled and app.connected and app.recovery_state == "ready",
+            **{
+                name: getattr(app, name)
+                for name in (
+                    "connected",
+                    "recovery_state",
+                    "last_disconnect_at",
+                    "last_disconnect_code",
+                    "reconnect_attempts",
+                    "outcome_unknown",
+                )
+            },
+            "last_error": self.last_error or app.recovery_error,
+            "rpc_error_code": app.last_rpc_error_code,
+        }
+
+    def start(self):
+        self.app.managed = True
+        self.supervisor = asyncio.create_task(self.app.supervise())
+        self.worker = asyncio.create_task(self.work())
+
+    async def work(self):
+        while self.enabled:
+            event_id = await self.queue.get()
+            self.active = True
+            try:
+                await self.app.run_event_turn(SYNTHETIC_EVENT_TEXT.format(event_id=event_id), event_id)
+                self.completed += 1
+            except (wake.WakeError, OSError, TimeoutError) as exc:
+                self.failed += 1
+                self.last_error = self.app.recovery_error or (
+                    str(exc) if isinstance(exc, wake.WakeError) else "test_driver_failed"
+                )
+                self.enabled = False
+                if not self.app.pausing and not self.app.blocked:
+                    self.app.block(self.last_error)
+            finally:
+                self.active = False
+                self.queue.task_done()
+
+    async def pause(self):
+        self.enabled = False
+        self.app.pausing = True
+        self.app.recovery_state = "paused"
+        self.app.ready_event.set()
+        await wake._cancel_task(self.supervisor)
+        try:
+            await self.app.interrupt()
+            if self.worker is not None and self.active:
+                await asyncio.wait_for(asyncio.shield(self.worker), 2)
+        finally:
+            await wake._cancel_task(self.worker)
+            while not self.queue.empty():
+                self.queue.get_nowait()
+                self.queue.task_done()
+
+
 async def until(predicate):
     async with asyncio.timeout(3):
         while not predicate():
@@ -338,7 +424,7 @@ async def managed_wake(tmp_path, server):
     path = str(tmp_path / "app.sock")
     async with unix_serve(server.handle, path, compression=None):
         app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-        dispatcher = wake.WakeDispatcher(app, 123)
+        dispatcher = AppServerDriver(app)
         dispatcher.start()
         try:
             await asyncio.wait_for(app.ready_event.wait(), 3)

@@ -30,6 +30,16 @@
 удалённой основной ветки. Для Manager и CRM push и успешный CI сами по себе не
 устанавливают релиз; Store workflow проверяй отдельно в разрешённых границах.
 
+`/opt/AutostopManager` сохраняется как постоянный workspace служб, с данными, env
+и `.git`; это не source checkout для правки или Git checkout/reset/clean.
+Tracked прикладной код и инструкции представлены aliases на выбранный
+`/opt/autostop-manager-releases/current`; обычный `.gitignore` — исключение для
+управления Git, а не второй источник runtime-кода. При согласованном выпуске
+используй [refresh-manager-runtime-workspace.py](../../../scripts/refresh-manager-runtime-workspace.py)
+по его текущей справке, со сверкой targets до и после; не заменяй весь workspace
+symlink и не переноси данные, настройки или Git ради смены кода. Source worktree
+и его HEAD учитываются отдельно от workspace aliases, installed REVISION и Python.
+
 Рабочий порядок — обслуживание с полной остановкой приложений, описанное ниже.
 Сохранившиеся cold/coordinated-компоненты не являются обязательным путём выпуска;
 их удаление требует отдельной проверки связей. Открытые замечания старых review —
@@ -51,6 +61,12 @@ CI и source release gates используют `scripts/update-instruction-cata
 `update-instruction-catalogs.py --check`, сверяющие установленные выбранные навыки
 и host environment до выпуска. Эти проверки читают;
 обновление каталогов без флагов выполняется до публикации исходников.
+
+Для установленного клиентского пути отдельно выполни `doctor --instruction-sources`:
+`raw_project_skill_differences` и `raw_project_skill_unverified` должны быть пусты;
+stale/unverified discovery — отказ, а не зелёная проверка с предупреждением.
+Сверь bundle hash и состояние доставки отдельно от protocol hash. Транспортный
+probe с `not_prepared` и project-only doctor не заменяют эту приёмку.
 
 При выпуске изменений инструкций дополнительно сверь physical root/revision, весь граф с `MANIFEST.sha256`, профиль служебного исполнителя и источники, обнаруживаемые действующим Codex. Объём модельной проверки доставки AGENTS/профильных правил задаётся поручением владельца; для конкретного пакета он может её отменить. Проверки исходников, hashes и `skills/list` не доказывают загрузку правил моделью, в том числе при отменённой модельной проверке. Ошибка или неизвестный результат передачи правил не разрешает запуск клиентского хода или повтор исходного действия.
 
@@ -222,8 +238,14 @@ push и количество tools не подтверждают загрузк�
    `api:/api/manager_structure`; сохрани исходные JSON-типы чисел. Из exact sealed
    Manager и final bundle подготовь instruction-only patch вне репозитория:
 
+   Сначала выбери qualified физический source root CRM и его revision по
+   установленному image/source, затем matching Python. Старый `/opt/autostopcrm`
+   сам по себе не доказывает нужную ревизию helper. Проверенный helper поддерживает
+   retained core и optional K1; нельзя возвращать карту к прежнему числу узлов
+   или запускать старую layout migration ради синхронизации текста.
+
    ```bash
-   /opt/autostopcrm/.venv/bin/python /opt/autostopcrm/scripts/sync_manager_structure_instructions.py \
+   "${crm_python:?Set verified CRM Python}" "${crm_source_root:?Set qualified CRM physical root}/scripts/sync_manager_structure_instructions.py" \
      --graph /ROOT_PRIVATE/fresh-graph.json --manager-root /ROOT_PRIVATE/sealed-manager \
      --bundle /ROOT_PRIVATE/final-catalog.json --patch-output /ROOT_PRIVATE/instructions.json
    ```
@@ -237,6 +259,13 @@ push и количество tools не подтверждают загрузк�
    parent/геометрию, manual paths, связи и `tool_statuses`; E1 layout migration для текста
    не запускай. В браузере проверь pinned SHA ссылки, относительные переходы, unsafe URL
    блокировку и owner/viewer права; просмотр не запускает providers или business actions.
+
+Новый bridge fence сверяет пару root/revision при `job_claim` до захвата новых
+событий. Ошибка `wake_instruction_release_mismatch` требует сверки installed
+bridge/wake pins и manifests; перезапуск или новая очередь её не разрешают.
+Сохрани исходные задания, effects и receipts. Существующий job не перепривязывай
+к новому комплекту ради обновления; порядок удержания и завершения прежних работ
+остаётся частью согласованного выпуска.
 
 ## Native MCP и подключённый Codex
 

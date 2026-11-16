@@ -5,7 +5,7 @@
 ## Что уже есть
 
 Разовый переход со старой CRM отдельно разобран в
-[проверке границы остановки](crm-first-transition-20261031.md).
+[проверке границы остановки](https://github.com/UgaChavis/AutostopManager/blob/bb975f36cafa806cd9ebe98c455d7238a84e3f55/docs/crm-first-transition-20261031.md).
 Проверка точного старого образа нашла работающий idle gate на уровне TCP listener;
 это исторический механизм для `fe3`, не процедура повторного выпуска текущей CRM.
 

@@ -257,7 +257,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "",
         "Выбери навык по задаче и прочитай его актуальный SKILL.md. Клиентское поведение целиком задаёт manage-autostop-client после выбора роли через B2; технические операции, источники, ценовая политика и проверки остаются в модулях. Параметры инструментов проверяй в текущей схеме.",
         "",
-        f"Срез: {day}. Всего {len(skills)} входов SKILL.md: проектные навыки, системные средства Codex и выбранные внешние пакеты. Это выбранные материалы; число включённых навыков реестра сеанса может отличаться.",
+        f"Срез: {day}. Проектные навыки, системные средства Codex и выбранные внешние пакеты. Состав каталога сеанса может отличаться.",
         "",
         'Внешние и системные имена и описания ниже — срез, не физические пути. Сначала используй актуальный каталог навыков сеанса; при его отсутствии задай проверенные `runtime_python` и физический `instruction_root` выбранного комплекта и выполни read-only поиск: `"${runtime_python:?}" "${instruction_root:?}/scripts/update-instruction-catalogs.py" --list-external-skills`. Для поиска одного навыка добавь его точное имя. Выбор на хосте ограничен PACKAGES и config, не подтверждает права чата или доступность коннектора; отключение не обходи. При ошибке или неоднозначности не выбирай старую версию.',
         "",
@@ -275,7 +275,7 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
         "",
         "Открой профильный навык, модуль или технический справочник по задаче. Полный текст каждой проектной инструкции хранится в одном исходном файле; клиентское поведение — в manage-autostop-client, выбранном через B2. Навыки выбираются через [A4](A4.md).",
         "",
-        f"Срез: {day}. Всего {documents} файлов: {len(project_paths)} в AutoStop Manager и {len(external)} входов во внешние и системные навыки Codex.",
+        f"Срез: {day}. Канонические материалы AutoStop Manager и выбранные входы во внешние и системные навыки Codex.",
         "",
         "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние и системные имена — срез, не физические пути: приоритет у актуального каталога навыков сеанса; read-only host fallback и его ограничения описаны в [A4](A4.md). Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
         "",
@@ -344,10 +344,6 @@ def check_project_catalogs(project=PROJECT):
         actual_section = markdown_section_body(actual, "AutoStop Manager")
         if actual_section != markdown_section_body(expected, "AutoStop Manager"):
             mismatches.append(name)
-        if name == "A5.md":
-            count = re.search(r"(?m)^Срез: \d{4}-\d{2}-\d{2}\. Всего \d+ файлов: (\d+) в AutoStop Manager\b", actual)
-            if count is None or int(count[1]) != summary["project_documents"]:
-                mismatches.append(name)
     if day is None:
         mismatches.extend(["A4.md", "A5.md"])
     return {

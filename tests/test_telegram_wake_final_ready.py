@@ -6,7 +6,7 @@ import asyncio
 import json
 
 import pytest
-from telegram_wake_fakes import THREAD, MockServer, connected_app, event, managed_wake, stop, until
+from telegram_wake_fakes import AppServerDriver, THREAD, MockServer, connected_app, event, managed_wake, stop, until
 from telegram_wake_fakes import quick_recovery as quick_recovery
 from websockets.asyncio.server import unix_serve
 
@@ -25,7 +25,7 @@ def test_500_idle_manual_turns_leave_no_notifications_and_next_wake_runs(tmp_pat
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
+            dispatcher = AppServerDriver(app)
             try:
                 await app.connect()
                 await app.resume()
@@ -37,7 +37,7 @@ def test_500_idle_manual_turns_leave_no_notifications_and_next_wake_runs(tmp_pat
                 await app.request("barrier", {})
                 assert app.events.empty() and server.counter == server.metadata_calls == 0
                 dispatcher.worker = asyncio.create_task(dispatcher.work())
-                dispatcher.accept(event(1), 123)
+                dispatcher.enqueue(event(1))
                 await asyncio.wait_for(dispatcher.queue.join(), 3)
                 assert dispatcher.completed == server.counter == 1 and dispatcher.failed == 0
                 assert app.last_turn_started and app.events.empty() and server.metadata_calls == 0
@@ -70,7 +70,7 @@ def test_older_connection_loss_signal_does_not_reconcile_current_turn(tmp_path, 
     async def scenario():
         server = MockServer(complete=False)
         async with managed_wake(tmp_path, server) as (app, dispatcher):
-            dispatcher.accept(event(1), 123)
+            dispatcher.enqueue(event(1))
             await until(lambda: app.last_turn_started)
             app.events.put_nowait({"method": "connection_lost", "generation": app.generation - 1})
             await notify(server.sockets[-1], "1")
@@ -142,7 +142,7 @@ def test_own_turn_notification_overflow_releases_worker_and_preserves_pending_ev
         path = str(tmp_path / "app.sock")
         async with unix_serve(server.handle, path, compression=None):
             app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=path))
-            dispatcher = wake.WakeDispatcher(app, 123)
+            dispatcher = AppServerDriver(app)
             waiting = asyncio.Event()
             release_waiter = asyncio.Event()
             queue_get = app.events.get
@@ -157,8 +157,8 @@ def test_own_turn_notification_overflow_releases_worker_and_preserves_pending_ev
             dispatcher.start()
             try:
                 await asyncio.wait_for(app.ready_event.wait(), 3)
-                dispatcher.accept(event(1), 123)
-                dispatcher.accept(event(2), 123)
+                dispatcher.enqueue(event(1))
+                dispatcher.enqueue(event(2))
                 await asyncio.wait_for((waiting if known_id else server.started).wait(), 3)
                 expected_turn = "1" if known_id else None
                 assert app.active_turn == expected_turn and app.outcome_unknown
@@ -189,7 +189,7 @@ def test_known_turn_completed_in_metadata_does_not_force_next_turn_metadata(tmp_
         server.release_metadata.clear()
         async with managed_wake(tmp_path, server) as (app, dispatcher):
             try:
-                dispatcher.accept(event(1), 123)
+                dispatcher.enqueue(event(1))
                 await asyncio.wait_for(server.metadata_requested.wait(), 3)
                 server.turn_statuses["1"] = "completed"
                 server.release_metadata.set()
@@ -197,7 +197,7 @@ def test_known_turn_completed_in_metadata_does_not_force_next_turn_metadata(tmp_
                 metadata_calls = server.metadata_calls
                 assert metadata_calls == 1 and dispatcher.completed == 1
                 server.complete = server.emit_started = True
-                dispatcher.accept(event(2), 123)
+                dispatcher.enqueue(event(2))
                 await asyncio.wait_for(dispatcher.queue.join(), 3)
                 assert server.metadata_calls == metadata_calls
                 assert server.counter == dispatcher.completed == 2 and dispatcher.failed == 0
@@ -218,7 +218,7 @@ def test_twelve_known_turn_recoveries_with_varied_terminal_order_never_replay(tm
                     server.disconnect_after_start_response = True
                     server.metadata_requested.clear()
                     server.release_metadata.clear()
-                    dispatcher.accept(event(cycle * 2 + 1), 123)
+                    dispatcher.enqueue(event(cycle * 2 + 1))
                     await asyncio.wait_for(server.metadata_requested.wait(), 3)
                     ident = str(cycle * 2 + 1)
                     assert app.active_turn == ident and server.counter == cycle * 2 + 1
@@ -230,7 +230,7 @@ def test_twelve_known_turn_recoveries_with_varied_terminal_order_never_replay(tm
                     assert app.active_turn is None and not app.outcome_unknown and dispatcher.enabled
                     metadata_calls = server.metadata_calls
                     server.complete = server.emit_started = True
-                    dispatcher.accept(event(cycle * 2 + 2), 123)
+                    dispatcher.enqueue(event(cycle * 2 + 2))
                     await asyncio.wait_for(dispatcher.queue.join(), 3)
                     assert server.metadata_calls == metadata_calls
                     assert server.counter == dispatcher.completed == cycle * 2 + 2 and dispatcher.failed == 0
