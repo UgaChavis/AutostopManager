@@ -4494,6 +4494,16 @@ async def _handle_operation(
             _EFFECT_AUTHORITY.reset(token)
 
 
+def _local_transport_ready(client: Any) -> bool:
+    # Telethon remains user-connected during reconnect; its sender knows when
+    # the actual transport is usable. Legacy clients may expose neither check.
+    checks = (
+        getattr(client, "is_connected", None),
+        getattr(getattr(client, "_sender", None), "_transport_connected", None),
+    )
+    return all(check() for check in checks if callable(check))
+
+
 async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation router
     client: Any,
     config: TelegramConfig,
@@ -4538,7 +4548,9 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
             "ok": True,
             "authorized": bool(getattr(client, "_autostop_authorized", me is not None)),
             "transport_ready": (
-                inbound_monitor.transport_ready if isinstance(inbound_monitor, DurableInboundMonitor) else True
+                inbound_monitor.transport_ready
+                if isinstance(inbound_monitor, DurableInboundMonitor)
+                else _local_transport_ready(client)
             ),
             "inbound_enabled": (
                 inbound_monitor.capture_enabled
