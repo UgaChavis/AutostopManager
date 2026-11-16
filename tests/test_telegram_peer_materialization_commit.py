@@ -31,12 +31,16 @@ def test_restart_reconciliation_fences_peer_only_after_local_cleanup(tmp_path, b
             before_event = inbox.resolve(job["event_ids"][0])
             later = wake.DurableWakeDispatcher(wake.AppServer(app.config), os.geteuid(), FakeJobs(inbox))
             pending = asyncio.get_running_loop().create_future()
-            if cleanup_pending:
-                later.cleanup_tasks.add(pending)
             try:
                 # The real restart path must fence creation through its stop
                 # proof, without the test-only recover_on_startup shortcut.
                 await later._reconcile_active()
+                child, recovery = later.executions[job["job_id"]]
+                if cleanup_pending:
+                    child.cleanup_tasks.add(pending)
+                # Reconciliation launches independent peer recovery tasks;
+                # wait for this peer, with cleanup owned by the same child.
+                await asyncio.wait_for(recovery, 2)
                 recovered = inbox.read_peer_thread(job["job_id"])
                 assert recovered == {
                     **mapping,
