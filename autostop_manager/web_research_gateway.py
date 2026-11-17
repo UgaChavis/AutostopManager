@@ -17,8 +17,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .j1_fetch import (
+    _EMBEDDED_URL,
     _VIN,
     _decode_percent_layers,
+    _is_full_url_vin,
     _looks_like_vin,
     contains_sensitive,
     contains_unsafe_url,
@@ -227,6 +229,13 @@ def redact_vin_like_text(value: Any, *, limit: int = 1000) -> tuple[str, int]:
 
     raw = _decode_percent_layers(str(value or ""))
     replacements = 0
+    document_paths = []
+    for url_match in _EMBEDDED_URL.finditer(raw):
+        url = url_match.group().rstrip(".,;)]}")
+        if public_url(url):
+            parsed = urlparse(url)
+            start = url_match.start() + len(parsed.scheme) + 3 + len(parsed.netloc)
+            document_paths.append((start, start + len(parsed.path)))
 
     def replace(match: re.Match[str]) -> str:
         nonlocal replacements
@@ -235,7 +244,12 @@ def redact_vin_like_text(value: Any, *, limit: int = 1000) -> tuple[str, int]:
         # Preserve a known make plus article, without exempting arbitrary
         # alphabetic VIN prefixes such as WBAFR followed by twelve digits.
         brand_article = len(first) > 1 and len(first[0]) > 4 and first[0].upper() in _MAKE_SOURCE_MAP
-        if not _looks_like_vin(token) or brand_article:
+        # A bulletin filename can reach 17 characters only by consuming .pdf.
+        # Keep this URL-specific exception out of free text and DNS labels.
+        document_name = not _is_full_url_vin(token) and any(
+            start <= match.start() and match.end() <= end for start, end in document_paths
+        )
+        if not _looks_like_vin(token) or brand_article or document_name:
             return token
         replacements += 1
         return " "

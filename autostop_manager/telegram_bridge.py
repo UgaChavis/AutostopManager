@@ -7205,7 +7205,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
-            elif args.reply_to_message_id:
+            elif args.command in {"send-photo", "send-document"} and args.reply_to_message_id:
                 request["reply_to_message_id"] = args.reply_to_message_id
             payload = send_local_request(_socket_from_args(args), request)
     except BridgeError as exc:
