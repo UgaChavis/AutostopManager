@@ -122,7 +122,9 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
         isolate(patch, root)
         patch.setattr(bridge, "_MUTATION_LOCK", asyncio.Lock())
         instruction_root = bundle.__wrapped__(root, patch)
+        bundle_ready = time.monotonic()
         async with bridge_runtime(root) as runtime:
+            bridge_ready = time.monotonic()
             claim, proof = runtime.inbox.claim, runtime.inbox.finish_execution
 
             def observe_claim(**kwargs):
@@ -150,6 +152,7 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
                     accepted[event] = tick
                     samples["intake"].append(time.monotonic() - tick)
             peak_pending = runtime.inbox.status()["open_events"]
+            intake_finished = time.monotonic()
             server = MockServer(complete=False, peer_threads=True)
             lanes, fast_done = asyncio.Semaphore(actor_lanes), asyncio.Event()
             heart = asyncio.create_task(heartbeat())
@@ -209,6 +212,8 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
                     assert status["reply_verified_events"] == clients * messages
                     assert runtime.client.sent == 2 * len(seen) and server.counter == len(seen)
                     timing_snapshot = dispatcher.status()["stage_timings"]
+                    processing_finished = time.monotonic()
+                worker_closed = time.monotonic()
             finally:
                 stop.set()
                 await heart
@@ -218,6 +223,9 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
                         task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await bridge._effect_executor().close()
+                effects_closed = time.monotonic()
+        bridge_closed = time.monotonic()
+    isolation_closed = time.monotonic()
     # Closing connections can leave already scheduled finalizers for one turn.
     for _ in range(10):
         if not (set(asyncio.all_tasks()) - baseline_tasks):
@@ -225,7 +233,9 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
         await asyncio.sleep(0.01)
     remaining = set(asyncio.all_tasks()) - baseline_tasks
     assert not remaining, [(task.get_coro().__qualname__, task.done()) for task in remaining]
+    tasks_settled = time.monotonic()
     gc.collect()
+    gc_finished = time.monotonic()
     after = resources()
     assert after["fds"] <= before["fds"] and after["threads"] == before["threads"]
     elapsed = time.monotonic() - started
@@ -234,6 +244,18 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
         "messages_per_client": messages,
         "actor_lanes": actor_lanes,
         "elapsed_seconds": elapsed,
+        "phase_seconds": {
+            "bundle_setup": bundle_ready - started,
+            "bridge_setup": bridge_ready - bundle_ready,
+            "intake": intake_finished - bridge_ready,
+            "processing": processing_finished - intake_finished,
+            "worker_shutdown": worker_closed - processing_finished,
+            "effects_shutdown": effects_closed - worker_closed,
+            "bridge_shutdown": bridge_closed - effects_closed,
+            "isolation_exit": isolation_closed - bridge_closed,
+            "task_settle": tasks_settled - isolation_closed,
+            "gc": gc_finished - tasks_settled,
+        },
         "events_per_second": clients * messages / elapsed,
         "stages": {name: distribution(values) for name, values in samples.items()},
         "stage_timings": timing_snapshot,

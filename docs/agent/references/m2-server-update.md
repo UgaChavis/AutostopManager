@@ -113,9 +113,9 @@ VIN-bearing browser URLs остаются запрещены; прежняя bro
 
 ## Обслуживание с остановкой приложений
 
-1. Проверь полномочия для всех затрагиваемых компонентов; без разрешения не
-   инспектируй Store и не начинай совместный выпуск. Зафиксируй опубликованные SHA,
-   проверенные пакеты/images и фактические версии Manager, CRM и разрешённого Store.
+1. Проверь полномочия для всех затрагиваемых компонентов и состав совместного
+   выпуска. Зафиксируй опубликованные SHA, проверенные пакеты/images и фактические
+   версии Manager, CRM и Store.
    Сохрани незакоммиченную работу. Существующие checkout
    не переключай ради установки. Проверь совместимость итоговой пары Manager/CRM
    с выбранным Store и реальные пути source, Python, данных и конфигурации.
@@ -279,7 +279,7 @@ manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
 env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --provider-failure-check
 ```
 
-Требуются handshake, все страницы `tools/list`, manifest/schema и annotation parity, безопасные вызовы. Только при отдельном разрешении на такую проверку Store добавь `--store-check`: он читает health/capabilities и не более одного заказа через `store_search(entity="store_order", limit=1)` без pagination и записи. Проверяй `checks.store_order_search.ok=true`; `store_order_sample_empty` означает доступ без образца для проверки полей. Отчёт не сохраняет ID, поля или raw provider errors. Без разрешения Store эту проверку не выполняй и укажи ограничение приёмки.
+Требуются handshake, все страницы `tools/list`, manifest/schema и annotation parity, безопасные вызовы. Для проверки интеграции Store добавь `--store-check`: он читает health/capabilities и не более одного заказа через `store_search(entity="store_order", limit=1)` без pagination и записи. Проверяй `checks.store_order_search.ok=true`; `store_order_sample_empty` означает доступ без образца для проверки полей. Отчёт не сохраняет ID, поля или raw provider errors.
 
 После `browser_ready=true` и `browser_containers_ready=true` повтори probe с `--timeout 90 --browser-check`; нужен `checks.fetch_page_browser.ok=true` для публичного `https://example.com/`. Container health не подтверждает всю Manager browser chain.
 

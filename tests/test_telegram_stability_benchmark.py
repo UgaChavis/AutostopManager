@@ -17,6 +17,8 @@ def test_benchmark_observes_independent_client_results_and_settled_cleanup():
         assert result["covered_events"] == 4
         assert result["verified_sends"] == 4
         assert result["leaked_tasks"] == 0
+        assert all(seconds >= 0 for seconds in result["phase_seconds"].values())
+        assert sum(result["phase_seconds"].values()) <= result["elapsed_seconds"]
         for stage in (
             "queue_wait",
             "claim_to_context_ready",
