@@ -135,6 +135,43 @@ def _install_fakes(monkeypatch, **kwargs) -> list[dict]:
     return calls
 
 
+@pytest.mark.parametrize(
+    "raw,field,matching,conflicting,node,article",
+    [
+        ("левая фара", "side", "left", "right", "Фара", "Left headlight"),
+        ("внутренний ШРУС", "inner_outer", "inner", "outer", "внутренний ШРУС", "Front left inner CV joint"),
+    ],
+)
+@pytest.mark.parametrize("conflict", [False, True])
+def test_resolver_requires_clarification_before_catalog_for_conflicting_position(
+    monkeypatch, raw, field, matching, conflicting, node, article, conflict
+):
+    calls = _install_fakes(
+        monkeypatch,
+        rows=[{"NODE_3_TEXT": node, "NODE_3_STR_ID": 100470}],
+        articles=[{"article_id": "synthetic-article", "product_name": article, "part_number": "SYNTHETIC"}],
+    )
+    hints = {"side": "left", field: conflicting if conflict else matching}
+    if field == "inner_outer":
+        hints["axle"] = "front"
+    response = resolve_vin_oem_parts(
+        identifier=SYNTHETIC_VIN,
+        requested_part=raw,
+        live_vpic=False,
+        live_partsapi_identity=True,
+        live_partsapi_oem=True,
+        **hints,
+    )
+    assert response["part_intent"]["clarification_required"] is conflict
+    if conflict:
+        assert field in response["part_intent"]["clarification_fields"]
+        assert [call["operation"] for call in calls] == ["vin_decode"]
+        assert response["article_candidates"] == []
+    else:
+        assert [call["operation"] for call in calls] == ["vin_decode", "search_tree", "articles"]
+        assert response["article_candidates"][0]["position_match"] == "matched"
+
+
 def test_resolver_uses_current_three_method_chain_and_keeps_fitment_manual(monkeypatch):
     calls = _install_fakes(monkeypatch)
     result = resolve_vin_oem_parts(

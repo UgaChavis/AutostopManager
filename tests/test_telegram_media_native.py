@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
@@ -122,7 +123,7 @@ def media_case(tmp_path, monkeypatch):
                 kind,
                 self.uploaded,
                 caption=caption,
-                reply=kwargs.get("reply_to", 0),
+                reply=101 if self.fault == "reply" else kwargs.get("reply_to", 0),
                 identifier=201 if self.fault == "id" else 200,
                 peer=43 if self.fault == "chat" else 42,
                 out=self.fault != "incoming",
@@ -181,6 +182,146 @@ def test_real_tl_media_handler_verifies_and_replays_exact_outgoing(media_case, k
     assert _apply(media_case, request, dry)["replayed"] is True
     assert media_case.client.sent == 1
     assert media_case.client.downloads == (0 if kind == "photo" else 2)
+
+
+@pytest.mark.parametrize("kind", ["photo", "document"])
+@pytest.mark.parametrize("reply_id", [100, "100"])
+@pytest.mark.parametrize("with_monitor", [False, True])
+def test_personal_media_reply_is_bound_sent_and_verified(media_case, kind, reply_id, with_monitor):
+    media_case.config = replace(media_case.config, account="personal")
+    assert media_case.config.account == "personal"
+    monitor = bridge.InboundMonitor() if with_monitor else None
+    request = media_case.request(kind) | {"reply_to_message_id": reply_id}
+    dry = _invoke(media_case, request, monitor=monitor)
+    contract = bridge._decode_contract(
+        dry["contract_token"], bridge._ensure_private_key(media_case.config.state_dir / "contract.key")
+    )
+    assert contract["reply_to_message_id"] == 100
+    assert contract["reply_message_sha256"]
+    assert _apply(media_case, request, dry, monitor=monitor)["verified"] is True
+    assert bridge._message_reply_to_id(media_case.client.outgoing) == 100
+    assert _apply(media_case, request, dry, monitor=monitor)["replayed"] is True
+    assert media_case.client.sent == 1
+
+
+@pytest.mark.parametrize("kind", ["photo", "document"])
+def test_personal_media_reply_readback_mismatch_stays_unverified_without_resend(media_case, kind):
+    media_case.config = replace(media_case.config, account="personal")
+    request = media_case.request(kind) | {"reply_to_message_id": 100}
+    dry = _invoke(media_case, request)
+    media_case.client.fault = "reply"
+    for _attempt in range(2):
+        with pytest.raises(bridge.BridgeError, match="readback_failed"):
+            _apply(media_case, request, dry)
+    ledger = json.loads((media_case.config.state_dir / "idempotency.json").read_text())
+    assert ledger["native-media"]["message_id"] == 200
+    assert ledger["native-media"]["readback_verified"] is False
+    assert media_case.client.sent == 1
+
+
+@pytest.mark.parametrize("kind", ["photo", "document"])
+def test_personal_media_reply_source_edit_blocks_apply_before_send(media_case, kind):
+    media_case.config = replace(media_case.config, account="personal")
+    request = media_case.request(kind) | {"reply_to_message_id": 100}
+    dry = _invoke(media_case, request)
+    media_case.client.source.message = "Edited synthetic source"
+    with pytest.raises(bridge.BridgeError, match="contract_reply_source_changed"):
+        _apply(media_case, request, dry)
+    assert media_case.client.sent == 0
+
+
+@pytest.mark.parametrize("kind", ["photo", "document"])
+def test_personal_media_cli_preserves_reply_without_job(monkeypatch, capsys, kind):
+    requests = []
+
+    def send(_socket, request):
+        requests.append(request)
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "send_local_request", send)
+    result = bridge.main(
+        [
+            "--account",
+            "personal",
+            "send-" + kind,
+            "--peer",
+            "42",
+            "--file",
+            "/unused/media",
+            "--caption",
+            "Synthetic",
+            "--reply-to-message-id",
+            "100",
+        ]
+    )
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert requests[0]["reply_to_message_id"] == 100
+    assert "job_id" not in requests[0]
+
+
+@pytest.mark.parametrize("terminal", ["staged", "failed", "cancelled"])
+def test_voice_recovery_does_not_confirm_cleanup_during_accepted_download(media_case, monkeypatch, terminal):
+    async def scenario():
+        config = media_case.config
+        monitor = bridge.InboundMonitor()
+        content = media_case.content["voice"]
+        message = _media_message("voice", content, identifier=100, out=False)
+        event_id = monitor.record(message)
+        started, release = asyncio.Event(), asyncio.Event()
+        previous = set(bridge._MONITOR_VOICE_EXPIRY_TASKS)
+
+        async def load(_client, _events):
+            return [message]
+
+        async def download(_message, *, file):
+            assert file is bytes
+            started.set()
+            await release.wait()
+            if terminal == "failed":
+                raise bridge.BridgeError("download_failed")
+            return content
+
+        monkeypatch.setattr(bridge, "_load_inbound_monitor_context_messages", load)
+        monkeypatch.setattr(media_case.client, "download_media", download)
+        staging = asyncio.create_task(
+            bridge._handle_monitor_voice_stage(media_case.client, config, monitor, event_id=event_id)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            with pytest.raises(bridge.BridgeError, match="inbound_voice_stage_active"):
+                await bridge._handle_monitor_voice_cleanup(config, monitor, event_id=event_id)
+            # Recovery must not release the first reservation or allow an overlapping download.
+            with pytest.raises(bridge.BridgeError, match="inbound_voice_stage_active"):
+                await bridge._handle_monitor_voice_stage(media_case.client, config, monitor, event_id=event_id)
+            if terminal == "cancelled":
+                staging.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await staging
+            else:
+                release.set()
+                if terminal == "failed":
+                    with pytest.raises(bridge.BridgeError, match="download_failed"):
+                        await staging
+                else:
+                    staged = await staging
+                    path = monitor.voice_stage(staged["media_handle"]).path
+                    assert path.exists()
+                    await bridge._handle_monitor_voice_discard(config, monitor, handle=staged["media_handle"])
+                    assert not path.exists()
+            cleaned = await bridge._handle_monitor_voice_cleanup(config, monitor, event_id=event_id)
+            assert cleaned["cleanup_verified"] is True and cleaned["stage_active"] is False
+            assert not monitor.voice_stage_in_progress(monitor.resolve(event_id))
+        finally:
+            if not staging.done():
+                staging.cancel()
+            await asyncio.gather(staging, return_exceptions=True)
+            expiry = bridge._MONITOR_VOICE_EXPIRY_TASKS - previous
+            for task in expiry:
+                task.cancel()
+            await asyncio.gather(*expiry, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("kind", ["photo", "document", "voice"])

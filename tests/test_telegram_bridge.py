@@ -1236,6 +1236,8 @@ def _run_mocked_authorization(
     account: str = "work",
     monitor_intent: bool = False,
     monitor_intent_directory: bool = False,
+    runtime_exists: bool = True,
+    runtime_module: str = "telegram_bridge",
 ) -> tuple[subprocess.CompletedProcess[str], str, Path | None, Path]:
     release_link = tmp_path / "release"
     venv_python = tmp_path / "venv" / "bin" / "python"
@@ -1250,7 +1252,6 @@ def _run_mocked_authorization(
 
     service_user = "autostop-telegram" if account == "personal" else "autostop-work-telegram"
     release_root = "autostop-telegram-releases" if account == "personal" else "autostop-work-telegram-releases"
-    venv_root = "autostop-telegram-venv" if account == "personal" else "autostop-work-telegram-venv"
     state_root = "autostop-telegram" if account == "personal" else "autostop-work-telegram"
 
     source = (ROOT / "scripts/authorize-telegram-account.sh").read_text(encoding="utf-8")
@@ -1259,11 +1260,6 @@ def _run_mocked_authorization(
     source = source.replace(
         f'release_link="/opt/{release_root}/current"',
         f'release_link="{release_link}"',
-        1,
-    )
-    source = source.replace(
-        f'venv_python="/opt/{venv_root}/bin/python"',
-        f'venv_python="{venv_python}"',
         1,
     )
     source = source.replace(
@@ -1294,6 +1290,11 @@ def _run_mocked_authorization(
     authorize_script = tmp_path / "authorize.sh"
     authorize_script.write_text(source, encoding="utf-8")
     authorize_script.chmod(0o755)
+    runtime_helper = tmp_path / "work-telegram-python.sh"
+    runtime_helper.write_text((ROOT / "scripts/work-telegram-python.sh").read_text(), encoding="utf-8")
+    runtime_helper.chmod(0o755)
+    if not runtime_exists:
+        venv_python.unlink()
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -1305,7 +1306,13 @@ command_name="$1"
 shift
 printf '%s %s\n' "$command_name" "$*" >>"$FAKE_SYSTEMCTL_LOG"
 case "$command_name" in
-  show) printf 'loaded\n' ;;
+  show)
+    if [[ "$*" == *ExecStart* ]]; then
+      printf '{ path=%s ; argv[]=python -m autostop_manager.%s daemon ; }\n' "$FAKE_RUNTIME_PYTHON" "$FAKE_RUNTIME_MODULE"
+    else
+      printf 'loaded\n'
+    fi
+    ;;
   is-active) [[ "$(<"$FAKE_ACTIVE")" == 1 ]] ;;
   is-enabled) [[ "$(<"$FAKE_ENABLED")" == 1 ]] ;;
   stop) printf '0\n' >"$FAKE_ACTIVE" ;;
@@ -1328,6 +1335,7 @@ esac
     sudo.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_SUDO_LOG"
 if [[ "$*" == *" probe" ]]; then
   probe_count=0
   if [[ -f "$FAKE_PROBE_COUNT" ]]; then
@@ -1382,6 +1390,9 @@ exit 2
             "FAKE_SCENARIO": scenario,
             "FAKE_SESSION_MODE": session_mode,
             "FAKE_SYSTEMCTL_LOG": str(systemctl_log),
+            "FAKE_RUNTIME_PYTHON": str(venv_python),
+            "FAKE_RUNTIME_MODULE": runtime_module,
+            "FAKE_SUDO_LOG": str(tmp_path / "sudo.log"),
         }
     )
     completed = subprocess.run(
@@ -1393,6 +1404,35 @@ exit 2
     )
     state = f"active={active.read_text().strip()},enabled={enabled.read_text().strip()}"
     return completed, state, monitor_env, systemctl_log
+
+
+@pytest.mark.parametrize("account", ["personal", "work"])
+def test_authorization_uses_effective_runtime_without_legacy_venv(tmp_path, account):
+    result, state, _, log = _run_mocked_authorization(tmp_path, scenario="active_authorized", account=account)
+
+    assert result.returncode == 0, result.stderr
+    assert state == "active=1,enabled=1"
+    assert f"ExecStart --value autostop-{'work-' if account == 'work' else ''}telegram.service" in log.read_text()
+    calls = (tmp_path / "sudo.log").read_text()
+    assert f"{tmp_path / 'venv/bin/python'} -m autostop_manager.telegram_bridge --account {account} probe" in calls
+
+
+@pytest.mark.parametrize("account", ["personal", "work"])
+@pytest.mark.parametrize("invalid", ["missing", "wrong_module"])
+def test_authorization_refuses_invalid_runtime_before_service_mutation(tmp_path, account, invalid):
+    result, state, _, log = _run_mocked_authorization(
+        tmp_path,
+        scenario="active_authorized",
+        account=account,
+        runtime_exists=invalid != "missing",
+        runtime_module="telegram_wake" if invalid == "wrong_module" else "telegram_bridge",
+    )
+
+    assert result.returncode == 1
+    assert f"{account}_release_unavailable=true" in result.stderr
+    assert state == "active=1,enabled=1"
+    assert all(line.startswith("show ") for line in log.read_text().splitlines())
+    assert not (tmp_path / "sudo.log").exists()
 
 
 @pytest.mark.parametrize("account", ["personal", "work"])

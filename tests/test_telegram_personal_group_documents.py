@@ -386,13 +386,18 @@ def test_group_pdf_keeps_existing_private_file_safeguards(scenario, change, erro
     assert not scenario.reads and not scenario.sends
 
 
-def test_private_document_path_and_standalone_reply_behavior_are_unchanged(scenario):
+def test_private_document_reply_preserves_standalone_anchor(scenario):
     scenario.target = {"id": 42, "kind": "private"}
     scenario.request["peer"] = "42"
-    scenario.expected_reply = 0
-    scenario.readback = {"chat_id": 42, "is_private": True, "is_group": False, "reply_to_msg_id": 0}
+    scenario.source.chat_id = 42
+    scenario.source.is_private, scenario.source.is_group = True, False
+    scenario.readback = {"chat_id": 42, "is_private": True, "is_group": False, "reply_to_msg_id": 5}
     dry = scenario.invoke()
-    assert "reply_source" not in dry and not any(ids == 5 for ids, _limit in scenario.reads)
+    assert "reply_source" not in dry and any(ids == 5 for ids, _limit in scenario.reads)
+    contract = bridge._decode_contract(
+        dry["contract_token"], bridge._ensure_private_key(scenario.config.state_dir / "contract.key")
+    )
+    assert contract["reply_to_message_id"] == 5
     result = scenario.invoke(
         scenario.request
         | {

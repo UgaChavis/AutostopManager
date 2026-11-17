@@ -769,6 +769,38 @@ def _axle_context_issue(text: str, axle: str | None, position: str | None, posit
     return None
 
 
+_POSITION_PATTERNS = {
+    "axle": _AXLE_PATTERNS,
+    "side": {"left": r"\b(?:left|lh|лев\w*)\b", "right": r"\b(?:right|rh|прав\w*)\b"},
+    "inner_outer": {
+        "inner": r"\b(?:inner|internal|inboard|внутрен\w*)\b",
+        "outer": r"\b(?:outer|external|outboard|наружн\w*)\b",
+    },
+}
+
+
+def _position_context_issues(
+    text: str,
+    axle: str | None,
+    side: str | None,
+    position: str | None,
+    positions: tuple[str, ...],
+    inner_outer: str | None = None,
+) -> list[str]:
+    axle_issue = _axle_context_issue(text, axle, position, positions)
+    issues = [axle_issue] if axle_issue else []
+    for field, value in (("side", side), ("inner_outer", inner_outer)):
+        patterns = _POSITION_PATTERNS[field]
+        hints = (
+            _text_position_hints(value or "", patterns)
+            | _text_position_hints(text, patterns)
+            | _text_position_hints(position or "", patterns)
+        )
+        if len(hints) > 1:
+            issues.append(field)
+    return issues
+
+
 def _infer_position_context(text: str) -> dict[str, str]:
     """Extract only unambiguous axle/side hints from a recognised part request.
 
@@ -776,23 +808,7 @@ def _infer_position_context(text: str) -> dict[str, str]:
     keeps the request on the clarification path.
     """
 
-    coordinates = {
-        "axle": _single_text_position_hint(text, _AXLE_PATTERNS),
-        "side": _single_text_position_hint(
-            text,
-            {
-                "left": r"\b(?:left|lh|лев\w*)\b",
-                "right": r"\b(?:right|rh|прав\w*)\b",
-            },
-        ),
-        "inner_outer": _single_text_position_hint(
-            text,
-            {
-                "inner": r"\b(?:inner|internal|inboard|внутрен\w*)\b",
-                "outer": r"\b(?:outer|external|outboard|наружн\w*)\b",
-            },
-        ),
-    }
+    coordinates = {field: _single_text_position_hint(text, patterns) for field, patterns in _POSITION_PATTERNS.items()}
     return {key: value for key, value in coordinates.items() if value is not None}
 
 
@@ -843,7 +859,7 @@ def normalize_part_intent(
         }
 
     payload = asdict(matched)
-    axle_issue = _axle_context_issue(text, axle, position, matched.positions)
+    position_issues = _position_context_issues(text, axle, side, position, matched.positions, inner_outer)
     required_position_tokens = {
         "axle": any(
             "front_or_rear_required" in value or "front_axle_or_rear_axle_required" in value or value == "axle_required"
@@ -873,15 +889,13 @@ def normalize_part_intent(
             + list(matched.clarification_fields)
         )
     )
-    if axle_issue and axle_issue not in derived_required_fields:
-        derived_required_fields.append(axle_issue)
+    derived_required_fields = list(dict.fromkeys([*derived_required_fields, *position_issues]))
     missing_fields = [
         field
         for field in dict.fromkeys([*matched.clarification_fields, *derived_required_fields])
         if not supplied_context.get(field)
     ]
-    if axle_issue:
-        missing_fields = list(dict.fromkeys([*missing_fields, axle_issue]))
+    missing_fields = list(dict.fromkeys([*missing_fields, *position_issues]))
     group_terms = list(dict.fromkeys([*matched.catalog_groups_ru, *matched.catalog_groups_en]))
     terms = [text, *group_terms, matched.canonical_name_ru, matched.canonical_name_en]
     payload.update(
@@ -889,9 +903,9 @@ def normalize_part_intent(
             "ok": True,
             "raw": text,
             "recognized": True,
-            "catalog_search_terms": [text] if axle_issue else list(dict.fromkeys(term for term in terms if term)),
-            "catalog_group_terms": [] if axle_issue else group_terms,
-            "partsapi_category_candidates": [] if axle_issue else list(matched.partsapi_cat_candidates),
+            "catalog_search_terms": [text] if position_issues else list(dict.fromkeys(term for term in terms if term)),
+            "catalog_group_terms": [] if position_issues else group_terms,
+            "partsapi_category_candidates": [] if position_issues else list(matched.partsapi_cat_candidates),
             "required_position_fields": derived_required_fields,
             "risk_fields": list(matched.critical_vehicle_fields),
             "explicit_positions": explicit_positions,

@@ -8,6 +8,49 @@ from autostop_manager import config, work_pricing
 from autostop_manager.work_pricing import estimate_repair_work_cost
 
 
+def test_duplicate_operation_is_not_added_to_estimated_total_twice():
+    operation = "замена рулевой рейки"
+    common = {
+        "vehicle": "SYNTHETIC sedan",
+        "chassis": "DEMO-FRAME",
+        "quotes_json": {
+            "quotes": [
+                {
+                    "source": f"synthetic-{index}",
+                    "city": "Красноярск",
+                    "operation_name": operation,
+                    "price_rub": price,
+                    "includes_parts": False,
+                    "confidence": "medium",
+                }
+                for index, price in enumerate([4000, 4500, 5000])
+            ]
+        },
+        "auto_research": False,
+        "use_internal_experience": False,
+    }
+    single = estimate_repair_work_cost(work_items=[operation], **common)
+    duplicate = estimate_repair_work_cost(work_items=[operation, operation], **common)
+    assert duplicate["total_works_rub"] == single["total_works_rub"] == 6500
+    assert len(duplicate["normalized_operations"]) == 1
+    assert duplicate["recommended_total_works_rub"] == single["recommended_total_works_rub"] == 6500
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        ["замена левого переднего амортизатора", "замена правого переднего амортизатора"],
+        ["замена передних колодок", "замена задних колодок"],
+        ["замена рулевой рейки", "снятие рулевой рейки"],
+    ],
+)
+def test_distinct_position_or_scope_keeps_separate_estimate_operations(items):
+    response = estimate_repair_work_cost(
+        vehicle="SYNTHETIC sedan", work_items=items, auto_research=False, use_internal_experience=False
+    )
+    assert len(response["normalized_operations"]) == 2
+
+
 def test_internal_experience_uses_persistent_data_root_across_releases(tmp_path, monkeypatch):
     persistent_data = tmp_path / "persistent-data"
     private_knowledge = persistent_data / "private_knowledge"

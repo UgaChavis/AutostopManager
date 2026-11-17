@@ -1103,6 +1103,7 @@ class StoreApiClient:
                     expected_detail=expected_detail,
                     expected_operation=expected_operation,
                 )
+                _validate_action_binding(payload, response_contract=response_contract, request_body=json_body)
                 self._record_success()
                 redacted = _redact_payload(payload, allow_quote_pii=quote_access)
                 meta = redacted.setdefault("meta", {})
@@ -1205,6 +1206,14 @@ class StoreApiClient:
             )
         except (OSError, HTTPException, RecursionError, TypeError, ValueError):
             return None
+        if payload["ok"]:
+            return self._error(
+                "store_response_schema_invalid",
+                attempt_count=attempt_count,
+                request_dispatched=True,
+                outcome_uncertain=response_contract == "action",
+                http_status=int(error.code),
+            )
         redacted = _redact_payload(payload)
         meta = redacted.setdefault("meta", {})
         if isinstance(meta, dict):
@@ -1739,6 +1748,19 @@ def _validate_error_payload(payload: dict[str, Any]) -> None:
     _require_allowed_keys(payload["meta"], _ERROR_META_FIELDS | {"snapshot_at"}, path="meta")
     if payload.get("items") or payload.get("changes"):
         raise ValueError("Store error envelopes cannot contain entity payloads")
+
+
+def _validate_action_binding(
+    payload: dict[str, Any], *, response_contract: str, request_body: dict[str, Any] | None
+) -> None:
+    if not payload["ok"] or response_contract != "action" or request_body is None:
+        return
+    for field in ("mode", "target_id"):
+        if field in payload["summary"] and payload["summary"][field] != request_body[field]:
+            raise ValueError("Store action response binding mismatch")
+    response_mode = {"dry_run": "dry_run", "applied": "apply"}.get(payload["status"])
+    if response_mode is not None and response_mode != request_body["mode"]:
+        raise ValueError("Store action response status mismatch")
 
 
 def _validate_action_payload(payload: dict[str, Any], operation: str) -> None:

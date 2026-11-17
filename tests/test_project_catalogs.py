@@ -123,6 +123,26 @@ def test_portable_check_detects_changed_project_skill_metadata(portable_catalogs
     assert catalogs.check_project_catalogs(project)["mismatches"] == ["A4.md"]
 
 
+def test_external_descriptions_cannot_overflow_a4_and_all_names_remain(portable_catalogs):
+    project, codex = portable_catalogs
+    description = "External purpose. " * 3000
+    for name in ("core", "another"):
+        write(
+            codex / "skills/.system" / name / "SKILL.md",
+            f"---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n",
+        )
+
+    a4, a5, summary = catalogs.build_catalogs(project, codex, "2026-10-10")
+
+    assert len(a4) < 30_000
+    assert "Task project" in a4
+    assert description not in a4
+    for name in ("core", "another"):
+        assert catalogs.code(name) in a4
+        assert catalogs.code(name) in a5
+    assert summary["codex_documents"] == 2
+
+
 def test_portable_check_excludes_explicit_history_but_rejects_its_operational_links(portable_catalogs):
     project, _ = portable_catalogs
     write(project / "docs/agent/references/client-instruction-audit.md", "[Historical](missing.md)\n")

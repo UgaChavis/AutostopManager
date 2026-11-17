@@ -19,6 +19,80 @@ def test_owner_preflight_contract_matches_current_store_api() -> None:
     assert store_owner_api.OWNER_PREFLIGHT_CONTRACT_VERSION == "store-owner-preflight-v2"
 
 
+@pytest.mark.parametrize("location", ["path", "operation"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_effective_parameter_change_invalidates_prepared_owner_plan(monkeypatch, location, changed):
+    def capabilities(default):
+        operation = {
+            "operationId": "patch_synthetic_part",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                            "required": ["name"],
+                            "additionalProperties": False,
+                        }
+                    }
+                },
+            },
+            "responses": {"200": {"description": "synthetic"}},
+        }
+        path = {"patch": operation}
+        (path if location == "path" else operation)["parameters"] = [
+            {"in": "path", "name": "id", "required": True, "schema": {"type": "string"}},
+            {"in": "query", "name": "notify", "schema": {"type": "boolean", "default": default}},
+        ]
+        paths = {"/api/v1/parts/{id}": path}
+        paths.update(
+            {
+                f"/api/v1/synthetic-{index}": {
+                    "get": {"operationId": f"get_synthetic_{index}", "responses": {"200": {"description": "synthetic"}}}
+                }
+                for index in range(99)
+            }
+        )
+        return store_owner_api._parse_capabilities({"openapi": "3.1.0", "paths": paths, "components": {}})
+
+    old = capabilities(False)
+    current = {"capabilities": old}
+    client = StoreOwnerApiClient(
+        agent_api_url="https://store.synthetic.example/internal/agent/v1", owner_token="synthetic-owner-token"
+    )
+    monkeypatch.setattr(client, "_load_capabilities", lambda **kwargs: current["capabilities"])
+    arguments = {
+        "operation_id": "patch_synthetic_part",
+        "path_parameters": {"id": "synthetic-part"},
+        "body": {"name": "synthetic"},
+        "expected_revision": "synthetic-revision",
+    }
+    plan = client.prepare_invocation(**arguments)
+    assert plan["ok"] is True
+    current["capabilities"] = capabilities(changed)
+    dispatched = []
+
+    def dispatch(**kwargs):
+        dispatched.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_dispatch", dispatch)
+    response = client.invoke(
+        **arguments,
+        mode="apply",
+        owner_intent="Synthetic owner plan check",
+        idempotency_key="synthetic-owner-key",
+        correlation_id="synthetic-owner-correlation",
+        dry_run_proof="a" * 64,
+        expected_plan_hash=plan["summary"]["plan_hash"],
+    )
+    assert bool(dispatched) is not changed
+    assert response["ok"] is not changed
+    if changed:
+        assert response["summary"]["error_code"] == "store_owner_plan_changed"
+
+
 class _Response:
     def __init__(self, payload, *, content_type="application/json", status=200, headers=None):
         self.payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode()

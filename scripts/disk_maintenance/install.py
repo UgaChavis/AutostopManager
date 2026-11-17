@@ -140,7 +140,14 @@ def _payload(source: Path, revision: str) -> tuple[dict[str, bytes], str]:
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise MaintenanceError("install_source_invalid")
-        result[name] = path.read_bytes()
+        data = path.read_bytes()
+        # The clean-status observation is not a snapshot of mutable source.
+        # Bind the bytes already read to the explicitly selected Git object.
+        expected = _command(["git", "-C", str(source), "rev-parse", "--verify", f"{revision}:{name}"])
+        blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        if blob != expected:
+            raise MaintenanceError("install_source_payload_changed")
+        result[name] = data
     if result[TMPFILES_SOURCE] != TMPFILES_RULE:
         raise MaintenanceError("install_tmpfiles_source_invalid")
     digest = hashlib.sha256()

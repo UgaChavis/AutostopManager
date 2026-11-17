@@ -69,7 +69,7 @@ def runtime(tmp_path):
     return scripts, env, python, tmp_path
 
 
-@pytest.mark.parametrize("role", ["bridge", "wake"])
+@pytest.mark.parametrize("role", ["personal", "bridge", "wake"])
 def test_python_uses_effective_systemd_runtime(runtime, role):
     scripts, env, python, _ = runtime
     result = subprocess.run(

@@ -16,8 +16,17 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .j1_fetch import contains_sensitive, contains_unsafe_url, public_url, redact_sensitive
+from .j1_fetch import (
+    _VIN,
+    _decode_percent_layers,
+    _looks_like_vin,
+    contains_sensitive,
+    contains_unsafe_url,
+    public_url,
+    redact_sensitive,
+)
 from .j1_fetch import fetch_browser_document as fetch_j1_browser_page
+from .vin_sources import _MAKE_SOURCE_MAP
 from .work_pricing_research import PUBLIC_RESEARCH_TIMEOUT_SECONDS, _ddg_search
 
 
@@ -194,7 +203,7 @@ def _compact(value: Any, *, limit: int) -> str:
 
 
 def _contains_private_contact(value: Any) -> bool:
-    decoded = unquote(unquote(str(value or "")))
+    decoded = _decode_percent_layers(str(value or ""))
     return bool(_PRIVATE_EMAIL.search(decoded) or _PRIVATE_PHONE.search(decoded))
 
 
@@ -216,8 +225,24 @@ def _public_page_text(value: Any, *, limit: int) -> tuple[str, bool]:
 def redact_vin_like_text(value: Any, *, limit: int = 1000) -> tuple[str, int]:
     """Remove every full VIN-like token before it leaves Manager."""
 
-    raw = _compact(unquote(str(value or "")), limit=1000)
-    sanitized, replacements = _VIN_LIKE_TOKEN.subn(" ", raw)
+    raw = _decode_percent_layers(str(value or ""))
+    replacements = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal replacements
+        token = match.group()
+        first = re.split(r"[ ._/\\-]", token, maxsplit=1)
+        # Preserve a known make plus article, without exempting arbitrary
+        # alphabetic VIN prefixes such as WBAFR followed by twelve digits.
+        brand_article = len(first) > 1 and len(first[0]) > 4 and first[0].upper() in _MAKE_SOURCE_MAP
+        if not _looks_like_vin(token) or brand_article:
+            return token
+        replacements += 1
+        return " "
+
+    # Redact the complete decoded input before applying the public query cap.
+    # Use J1's shared split-VIN recognizer, including arbitrary separators.
+    sanitized = _VIN.sub(replace, raw)
     return _compact(sanitized, limit=limit), replacements
 
 
@@ -421,8 +446,8 @@ def _invalid_query_response(
 def _private_query_failure(query: str, *, capability: str, adapter: str) -> dict[str, Any] | None:
     # VIN removal remains supported; reject other private data before truncating
     # or handing a query to either an injected adapter or the local fallback.
-    decoded = unquote(unquote(str(query or "")))
-    without_vin = _VIN_LIKE_TOKEN.sub(" ", decoded)
+    decoded = _decode_percent_layers(str(query or ""))
+    without_vin, _removed = redact_vin_like_text(decoded, limit=len(decoded))
     if _contains_private_contact(query):
         code = "web_research_personal_contact_rejected"
     elif contains_sensitive(without_vin, include_vin=False) or contains_unsafe_url(without_vin):

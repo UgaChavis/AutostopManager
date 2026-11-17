@@ -16,13 +16,14 @@ import re
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit, parse_qsl, urljoin
 from urllib.request import Request
 from .bounded_http_read import urlopen as bounded_urlopen
 from .config import load_runtime_env
 from .parts_intent import normalize_part_intent
 from .partsapi_methods import PARTSAPI_SHOP_METHODS
 from .partsapi_category_index import search_partsapi_category_index
+from .j1_fetch import contains_sensitive, contains_unsafe_url
 
 
 MANN_FILTER_GRAPHQL_ENDPOINT = "https://www.mann-filter.com/api/graphql/catalog-prod"
@@ -39,6 +40,17 @@ MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
 MIN_PROVIDER_TIMEOUT_SECONDS = 1.0
 MAX_PROVIDER_TIMEOUT_SECONDS = 30.0
 MAX_PARTSAPI_TOTAL_TIMEOUT_SECONDS = 60.0
+
+
+def _public_input_failure(provider: str, *values: Any) -> dict[str, Any] | None:
+    if any(contains_sensitive(str(value or "")) or contains_unsafe_url(str(value or "")) for value in values):
+        return {
+            "ok": False,
+            "provider": provider,
+            "error": "public_catalog_private_input",
+            "privacy": {"raw_identifier_is_sensitive": True, "secret_exposed": False},
+        }
+    return None
 
 
 def _clamp_timeout(timeout: Any, *, default: float = 20.0) -> float:
@@ -473,6 +485,8 @@ def build_mann_filter_catalog_request(
     endpoint: str | None = None,
     store: str | None = None,
 ) -> dict[str, Any]:
+    if failure := _public_input_failure("mann_filter_catalog", part_number):
+        return failure
     clean_part = str(part_number or "").strip()
     actual_endpoint = (endpoint or os.getenv("MANN_FILTER_GRAPHQL_ENDPOINT") or MANN_FILTER_GRAPHQL_ENDPOINT).rstrip(
         "?&"
@@ -512,6 +526,8 @@ def mann_filter_catalog_lookup(
     request_plan = build_mann_filter_catalog_request(
         part_number=part_number, current_page=current_page, page_size=page_size
     )
+    if request_plan.get("error"):
+        return request_plan
     base = {
         "provider": "mann_filter_catalog",
         "operation": "part_number_search",
@@ -559,6 +575,8 @@ def build_denso_aftermarket_search_request(
     country: str = "europe",
     base_url: str | None = None,
 ) -> dict[str, Any]:
+    if failure := _public_input_failure("denso_aftermarket_catalog", part_number, country):
+        return failure
     clean_part = str(part_number or "").strip()
     clean_country = str(country or "europe").strip() or "europe"
     actual_base_url = (base_url or os.getenv("DENSO_AFTERMARKET_BASE_URL") or DENSO_AFTERMARKET_BASE_URL).rstrip("/")
@@ -622,6 +640,8 @@ def denso_aftermarket_catalog_lookup(
     _deadline: float | None = None,
 ) -> dict[str, Any]:
     request_plan = build_denso_aftermarket_search_request(part_number=part_number, country=country)
+    if request_plan.get("error"):
+        return request_plan
     base = {
         "provider": "denso_aftermarket_catalog",
         "operation": "part_number_search",
@@ -727,6 +747,8 @@ def public_aftermarket_catalog_lookup(
     timeout: float = 20.0,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if failure := _public_input_failure("public_aftermarket_catalogs", part_number, country):
+        return failure
     aliases = {
         "mann": "mann_filter_catalog",
         "mann_filter": "mann_filter_catalog",
@@ -829,11 +851,24 @@ def _exist_absolute_url(url: str | None, *, base_url: str | None = None) -> str 
     clean_url = str(url or "").strip()
     if not clean_url:
         return None
-    if clean_url.startswith(("http://", "https://")):
-        return clean_url
-    if clean_url.startswith("/"):
-        return f"{_exist_base_url(base_url)}{clean_url}"
-    return f"{_exist_base_url(base_url)}/{clean_url}"
+    try:
+        base = urlsplit(_exist_base_url(base_url))
+        target = urlsplit(urljoin(_exist_base_url(base_url) + "/", clean_url))
+        if (
+            base.scheme != "https"
+            or target.scheme != base.scheme
+            or not base.hostname
+            or target.hostname != base.hostname
+            or (target.port or 443) != (base.port or 443)
+            or any(value is not None for value in (base.username, base.password, target.username, target.password))
+            or target.fragment
+            or "\\" in clean_url
+            or any(ord(char) < 32 for char in clean_url)
+        ):
+            return None
+        return target.geturl()
+    except ValueError:
+        return None
 
 
 def _exist_pid_from_url(url: str | None) -> str | None:
@@ -904,14 +939,15 @@ class _ExistCatalogCandidateParser(HTMLParser):
                 part_number = re.sub(re.escape(value), " ", part_number, count=1, flags=re.IGNORECASE)
         part_number = _clean_exist_text(part_number)
         pid = _exist_pid_from_url(href)
-        if pid:
+        url = _exist_absolute_url(href, base_url=self.base_url)
+        if pid and url:
             self.candidates.append(
                 {
                     "brand": brand,
                     "part_number": part_number or None,
                     "name": name,
                     "pid": pid,
-                    "url": _exist_absolute_url(href, base_url=self.base_url),
+                    "url": url,
                 }
             )
         self._current = None
@@ -1191,6 +1227,8 @@ def build_exist_price_lookup_request(
     include_more_offers: bool = False,
     base_url: str | None = None,
 ) -> dict[str, Any]:
+    if failure := _public_input_failure("exist", part_number, brand, pid):
+        return failure
     clean_part = str(part_number or "").strip()
     clean_brand = str(brand or "").strip() or None
     clean_pid = str(pid or "").strip()
@@ -1232,12 +1270,16 @@ def _exist_headers(*, office_id: int, accept: str) -> dict[str, str]:
 
 
 def _exist_read_text(url: str, *, office_id: int, timeout: float) -> str:
+    if not _exist_absolute_url(url):
+        raise ValueError("unsafe_exist_origin")
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="text/html,application/xhtml+xml"))
     with urlopen(request, timeout=timeout) as response:
         return _read_response_text(response, errors="replace")
 
 
 def _exist_read_json(url: str, *, office_id: int, timeout: float) -> Any:
+    if not _exist_absolute_url(url):
+        raise ValueError("unsafe_exist_origin")
     request = Request(url, headers=_exist_headers(office_id=office_id, accept="application/json"))
     with urlopen(request, timeout=timeout) as response:
         payload = _read_response_text(response, errors="replace")
@@ -1401,6 +1443,8 @@ def exist_price_lookup(
         max_offers=max_offers,
         include_more_offers=include_more_offers,
     )
+    if request_plan.get("error"):
+        return request_plan
     base = {
         "provider": "exist",
         "operation": "price_lookup",

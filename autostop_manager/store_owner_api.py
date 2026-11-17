@@ -1477,6 +1477,7 @@ def _parse_capabilities(openapi: dict[str, Any]) -> dict[str, OwnerCapability]:
                         "components_hash": components_hash,
                         "method": method_upper,
                         "operation": operation,
+                        "parameters": parameters,
                         "path": path_template,
                     }
                 ),

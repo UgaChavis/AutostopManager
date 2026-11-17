@@ -359,9 +359,12 @@ class RoleStore:
             if old:
                 if old["request_hash"] != digest:
                     raise RoleError("role_idempotency_conflict")
-                return json.loads(old["response"])
-            result = {"ok": True, **self._apply(db, operation, role, payload, expected_revision, actor)}
-            db.execute("INSERT INTO role_commands VALUES (?,?,?,?)", (key, digest, canonical(result), now()))
+                result = json.loads(old["response"])
+            else:
+                result = {"ok": True, **self._apply(db, operation, role, payload, expected_revision, actor)}
+                db.execute("INSERT INTO role_commands VALUES (?,?,?,?)", (key, digest, canonical(result), now()))
+        # A committed command may have outlived a failed projection write.
+        # Replays keep their original receipt and rebuild views from current state.
         self.export_views()
         return result
 
@@ -551,25 +554,35 @@ class RoleStore:
 
     def export_views(self) -> None:
         """Readable manual context; M2's independent technical journal is untouched."""
-        for role in ROLES:
-            state = self.role_state(role)
-            body = f"# {role} — рабочий контекст\n\n{state['context']}\n"
-            notes = self.read("notes", role, limit=100)["items"]
-            note_text = f"# {role} — наблюдения, идеи и опыт\n\n" + "\n".join(
-                f"- {item['created_at']} [{item['kind']}]: {item['data']['text']} ({item['data']['source_ref']})"
-                for item in notes
-            )
-            directory = self.views_root / role
-            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            for name, content in (("context.md", body), ("notes.md", note_text)):
-                target = directory / name
-                if target.is_symlink():
-                    raise RoleError("role_view_invalid")
-                fd, temporary = tempfile.mkstemp(prefix=".role-", dir=directory)
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                        stream.write(content)
-                    os.replace(temporary, target)
-                finally:
-                    if os.path.exists(temporary):
-                        os.unlink(temporary)
+        # Share the CAS writers' SQLite lock through the final replace. A newer
+        # commit cannot be followed by bytes from an older projection snapshot.
+        with self.connection(write=True) as db:
+            for role in ROLES:
+                state = self._state(db, role)
+                body = f"# {role} — рабочий контекст\n\n{state['context']}\n"
+                notes = [
+                    {**dict(row), "data": json.loads(row["data"])}
+                    for row in db.execute(
+                        "SELECT created_at,kind,data FROM role_items WHERE role=? "
+                        "AND kind IN ('observation','idea','knowledge') ORDER BY created_at DESC LIMIT 100",
+                        (role,),
+                    )
+                ]
+                note_text = f"# {role} — наблюдения, идеи и опыт\n\n" + "\n".join(
+                    f"- {item['created_at']} [{item['kind']}]: {item['data']['text']} ({item['data']['source_ref']})"
+                    for item in notes
+                )
+                directory = self.views_root / role
+                directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                for name, content in (("context.md", body), ("notes.md", note_text)):
+                    target = directory / name
+                    if target.is_symlink():
+                        raise RoleError("role_view_invalid")
+                    fd, temporary = tempfile.mkstemp(prefix=".role-", dir=directory)
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                            stream.write(content)
+                        os.replace(temporary, target)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)

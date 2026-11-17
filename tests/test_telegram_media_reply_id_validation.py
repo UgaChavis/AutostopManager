@@ -12,7 +12,7 @@ from test_telegram_durable_integration import bundle as bundle
 
 
 @pytest.mark.parametrize("operation", ["send_photo", "send_document"])
-@pytest.mark.parametrize("reply_id", [0.0, 0.9, 1.0, 1.9, True, False, [], {}])
+@pytest.mark.parametrize("reply_id", [0.0, 0.9, 1.0, 1.9, True, False, [], {}, -1, "-1", "invalid"])
 @pytest.mark.parametrize("durable", [True, False])
 def test_media_rejects_invalid_reply_before_io(monkeypatch, operation, reply_id, durable):
     def denied(*_args, **_kwargs):

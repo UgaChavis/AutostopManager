@@ -162,12 +162,13 @@ def _collect_search(job_id: str, operation: dict[str, Any], current: dict[str, A
             ("done" if result.get("ok") else "failed", code, json.dumps(providers), operation["id"]),
         )
         for entry in result.get("errors", []):
-            if (
-                entry.get("http_status") in {401, 403, 429}
-                and entry.get("provider") in store.ENGINES
-                and entry["provider"] not in updated["blocked_engines"]
-            ):
-                updated["blocked_engines"].append(entry["provider"])
+            if entry.get("http_status") in {401, 403, 429} and entry.get("provider") in store.ENGINES:
+                # Bing/Yahoo are aliases on one SearXNG endpoint. Its HTTP
+                # rejection applies to both, including subsequent queries.
+                blocked = ("bing", "yahoo") if entry["provider"] in {"bing", "yahoo"} else (entry["provider"],)
+                for engine in blocked:
+                    if engine not in updated["blocked_engines"]:
+                        updated["blocked_engines"].append(engine)
         if allowed:
             _discover(conn, updated, result.get("results", []))
         updated["used_seconds"] += max(0.0, time.monotonic() - started - charged)

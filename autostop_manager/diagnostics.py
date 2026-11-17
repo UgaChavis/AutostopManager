@@ -89,6 +89,8 @@ REFERENCE_DOCUMENTS = tuple(
 # Only the entry instructions and operational skills count toward this budget.
 # Detailed module guides and complete plugin catalogs are loaded when needed.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
+# The qualified CRM constructor uses a canonical pointer only for a long A5.
+CONSTRUCTOR_INSTRUCTION_MAX_CHARS = 30_000
 EXTERNAL_CODEX_ROOTS = (
     Path("/root/.codex/skills"),
     Path("/root/.codex/plugins/cache"),
@@ -276,6 +278,12 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
                 detail_size += len(text.encode())
             if not text.strip():
                 warnings.append(f"empty_document:{name}")
+            if (
+                name in MODULE_DOCUMENTS.values()
+                and name != MODULE_DOCUMENTS["A5"]
+                and len(text) > CONSTRUCTOR_INSTRUCTION_MAX_CHARS
+            ):
+                warnings.append(f"constructor_instruction_too_long:{name}")
             if (
                 name in MODULE_DOCUMENTS.values()
                 and name != "AGENTS.md"

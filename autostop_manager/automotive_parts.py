@@ -25,7 +25,7 @@ from .automotive_contracts import (
 from .parts_intent import (
     _ITEM_QUANTITY,
     _QUANTITY_LABEL,
-    _axle_context_issue,
+    _position_context_issues,
     _split_part_conjunctions,
     normalize_part_intent,
 )
@@ -155,11 +155,11 @@ def _request_item(row: str | dict[str, Any], index: int) -> dict[str, Any]:
     if intent.get("intent_id") in {"unknown", "multiple_parts"}:
         missing.append("part_intent")
     else:
-        axle_issue = _axle_context_issue(
-            raw, supplied.get("axle"), supplied.get("position"), intent.get("positions", ())
+        missing.extend(
+            _position_context_issues(
+                raw, supplied.get("axle"), supplied.get("side"), supplied.get("position"), intent.get("positions", ())
+            )
         )
-        if axle_issue:
-            missing.append(axle_issue)
     return {
         "item_id": str(supplied.get("item_id") or "part-" + content_digest({"index": index, "raw": raw})[:16]),
         "raw": raw,

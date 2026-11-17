@@ -17,14 +17,14 @@ case "${account}" in
     service_unit="autostop-telegram.service"
     service_user="autostop-telegram"
     release_link="/opt/autostop-telegram-releases/current"
-    venv_python="/opt/autostop-telegram-venv/bin/python"
+    runtime_role="personal"
     session_base="/var/lib/autostop-telegram/account.session"
     ;;
   work)
     service_unit="autostop-work-telegram.service"
     service_user="autostop-work-telegram"
     release_link="/opt/autostop-work-telegram-releases/current"
-    venv_python="/opt/autostop-work-telegram-venv/bin/python"
+    runtime_role="bridge"
     session_base="/var/lib/autostop-work-telegram/account.session"
     monitor_env="/etc/autostop-work-telegram/monitor.env"
     ;;
@@ -42,12 +42,17 @@ if [[ "${account}" == "work" ]]; then
   flock -x 9
 fi
 
-if [[ ! -x "${venv_python}" || ! -d "${release_link}" ]]; then
+if [[ ! -d "${release_link}" ]]; then
   echo "${account}_release_unavailable=true" >&2
   exit 1
 fi
 if ! systemctl show --property=LoadState --value "${service_unit}" | grep -Fxq loaded; then
   echo "${account}_service_unavailable=true" >&2
+  exit 1
+fi
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if ! venv_python="$("${script_dir}/work-telegram-python.sh" "${runtime_role}")"; then
+  echo "${account}_release_unavailable=true" >&2
   exit 1
 fi
 if [[ "${account}" == "work" ]]; then
