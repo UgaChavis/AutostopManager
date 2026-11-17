@@ -258,7 +258,7 @@ async def _await_until(operation: Awaitable[Any], deadline: float, retained: set
 
 
 async def _cancel_task_until(
-    task: asyncio.Task[Any] | None, deadline: float, retained: set[asyncio.Future[Any]]
+    task: asyncio.Future[Any] | None, deadline: float, retained: set[asyncio.Future[Any]]
 ) -> None:
     if task is None:
         return
@@ -3032,6 +3032,7 @@ class DurableWakeDispatcher:
             await self.pause(persist=False)
         deadline = asyncio.get_running_loop().time() + 5
         # Pause may fail on bridge IPC before reaching its owned task cleanup.
+        task: asyncio.Future[Any] | None
         for task in (self.worker, self.execution_task):
             with suppress(TimeoutError):
                 await _cancel_task_until(task, deadline, self.cleanup_tasks)
