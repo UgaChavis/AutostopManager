@@ -176,6 +176,10 @@ def test_public_results_redact_email_without_removing_sentence_punctuation(searc
     [
         ("Renault 7700100008", "Renault 7700100008", False),
         (PDF, PDF, False),
+        (PDF.replace("static.nhtsa.gov", "example.org"), PDF.replace("static.nhtsa.gov", "example.org"), False),
+        ("Official bulletin: " + PDF, "Official bulletin: " + PDF, False),
+        (PDF + " " + VIN, PDF, True),
+        ("repair WBA00000000000.PDF", "repair", True),
         ("Renault 7700100008 " + VIN, "Renault 7700100008", True),
     ],
 )
@@ -192,3 +196,30 @@ def test_ordinary_parts_pdf_and_legacy_vin_query_behavior_is_preserved(
     assert calls == [("search_web_multi", {"query": safe_query, "limit": 5})]
     assert j1_fetch.public_url(PDF) == PDF
     assert j1_fetch.redact_sensitive(PDF) == PDF
+
+
+@pytest.mark.parametrize("layers", [0, 1, 2])
+@pytest.mark.parametrize(
+    "private,tail",
+    [(VIN, ""), (VIN + ".pdf", " .pdf"), ("WBA 000000/00000000", ""), ("WBA00000000000.PDF", "")],
+)
+def test_public_pdf_exception_preserves_actual_vin_redaction(search, in_memory_gateway, private, tail, layers):
+    calls, _payload = in_memory_gateway
+    query = PDF + " " + encoded_contact(private, layers)
+
+    result = search(query)
+
+    assert result["ok"] is True and result["vin_redacted"] is True
+    assert result["query"] == PDF + tail
+    assert calls == [("search_web_multi", {"query": PDF + tail, "limit": 5})]
+
+
+def test_document_suffix_in_dns_label_is_not_a_public_pdf_exception(search, in_memory_gateway):
+    calls, _payload = in_memory_gateway
+    query = "https://WBA00000000000.pdf/"
+
+    result = search(query)
+
+    assert result["ok"] is True and result["vin_redacted"] is True
+    assert "WBA00000000000" not in str(result)
+    assert calls == [("search_web_multi", {"query": result["query"], "limit": 5})]

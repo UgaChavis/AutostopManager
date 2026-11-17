@@ -82,16 +82,18 @@ def test_work_authorization_ignores_caller_package(tmp_path: Path, scenario: str
     )
     shell(
         fake_bin / "systemctl",
-        'case "$1" in show) echo loaded;; *) exit 0;; esac\n',
+        'case "$*" in\n'
+        '  *--property=ExecStart*) printf "%s\\n" '
+        + shlex.quote(
+            f"{{ path={sys.executable} ; argv[]={sys.executable} -m autostop_manager.telegram_bridge daemon ; }}"
+        )
+        + ";;\n  show*) echo loaded;;\n  *) exit 0;;\nesac\n",
     )
     # Drop the environment as sudo does, retaining only this fixture's PATH.
     shell(fake_bin / "sudo", 'shift 2\nexec /usr/bin/env -i PATH="$PATH" "$@"\n')
     source = (ROOT / "scripts/authorize-telegram-account.sh").read_text(encoding="utf-8")
     source = source.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then", 1)
     source = source.replace('release_link="/opt/autostop-work-telegram-releases/current"', f'release_link="{release}"')
-    source = source.replace(
-        'venv_python="/opt/autostop-work-telegram-venv/bin/python"', f'venv_python="{sys.executable}"'
-    )
     source = source.replace(
         'session_base="/var/lib/autostop-work-telegram/account.session"', f'session_base="{tmp_path / "session"}"'
     )
@@ -103,6 +105,8 @@ def test_work_authorization_ignores_caller_package(tmp_path: Path, scenario: str
     )
     script = tmp_path / "authorize.sh"
     script.write_text(source, encoding="utf-8")
+    (tmp_path / "work-telegram-python.sh").write_bytes((ROOT / "scripts/work-telegram-python.sh").read_bytes())
+    (tmp_path / "work-telegram-python.sh").chmod(0o755)
     env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
     env.pop("PYTHONSAFEPATH", None)
     result = subprocess.run(
