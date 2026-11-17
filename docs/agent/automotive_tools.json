@@ -142,7 +142,7 @@
         "Ручной цвет сообщает ввод в работу, а пригодность ответа проверяется отдельно."
       ],
       "input_notes": [
-        "Номер+бренд; Store offer ID/context и observed_at нужны для точного предложения."
+        "Номер+бренд; для точного предложения Store нужны offer ID/context и observed_at."
       ],
       "reference": "docs/agent/references/store-api.md"
     },

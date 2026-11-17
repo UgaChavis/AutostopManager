@@ -10,6 +10,39 @@ configuration remain unchanged. The fixture is based on revision
 `e3d24d1b11498f33a24e3a80c3830bc4fcc6a3ee` and the full client skill, B1–B4,
 F4 and C6/C7. The runner supplies these instructions literally.
 
+## Technical transport and load checks
+
+`tests/telegram_stability_benchmark.py` reuses the native IPC integration fakes:
+temporary Unix sockets, SQLite and synthetic instruction bundles, with fixed
+scripted ACK/result actions. It requires root for the bridge's peer credentials
+and uses the existing development Python. DNS, external socket connections,
+subprocesses and databases outside the private temporary directory are rejected.
+It makes no model calls and does not contact Telegram, CRM or Store.
+
+From a source checkout, choose an absolute private output path:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 AUTOSTOP_MANAGER_ENV_FILE=/dev/null \
+  .venv/bin/python tests/telegram_stability_benchmark.py --output /PRIVATE/benchmark.json
+```
+
+The opt-in default performs three repetitions of 1/10/50/100 peers with ten
+messages each and 1k/10k/100k retained histories. Synthetic answer actors have
+eight lanes; one peer waits for another peer's verified result. All accepted
+events must be covered, actual send/readback receipts verified and execution
+slots settled. Ten messages may span multiple jobs under the existing intake
+policy. `--clients 1 --history 1000 --repeats 1` selects a small diagnostic run.
+`--source-root` selects source imports, including an immutable Git archive;
+the harness and source file hashes bind the report. Runtime/data are not copied.
+
+Compare identical workloads with the same harness, Python and dependencies.
+`queue_wait` measures intake start through claim, including the intake commit;
+`control_rpc` records up to ten actual samples. End-to-end throughput includes
+fixture setup and cleanup, while peak RSS is cumulative for the process.
+Durations and percentiles describe the synthetic transport, not model inference
+or live client latency. The command removes its own temporary directory and is
+not part of routine CI; run it for a performance change, rather than every edit.
+
 ## Files and input preparation
 
 - Fixture: `tests/fixtures/telegram/client_behavior_v1.json`.

@@ -258,7 +258,7 @@ async def _await_until(operation: Awaitable[Any], deadline: float, retained: set
 
 
 async def _cancel_task_until(
-    task: asyncio.Task[Any] | None, deadline: float, retained: set[asyncio.Future[Any]]
+    task: asyncio.Future[Any] | None, deadline: float, retained: set[asyncio.Future[Any]]
 ) -> None:
     if task is None:
         return
@@ -2503,7 +2503,7 @@ class DurableWakeDispatcher:
             ):
                 await self._finish_request(job, code)
         finally:
-            if self.stop_proof_verified:
+            if self.stop_proof_verified and self.parent is None:
                 self.current_job = None
                 self.request_deadline = None
 
@@ -2554,7 +2554,7 @@ class DurableWakeDispatcher:
             if asyncio.get_running_loop().time() >= deadline:
                 break
             local = child.current_job
-            if job_id in slotted or local is None:
+            if job_id in self.executions or job_id in slotted or local is None:
                 continue
             if child.execution_task is not None and not child.execution_task.done():
                 continue
@@ -2584,12 +2584,40 @@ class DurableWakeDispatcher:
         job_id = job["job_id"]
         if job_id in self.executions or job_id in self.unsettled:
             return
+        predecessors = [
+            (previous_id, task)
+            for previous_id, (owner, task) in self.executions.items()
+            if owner.current_job is not None and owner.current_job.get("peer_id") == job.get("peer_id")
+        ]
         child = DurableWakeDispatcher(self.bootstrap_app, self.bridge_uid, self.jobs)
         child.parent = self
+        child._stage_timings = self._stage_timings
         child.bootstrap_checked = self.bootstrap_checked
+        child.current_job = job
 
         async def run() -> None:
             try:
+                for previous_id, previous in predecessors:
+                    deadline = child.request_deadline = child._deadline(job)
+                    done, _pending = await asyncio.wait(
+                        {previous}, timeout=max(0, deadline - asyncio.get_running_loop().time())
+                    )
+                    if previous not in done:
+                        child.accepted += 1
+                        child.failed += 1
+                        child.deadline_exceeded = True
+                        await child._finish_request(job, "wake_request_deadline_exceeded")
+                        return
+                    await asyncio.shield(previous)
+                    if previous_id in self.unsettled:
+                        child.terminal_stop_pending = True
+                        return
+                if any(
+                    owner.current_job is not None and owner.current_job.get("peer_id") == job.get("peer_id")
+                    for owner in self.unsettled.values()
+                ):
+                    child.terminal_stop_pending = True
+                    return
                 if recovering:
                     await child._reconcile_job(job)
                 else:
@@ -2603,20 +2631,48 @@ class DurableWakeDispatcher:
                 self.accepted += child.accepted
                 self.completed += child.completed
                 self.failed += child.failed
-                if child.terminal_stop_pending or (child.current_job is not None and not child.stop_proof_verified):
-                    self.unsettled[job_id] = child
-                else:
-                    with suppress(OSError, TimeoutError, WakeError):
-                        await child._retire_peer(asyncio.get_running_loop().time() + CONNECT_TIMEOUT)
-                if _shared_backend_failure(child.execution_error):
-                    self.execution_error = self.last_error = child.execution_error
-                self.executions.pop(job_id, None)
-                self.active = bool(self.executions)
-                self.jobs.changed.set()
+                try:
+                    if child.terminal_stop_pending or (child.current_job is not None and not child.stop_proof_verified):
+                        self.unsettled[job_id] = child
+                    else:
+                        await self._retire_completed_child(job_id, child)
+                finally:
+                    if _shared_backend_failure(child.execution_error):
+                        self.execution_error = self.last_error = child.execution_error
+                    self.executions.pop(job_id, None)
+                    self.active = bool(self.executions)
+                    self.jobs.changed.set()
 
         task = asyncio.create_task(run())
         self.executions[job_id] = (child, task)
         self.active = True
+
+    async def _retire_completed_child(self, job_id: str, child: DurableWakeDispatcher) -> None:
+        """Own post-proof cleanup without blocking another peer's execution."""
+        while True:
+            try:
+                await child._retire_peer(asyncio.get_running_loop().time() + CONNECT_TIMEOUT)
+            except asyncio.CancelledError:
+                self.unsettled[job_id] = child
+                raise
+            except (OSError, TimeoutError, WakeError):
+                self.unsettled[job_id] = child
+                pending = {
+                    task
+                    for tasks in (child.cleanup_tasks, child.app.cleanup_tasks)
+                    for task in tasks
+                    if not task.done()
+                }
+                if not pending:
+                    return
+                for task in pending:
+                    task.add_done_callback(lambda _done: self.jobs.changed.set())
+                await asyncio.gather(*(asyncio.shield(task) for task in pending), return_exceptions=True)
+            else:
+                self.unsettled.pop(job_id, None)
+                child.current_job = None
+                child.request_deadline = None
+                return
 
     async def _reconcile_job(self, job: dict[str, Any]) -> None:
         if job.get("execution_proof") is not None:
@@ -2976,6 +3032,7 @@ class DurableWakeDispatcher:
             await self.pause(persist=False)
         deadline = asyncio.get_running_loop().time() + 5
         # Pause may fail on bridge IPC before reaching its owned task cleanup.
+        task: asyncio.Future[Any] | None
         for task in (self.worker, self.execution_task):
             with suppress(TimeoutError):
                 await _cancel_task_until(task, deadline, self.cleanup_tasks)
@@ -2985,7 +3042,13 @@ class DurableWakeDispatcher:
                 if task is not None and task is not self.bootstrap_supervisor:
                     with suppress(TimeoutError):
                         await _cancel_task_until(task, deadline, self.cleanup_tasks)
-            if child.app is not self.bootstrap_app:
+            pending = {
+                task for tasks in (child.cleanup_tasks, child.app.cleanup_tasks) for task in tasks if not task.done()
+            }
+            for task in pending:
+                with suppress(TimeoutError):
+                    await _cancel_task_until(task, deadline, self.cleanup_tasks)
+            if not pending and child.app is not self.bootstrap_app:
                 with suppress(OSError, TimeoutError, WakeError):
                     await _await_until(child.app.close(), deadline, self.cleanup_tasks)
         with suppress(OSError, TimeoutError, WakeError):
