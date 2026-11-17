@@ -203,6 +203,7 @@ class TelegramInbox:
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, outcome TEXT, reason_code TEXT
             );
             CREATE INDEX IF NOT EXISTS jobs_peer_state ON jobs(peer_id, state);
+            CREATE INDEX IF NOT EXISTS jobs_review_peer ON jobs(peer_id) WHERE state='needs_review';
             CREATE INDEX IF NOT EXISTS jobs_retention_updated_at ON jobs(updated_at)
                 WHERE state IN ('completed','released','retired','failed_waiting_input');
             CREATE TABLE IF NOT EXISTS events (
@@ -262,6 +263,7 @@ class TelegramInbox:
                 state TEXT NOT NULL CHECK(state IN ('creating','ready','creation_unknown')),
                 revision INTEGER NOT NULL, reviewed_turn_id TEXT
             );
+            CREATE INDEX IF NOT EXISTS peer_threads_held_peer ON peer_threads(peer_id) WHERE state<>'ready';
             CREATE TABLE IF NOT EXISTS global_slot (
                 job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
                 peer_id INTEGER NOT NULL UNIQUE REFERENCES peers(peer_id), lease TEXT NOT NULL,
@@ -1112,10 +1114,10 @@ class TelegramInbox:
             ),
             "compatibility_hold": self._compatibility_hold(),
             "held_peers": self._db.execute(
-                "SELECT COUNT(*) FROM peers WHERE EXISTS "
-                "(SELECT 1 FROM jobs WHERE jobs.peer_id=peers.peer_id AND jobs.state='needs_review') "
-                "OR EXISTS (SELECT 1 FROM peer_threads WHERE peer_threads.peer_id=peers.peer_id "
-                "AND peer_threads.state<>'ready')"
+                # Persistent peer bindings outlive terminal job history. Count
+                # only actual holds, deduplicating overlaps and repeated jobs.
+                "SELECT COUNT(*) FROM (SELECT peer_id FROM jobs WHERE state='needs_review' "
+                "UNION SELECT peer_id FROM peer_threads WHERE state<>'ready')"
             ).fetchone()[0],
         }
 

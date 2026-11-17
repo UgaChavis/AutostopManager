@@ -66,18 +66,17 @@ def held_peer_plan(inbox):
         inbox.status()
     finally:
         inbox._db.set_trace_callback(None)
-    query = next(
-        statement for statement in statements if statement.startswith("SELECT COUNT(*) FROM peers WHERE EXISTS")
-    )
+    query = next(statement for statement in statements if statement.startswith("SELECT COUNT(*) FROM (SELECT peer_id"))
     return [row["detail"].upper() for row in inbox._db.execute("EXPLAIN QUERY PLAN " + query)]
 
 
-def test_status_searches_jobs_by_peer_and_state_in_completed_history(tmp_path):
+def test_status_reads_only_hold_indexes_in_completed_history(tmp_path):
     with TelegramInbox(tmp_path / "inbox.sqlite3", clock=lambda: NOW) as inbox:
         seed_history(inbox)
         plan = held_peer_plan(inbox)
-        assert any("SEARCH JOBS USING COVERING INDEX JOBS_PEER_STATE" in step for step in plan), plan
-        assert not any(step.startswith("SCAN JOBS") for step in plan), plan
+        assert any("JOBS_REVIEW_PEER" in step for step in plan), plan
+        assert any("PEER_THREADS_HELD_PEER" in step for step in plan), plan
+        assert not any(step.startswith("SCAN PEERS") for step in plan), plan
 
 
 def test_index_preserves_held_peer_count_and_other_status_fields(tmp_path):
@@ -89,11 +88,43 @@ def test_index_preserves_held_peer_count_and_other_status_fields(tmp_path):
         assert indexed["held_peers"] == 6
         assert indexed["compatibility_hold"] is True
         with inbox._db:
-            inbox._db.execute("DROP INDEX jobs_peer_state")
+            inbox._db.execute("DROP INDEX jobs_review_peer")
+            inbox._db.execute("DROP INDEX peer_threads_held_peer")
         assert inbox.status() == indexed
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+def quiet_peer_status_work(path, retained_peers):
+    with TelegramInbox(path, clock=lambda: NOW) as inbox:
+        seed_history(inbox, retained=0)
+        with inbox._db:
+            inbox._db.executemany(
+                "INSERT INTO peers VALUES (?,1)", ((peer,) for peer in range(20000, 20000 + retained_peers))
+            )
+        work = 0
+
+        def tick():
+            nonlocal work
+            work += 1
+            return 0
+
+        inbox._db.set_progress_handler(tick, 1)
+        try:
+            status = inbox.status()
+        finally:
+            inbox._db.set_progress_handler(None, 0)
+        assert status["held_peers"] == 6
+        return work
+
+
+def test_status_does_not_visit_quiet_peer_bindings_after_job_retention(tmp_path):
+    small = quiet_peer_status_work(tmp_path / "small" / "inbox.sqlite3", 32)
+    large = quiet_peer_status_work(tmp_path / "large" / "inbox.sqlite3", 4096)
+    # Peer identities intentionally survive pruning their completed jobs. The
+    # same six holds should not require visiting 128 times more quiet peers.
+    assert large <= small * 3, (small, large)
+
+
+@pytest.mark.parametrize("version", [1, 2, 3, 9])
 def test_reopen_adds_missing_index_without_changing_registry_or_version_contract(tmp_path, version):
     path = tmp_path / "inbox.sqlite3"
     with TelegramInbox(path, clock=lambda: NOW) as inbox:
@@ -111,6 +142,8 @@ def test_reopen_adds_missing_index_without_changing_registry_or_version_contract
         generation = inbox.generation
         with inbox._db:
             inbox._db.execute("DROP INDEX IF EXISTS jobs_peer_state")
+            inbox._db.execute("DROP INDEX IF EXISTS jobs_review_peer")
+            inbox._db.execute("DROP INDEX IF EXISTS peer_threads_held_peer")
             inbox._db.execute("UPDATE metadata SET value=? WHERE key='schema_version'", (str(version),))
     # Opening an existing schema 3 also installs the index; repeated startup
     # must leave queue identities, controls, jobs and generation intact.
@@ -126,3 +159,13 @@ def test_reopen_adds_missing_index_without_changing_registry_or_version_contract
                 "state",
             ]
             assert sum(row["name"] == "jobs_peer_state" for row in restored._db.execute("PRAGMA index_list(jobs)")) == 1
+            assert (
+                sum(row["name"] == "jobs_review_peer" for row in restored._db.execute("PRAGMA index_list(jobs)")) == 1
+            )
+            assert (
+                sum(
+                    row["name"] == "peer_threads_held_peer"
+                    for row in restored._db.execute("PRAGMA index_list(peer_threads)")
+                )
+                == 1
+            )

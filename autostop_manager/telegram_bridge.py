@@ -3533,6 +3533,11 @@ async def _handle_send_text_to_entity(
             config, inbound_monitor, request, target["id"], idempotency_key, bound_handoff=bound_handoff
         )
         await _revalidate_job_effect(client, entity, inbound_monitor, job_effect)
+        # Different client jobs can share the owner recipient. Its unknown
+        # effects or routing may have changed during client-context RPCs.
+        _require_direct_send_allowed(
+            config, inbound_monitor, request, target["id"], idempotency_key, bound_handoff=bound_handoff
+        )
         # Exact readback can commit while context RPCs run. Preserve its latest
         # receipts and never replace a key that appeared during those awaits.
         idempotency = _load_idempotency(idempotency_path)
