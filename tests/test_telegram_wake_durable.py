@@ -451,12 +451,12 @@ def test_instruction_bundle_rejects_directory_in_place_of_client_skill(bundle):
 def test_control_socket_closes_after_schema_error(tmp_path):
     async def scenario():
         app = wake.AppServer(wake.WakeConfig(THREAD))
-        dispatcher = wake.WakeDispatcher(app, os.geteuid())
-        dispatcher.failed_context = lambda: (_ for _ in ()).throw(TypeError("private payload"))
+        dispatcher = wake.DurableWakeDispatcher(app, os.geteuid())
+        dispatcher.status = lambda: (_ for _ in ()).throw(TypeError("private payload"))
         path = tmp_path / "control.sock"
         async with await asyncio.start_unix_server(dispatcher.serve, path=str(path)):
             reader, writer = await asyncio.open_unix_connection(str(path))
-            writer.write(b'{"operation":"failed_context"}\n')
+            writer.write(b'{"operation":"status"}\n')
             await writer.drain()
             reply = json.loads(await asyncio.wait_for(reader.readline(), 1))
             assert reply == {"ok": False, "error": "wake_request_failed"}
@@ -883,5 +883,21 @@ def test_worker_migration_denies_enabled_owned_active_or_unknown_wake(tmp_path, 
                 instruction_revision=REVISION,
             )
         assert config_path.read_bytes() == original
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-only control socket")
+@pytest.mark.parametrize("operation", ["event", "failed_context", "recover_failed"])
+def test_durable_control_rejects_retired_ram_operations(tmp_path, operation):
+    async def scenario():
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        dispatcher = wake.DurableWakeDispatcher(app, os.geteuid())
+        path = tmp_path / "control.sock"
+        async with await asyncio.start_unix_server(dispatcher.serve, path=str(path)):
+            result = await wake.local_request({"operation": operation}, path)
+            assert result == {"ok": False, "error": "wake_request_invalid"}
+        assert app.active_turn is None and not app.outcome_unknown
+        await app.close()
 
     asyncio.run(scenario())

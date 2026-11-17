@@ -248,7 +248,9 @@ def _extraction_method(fetch_result: dict[str, Any]) -> str:
 def _simhash(value: str) -> str:
     """Conservative 64-bit similarity fingerprint for same-job duplicate linking."""
 
-    tokens = _WORD.findall(str(value or "").casefold())[:2_048]
+    # Bodies are already bounded to MAX_DOCUMENT_CHARS. A prefix fingerprint
+    # can equate unrelated articles that share long navigation/boilerplate.
+    tokens = _WORD.findall(str(value or "").casefold())
     if len(tokens) < 80:
         return ""
     weights = [0] * 64

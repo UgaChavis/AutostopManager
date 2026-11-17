@@ -89,6 +89,8 @@ REFERENCE_DOCUMENTS = tuple(
 # Only the entry instructions and operational skills count toward this budget.
 # Detailed module guides and complete plugin catalogs are loaded when needed.
 INSTRUCTION_BUDGET_BYTES = 32 * 1024
+# The qualified CRM constructor uses a canonical pointer only for a long A5.
+CONSTRUCTOR_INSTRUCTION_MAX_CHARS = 30_000
 EXTERNAL_CODEX_ROOTS = (
     Path("/root/.codex/skills"),
     Path("/root/.codex/plugins/cache"),
@@ -278,6 +280,12 @@ def audit_documentation(root: Path = PROJECT_ROOT, *, check_external_links: bool
                 warnings.append(f"empty_document:{name}")
             if (
                 name in MODULE_DOCUMENTS.values()
+                and name != MODULE_DOCUMENTS["A5"]
+                and len(text) > CONSTRUCTOR_INSTRUCTION_MAX_CHARS
+            ):
+                warnings.append(f"constructor_instruction_too_long:{name}")
+            if (
+                name in MODULE_DOCUMENTS.values()
                 and name != "AGENTS.md"
                 and not re.search(r"(?m)^#\s+" + re.escape(path.stem) + r"\b", text)
             ):
@@ -360,57 +368,79 @@ def watchdog_status() -> dict[str, Any]:
     return {"ok": all(checks.values()), "desired_state": "absent", "checks": checks}
 
 
-def _discovered_instruction_skills(result: Any, *, cwd: str, bundle: Any) -> tuple[list[dict[str, Any]], int]:
-    """Keep only bounded known project paths; never open arbitrary RPC paths."""
+def _instruction_skill_evidence(skill: dict[str, Any], *, root: Path, bundle: Any, name: str) -> dict[str, Any]:
+    """Read constructed paths only; an escaping workspace alias must target this exact bundle file."""
+    relative = f".agents/skills/{name}/SKILL.md"
+    expected, canonical = root / relative, Path(bundle.root) / relative
+    reported = skill.get("path")
+    digest = safe_path = None
+    try:
+        resolved = expected.resolve(strict=True)
+        canonical_regular = canonical.resolve(strict=True) == canonical
+        if canonical_regular and resolved == canonical and reported in {str(expected), str(canonical)}:
+            candidate = canonical
+        elif (
+            reported == str(expected)
+            and resolved.is_relative_to(root.resolve(strict=True))
+            and not expected.is_symlink()
+        ):
+            candidate = resolved
+        else:
+            candidate = None
+        if candidate is not None:
+            digest = hashlib.sha256(read_instruction_bytes(candidate)).hexdigest()
+            safe_path = reported
+    except (OSError, RuntimeError, TypeError, ValueError):
+        pass
+    content = bundle.files.get(relative)
+    expected_digest = hashlib.sha256(content).hexdigest() if content is not None else None
+    return {
+        "path": safe_path,
+        "enabled_in_raw_discovery": skill.get("enabled", True) is not False,
+        "sha256": digest,
+        "matches_selected_bundle": digest == expected_digest
+        if digest is not None and expected_digest is not None
+        else None,
+        "discovery_state": "unique",
+    }
+
+
+def _discovered_instruction_skills(result: Any, *, cwd: str, bundle: Any) -> tuple[list[dict[str, Any]], int, int]:
+    """Require one unambiguous source for every known project skill in each requested scope."""
     from .instruction_bundle import PROJECT_SKILLS
 
     if not isinstance(result, dict) or not isinstance(result.get("data"), list):
         raise ValueError("instruction_discovery_invalid")
-    discovered = []
-    mismatches = 0
-    seen = set()
+    views: dict[str, list[dict[str, Any]]] = {root: [] for root in (cwd, bundle.root)}
     for row in result["data"]:
         if not isinstance(row, dict) or not isinstance(row.get("skills"), list) or row.get("errors"):
             raise ValueError("instruction_discovery_invalid")
-        scope = "worker_cwd" if row.get("cwd") == cwd else "selected_bundle"
-        expected_root = Path(cwd) if scope == "worker_cwd" else Path(bundle.root)
-        if row.get("cwd") not in {cwd, bundle.root}:
+        if row.get("cwd") not in views:
             raise ValueError("instruction_discovery_invalid")
-        seen.add(row["cwd"])
-        for skill in row["skills"]:
-            if not isinstance(skill, dict) or skill.get("name") not in PROJECT_SKILLS:
-                continue
-            name = skill["name"]
-            relative = f".agents/skills/{name}/SKILL.md"
-            expected = expected_root / relative
-            path = skill.get("path")
-            digest = None
-            safe_path = None
-            if path == str(expected) and expected.resolve().is_relative_to(expected_root.resolve()):
-                safe_path = path
-                try:
-                    if not expected.is_symlink():
-                        digest = hashlib.sha256(read_instruction_bytes(expected)).hexdigest()
-                except (OSError, RuntimeError, ValueError):
-                    pass
-            content = bundle.files.get(relative)
-            expected_digest = hashlib.sha256(content).hexdigest() if content is not None else None
-            matches = digest == expected_digest if digest is not None and expected_digest is not None else None
-            if scope == "worker_cwd" and matches is False:
-                mismatches += 1
-            discovered.append(
-                {
-                    "scope": scope,
-                    "name": name,
-                    "path": safe_path,
-                    "enabled_in_raw_discovery": skill.get("enabled", True) is not False,
-                    "sha256": digest,
-                    "matches_selected_bundle": matches,
+        views[row["cwd"]].append(row)
+    discovered = []
+    for root, rows in views.items():
+        for name in PROJECT_SKILLS:
+            candidates = [
+                skill
+                for row in rows
+                for skill in row["skills"]
+                if isinstance(skill, dict) and skill.get("name") == name
+            ]
+            if len(rows) == 1 and len(candidates) == 1:
+                evidence = _instruction_skill_evidence(candidates[0], root=Path(root), bundle=bundle, name=name)
+            else:
+                evidence = {
+                    "path": None,
+                    "enabled_in_raw_discovery": None,
+                    "sha256": None,
+                    "matches_selected_bundle": None,
+                    "discovery_state": "missing" if not candidates else "duplicate",
                 }
-            )
-    if seen != {cwd, bundle.root}:
-        raise ValueError("instruction_discovery_invalid")
-    return discovered, mismatches
+            discovered.append({"scope": "worker_cwd" if root == cwd else "selected_bundle", "name": name, **evidence})
+    mismatches = sum(skill["matches_selected_bundle"] is False for skill in discovered)
+    unverified = sum(skill["matches_selected_bundle"] is None for skill in discovered)
+    return discovered, mismatches, unverified
 
 
 async def _audit_instruction_sources() -> dict[str, Any]:
@@ -480,9 +510,12 @@ async def _audit_instruction_sources() -> dict[str, Any]:
             discovery = await app.request(
                 "skills/list", {"cwds": [config.project_dir, bundle.root], "forceReload": False}
             )
-            skills, differences = _discovered_instruction_skills(discovery, cwd=config.project_dir, bundle=bundle)
+            skills, differences, unverified = _discovered_instruction_skills(
+                discovery, cwd=config.project_dir, bundle=bundle
+            )
             result["raw_skill_discovery"] = skills
             result["raw_project_skill_differences"] = differences
+            result["raw_project_skill_unverified"] = unverified
             effective = await app.request("config/read", {"cwd": config.project_dir, "includeLayers": False})
             effective_config = effective.get("config") if isinstance(effective, dict) else None
             if not isinstance(effective_config, dict):
@@ -499,7 +532,11 @@ async def _audit_instruction_sources() -> dict[str, Any]:
                 result["warnings"].append("instruction_declared_bundle_mismatch")
             if state in {"rejected", "unknown"}:
                 result["warnings"].append("instruction_delivery_unverified")
-            result["ok"] = hash_matches is not False and state not in {"rejected", "unknown"}
+            if differences:
+                result["warnings"].append("instruction_raw_skill_drift")
+            if unverified:
+                result["warnings"].append("instruction_raw_skills_unverified")
+            result["ok"] = not (hash_matches is False or state in {"rejected", "unknown"} or differences or unverified)
     except InstructionBundleError as exc:
         result["warnings"].append(exc.code)
     except (OSError, RuntimeError, TimeoutError, TypeError, ValueError):

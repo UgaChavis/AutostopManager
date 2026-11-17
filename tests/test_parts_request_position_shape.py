@@ -162,6 +162,9 @@ def test_later_bad_row_identifies_its_own_input_field(call, field):
 @pytest.mark.parametrize(
     "raw,hints,missing",
     [
+        ("левая фара", {"side": "right"}, "side"),
+        ("LH headlight", {"side": "RH"}, "side"),
+        ("внутренний ШРУС", {"position": "outer", "axle": "front", "side": "left"}, "inner_outer"),
         ("передние колодки", {"axle": "rear"}, "axle"),
         ("колодки спереди", {"axle": "rear"}, "axle"),
         ("колодки на перед", {"axle": "rear"}, "axle"),

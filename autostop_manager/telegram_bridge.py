@@ -483,6 +483,11 @@ class InboundMonitor:
             raise BridgeError("inbound_voice_stage_active")
         self._voice_stage_reservations.add(event.sequence)
 
+    def voice_stage_in_progress(self, event: InboundMonitorEvent) -> bool:
+        """An accepted download may not have published its handle or file yet."""
+
+        return event.sequence in self._voice_stage_reservations
+
     def release_voice_stage_reservation(self, event: InboundMonitorEvent) -> None:
         """Forget an unfinished stage claim after a failed or cancelled download."""
 
@@ -1526,10 +1531,17 @@ def validate_owner_notification_idempotency_readback_request(
     return idempotency_key, expected_text_sha256
 
 
-def _validate_media_reply_id(request: dict[str, Any]) -> None:
+def _validate_media_reply_id(request: dict[str, Any]) -> int:
     reply_id = request.get("reply_to_message_id", 0)
     if isinstance(reply_id, bool) or not isinstance(reply_id, (int, str, type(None))):
         raise BridgeError("reply_to_message_id_invalid")
+    try:
+        normalized = int(reply_id or 0)
+    except ValueError as exc:
+        raise BridgeError("reply_to_message_id_invalid") from exc
+    if normalized < 0:
+        raise BridgeError("reply_to_message_id_invalid")
+    return normalized
 
 
 def validate_photo_request(request: dict[str, Any]) -> tuple[str, Path, str, str, str]:
@@ -2926,7 +2938,7 @@ async def _handle_send_photo(
         or _message_media_metadata(readback)["mime_type"] not in {"image/jpeg", "image/png", "image/webp"}
     ):
         raise BridgeError("send_readback_failed")
-    if effect is not None and _message_reply_to_id(readback) != reply_to:
+    if _message_reply_to_id(readback) != reply_to:
         raise BridgeError("send_readback_failed")
     idempotency = _persist_delivery(
         idempotency_path, idempotency_key, idempotency[idempotency_key], message_id=message_id, verified=True
@@ -3124,7 +3136,7 @@ async def _handle_send_document(
         document_bytes=document_bytes,
         document_name=document_path.name,
     )
-    if effect is not None and _message_reply_to_id(readback) != reply_to:
+    if _message_reply_to_id(readback) != reply_to:
         raise BridgeError("send_document_readback_failed")
     idempotency = _persist_delivery(
         idempotency_path, idempotency_key, idempotency[idempotency_key], message_id=message_id, verified=True
@@ -3619,7 +3631,7 @@ async def _prepare_job_media(
     idempotency_key: str,
 ) -> tuple[dict[str, Any] | None, str, int]:
     if not isinstance(monitor, DurableInboundMonitor):
-        return None, idempotency_key, 0
+        return None, idempotency_key, _validate_media_reply_id(request)
     if not request.get("job_id"):
         if request.get("reply_to_message_id"):
             raise BridgeError("job_binding_required")
@@ -4244,6 +4256,8 @@ async def _handle_monitor_voice_cleanup(
     config: TelegramConfig, monitor: InboundMonitor, *, event_id: str
 ) -> dict[str, Any]:
     event = monitor.resolve(event_id)
+    if monitor.voice_stage_in_progress(event):
+        raise BridgeError("inbound_voice_stage_active")
     current = monitor.voice_stage_for(event)
     recovered = current is not None
     if current is not None:
@@ -4494,6 +4508,16 @@ async def _handle_operation(
             _EFFECT_AUTHORITY.reset(token)
 
 
+def _local_transport_ready(client: Any) -> bool:
+    # Telethon remains user-connected during reconnect; its sender knows when
+    # the actual transport is usable. Legacy clients may expose neither check.
+    checks = (
+        getattr(client, "is_connected", None),
+        getattr(getattr(client, "_sender", None), "_transport_connected", None),
+    )
+    return all(check() for check in checks if callable(check))
+
+
 async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation router
     client: Any,
     config: TelegramConfig,
@@ -4538,7 +4562,9 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
             "ok": True,
             "authorized": bool(getattr(client, "_autostop_authorized", me is not None)),
             "transport_ready": (
-                inbound_monitor.transport_ready if isinstance(inbound_monitor, DurableInboundMonitor) else True
+                inbound_monitor.transport_ready
+                if isinstance(inbound_monitor, DurableInboundMonitor)
+                else _local_transport_ready(client)
             ),
             "inbound_enabled": (
                 inbound_monitor.capture_enabled
@@ -4851,6 +4877,29 @@ def _require_result_history(
         raise BridgeError("context_history_incomplete")
 
 
+def _claim_current_job(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any] | None:
+    """Fence new input by the bridge pin without changing existing job holds."""
+    inbox = monitor.inbox
+    if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 3:
+        raise BridgeError("worker_protocol_unsupported")
+    if _effect_executor().closed or _effect_executor().failed.is_set():
+        raise BridgeError("bridge_effects_held")
+    instructions = (
+        str(request.get("instruction_root") or ""),
+        str(request.get("instruction_revision") or ""),
+    )
+    if instructions != inbox.configured_instructions:
+        if inbox.health().get("codex", {}).get("state") not in {"held", "offline", "paused"}:
+            inbox.set_health("codex", "held", "wake_instruction_release_mismatch")
+        monitor.changed()
+        raise BridgeError("wake_instruction_release_mismatch")
+    job = inbox.claim(instruction_root=instructions[0], instruction_revision=instructions[1], exclude_peer_id=None)
+    if inbox.health().get("codex") == {"state": "held", "error_code": "wake_instruction_release_mismatch"}:
+        # A matching caller repairs this cause, not model readiness or unknown effects.
+        inbox.set_health("codex", "connected")
+    return job
+
+
 async def _handle_job_operation(
     client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
 ) -> dict[str, Any]:
@@ -4860,15 +4909,7 @@ async def _handle_job_operation(
     if control is not None:
         return control
     if operation == "job_claim":
-        if type(request.get("worker_protocol")) is not int or request["worker_protocol"] != 3:
-            raise BridgeError("worker_protocol_unsupported")
-        if _effect_executor().closed or _effect_executor().failed.is_set():
-            raise BridgeError("bridge_effects_held")
-        job = inbox.claim(
-            instruction_root=str(request.get("instruction_root") or ""),
-            instruction_revision=str(request.get("instruction_revision") or ""),
-            exclude_peer_id=None,
-        )
+        job = _claim_current_job(request, monitor)
     elif operation == "job_start_intent":
         job = inbox.start_intent(**_job_arguments(request), thread_id=str(request.get("thread_id") or ""))
     elif operation == "job_turn_bound":
@@ -7159,7 +7200,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
-            elif args.command == "send-document" and args.reply_to_message_id:
+            elif args.reply_to_message_id:
                 request["reply_to_message_id"] = args.reply_to_message_id
             payload = send_local_request(_socket_from_args(args), request)
     except BridgeError as exc:

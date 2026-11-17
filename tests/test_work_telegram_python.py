@@ -69,7 +69,7 @@ def runtime(tmp_path):
     return scripts, env, python, tmp_path
 
 
-@pytest.mark.parametrize("role", ["bridge", "wake"])
+@pytest.mark.parametrize("role", ["personal", "bridge", "wake"])
 def test_python_uses_effective_systemd_runtime(runtime, role):
     scripts, env, python, _ = runtime
     result = subprocess.run(
@@ -93,6 +93,65 @@ def test_missing_service_runtime_fails_without_a_checkout_fallback(runtime):
     assert result.returncode == 1
     assert result.stderr.strip() == "work_telegram_runtime_unavailable=true"
     assert not result.stdout
+
+
+@pytest.mark.parametrize("work_aligned", [True, False])
+def test_wake_installer_requires_one_release_and_uses_bridge_runtime(runtime, work_aligned):
+    scripts, env, python, tmp_path = runtime
+    source = (ROOT / "scripts/install-codex-wake.sh").read_text().split("export PYTHONPATH", 1)[0]
+    source = source.replace('[[ "${EUID}" -eq 0 ]]', "true")
+    work_current = tmp_path / "work-current"
+    work_current.symlink_to(scripts.parent if work_aligned else tmp_path)
+    source = source.replace("/opt/autostop-work-telegram-releases/current", str(work_current))
+    source = source.replace("/opt/autostop-manager-releases/current", str(scripts.parent.parent / "current"))
+    source = source.replace("/opt/autostop-manager-releases/*", f"{scripts.parent.parent}/*")
+    source = source.replace('[[ "$(stat -c %U "$release")" == root ]]', "true")
+    shell(
+        tmp_path / "bin/systemctl",
+        'case "$*" in\n'
+        "  is-active*) exit 3;;\n"
+        '  *ExecStart*autostop-work-telegram.service*) printf "{ path=%s ; argv[]=python -m autostop_manager.telegram_bridge daemon ; }\\n" "$ACTIVE_PYTHON";;\n'
+        "  *) exit 9;;\n"
+        "esac\n",
+    )
+    result = subprocess.run(
+        ["bash", "-c", source + 'printf "%s\\n" "$python"\n'],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if work_aligned:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(python)
+    else:
+        assert result.returncode == 1
+        assert result.stderr.strip() == "codex_wake_release_alias_mismatch=true"
+        assert not result.stdout
+
+
+def test_installed_wake_unit_preserves_effective_venv_entry_point(tmp_path):
+    source = (ROOT / "scripts/install-codex-wake.sh").read_text()
+    render = (
+        '"$python" - "$unit" "$python"'
+        + source.split('"$python" - "$unit" "$python"', 1)[1].split("\nPY\n", 1)[0]
+        + "\nPY\n"
+    )
+    unit = tmp_path / "wake.service"
+    unit.write_text((ROOT / "deploy/systemd/autostop-codex-wake.service").read_text())
+    python = tmp_path / "active-runtime/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    result = subprocess.run(
+        ["bash", "-c", f"python={shlex.quote(str(python))}\nunit={shlex.quote(str(unit))}\n" + render],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"ExecStart={python} -m autostop_manager.telegram_wake daemon" in unit.read_text()
+    assert "Environment=PYTHONPATH=/opt/autostop-manager-releases/current" in unit.read_text()
 
 
 def test_duty_status_uses_active_runtime_without_the_old_venv(runtime):

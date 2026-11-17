@@ -73,6 +73,48 @@ def _client(**kwargs) -> StoreApiClient:
     )
 
 
+@pytest.mark.parametrize("mode", ["dry_run", "apply"])
+@pytest.mark.parametrize("mismatch", [None, "mode", "target_id", "status"])
+@pytest.mark.parametrize("http_status", [200, 409])
+def test_action_receipt_is_bound_to_requested_mode_and_target(monkeypatch, mode, mismatch, http_status):
+    summary = {"operation": "assign_quote_request", "mode": mode, "target_id": "synthetic-quote"}
+    status = "dry_run" if mode == "dry_run" else "applied"
+    other_mode = "apply" if mode == "dry_run" else "dry_run"
+    if mismatch == "mode":
+        summary["mode"] = other_mode
+    elif mismatch == "target_id":
+        summary["target_id"] = "other-synthetic-quote"
+    elif mismatch == "status":
+        status = "applied" if mode == "dry_run" else "dry_run"
+    calls = []
+
+    def fake_open(request, **kwargs):
+        calls.append(json.loads(request.data))
+        payload = _envelope(status=status, summary=summary)
+        if http_status == 409:
+            raise HTTPError(request.full_url, 409, "conflict", {}, io.BytesIO(json.dumps(payload).encode()))
+        return _Response(payload)
+
+    monkeypatch.setattr(store_api_module, "urlopen", fake_open)
+    response = _client().management_action(
+        operation="assign_quote_request",
+        target_id="synthetic-quote",
+        expected_updated_at="synthetic-revision",
+        owner_intent="Synthetic receipt binding check",
+        idempotency_key="synthetic-receipt-key",
+        correlation_id="contract:12345678",
+        mode=mode,
+        planned_changes={"assignee_id": "synthetic-assignee"},
+    )
+    assert len(calls) == 1 and calls[0]["mode"] == mode
+    rejected = mismatch is not None or http_status != 200
+    assert response["ok"] is not rejected
+    assert response["meta"]["request_dispatched"] is True
+    assert response["meta"]["outcome_uncertain"] is rejected
+    if rejected:
+        assert response["summary"]["error_code"] == "store_response_schema_invalid"
+
+
 def test_client_repr_and_local_status_never_expose_tokens():
     client = _client()
 

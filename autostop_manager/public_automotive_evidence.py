@@ -8,11 +8,13 @@ import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from zipfile import BadZipFile, ZipFile
 
 from .source_catalog import load_open_dataset_endpoints
 from .vin_lookup import normalize_vin
+from .bounded_http_read import urlopen as bounded_urlopen
+from .j1_fetch import contains_sensitive, contains_unsafe_url
 
 
 NHTSA_RECALLS_API_URL = "https://api.nhtsa.gov/recalls/recallsByVehicle"
@@ -25,6 +27,16 @@ _ALLOWED_HOSTS = frozenset({"api.nhtsa.gov", "static.nhtsa.gov"})
 _MAX_HTTP_BYTES = 24 * 1024 * 1024
 _MAX_TSB_TEXT_BYTES = 72 * 1024 * 1024
 _MAX_SUMMARY_CHARS = 1_200
+
+
+def _private_input(*values: Any) -> bool:
+    return any(contains_sensitive(str(value or "")) or contains_unsafe_url(str(value or "")) for value in values)
+
+
+def urlopen(request: Request, *, timeout: float) -> Any:
+    # Reject redirects at their headers. These fixed dataset origins require no
+    # navigation, and an upstream Location must never expand their allowlist.
+    return bounded_urlopen(request, timeout=timeout, maximum=_MAX_HTTP_BYTES, preserve_error_status=True)
 
 
 def _utc_now() -> str:
@@ -67,7 +79,13 @@ def _parse_model_year(value: int | str | None) -> int | None:
 
 def _safe_get_bytes(url: str, *, timeout: float, max_bytes: int = _MAX_HTTP_BYTES) -> bytes:
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in _ALLOWED_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+    ):
         raise ValueError("public automotive evidence URL is outside the allowlist")
     request = Request(url, headers={"User-Agent": "AutostopManager/1.0", "Accept": "application/json,text/csv,*/*"})
     with urlopen(request, timeout=timeout) as response:
@@ -105,6 +123,13 @@ def lookup_nhtsa_recalls(
     timeout: float = 12.0,
 ) -> dict[str, Any]:
     """Return public NHTSA model-level recall evidence without VIN lookup."""
+    if _private_input(make, model):
+        return {
+            "ok": False,
+            "source_id": "nhtsa_datasets_apis",
+            "records": [],
+            "error": "public_automotive_private_input",
+        }
     year = _parse_model_year(model_year)
     make_text = _compact(make, limit=128)
     model_text = _compact(model, limit=128)
@@ -230,6 +255,13 @@ def lookup_nhtsa_tsb_metadata(
     timeout: float = 20.0,
 ) -> dict[str, Any]:
     """Return compact metadata from NHTSA's public manufacturer-communications ZIP."""
+    if _private_input(make, model):
+        return {
+            "ok": False,
+            "source_id": "nhtsa_datasets_apis",
+            "records": [],
+            "error": "public_automotive_private_input",
+        }
     year = _parse_model_year(model_year)
     make_text = _compact(make, limit=128)
     model_text = _compact(model, limit=128)
@@ -359,6 +391,8 @@ def lookup_public_automotive_evidence(
     timeout: float = 12.0,
 ) -> dict[str, Any]:
     """Collect legal public technical evidence without writing or persisting raw exports."""
+    if _private_input(make, model, system, topics):
+        return {"ok": False, "evidence": [], "error": "public_automotive_private_input", "confidence": "low"}
     bounded_limit = _normalise_limit(limit)
     selected_topics = _normalise_topics(topics)
     evidence: list[dict[str, Any]] = []

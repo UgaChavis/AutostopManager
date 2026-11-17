@@ -197,6 +197,40 @@ def test_dirty_selected_source_never_installs(source, target):
     assert not any(call[0] == "systemctl" for call in calls)
 
 
+@pytest.mark.parametrize(
+    "changed_name",
+    [
+        installer.PAYLOAD[0],
+        installer.INSTALL_SOURCE[0],
+        installer.INSTALL_SOURCE[1],
+        "deploy/systemd/" + installer.UNITS[0],
+        installer.TMPFILES_SOURCE,
+    ],
+)
+def test_post_status_source_edit_cannot_enter_committed_install(source, target, monkeypatch, changed_name):
+    root, revision = source
+    policy, receipt, calls, command = target
+    changed = root / changed_name
+    committed = changed.read_bytes()
+    observed = []
+
+    def concurrent_editor(argv, *, allow_failure=False):
+        result = command(argv, allow_failure=allow_failure)
+        if argv[0] == "git" and "status" in argv:
+            assert not result
+            changed.write_bytes(committed + b"# uncommitted after clean status\n")
+            observed.append(True)
+        return result
+
+    monkeypatch.setattr(installer, "_command", concurrent_editor)
+    with pytest.raises(MaintenanceError, match="install_source_payload_changed"):
+        installer.install(root, policy, revision, receipt)
+
+    assert observed
+    assert not installer.WRAPPER.exists() and not installer.POLICY.exists() and not receipt.exists()
+    assert all(call[0] == "git" for call in calls)
+
+
 def test_failed_activation_restores_existing_policy_and_never_enables_apps(source, target, monkeypatch):
     root, revision = source
     policy, receipt, calls, command = target

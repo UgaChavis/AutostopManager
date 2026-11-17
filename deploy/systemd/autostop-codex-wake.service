@@ -10,7 +10,7 @@ Group=autostop-work-telegram
 WorkingDirectory=/opt/AutostopManager
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
-Environment=PYTHONPATH=/opt/autostop-work-telegram-releases/current
+Environment=PYTHONPATH=/opt/autostop-manager-releases/current
 RuntimeDirectory=autostop-codex-wake
 RuntimeDirectoryMode=0750
 UMask=0077

@@ -1168,6 +1168,10 @@ class TelegramInbox:
         self._instruction(instruction_root, instruction_revision)
         self._instruction_pair = (instruction_root, instruction_revision)
 
+    @property
+    def configured_instructions(self) -> tuple[str, str] | None:
+        return self._instruction_pair
+
     def _hold_refs(
         self, sequences: list[str], peer_id: int, instruction_root: str, instruction_revision: str, *, reason_code: str
     ) -> None:

@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import pytest
 
 from autostop_manager import telegram_wake as wake
+from instruction_bundle_fakes import create_instruction_bundle
 
 OLD = "00000000-0000-4000-8000-000000000001"
 WORKER_A = "00000000-0000-4000-8000-000000000002"
@@ -61,21 +62,8 @@ def layout(tmp_path):
     if os.geteuid() != 0:
         pytest.skip("real production config and bundle validators require root ownership")
     releases = tmp_path / "releases"
-    bundle = releases / "snapshot"
-    for relative in (
-        "AGENTS.md",
-        "docs/agent/modules/B2.md",
-        "docs/agent/modules/B4.md",
-        ".agents/skills/manage-owner-telegram/SKILL.md",
-        ".agents/skills/manage-autostop-client/SKILL.md",
-    ):
-        target = bundle / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("synthetic instructions\n")
-        target.chmod(0o644)
+    bundle = create_instruction_bundle(releases / "snapshot", REVISION)
     bundle.chmod(0o755)
-    (bundle / "REVISION").write_text(REVISION + "\n")
-    (bundle / "REVISION").chmod(0o644)
     config = tmp_path / "wake.json"
     config.write_bytes(_configured_bytes(OLD, bundle))
     config.chmod(0o600)
@@ -118,6 +106,9 @@ def _child(connection, config_text, bundle_text, expected_thread, expected_hash,
     lock_contention_observed = False
 
     class FakeApp:
+        # This local policy helper has no IPC; keep its production contract.
+        worker_instruction_config = wake.AppServer.worker_instruction_config
+
         def __init__(self, current):
             self.config = current
             self.resumed_model = "synthetic-model"

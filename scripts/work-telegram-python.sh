@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Use systemd's effective interpreter, including deployment drop-ins.
 set -Eeuo pipefail
+error_prefix=work_telegram
 case "${1:-}" in
+  personal) unit=autostop-telegram.service; module=autostop_manager.telegram_bridge; error_prefix=personal_telegram ;;
   bridge) unit=autostop-work-telegram.service; module=autostop_manager.telegram_bridge ;;
   wake) unit=autostop-codex-wake.service; module=autostop_manager.telegram_wake ;;
   *) echo 'work_telegram_runtime_invalid=true' >&2; exit 2 ;;
@@ -14,5 +16,5 @@ if [[ "${command}" =~ ^\{\ path=(/[^\;[:space:]]+)\ \; ]]; then
     exit 0
   fi
 fi
-echo 'work_telegram_runtime_unavailable=true' >&2
+echo "${error_prefix}_runtime_unavailable=true" >&2
 exit 1

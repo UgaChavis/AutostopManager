@@ -666,7 +666,13 @@ def _normalize_operations(work_items: list[str], complaint: str | None) -> tuple
         complaint_only = True
         items = ["диагностика"]
     operations: list[dict[str, Any]] = []
+    matcher = OperationMatcher()
+    seen: set[str] = set()
     for item in items:
+        identity = matcher.identity(item)
+        if identity in seen:
+            continue
+        seen.add(identity)
         normalized_name = _canonical_operation(item)
         category = _operation_category(normalized_name or item)
         safety_flags = []

@@ -113,6 +113,7 @@ def bundle(tmp_path, monkeypatch):
 async def bridge_runtime(tmp_path):
     state = tmp_path / "state"
     inbox = TelegramInbox(state / "inbound.sqlite3")
+    inbox.configure_instructions(str(tmp_path / "releases" / "snapshot"), REVISION)
     inbox.duty_set(True, at=(datetime.now(UTC) - timedelta(hours=1)).isoformat())
     monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
     owner_file = tmp_path / "owner.json"

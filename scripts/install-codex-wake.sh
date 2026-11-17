@@ -3,12 +3,17 @@ set -Eeuo pipefail
 
 [[ "${EUID}" -eq 0 ]] || { echo 'run_as_root_required=true' >&2; exit 1; }
 [[ $# -eq 0 ]] || { echo "usage: $0" >&2; exit 2; }
-release="$(readlink -f /opt/autostop-work-telegram-releases/current)"
+release="$(readlink -f /opt/autostop-manager-releases/current)"
+[[ "$release" == "$(readlink -f /opt/autostop-work-telegram-releases/current)" ]] || {
+  echo 'codex_wake_release_alias_mismatch=true' >&2
+  exit 1
+}
 unit=/etc/systemd/system/autostop-codex-wake.service
 boot_unit=/etc/systemd/system/autostop-codex-start.service
-python=/opt/AutostopManager/.venv/bin/python
-[[ "$release" == /opt/autostop-work-telegram-releases/* && -d "$release" && ! -L "$release" ]]
+[[ ( "$release" == /opt/autostop-manager-releases/* || "$release" == /opt/autostop-work-telegram-releases/* ) && -d "$release" && ! -L "$release" ]]
 [[ "$(stat -c %U "$release")" == root ]]
+# The bridge is installed first; a fresh wake unit need not exist yet.
+python="$(bash "$release/scripts/work-telegram-python.sh" bridge)"
 if systemctl is-active --quiet autostop-codex-wake.service; then
   echo "codex_wake_service_must_be_inactive=true" >&2
   exit 1
@@ -33,6 +38,18 @@ restore() {
 trap restore ERR
 "$python" -m autostop_manager.telegram_wake setup
 install -o root -g root -m 0644 "$release/deploy/systemd/autostop-codex-wake.service" "$unit"
+# Preserve the effective venv entry point, including deployments using drop-ins.
+"$python" - "$unit" "$python" <<'PY'
+from pathlib import Path
+import sys
+
+unit = Path(sys.argv[1])
+source = unit.read_text()
+old = 'ExecStart=/opt/AutostopManager/.venv/bin/python -m autostop_manager.telegram_wake daemon'
+if source.count(old) != 1:
+    raise SystemExit('codex_wake_unit_runtime_invalid=true')
+unit.write_text(source.replace(old, f'ExecStart={sys.argv[2]} -m autostop_manager.telegram_wake daemon'))
+PY
 install -o root -g root -m 0644 "$release/deploy/systemd/autostop-codex-start.service" "$boot_unit"
 systemctl daemon-reload
 systemctl enable --now autostop-codex-start.service
