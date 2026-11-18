@@ -2253,6 +2253,33 @@ def test_public_aftermarket_catalog_lookup_rejects_unknown_provider():
     assert "mann_filter_catalog" in result["available_providers"]
 
 
+def test_public_denso_shares_deadline_between_search_and_details(monkeypatch):
+    now = 100.0
+    requests = []
+
+    def read(url, *, timeout, **_kwargs):
+        nonlocal now
+        path = urlsplit(url).path
+        requests.append((path, timeout))
+        now += min(timeout, 4.0)
+        if timeout < 4.0:
+            raise TimeoutError("provider_total_deadline_exceeded")
+        if path == "/api/v1/search":
+            return {"status": "success", "data": {"parts": [{"part_name": name} for name in ("P1", "P2", "P3")]}}
+        return {"status": "success", "data": [{"name": path.rsplit("/", 1)[-1]}]}
+
+    monkeypatch.setattr(catalog_clients_module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(catalog_clients_module, "_read_json_url", read)
+
+    result = public_aftermarket_catalog_lookup(provider="denso", part_number="DEMO", timeout=10.0)
+
+    assert now == 110.0
+    assert requests == [("/api/v1/search", 10.0), ("/api/v1/parts/P1", 6.0), ("/api/v1/parts/P2", 2.0)]
+    assert result["ok"] is result["partial"] is result["requires_fallback"] is True
+    assert [row["part_name"] for row in result["items"]] == ["P1", "P2", "P3"]
+    assert result["details"][0]["items"][0]["name"] == "P1"
+
+
 def test_public_aftermarket_all_reports_aggregate_provider_failures(monkeypatch):
     monkeypatch.setattr(
         "autostop_manager.catalog_clients.mann_filter_catalog_lookup",

@@ -655,7 +655,10 @@ def denso_aftermarket_catalog_lookup(
     if dry_run:
         return {**base, "ok": True, "dry_run": True}
 
-    request_timeout = timeout if _deadline is None else _remaining_timeout(_deadline)
+    deadline = _deadline
+    if deadline is None:
+        deadline = time.monotonic() + _bounded_public_aftermarket_timeout(timeout)
+    request_timeout = _remaining_timeout(deadline)
     if request_timeout is None:
         return {**base, **_catalog_deadline_failure("denso_aftermarket_catalog")}
     try:
@@ -678,7 +681,7 @@ def denso_aftermarket_catalog_lookup(
             if not part_key:
                 continue
             detail_url = _denso_detail_url(part_key=str(part_key), country=request_plan["country"])
-            request_timeout = timeout if _deadline is None else _remaining_timeout(_deadline)
+            request_timeout = _remaining_timeout(deadline)
             if request_timeout is None:
                 deadline_exhausted = True
                 break
