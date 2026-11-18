@@ -24,7 +24,7 @@ import time
 import weakref
 from collections import deque
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, datetime
@@ -41,6 +41,7 @@ from autostop_manager.telegram_owner import (
 )
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
 from autostop_manager.telegram_effects import EffectExecutor, EffectQueueError, rpc_budget, server_budget
+from autostop_manager.telegram_timings import StageTimings
 
 
 DEFAULT_CREDENTIALS_PATH = Path("/etc/autostop-telegram/credentials")
@@ -675,6 +676,9 @@ class DurableInboundMonitor(InboundMonitor):
         # unattempted draft: its used-context snapshot cannot be reconstructed.
         self.context_messages: dict[int, dict[int, str | None]] = {}
         self.context_jobs: dict[str, dict[str, Any]] = {}
+        self.job_latency = StageTimings(
+            stages=("history", "history_page", "send", "readback", "reply_to_terminal"), modes=("new",)
+        )
 
     def begin_context(self, job: dict[str, Any]) -> None:
         active = {slot["job_id"] for slot in self.inbox.execution_slots()}
@@ -692,7 +696,11 @@ class DurableInboundMonitor(InboundMonitor):
                     receipt=None,
                     end_reached=False,
                     pages=0,
+                    history_timed=False,
+                    result_timings={},
                 )
+                current.pop("history_timing_started", None)
+                current.pop("terminal_timing_started", None)
             return
         for identifier, state in list(self.context_jobs.items()):
             if state["peer"] == job["peer_id"]:
@@ -714,6 +722,8 @@ class DurableInboundMonitor(InboundMonitor):
             "reading": False,
             "end_reached": False,
             "pages": 0,
+            "history_timed": False,
+            "result_timings": {},
         }
 
     @staticmethod
@@ -3505,6 +3515,19 @@ async def _handle_send_text_to_entity(
     _require_job_effect_ledger(inbound_monitor, job_effect, previous)
     if contract_target_role is not None:
         target_binding["target_fingerprint"] = f"{contract_peer_id:016x}"
+    timed_monitor = (
+        inbound_monitor
+        if isinstance(inbound_monitor, DurableInboundMonitor)
+        and previous is None
+        and job_effect is not None
+        and request.get("kind") == "result"
+        and idempotency_operation == "send_text"
+        else None
+    )
+    timings = timed_monitor.job_latency if timed_monitor is not None else None
+    job_id = str(request.get("job_id") or "")
+    result_context = None
+    context_revision = None
     allowed_previous_operations: set[str | None] = {idempotency_operation}
     if idempotency_operation == "send_text":
         allowed_previous_operations.add(None)
@@ -3557,28 +3580,44 @@ async def _handle_send_text_to_entity(
         # A lost response must leave a durable intent that blocks blind retries.
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
-        sent = await client.send_message(
-            entity,
-            text,
-            parse_mode=None,
-            **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
-            **({"link_preview": False} if group_reply else {}),
+        result_context = timed_monitor.context_jobs.get(job_id) if timed_monitor is not None else None
+        context_revision = result_context["revision"] if result_context is not None else None
+        with timings.measure("new", "send") if timings is not None else nullcontext():
+            sent = await client.send_message(
+                entity,
+                text,
+                parse_mode=None,
+                **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
+                **({"link_preview": False} if group_reply else {}),
+            )
+            entry["message_id"] = int(sent.id)
+    with timings.measure("new", "readback") if timings is not None else nullcontext():
+        idempotency = (
+            _persist_delivery(idempotency_path, idempotency_key, entry, message_id=entry["message_id"])
+            if previous is None
+            else idempotency
         )
-        entry["message_id"] = int(sent.id)
-        idempotency = _persist_delivery(idempotency_path, idempotency_key, entry, message_id=int(sent.id))
-    message_id = int(idempotency[idempotency_key]["message_id"])
-    readback = await client.get_messages(entity, ids=message_id)
-    matches_target = _outgoing_group_text_matches if group_reply else _outgoing_message_matches
+        message_id = int(idempotency[idempotency_key]["message_id"])
+        readback = await client.get_messages(entity, ids=message_id)
+        matches_target = _outgoing_group_text_matches if group_reply else _outgoing_message_matches
+        if (
+            not matches_target(readback, peer_id=int(target["id"]), message_id=message_id)
+            or str(readback.message or "") != text
+            or _message_reply_to_id(readback) != reply_to_message_id
+        ):
+            raise BridgeError("send_readback_failed")
+        idempotency = _persist_delivery(
+            idempotency_path, idempotency_key, idempotency[idempotency_key], message_id=message_id, verified=True
+        )
+        _record_job_send_receipt(inbound_monitor, job_effect, idempotency_key, message_id)
     if (
-        not matches_target(readback, peer_id=int(target["id"]), message_id=message_id)
-        or str(readback.message or "") != text
-        or _message_reply_to_id(readback) != reply_to_message_id
+        timed_monitor is not None
+        and result_context is not None
+        and timed_monitor.context_jobs.get(job_id) is result_context
+        and result_context["revision"] == context_revision
     ):
-        raise BridgeError("send_readback_failed")
-    idempotency = _persist_delivery(
-        idempotency_path, idempotency_key, idempotency[idempotency_key], message_id=message_id, verified=True
-    )
-    _record_job_send_receipt(inbound_monitor, job_effect, idempotency_key, message_id)
+        # Result slots already limit the number of keys in this exact context.
+        result_context["result_timings"][idempotency_key] = timed_monitor.job_latency.timestamp()
     monitor_event_closed: bool | None = None
     if reply_to_message_id and inbound_monitor is not None:
         monitor_event_closed = inbound_monitor.mark_reply_verified(
@@ -4651,6 +4690,8 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         entity, target = await _resolve_peer(client, peer)
         context = None
         authority = None
+        timings = None
+        history_started = None
         if request.get("job_id"):
             if not isinstance(inbound_monitor, DurableInboundMonitor):
                 raise BridgeError("durable_inbox_disabled")
@@ -4679,13 +4720,17 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
                 or not hmac.compare_digest(request["history_receipt"], context["receipt"])
             ):
                 raise BridgeError("history_sequence_invalid")
+            timings = inbound_monitor.job_latency
+            if before is None and not context["history_timed"] and "history_timing_started" not in context:
+                history_started = timings.timestamp()
         arguments = {"limit": limit + 1}
         if before is not None:
             arguments["offset_id"] = before
         if context is not None:
             context["reading"] = True
         try:
-            page = list(await client.get_messages(entity, **arguments))
+            with timings.measure("new", "history_page") if timings is not None else nullcontext():
+                page = list(await client.get_messages(entity, **arguments))
         finally:
             if context is not None:
                 context["reading"] = False
@@ -4709,6 +4754,8 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
             context["end_reached"] = not has_more
             context["receipt"] = secrets.token_urlsafe(24)
             context["pages"] += 1
+            if before is None and not context["history_timed"]:
+                context.setdefault("history_timing_started", history_started)
         rows = []
         for message in reversed(messages):
             text, sensitive_content_redacted = redact_sensitive_message_text(str(message.message or ""))
@@ -4968,6 +5015,12 @@ async def _handle_job_operation(
             human_message_ids=request.get("human_message_ids"),
             guidance_revision=monitor.guidance_read.get(str(request.get("job_id") or "")),
         )
+        context = monitor.context_jobs.get(job["job_id"])
+        if context is not None and context["revision"] == job["context_revision"] and job["outcome"] == "answered":
+            for key in receipt_keys:
+                if key in context["result_timings"]:
+                    context["terminal_timing_started"] = context["result_timings"][key]
+                    break
         monitor.guidance_read.pop(job["job_id"], None)
         if not job["client_control"]["guidance_pending"]:
             monitor.trusted_guidance.pop(job["peer_id"], None)
@@ -5239,6 +5292,10 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
         ):
             raise BridgeError("context_history_incomplete")
         context["complete"] = True
+        if not context["history_timed"] and "history_timing_started" in context:
+            started = context.pop("history_timing_started")
+            context["history_timed"] = True
+            monitor.job_latency.record("new", "history", started, monitor.job_latency.timestamp())
         return {"ok": True, "history_complete": True, "history_pages": context["pages"]}
     if operation == "job_execution_proof":
         executor = _effect_executor()
@@ -5252,6 +5309,11 @@ def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonit
             terminal_status=request.get("terminal_status"),
             local_tasks_done=request.get("local_tasks_done") is True,
         )
+        proof_context = monitor.context_jobs.get(job["job_id"])
+        if proof_context is not None and "terminal_timing_started" in proof_context:
+            started = proof_context.pop("terminal_timing_started")
+            if job["state"] == "completed" and job["execution_proof"] == "completed":
+                monitor.job_latency.record("new", "reply_to_terminal", started, monitor.job_latency.timestamp())
         monitor.changed()
         return {"ok": True, "job": job}
     return None
@@ -5272,6 +5334,7 @@ def _handle_owner_routing_control(
                 "health": inbox.health(),
                 "owner_pending": owner_pending,
                 "owner_routes_unfinished": len(inbox.owner_routes_unfinished(limit=100)),
+                "job_latency": monitor.job_latency.snapshot(),
             },
         }
     if operation in {"job_owner_pending", "job_owner_unfinished", "job_owner_completed", "job_owner_routed"}:

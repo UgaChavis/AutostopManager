@@ -8,7 +8,6 @@ import fcntl
 import hashlib
 import json
 import logging
-import math
 import os
 import pwd
 import signal
@@ -16,8 +15,8 @@ import socket
 import stat
 import struct
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
-from contextlib import contextmanager, suppress
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import ExitStack, nullcontext, suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +32,7 @@ from autostop_manager.instruction_bundle import (
 )
 from autostop_manager.mcp_contract import manager_session_schema_evidence
 from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN
+from autostop_manager.telegram_timings import StageTimings as _StageTimings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -133,96 +133,14 @@ class FailedTurnContext:
     status: str = "failed"
 
 
-class _StageTimings:
-    """Bounded, process-local observations; returned awaits are not business success."""
-
-    MODES = ("new", "recovery")
-    STAGES = ("peer_prepare", "idle_wait", "turn_lifecycle", "finish_request")
-
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self._clock = clock
-        self._since = self._now()
-        self._dropped = 0
-        self._cells = {
-            mode: {
-                stage: {
-                    "count": 0,
-                    "sum_seconds": 0.0,
-                    "max_seconds": 0.0,
-                    "returned": 0,
-                    "raised": 0,
-                    "cancelled": 0,
-                    "in_flight": 0,
-                    **({"unsettled": 0} if stage == "finish_request" else {}),
-                }
-                for stage in self.STAGES
-            }
-            for mode in self.MODES
-        }
-
-    def _now(self) -> float | None:
-        try:
-            value = float(self._clock())
-            return value if math.isfinite(value) else None
-        except Exception:  # noqa: BLE001 - measurement failures never replace execution outcomes.
-            return None
-
-    def _record(
-        self, cell: dict[str, Any], outcome: str, started: float | None, unsettled: Callable[[], bool] | None
-    ) -> None:
-        ended = self._now()
-        if started is None or ended is None:
-            raise ValueError
-        elapsed = ended - started
-        total = cell["sum_seconds"] + elapsed
-        if elapsed < 0 or not math.isfinite(elapsed) or not math.isfinite(total):
-            raise ValueError
-        unfinished = outcome == "returned" and unsettled is not None and unsettled()
-        cell["count"] += 1
-        cell["sum_seconds"] = total
-        cell["max_seconds"] = max(cell["max_seconds"], elapsed)
-        cell[outcome] += 1
-        if unfinished:
-            cell["unsettled"] += 1
-
-    @contextmanager
-    def measure(self, mode: str, stage: str, *, unsettled: Callable[[], bool] | None = None) -> Iterator[None]:
-        cell = self._cells[mode][stage]
-        started = self._now()
-        cell["in_flight"] += 1
-        outcome = "raised"
-        try:
-            yield
-            outcome = "returned"
-        except asyncio.CancelledError:
-            outcome = "cancelled"
-            raise
-        finally:
-            cell["in_flight"] -= 1
-            try:
-                self._record(cell, outcome, started, unsettled)
-            except Exception:  # noqa: BLE001 - no exception payload is retained or exported.
-                self._dropped += 1
-
-    def snapshot(self) -> dict[str, Any]:
-        now = self._now()
-        age = None if now is None or self._since is None else now - self._since
-        return {
-            "scope": "process",
-            "observed_seconds": age if age is not None and math.isfinite(age) and age >= 0 else None,
-            "dropped_samples": self._dropped,
-            **{
-                mode: {
-                    stage: {
-                        **cell,
-                        "sum_seconds": cell["sum_seconds"] if cell["count"] else None,
-                        "max_seconds": cell["max_seconds"] if cell["count"] else None,
-                    }
-                    for stage, cell in cells.items()
-                }
-                for mode, cells in self._cells.items()
-            },
-        }
+def _wake_stage_timings(clock: Callable[[], float] = time.monotonic) -> _StageTimings:
+    return _StageTimings(
+        clock,
+        stages={
+            "new": (*_StageTimings.STAGES, "instruction_delivery", "turn_start", "turn_execution"),
+            "recovery": _StageTimings.STAGES,
+        },
+    )
 
 
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
@@ -1195,18 +1113,23 @@ class AppServer:
         text: str,
         before_start: Callable[[], Awaitable[None]],
         bind_turn: Callable[[str], Awaitable[None]],
+        *,
+        timings: _StageTimings | None = None,
     ) -> None:
         self.last_turn_started = False
         self.turn_start_attempted = False
-        while True:
-            try:
-                generation = await self._start_turn(text, before_start=before_start, bind_turn=bind_turn)
-                break
-            except WakeError as exc:
-                if str(exc) != "codex_thread_busy" or self.outcome_unknown:
-                    raise
-                await self.wait_idle()
-        await self._wait_turn(generation, notification_only=True)
+        with ExitStack() as execution:
+            while True:
+                try:
+                    generation = await self._start_turn(
+                        text, before_start=before_start, bind_turn=bind_turn, timings=timings, execution=execution
+                    )
+                    break
+                except WakeError as exc:
+                    if str(exc) != "codex_thread_busy" or self.outcome_unknown:
+                        raise
+                    await self.wait_idle()
+            await self._wait_turn(generation, notification_only=True)
 
     async def _start_turn(
         self,
@@ -1214,6 +1137,8 @@ class AppServer:
         *,
         before_start: Callable[[], Awaitable[None]] | None = None,
         bind_turn: Callable[[str], Awaitable[None]] | None = None,
+        timings: _StageTimings | None = None,
+        execution: ExitStack | None = None,
     ) -> int:
         while True:
             await self.ensure_ready()
@@ -1256,9 +1181,15 @@ class AppServer:
                         if self.blocked:
                             raise WakeError(self.recovery_error or "codex_recovery_blocked")
                     self.outcome_unknown = True
-                    await self._deliver_instruction_context(
-                        instruction_item, turn_generation, turn_archive_sequence, turn_notification_sequence
+                    instruction_timing = (
+                        timings.measure("new", "instruction_delivery")
+                        if timings is not None and instruction_item is not None
+                        else nullcontext()
                     )
+                    with instruction_timing:
+                        await self._deliver_instruction_context(
+                            instruction_item, turn_generation, turn_archive_sequence, turn_notification_sequence
+                        )
                     try:
                         params: dict[str, Any] = {
                             "threadId": self.config.thread_id,
@@ -1281,14 +1212,14 @@ class AppServer:
                                     "settings": mode["settings"] | {"reasoning_effort": effort}
                                 }
                         self.turn_start_attempted = True
-                        result = await self.request(
-                            "turn/start",
-                            params,
-                        )
+                        if timings is not None and execution is not None:
+                            execution.enter_context(timings.measure("new", "turn_execution"))
+                        with timings.measure("new", "turn_start") if timings is not None else nullcontext():
+                            result = await self.request("turn/start", params)
+                            self.active_turn = rpc_entity(result, "turn")["id"]
                     except RPCRejected as exc:
                         self.outcome_unknown = False
                         raise WakeError("codex_turn_start_rejected") from exc
-                    self.active_turn = rpc_entity(result, "turn")["id"]
                     if bind_turn is not None:
                         await bind_turn(self.active_turn)
                 return turn_generation
@@ -1714,7 +1645,7 @@ class DurableWakeDispatcher:
         self.stop_proof_verified = False
         self.pause_requested = False
         self.bootstrap_checked = False
-        self._stage_timings = _StageTimings()
+        self._stage_timings = _wake_stage_timings()
         # Work Telegram has only client traffic. Trusted control comes from
         # Codex, never from a Telegram sender or the owner's display name.
         # Each running job owns its app connection and stop proof. The bridge,
@@ -2475,7 +2406,9 @@ class DurableWakeDispatcher:
                     await self.app.wait_idle()
                 await self._health("running")
                 with self._stage_timings.measure(mode, "turn_lifecycle"):
-                    await self.app.run_job_turn(job_instruction(job), before_start, bind_turn)
+                    await self.app.run_job_turn(
+                        job_instruction(job), before_start, bind_turn, timings=self._stage_timings
+                    )
 
         code = None
         self.execution_task = asyncio.create_task(execute())

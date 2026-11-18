@@ -35,6 +35,25 @@ policy. `--clients 1 --history 1000 --repeats 1` selects a small diagnostic run.
 `--source-root` selects source imports, including an immutable Git archive;
 the harness and source file hashes bind the report. Runtime/data are not copied.
 
+For an isolated pair of short text replies, use the same command with
+`--paired-text --repeats 1`. The first job creates the peer's thread binding.
+The second keeps its thread and revision. The driver verifies one receipt,
+terminal execution proof and settled cleanup for each job. It reports bootstrap
+readiness for the shared App Server connection, driver intervals, and deltas
+from the Bridge and Wake timing snapshots. Each job has its own executor.
+`turn_execution` includes tool calls, so the Bridge durations overlap it.
+
+For a separately authorized live pair, reuse the one-shot acceptance procedure
+with a current test peer, release pin and execution revision. Start with an
+unmapped peer and verify the ready binding before the second job. Keep the
+model, effort and message shape consistent. Take root-only Bridge and Wake
+snapshots around each isolated job. The same processes must serve both
+snapshots of a job. Compare counts and summed durations, reject in-flight,
+failed, dropped or unexpected samples, and record App Server readiness and
+post-proof cleanup in the driver. Start the next job after verified receipt
+and settled slot cleanup. Stop the pair on an uncertain outcome, foreign
+claim or timeout and retain the original state for reconciliation.
+
 Compare identical workloads with the same harness, Python and dependencies.
 `queue_wait` measures intake start through claim, including the intake commit;
 `control_rpc` records up to ten actual samples. End-to-end throughput includes

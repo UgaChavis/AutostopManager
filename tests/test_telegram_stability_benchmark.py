@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 
 import pytest
-from telegram_stability_benchmark import database, pipeline
+from telegram_stability_benchmark import database, paired_text_latency, pipeline
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="native bridge credential checks require root")
@@ -32,3 +32,17 @@ def test_benchmark_observes_independent_client_results_and_settled_cleanup():
         assert state["retained_peers"] == 32
         assert state["quiet_peers_status"]["count"] == 5
     assert not root.exists()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="native bridge credential checks require root")
+def test_paired_text_benchmark_proves_one_reply_per_case_and_reuses_thread():
+    with tempfile.TemporaryDirectory(prefix="mng-bench-pair-") as temporary:
+        result = asyncio.run(paired_text_latency(Path(temporary) / "pair"))
+
+    assert result["bootstrap_ready_seconds"] >= 0
+    assert [case["condition"] for case in result["cases"]] == ["create_thread", "reuse_thread"]
+    for case in result["cases"]:
+        assert case["verified_replies"] == 1 and case["execution_proof"] == "completed"
+        assert all(value >= 0 for value in case["driver_seconds"].values())
+        for service in ("bridge", "wake"):
+            assert all(cell["count"] == 1 and cell["seconds"] >= 0 for cell in case[service].values())

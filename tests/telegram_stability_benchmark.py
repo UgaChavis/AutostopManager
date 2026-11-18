@@ -14,6 +14,7 @@ import gc
 import hashlib
 from importlib.metadata import version
 import json
+import math
 import os
 from pathlib import Path
 import resource
@@ -76,6 +77,158 @@ def isolate(patch, root):
     patch.setattr(subprocess, "Popen", denied)
     patch.setenv("AUTOSTOP_MANAGER_ENV_FILE", "/dev/null")
     patch.setenv("AUTOSTOP_MANAGER_DB", str(root / "unused.sqlite3"))
+
+
+def phase_deltas(before, after, expected_counts):
+    """Extract an isolated successful sample from two process-local snapshots."""
+    assert before["scope"] == after["scope"] == "process"
+    assert 0 <= before["observed_seconds"] <= after["observed_seconds"] < math.inf
+    assert before["dropped_samples"] == after["dropped_samples"]
+    phases = {}
+    for name, expected_count in expected_counts.items():
+        old = before["new"][name]
+        current = after["new"][name]
+        assert old["in_flight"] == current["in_flight"] == 0, name
+        count = current["count"] - old["count"]
+        assert count == expected_count and current["returned"] - old["returned"] == count, name
+        assert current["raised"] == old["raised"] and current["cancelled"] == old["cancelled"], name
+        assert current.get("unsettled") == old.get("unsettled"), name
+        seconds = (current["sum_seconds"] or 0.0) - (old["sum_seconds"] or 0.0)
+        assert math.isfinite(seconds) and seconds >= 0, name
+        phases[name] = {"seconds": seconds, "count": count}
+    return phases
+
+
+async def _observe_text_reply(runtime, dispatcher, server, peer, incoming, marks):
+    from telegram_wake_fakes import until
+    from test_telegram_durable_integration import binding, model_complete, read_history, send
+
+    initial = runtime.monitor.record(runtime.client.inbound(incoming, peer=peer))
+    assert initial is not None
+    marks["accepted"] = time.monotonic()
+    completed = dispatcher.completed
+    await until(lambda: any(job["state"] == "running" for job in runtime.inbox.execution_slots()))
+    (job,) = runtime.inbox.execution_slots()
+    assert job["peer_id"] == peer and job["event_ids"] == [initial] and job["state"] == "running"
+    await read_history(runtime, job)
+    prepared = await send(runtime, job, kind="result", text="synthetic reply")
+    receipt = await send(runtime, job, kind="result", text="synthetic reply", dry=prepared)
+    assert receipt["verified"] and receipt["reply_to_message_id"] == incoming and not receipt["replayed"]
+    marks["receipt_received"] = time.monotonic()
+    result = await runtime.jobs.request(
+        "job_result", **binding(job), outcome="answered", event_ids=[initial], receipt_keys=[receipt["receipt_key"]]
+    )
+    assert result["job"]["state"] == "completed"
+    await model_complete(server, job)
+    await until(lambda: not dispatcher.executions and dispatcher.completed > completed)
+    proved = runtime.inbox.read_job(job["job_id"])
+    assert proved["execution_proof"] == "completed" and not runtime.inbox.execution_slots()
+    assert runtime.inbox.event_state(initial) == "reply_verified"
+    assert not dispatcher.unsettled and not dispatcher.cleanup_pending
+
+
+async def paired_text_latency(root):
+    """Use one synthetic peer twice, proving creation then reuse of its binding."""
+    import pytest
+    from telegram_wake_fakes import MockServer
+    from test_telegram_durable_integration import bridge_runtime, bundle, worker
+
+    from autostop_manager import telegram_bridge as bridge
+
+    root.mkdir()
+    peer = 101
+    cases, marks = [], {}
+    server = MockServer(complete=False, peer_threads=True)
+    with pytest.MonkeyPatch.context() as patch:
+        isolate(patch, root)
+        patch.setattr(bridge, "_MUTATION_LOCK", asyncio.Lock())
+        instruction_root = bundle.__wrapped__(root, patch)
+        async with bridge_runtime(root) as runtime:
+            claim, finish = runtime.inbox.claim, runtime.inbox.finish_execution
+
+            def observe_claim(**kwargs):
+                job = claim(**kwargs)
+                if job is not None:
+                    marks["claimed"] = time.monotonic()
+                return job
+
+            def observe_proof(**kwargs):
+                job = finish(**kwargs)
+                marks["proved"] = time.monotonic()
+                return job
+
+            patch.setattr(runtime.inbox, "claim", observe_claim)
+            patch.setattr(runtime.inbox, "finish_execution", observe_proof)
+            started = time.monotonic()
+            try:
+                async with asyncio.timeout(20), worker(runtime, root, instruction_root, server) as dispatcher:
+                    await dispatcher.bootstrap_app.ensure_ready()
+                    bootstrap_seconds = time.monotonic() - started
+                    retire = dispatcher._retire_completed_child
+
+                    async def observe_retirement(job_id, child):
+                        await retire(job_id, child)
+                        if job_id not in dispatcher.unsettled:
+                            marks["retired"] = time.monotonic()
+
+                    patch.setattr(dispatcher, "_retire_completed_child", observe_retirement)
+                    binding = runtime.inbox.read_peer_thread_by_peer(peer)
+                    assert binding is None
+                    for condition, incoming in (("create_thread", 100), ("reuse_thread", 200)):
+                        marks.clear()
+                        old_sends = runtime.client.sent
+                        bridge_before = (await runtime.jobs.request("job_status"))["status"]["job_latency"]
+                        wake_before = dispatcher.status()["stage_timings"]
+                        await _observe_text_reply(runtime, dispatcher, server, peer, incoming, marks)
+                        bridge_after = (await runtime.jobs.request("job_status"))["status"]["job_latency"]
+                        wake_after = dispatcher.status()["stage_timings"]
+                        current = runtime.inbox.read_peer_thread_by_peer(peer)
+                        assert current is not None and current["state"] == "ready"
+                        if binding is not None:
+                            assert (binding["thread_id"], binding["revision"]) == (
+                                current["thread_id"],
+                                current["revision"],
+                            )
+                        binding = current
+                        assert len(server.created_threads) == 1 and runtime.client.sent - old_sends == 1
+                        cases.append(
+                            {
+                                "condition": condition,
+                                "verified_replies": 1,
+                                "execution_proof": "completed",
+                                "driver_seconds": {
+                                    "intake_to_claim": marks["claimed"] - marks["accepted"],
+                                    "intake_to_verified_reply": marks["receipt_received"] - marks["accepted"],
+                                    "terminal_proof_to_cleanup": marks["retired"] - marks["proved"],
+                                },
+                                "bridge": phase_deltas(
+                                    bridge_before,
+                                    bridge_after,
+                                    dict.fromkeys(
+                                        ("history", "history_page", "send", "readback", "reply_to_terminal"), 1
+                                    ),
+                                ),
+                                "wake": phase_deltas(
+                                    wake_before,
+                                    wake_after,
+                                    dict.fromkeys(
+                                        (
+                                            "peer_prepare",
+                                            "idle_wait",
+                                            "instruction_delivery",
+                                            "turn_start",
+                                            "turn_execution",
+                                            "finish_request",
+                                        ),
+                                        1,
+                                    ),
+                                ),
+                            }
+                        )
+                    assert server.counter == len(cases) == 2 and runtime.inbox.status()["open_events"] == 0
+            finally:
+                await bridge._effect_executor().close()
+    return {"bootstrap_ready_seconds": bootstrap_seconds, "cases": cases}
 
 
 async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one measured IPC lifecycle and cleanup.
@@ -334,14 +487,24 @@ def main():
     parser.add_argument("--repeats", type=int, default=3, choices=range(1, 4))
     parser.add_argument("--clients", type=int, nargs="+", default=[1, 10, 50, 100])
     parser.add_argument("--history", type=int, nargs="+", default=[1000, 10000, 100000])
+    parser.add_argument(
+        "--paired-text", action="store_true", help="run the isolated create/reuse reply pair per repeat"
+    )
     args = parser.parse_args()
     source = args.source_root.resolve()
+    timings_source = source / "autostop_manager/telegram_timings.py"
+    if args.paired_text and not timings_source.is_file():
+        parser.error("--paired-text requires job latency timings in the selected source")
     sys.path[:0] = [str(source / "tests"), str(source)]
     os.environ["AUTOSTOP_MANAGER_ENV_FILE"] = "/dev/null"
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     assert all(0 < n <= 100 for n in args.clients) and all(0 < n <= 100000 for n in args.history)
     report = {
-        "format": "autostop.manager.synthetic-stability-benchmark.v1",
+        "format": (
+            "autostop.manager.synthetic-text-latency.v1"
+            if args.paired_text
+            else "autostop.manager.synthetic-stability-benchmark.v1"
+        ),
         "source_root": str(source),
         "python": sys.version,
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -361,12 +524,20 @@ def main():
             )
         },
     }
+    if timings_source.is_file():
+        report["source_files_sha256"]["autostop_manager/telegram_timings.py"] = hashlib.sha256(
+            timings_source.read_bytes()
+        ).hexdigest()
     from autostop_manager import telegram_bridge
 
     assert Path(telegram_bridge.__file__).resolve().is_relative_to(source)
     with tempfile.TemporaryDirectory(prefix="mng-bench-") as temporary:
         root = Path(temporary)
         for repetition in range(args.repeats):
+            if args.paired_text:
+                pair = asyncio.run(paired_text_latency(root / f"pair{repetition}"))
+                report["repeats"].append({"paired_text": pair})
+                continue
             group = {"pipeline": [], "database": []}
             for clients in args.clients:
                 value = asyncio.run(pipeline(root / f"p{repetition}-{clients}", clients, 10, 8))

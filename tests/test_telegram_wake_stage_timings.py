@@ -128,7 +128,7 @@ async def durable_request(tmp_path, bundle, server, *, finish=True):
                 wake.WakeConfig(THREAD, app_socket=path, instruction_root=str(bundle), instruction_revision=REVISION)
             )
             dispatcher = wake.DurableWakeDispatcher(bootstrap, os.geteuid(), jobs)
-            dispatcher._stage_timings = wake._StageTimings(clock)
+            dispatcher._stage_timings = wake._wake_stage_timings(clock)
             try:
                 await bootstrap.connect()
                 await bootstrap.resume(allow_active=True)
@@ -225,6 +225,122 @@ def test_new_durable_execution_measures_boundaries_without_replaying_on_reconnec
                 await asyncio.gather(executing, return_exceptions=True)
 
     monkeypatch.setattr(wake, "RECONNECT_DELAYS", (0,))
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled"])
+def test_new_turn_diagnostics_follow_instruction_start_and_exact_terminal(tmp_path, bundle, monkeypatch, terminal):
+    async def scenario():
+        server = MockServer(peer_threads=True, strict_peer_lifecycle=True, complete=False)
+        async with durable_request(tmp_path, bundle, server) as (_inbox, job, dispatcher, clock):
+            request = wake.AppServer.request
+            wait_turn = wake.AppServer._wait_turn
+            notice_turn = wake.AppServer._notice_turn
+            waiting = asyncio.Event()
+            unrelated_observed = asyncio.Event()
+
+            def cells():
+                return dispatcher.status()["stage_timings"]["new"]
+
+            async def delayed_request(app, method, *args, **kwargs):
+                if method == "thread/inject_items":
+                    assert cells()["instruction_delivery"]["in_flight"] == 1
+                    assert cells()["turn_execution"]["in_flight"] == 0
+                    clock.advance(2)
+                elif method == "turn/start":
+                    assert cells()["instruction_delivery"]["returned"] == 1
+                    assert cells()["turn_start"]["in_flight"] == cells()["turn_execution"]["in_flight"] == 1
+                    clock.advance(3)
+                return await request(app, method, *args, **kwargs)
+
+            async def observed_wait(app, *args, **kwargs):
+                assert cells()["turn_start"]["returned"] == 1 and cells()["turn_execution"]["in_flight"] == 1
+                waiting.set()
+                return await wait_turn(app, *args, **kwargs)
+
+            def observed_notification(app, method, params):
+                notice_turn(app, method, params)
+                if params["turn"]["id"] == "unrelated-turn":
+                    unrelated_observed.set()
+
+            monkeypatch.setattr(wake.AppServer, "request", delayed_request)
+            monkeypatch.setattr(wake.AppServer, "_wait_turn", observed_wait)
+            monkeypatch.setattr(wake.AppServer, "_notice_turn", observed_notification)
+            executing = asyncio.create_task(dispatcher._execute(job))
+            try:
+                await asyncio.wait_for(waiting.wait(), 3)
+                clock.advance(5)
+                thread = dispatcher.app.config.thread_id
+                await server.sockets[-1].send(
+                    json.dumps(
+                        {
+                            "method": "turn/completed",
+                            "params": {"threadId": thread, "turn": {"id": "unrelated-turn", "status": "completed"}},
+                        }
+                    )
+                )
+                await asyncio.wait_for(unrelated_observed.wait(), 3)
+                assert cells()["turn_execution"]["in_flight"] == 1
+                clock.advance(7)
+                if terminal == "cancelled":
+                    executing.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(executing, 3)
+                    await asyncio.gather(dispatcher.execution_task, return_exceptions=True)
+                else:
+                    server.turn_statuses["1"] = "completed"
+                    await server.sockets[-1].send(
+                        json.dumps(
+                            {
+                                "method": "turn/completed",
+                                "params": {"threadId": thread, "turn": {"id": "1", "status": "completed"}},
+                            }
+                        )
+                    )
+                    await asyncio.wait_for(executing, 3)
+                for stage, elapsed, outcome in (
+                    ("instruction_delivery", 2, "returned"),
+                    ("turn_start", 3, "returned"),
+                    ("turn_execution", 15, "cancelled" if terminal == "cancelled" else "returned"),
+                ):
+                    cell = cells()[stage]
+                    assert cell["count"] == cell[outcome] == 1 and cell["in_flight"] == 0
+                    assert cell["sum_seconds"] == cell["max_seconds"] == elapsed
+                assert set(dispatcher.status()["stage_timings"]["recovery"]) == set(wake._StageTimings.STAGES)
+                assert dispatcher.status()["stage_timings"]["dropped_samples"] == 0
+            finally:
+                if not executing.done():
+                    executing.cancel()
+                await asyncio.gather(executing, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("rejected", ["thread/inject_items", "turn/start"])
+def test_rejected_rpc_does_not_count_a_successful_turn(tmp_path, bundle, monkeypatch, rejected):
+    async def scenario():
+        server = MockServer(peer_threads=True, strict_peer_lifecycle=True)
+        server.reject_method = rejected
+        async with durable_request(tmp_path, bundle, server) as (_inbox, job, dispatcher, clock):
+            request = wake.AppServer.request
+
+            async def delayed_request(app, method, *args, **kwargs):
+                if method == rejected:
+                    clock.advance(3)
+                return await request(app, method, *args, **kwargs)
+
+            monkeypatch.setattr(wake.AppServer, "request", delayed_request)
+            await asyncio.wait_for(dispatcher._execute(job), 3)
+            cells = dispatcher.status()["stage_timings"]["new"]
+            instruction_rejected = rejected == "thread/inject_items"
+            assert cells["instruction_delivery"]["returned"] == (0 if instruction_rejected else 1)
+            assert cells["instruction_delivery"]["raised"] == (1 if instruction_rejected else 0)
+            for stage in ("turn_start", "turn_execution"):
+                cell = cells[stage]
+                assert cell["returned"] == cell["in_flight"] == 0
+                assert cell["raised"] == (0 if instruction_rejected else 1)
+                assert cell["sum_seconds"] == (None if instruction_rejected else 3)
+
     asyncio.run(scenario())
 
 
@@ -489,9 +605,13 @@ def test_full_status_roundtrip_stays_private_and_within_existing_reader_limit(tm
     async def scenario():
         with claimed_request(tmp_path, monkeypatch) as (_inbox, _job, app, dispatcher):
             clock = Clock()
-            timings = dispatcher._stage_timings = wake._StageTimings(clock)
-            for mode in timings.MODES:
-                for stage in timings.STAGES:
+            timings = dispatcher._stage_timings = wake._wake_stage_timings(clock)
+            expected = {
+                "new": {*timings.STAGES, "instruction_delivery", "turn_start", "turn_execution"},
+                "recovery": set(timings.STAGES),
+            }
+            for mode, stages in expected.items():
+                for stage in stages:
                     with timings.measure(mode, stage, unsettled=(lambda: True) if stage == "finish_request" else None):
                         clock.advance(1200)
                     # Fill all fixed cells with realistic large aggregates, not billions of test awaits.
@@ -525,8 +645,8 @@ def test_full_status_roundtrip_stays_private_and_within_existing_reader_limit(tm
             assert snapshot == timings.snapshot()
             assert set(snapshot) == {"scope", "observed_seconds", "dropped_samples", "new", "recovery"}
             assert snapshot["scope"] == "process"
-            for mode in timings.MODES:
-                assert set(snapshot[mode]) == set(timings.STAGES)
+            for mode, stages in expected.items():
+                assert set(snapshot[mode]) == stages
                 for stage, cell in snapshot[mode].items():
                     keys = {"count", "sum_seconds", "max_seconds", "returned", "raised", "cancelled", "in_flight"}
                     assert set(cell) == keys | ({"unsettled"} if stage == "finish_request" else set())
