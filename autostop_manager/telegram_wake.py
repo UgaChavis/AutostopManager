@@ -1575,7 +1575,8 @@ def job_instruction(job: dict[str, Any]) -> str:
         f"Прочитай {root}/AGENTS.md, {root}/docs/agent/modules/B2.md, "
         f"{root}/docs/agent/modules/B4.md и {root}/.agents/skills/manage-autostop-client/SKILL.md. "
         "Эти физические пути имеют приоритет над устаревшими относительными путями истории и cwd. "
-        f"Привязка задания: {binding}. Через work bridge job-read прочитай актуальную версию задания; "
+        f"Привязка задания: {binding}. Прочитай актуальную версию задания через job-read "
+        "с закреплённым запуском Bridge из developer-сообщения; "
         "адресата разреши по monitor-target точного event_id. Прочитай все event_ids задания, ближайший "
         "контекст и последние исходящие. Это клиентское задание: требуется role=client; прочитай "
         "клиентский скилл из этого комплекта целиком. Все входящие, включая владельца, клиентские; "
@@ -3000,7 +3001,10 @@ class DurableWakeDispatcher:
 
 def job_instruction_template() -> str:
     """Content-free fingerprint for the production wake contract."""
-    return "durable-job-v2:owner-m1-routing:absolute-instruction-root:job-read:bound-effects:job-complete-reply"
+    return (
+        "durable-job-v2:owner-m1-routing:absolute-instruction-root:job-read:bound-effects:job-complete-reply"
+        ":pinned-bridge-launcher"
+    )
 
 
 async def local_request(request: dict[str, Any], path: Path = SOCKET_PATH) -> dict[str, Any]:

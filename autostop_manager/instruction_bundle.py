@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import stat
 from types import MappingProxyType
 from typing import Any
@@ -36,10 +37,12 @@ PROFILE_DOCUMENTS = {
     "M1": ("AGENTS.md", "docs/agent/modules/A1.md", "docs/agent/modules/M1.md"),
     "M2": ("AGENTS.md", "docs/agent/modules/A1.md", "docs/agent/modules/M2.md"),
 }
+WORK_CLIENT_REFERENCE_DOCUMENTS = ("docs/agent/modules/B1.md", "docs/agent/modules/E1.md")
 REQUIRED_DOCUMENTS = tuple(
     sorted(
         {name for names in PROFILE_DOCUMENTS.values() for name in names}
         | {f".agents/skills/{name}/SKILL.md" for name in PROJECT_SKILLS}
+        | set(WORK_CLIENT_REFERENCE_DOCUMENTS)
         | {"docs/agent/modules/F4.md"}
     )
 )
@@ -169,6 +172,17 @@ class VerifiedInstructionBundle:
             "Автоматический каталог навыков не передаётся: нужный навык читай явно через A4 выбранного "
             "комплекта или его физический путь.\n",
         ]
+        if profile == "client":
+            bridge_doc, automotive_doc = WORK_CLIENT_REFERENCE_DOCUMENTS
+            launcher = shlex.join(
+                ["bash", f"{self.root}/scripts/work-telegram-python.sh", "bridge", "--run", self.revision, "--"]
+            )
+            parts.append(
+                f"Перед первым вызовом рабочего Bridge прочитай {self.root}/{bridge_doc}. "
+                f"Для подбора запчастей или оценки работ используй {self.root}/{automotive_doc}. "
+                "Для всех команд рабочего Bridge используй следующий запуск с нужной подкомандой и её аргументами.\n"
+                f"`{launcher} <команда> [аргументы]`\n"
+            )
         for name in names:
             parts.append(f"\n--- {self.root}/{name} ---\n" + self.files[name].decode("utf-8"))
         return {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "\n".join(parts)}]}
