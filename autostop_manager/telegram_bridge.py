@@ -4573,6 +4573,8 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
     if operation.startswith("job_") or operation == "duty_set":
         if not isinstance(inbound_monitor, DurableInboundMonitor):
             raise BridgeError("durable_inbox_disabled")
+        if operation == "job_complete_reply":
+            return await _handle_job_complete_reply(client, config, request, inbound_monitor)
         return await _handle_job_operation(client, config, request, inbound_monitor)
     if operation == "probe":
         me = await client.get_me()
@@ -5157,7 +5159,12 @@ async def _verify_job_effect_message(
 
 
 async def _handle_job_effect_readback(
-    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    monitor: DurableInboundMonitor,
+    *,
+    verified_text_result: bool = False,
 ) -> dict[str, Any]:
     arguments = _job_arguments(request)
     job = monitor.inbox.read_job(arguments["job_id"])
@@ -5188,6 +5195,17 @@ async def _handle_job_effect_readback(
         raise BridgeError("job_effect_ledger_required")
     peer_id, reply_to = _job_effect_ledger_target(config, job, effect, entry)
     message_id = _job_effect_readback_message_id(request, effect, entry)
+    if verified_text_result:
+        if (
+            effect["kind"] != "result"
+            or not effect["verified"]
+            or effect["sent_message_id"] != message_id
+            or entry.get("operation") != "send_text"
+            or entry.get("readback_verified") is not True
+        ):
+            raise BridgeError("job_complete_reply_receipt_invalid")
+        if effect["context_revision"] != job["context_revision"]:
+            raise InboxError("inbox_context_stale")
     try:
         message = await client.get_messages(peer_id, ids=message_id)
         await _verify_job_effect_message(
@@ -5195,10 +5213,16 @@ async def _handle_job_effect_readback(
         )
     except Exception as exc:  # Readback failure preserves the original unknown effect.
         raise BridgeError("job_effect_readback_failed") from exc
-    _persist_delivery(ledger_path, expected_key, entry, message_id=message_id, verified=True)
-    monitor.inbox.verify_effect(effect_key=expected_key, receipt_key=expected_key, message_id=message_id)
-    monitor.reconcile_outgoing(job["peer_id"])
-    monitor.changed()
+    if verified_text_result:
+        # This receipt was already durable. Recheck its exact entry after the
+        # Telegram await without rewriting the native or SQLite ledgers.
+        if _load_idempotency(ledger_path).get(expected_key) != entry:
+            raise BridgeError("job_effect_ledger_conflict")
+    else:
+        _persist_delivery(ledger_path, expected_key, entry, message_id=message_id, verified=True)
+        monitor.inbox.verify_effect(effect_key=expected_key, receipt_key=expected_key, message_id=message_id)
+        monitor.reconcile_outgoing(job["peer_id"])
+        monitor.changed()
     return {
         "ok": True,
         "verified": True,
@@ -5208,6 +5232,55 @@ async def _handle_job_effect_readback(
         "message_id": message_id,
         "replayed": bool(effect["verified"]),
     }
+
+
+def _require_single_reply_attempt(job: dict[str, Any], receipt_key: Any) -> None:
+    keys = [effect["effect_key"] for effect in job["effects"] if effect["attempted"] and effect["kind"] != "ack"]
+    if keys != [receipt_key]:
+        raise BridgeError("job_complete_reply_receipt_invalid")
+
+
+async def _handle_job_complete_reply(
+    client: Any, config: TelegramConfig, request: dict[str, Any], monitor: DurableInboundMonitor
+) -> dict[str, Any]:
+    """Verify an ordinary text receipt once more and commit the existing answered outcome."""
+    inbox = monitor.inbox
+    job = inbox.read_job(str(request.get("job_id") or ""))
+    arguments = _job_arguments(request | {"expected_revision": job["revision"]})
+    authority = inbox.execution_authority(**arguments)
+    if authority["manual_recovery"]:
+        raise InboxError("inbox_effect_state_invalid")
+    inbox.require_current_context(job["job_id"])
+    _require_native_outcome_known(monitor, job["peer_id"])
+    receipt_key = request.get("receipt_key")
+    _require_single_reply_attempt(job, receipt_key)
+    proof = await _handle_job_effect_readback(
+        client,
+        config,
+        arguments | {"effect_key": receipt_key},
+        monitor,
+        verified_text_result=True,
+    )
+
+    # Reading Telegram yields control. Changes to the job, its input or
+    # execution authority must stop the completion, even with a valid receipt.
+    inbox.check_execution_authority(authority)
+    job = inbox.read_job(job["job_id"])
+    _require_single_reply_attempt(job, receipt_key)
+    result = await _handle_job_operation(
+        client,
+        config,
+        arguments
+        | {
+            "operation": "job_result",
+            "expected_revision": job["revision"],
+            "outcome": "answered",
+            "event_ids": job["event_ids"],
+            "receipt_keys": [proof["receipt_key"]],
+        },
+        monitor,
+    )
+    return result | {"receipt_key": proof["receipt_key"], "message_id": proof["message_id"]}
 
 
 def _job_execution_control(request: dict[str, Any], monitor: DurableInboundMonitor) -> dict[str, Any] | None:
@@ -6811,6 +6884,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--state", choices=["running", "ready", "waiting_thread", "held", "paused", "offline"], required=True
     )
     health.add_argument("--error-code", default=None)
+    complete_reply = subparsers.add_parser("job-complete-reply")
+    complete_reply.add_argument("--job-id", required=True)
+    complete_reply.add_argument("--lease", required=True)
+    complete_reply.add_argument("--receipt-key", required=True)
     for command in (
         "job-start-intent",
         "job-turn-bound",
@@ -7053,7 +7130,9 @@ def _job_cli_request(args: Any) -> dict[str, Any]:
             request[name] = getattr(args, name)
     if hasattr(args, "event_id"):
         request["event_ids"] = args.event_id
-    if hasattr(args, "receipt_key"):
+    if args.command == "job-complete-reply":
+        request["receipt_key"] = args.receipt_key
+    elif hasattr(args, "receipt_key"):
         request["receipt_keys"] = args.receipt_key
     if hasattr(args, "human_message_id"):
         request["human_message_ids"] = args.human_message_id
