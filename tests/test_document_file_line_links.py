@@ -94,7 +94,7 @@ def test_generated_catalog_follows_unseeded_file_line_references(tmp_path: Path)
     write_document(project / "docs/agent/references/runbook.md", "# Runbook\n\n[Schema](schema.json:1)\n" + "\n" * 9)
     write_document(project / "docs/agent/references/schema.json", '{"synthetic": true}\n')
 
-    _, instructions, summary = catalogs.build_catalogs(project, tmp_path / "empty-codex", "2026-10-05")
+    _, instructions, summary = catalogs.build_catalogs(project, day="2026-10-05")
 
     assert summary["project_paths"] == [
         "AGENTS.md",
@@ -112,7 +112,7 @@ def test_generated_catalog_reports_missing_unseeded_file_line_reference(tmp_path
     write_document(project / "docs/agent/references/index.md", "# Index\n\n[Missing](missing.md:12)\n")
 
     with pytest.raises(ValueError, match="Missing or outside-project instruction"):
-        catalogs.build_catalogs(project, tmp_path / "empty-codex", "2026-10-05")
+        catalogs.build_catalogs(project, day="2026-10-05")
 
 
 @pytest.mark.parametrize("prefix", ["", "./"])
@@ -138,7 +138,7 @@ def test_generated_catalog_rejects_invalid_numeric_reference(tmp_path: Path, pre
     write_document(project / "docs/agent/references/runbook.md", "# Runbook\n")
 
     with pytest.raises(ValueError, match="document_link_line_invalid"):
-        catalogs.build_catalogs(project, tmp_path / "empty-codex", "2026-10-05")
+        catalogs.build_catalogs(project, day="2026-10-05")
 
 
 @pytest.mark.parametrize("suffix", [".json", ".py", ".toml", ".txt", ".sh", ".PY"])
@@ -187,7 +187,7 @@ def test_generated_catalog_does_not_follow_external_uris_or_authorities(tmp_path
     write_document(project / "custom.scheme", "synthetic collision\n")
     write_document(project / "runbook.md", "# Authority path collision\n")
 
-    _, instructions, summary = catalogs.build_catalogs(project, tmp_path / "empty-codex", "2026-10-05")
+    _, instructions, summary = catalogs.build_catalogs(project, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md"]
     assert "../../../runbook.md" not in instructions
@@ -223,7 +223,7 @@ def test_audit_and_catalog_validate_unicode_duplicate_heading_destinations(navig
     write_document(module.parent / "guide.md", content)
     module.write_text(module.read_text() + "\n" + content + f"\n[Section]({destination})\n")
     assert diagnostics.audit_documentation(navigation_project, check_external_links=False)["ok"]
-    assert catalogs.build_catalogs(navigation_project, navigation_project / "missing-codex")[2]["project_paths"]
+    assert catalogs.build_catalogs(navigation_project)[2]["project_paths"]
 
 
 @pytest.mark.parametrize("destination", ["#missing", "guide.md#missing", "guide.md:1#missing", "guide.md#fake-heading"])
@@ -236,7 +236,7 @@ def test_audit_and_catalog_reject_missing_or_literal_heading_destinations(naviga
     assert not report["ok"]
     assert f"document_link_invalid:{module_name}" in report["warnings"]
     with pytest.raises(ValueError, match="document_link_anchor_missing"):
-        catalogs.build_catalogs(navigation_project, navigation_project / "missing-codex")
+        catalogs.build_catalogs(navigation_project)
 
 
 @pytest.mark.parametrize("suffix", [".md", ".py", ".json"])
@@ -253,7 +253,7 @@ def test_line_references_accept_the_last_line_and_reject_past_eof(navigation_pro
     assert not report["ok"]
     assert f"document_link_invalid:{module_name}" in report["warnings"]
     with pytest.raises(ValueError, match="document_link_line_out_of_range"):
-        catalogs.build_catalogs(navigation_project, navigation_project / "missing-codex")
+        catalogs.build_catalogs(navigation_project)
 
 
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85", "\v", "\f", "\x1c", "\x1d", "\x1e"])

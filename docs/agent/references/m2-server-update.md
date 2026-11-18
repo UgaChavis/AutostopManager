@@ -56,11 +56,11 @@ push не дублирует этот набор. Полный локальны�
 registrar и guarded ledger; они не входят в native Manager MCP.
 
 CI и source release gates используют `scripts/update-instruction-catalogs.py --check --project-only`:
-проектная часть A4/A5 проверяется без локального кеша плагинов Codex. Source doctor также
+A4 и A5 целиком проверяются без локального кеша плагинов Codex. Source doctor также
 использует `--project-only`. На целевом хосте отдельно запусти полный `doctor` и
-`update-instruction-catalogs.py --check`, сверяющие установленные выбранные навыки
-и host environment до выпуска. Эти проверки читают;
-обновление каталогов без флагов выполняется до публикации исходников.
+`update-instruction-catalogs.py --check`. Полная проверка каталогов также читает выбранные
+внешние навыки хоста и проверяет однозначность их имён. Обновление A4 и A5 без флагов
+использует файлы проекта и выполняется до публикации исходников.
 
 Для установленного клиентского пути отдельно выполни `doctor --instruction-sources`:
 `raw_project_skill_differences` и `raw_project_skill_unverified` должны быть пусты;

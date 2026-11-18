@@ -1,8 +1,9 @@
-"""Index canonical project documents and selected skill entrypoints only."""
+"""Index project instructions and discover the host's selected external skills."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import date, datetime, UTC
 import json
 from pathlib import Path
@@ -24,7 +25,6 @@ from autostop_manager.instruction_inventory import (  # noqa: E402
     read_instruction_bytes,
     require_instruction_inventory,
 )
-from autostop_manager.markdown_links import markdown_section_body  # noqa: E402
 
 CODEX = Path("/root/.codex")
 AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
@@ -53,14 +53,6 @@ def link(label, path, project):
     if " " in target:
         target = "<" + target + ">"
     return "[" + cell(label).replace("[", "(").replace("]", ")") + "](" + target + ")"
-
-
-def code(value):
-    value = cell(value)
-    delimiter = "`" * (max((len(match.group()) for match in re.finditer(r"`+", value)), default=0) + 1)
-    if value.startswith("`") or value.endswith("`"):
-        return delimiter + " " + value + " " + delimiter
-    return delimiter + value + delimiter
 
 
 class SkillMetadataError(ValueError):
@@ -244,47 +236,41 @@ def project_skill_entries(project):
     return result
 
 
-def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False):
+def build_catalogs(project=PROJECT, day=None):
     project = project.resolve()
     day = day or datetime.now(UTC).strftime("%Y-%m-%d")
-    skills = project_skill_entries(project) if project_only else selected_skills(project, codex)
+    skills = project_skill_entries(project)
     inventory = collect_instruction_inventory(project)
     project_paths = require_instruction_inventory(inventory)
-    external = [s for s in skills if not s["path"].is_relative_to(project)]
-    documents = len(project_paths) + len(external)
     a4 = [
         "# A4 — Каталог действующих навыков",
         "",
         "Выбери навык по задаче и прочитай его актуальный SKILL.md. Клиентское поведение целиком задаёт manage-autostop-client после выбора роли через B2; технические операции, источники, ценовая политика и проверки остаются в модулях. Параметры инструментов проверяй в текущей схеме.",
         "",
-        f"Срез: {day}. Проектные навыки и имена выбранных внешних навыков. Их назначение и доступность проверяй в актуальном каталоге сеанса.",
+        f"Срез: {day}. Проектные навыки AutoStop Manager.",
         "",
-        'Внешние и системные имена ниже — срез, не физические пути. Сначала используй актуальный каталог навыков сеанса; при его отсутствии задай проверенные `runtime_python` и физический `instruction_root` выбранного комплекта и выполни read-only поиск: `"${runtime_python:?}" "${instruction_root:?}/scripts/update-instruction-catalogs.py" --list-external-skills`. Для поиска одного навыка добавь его точное имя. Выбор на хосте ограничен PACKAGES и config, не подтверждает права чата или доступность коннектора; отключение не обходи. При ошибке или неоднозначности не выбирай старую версию.',
+        'Внешние и системные навыки ищи в каталоге текущего сеанса. Если каталог недоступен, задай проверенные `runtime_python` и физический `instruction_root` выбранного комплекта. Команда `"${runtime_python:?}" "${instruction_root:?}/scripts/update-instruction-catalogs.py" --list-external-skills` прочитает выбранные навыки хоста. Чтобы найти один навык, добавь его точное имя. Поиск учитывает список поддерживаемых пакетов и настройки Codex. Права чата и доступность коннектора проверяй в текущем сеансе.',
         "",
         "Общие правила, профильные навыки и технические справочники проекта — в [A5](A5.md); порядок работы ролей — в [M1](M1.md) и [M2](M2.md).",
         "",
+        "## AutoStop Manager",
+        "",
+        "| Навык | Назначение |",
+        "| --- | --- |",
     ]
-    for group in dict.fromkeys(s["group"] for s in skills):
-        project_group = group == "AutoStop Manager"
-        a4.extend(
-            ["## " + group, "", "| Навык | Назначение |", "| --- | --- |"]
-            if project_group
-            else ["## " + group, "", "| Навык |", "| --- |"]
-        )
-        for s in (s for s in skills if s["group"] == group):
-            name = link(s["name"], s["path"], project) if project_group else code(s["name"])
-            a4.append("| " + name + (" | " + cell(s["description"]) if project_group else "") + " |")
-        a4.append("")
+    for skill in skills:
+        name = link(skill["name"], skill["path"], project)
+        a4.append(f"| {name} | {cell(skill['description'])} |")
     a5 = [
         "# A5 — Указатель действующих инструкций",
         "",
         "Открой профильный навык, модуль или технический справочник по задаче. Полный текст каждой проектной инструкции хранится в одном исходном файле; клиентское поведение — в manage-autostop-client, выбранном через B2. Навыки выбираются через [A4](A4.md).",
         "",
-        f"Срез: {day}. Канонические материалы AutoStop Manager и выбранные входы во внешние и системные навыки Codex.",
+        f"Срез: {day}. Инструкции AutoStop Manager.",
         "",
-        "Область проекта: AGENTS.md, актуальные модули, проектные SKILL.md и явно связанные материалы. Внешние и системные имена — срез, не физические пути: приоритет у актуального каталога навыков сеанса; read-only host fallback и его ограничения описаны в [A4](A4.md). Исторические инструкции, отчёты, архивы и весь кеш плагинов не включаются рекурсивно. Журналы M2 находятся вне Git; вход — через [M2](M2.md).",
+        "В указатель входят AGENTS.md, модули, проектные SKILL.md и связанные с ними материалы. Порядок поиска внешних и системных навыков описан в [A4](A4.md). Журналы M2 доступны через [M2](M2.md).",
         "",
-        "Обновление: `python scripts/update-instruction-catalogs.py`. Проверка без записи на хосте: `python scripts/update-instruction-catalogs.py --check`; переносимая проверка проектной части: `python scripts/update-instruction-catalogs.py --check --project-only`. При нескольких версиях выбранного пакета сначала установи текущую версию; доступность действий проверяй по инструментам сеанса.",
+        "Обнови указатель командой `python scripts/update-instruction-catalogs.py`. Для проверки файлов проекта используй `python scripts/update-instruction-catalogs.py --check --project-only`. Команда `python scripts/update-instruction-catalogs.py --check` также проверяет, что выбранные внешние навыки хоста доступны для поиска. Обе проверки выполняются без записи.",
         "",
         "## AutoStop Manager",
         "",
@@ -298,15 +284,9 @@ def build_catalogs(project=PROJECT, codex=CODEX, day=None, *, project_only=False
     for path in project_paths:
         document_title = generated_titles[path] if path in generated_titles else title(path, inventory.contents[path])
         a5.append("| " + link(str(path.relative_to(project)), path, project) + " | " + cell(document_title) + " |")
-    a5.extend(["", "## Внешние и системные навыки Codex", "", "| Пакет | Вход |", "| --- | --- |"])
-    for s in external:
-        a5.append("| " + s["group"] + " | " + code(s["name"]) + " |")
-    a5.append("")
     summary = {
-        "skills": len(skills),
-        "documents": documents,
+        "project_skills": len(skills),
         "project_documents": len(project_paths),
-        "codex_documents": len(external),
         "project_paths": [str(p.relative_to(project)) for p in project_paths],
     }
     return "\n".join(a4).rstrip() + "\n", "\n".join(a5).rstrip() + "\n", summary
@@ -330,10 +310,10 @@ def checked_catalog_day(project):
 
 
 def check_project_catalogs(project=PROJECT):
-    """Check repository coverage and generated project sections without Codex IO."""
+    """Check repository coverage and both generated catalogs without Codex IO."""
     project = project.resolve()
     day = checked_catalog_day(project)
-    a4, a5, summary = build_catalogs(project, day=day, project_only=True)
+    a4, a5, summary = build_catalogs(project, day=day)
     expected_paths = {project / name for name in summary["project_paths"]}
     candidates = active_instruction_candidates(project)
     orphaned = sorted(
@@ -342,12 +322,7 @@ def check_project_catalogs(project=PROJECT):
     mismatches = []
     for name, expected in (("A4.md", a4), ("A5.md", a5)):
         path = project / "docs/agent/modules" / name
-        if not path.is_file():
-            mismatches.append(name)
-            continue
-        actual = read_instruction_bytes(path).decode("utf-8")
-        actual_section = markdown_section_body(actual, "AutoStop Manager")
-        if actual_section != markdown_section_body(expected, "AutoStop Manager"):
+        if not path.is_file() or read_instruction_bytes(path).decode("utf-8") != expected:
             mismatches.append(name)
     if day is None:
         mismatches.extend(["A4.md", "A5.md"])
@@ -355,7 +330,8 @@ def check_project_catalogs(project=PROJECT):
         "ok": not mismatches and not orphaned,
         "project_only": True,
         "project_documents": summary["project_documents"],
-        "project_skills": summary["skills"],
+        "project_skills": summary["project_skills"],
+        "project_paths": summary["project_paths"],
         "active_document_candidates": len(candidates),
         "orphaned_active_documents": orphaned[:64],
         "orphaned_active_document_count": len(orphaned),
@@ -367,7 +343,7 @@ def check_project_catalogs(project=PROJECT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--check", action="store_true", help="Compare catalogs without changing files")
+    mode.add_argument("--check", action="store_true", help="Check catalogs and host skill discovery without writing")
     mode.add_argument(
         "--list-external-skills",
         nargs="?",
@@ -377,7 +353,7 @@ def main():
         help="List selected host system/external skills, optionally by exact name, without writing files",
     )
     parser.add_argument(
-        "--project-only", action="store_true", help="Check repository sections without host Codex files"
+        "--project-only", action="store_true", help="Check both project catalogs without host Codex files"
     )
     args = parser.parse_args()
     if args.list_external_skills is not None:
@@ -411,29 +387,33 @@ def main():
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    if args.project_only:
-        if not args.check:
-            parser.error("--project-only requires --check; host catalogs must not be overwritten")
+    if args.project_only and not args.check:
+        parser.error("--project-only requires --check")
+    if args.check:
         summary = check_project_catalogs(PROJECT)
+        if args.project_only:
+            summary.pop("project_paths")
+        else:
+            external = [skill for skill in selected_skills(PROJECT, CODEX) if skill["group"] != "AutoStop Manager"]
+            counts = Counter(skill["name"] for skill in external)
+            ambiguous = sorted(name for name, count in counts.items() if count > 1)
+            summary.update(
+                ok=summary["ok"] and not ambiguous,
+                project_only=False,
+                external_skills_checked=True,
+                codex_documents=len(external),
+                skills=summary["project_skills"] + len(external),
+                documents=summary["project_documents"] + len(external),
+                ambiguous_external_skills=ambiguous,
+            )
         print(json.dumps(summary, ensure_ascii=False))
         return int(not summary["ok"])
-    # A read-only check compares content at the recorded cutoff; tomorrow's
-    # date alone does not make an unchanged inventory stale.
-    day = checked_catalog_day(PROJECT) if args.check else None
-    a4, a5, summary = build_catalogs(PROJECT, CODEX, day)
-    mismatches = []
+    a4, a5, summary = build_catalogs(PROJECT)
     for name, text in [("A4.md", a4), ("A5.md", a5)]:
         path = PROJECT / "docs/agent/modules" / name
-        if args.check:
-            if not path.is_file() or path.read_text(encoding="utf-8") != text:
-                mismatches.append(name)
-        else:
-            path.write_text(text, encoding="utf-8")
-    if args.check:
-        summary["ok"] = not mismatches
-        summary["mismatches"] = mismatches
+        path.write_text(text, encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False))
-    return int(bool(mismatches))
+    return 0
 
 
 if __name__ == "__main__":
