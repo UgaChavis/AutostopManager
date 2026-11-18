@@ -92,28 +92,16 @@ def test_catalogs_do_not_import_or_recursively_index_retired_packages(tmp_path):
     )
     before = (project / "docs/agent/modules/A5.md").read_text()
 
-    a4, a5, counts = catalogs.build_catalogs(project, codex, "2026-10-01")
+    a4, a5, counts = catalogs.build_catalogs(project, day="2026-10-01")
 
-    assert len(counts["project_paths"]) == 8
-    assert counts["skills"] == 13  # project + system + eleven enabled selected packages
-    assert counts["documents"] == 20
-    assert counts["codex_documents"] == 12
+    assert counts["project_documents"] == len(counts["project_paths"]) == 8
+    assert counts["project_skills"] == 1
     assert "M1.md" in a5 and "M2.md" in a5
     assert retired.relative_to(project).as_posix() not in a5
     assert (project / "docs/agent/modules/A5.md").read_text() == before
-    assert all(
-        name not in a4 + a5
-        for name in (
-            "sales/",
-            "pages/",
-            "work-pets/",
-            "openai-templates/",
-            "figma/",
-            "nested/",
-            "references/old.md",
-            "github:index",
-        )
-    )
+    host_skills = {"core", *(package + ":index" for package in catalogs.PACKAGES if package != "github")}
+    assert {entry["name"] for entry in catalogs.selected_skills(project, codex)} == {"project", *host_skills}
+    assert all(f"`{name}`" not in a4 + a5 for name in host_skills)
 
 
 def test_catalogs_refuse_linked_retired_or_missing_instructions(tmp_path):
@@ -151,11 +139,11 @@ def test_catalogs_refuse_linked_retired_or_missing_instructions(tmp_path):
     ],
 )
 def test_catalogs_follow_visible_navigation_and_ignore_documentation_literals(tmp_path, example):
-    project, codex = tmp_path / "project", tmp_path / "codex"
+    project = tmp_path / "project"
     write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)\n" + example)
     write(project / "docs/agent/modules/A1.md", "# A1")
 
-    _, a5, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+    _, a5, summary = catalogs.build_catalogs(project, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/agent/modules/A1.md"]
     assert "docs/missing.md" not in a5
@@ -163,7 +151,7 @@ def test_catalogs_follow_visible_navigation_and_ignore_documentation_literals(tm
 
 @pytest.mark.parametrize("usage", ["[Guide][Current Guide]", "[current guide][]", "[CURRENT GUIDE]"])
 def test_catalogs_index_used_reference_targets_and_leave_unused_documents_out(tmp_path, usage):
-    project, codex = tmp_path / "project", tmp_path / "codex"
+    project = tmp_path / "project"
     write(project / "AGENTS.md", "[A1](docs/agent/modules/A1.md)")
     write(
         project / "docs/agent/modules/A1.md",
@@ -175,7 +163,7 @@ def test_catalogs_index_used_reference_targets_and_leave_unused_documents_out(tm
     write(project / "docs/agent/references/Live Guide.md", "# Current guide")
     write(project / "docs/agent/references/unused.md", "# Unused guide")
 
-    _, a5, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+    _, a5, summary = catalogs.build_catalogs(project, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/agent/modules/A1.md", "docs/agent/references/Live Guide.md"]
     assert "Live Guide.md" in a5 and "unused.md" not in a5
@@ -188,7 +176,7 @@ def test_catalogs_follow_visible_links_in_separate_paragraphs_between_unmatched_
     write(tmp_path / "AGENTS.md", "` unmatched" + separator + "[Guide](docs/live.md)" + separator + "trailing `\n")
     write(tmp_path / "docs/live.md", "# Guide")
 
-    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+    _, _, summary = catalogs.build_catalogs(tmp_path, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
 
@@ -205,7 +193,7 @@ def test_catalogs_follow_visible_links_in_separate_paragraphs_between_unmatched_
 def test_catalogs_ignore_code_in_container_fences(tmp_path, container):
     write(tmp_path / "AGENTS.md", "# Project\n" + container)
 
-    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+    _, _, summary = catalogs.build_catalogs(tmp_path, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md"]
 
@@ -228,7 +216,7 @@ def test_catalogs_follow_real_links_with_contextual_markdown_syntax(tmp_path, na
     write(tmp_path / "AGENTS.md", navigation)
     write(tmp_path / "docs/live.md", "# Guide")
 
-    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+    _, _, summary = catalogs.build_catalogs(tmp_path, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
 
@@ -237,7 +225,7 @@ def test_catalogs_reject_a_missing_target_of_a_used_reference_link(tmp_path):
     write(tmp_path / "AGENTS.md", "[Guide][required]\n\n[required]: missing.md")
 
     with pytest.raises(ValueError, match="Missing"):
-        catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+        catalogs.build_catalogs(tmp_path, day="2026-10-05")
 
 
 @pytest.mark.parametrize(
@@ -249,11 +237,11 @@ def test_catalogs_reject_a_missing_target_of_a_used_reference_link(tmp_path):
     ],
 )
 def test_catalogs_preserve_real_destinations_with_parentheses(tmp_path, navigation):
-    project, codex = tmp_path / "project", tmp_path / "codex"
+    project = tmp_path / "project"
     write(project / "AGENTS.md", navigation)
     write(project / "docs/Guide(one).md", "# Guide")
 
-    _, _, summary = catalogs.build_catalogs(project, codex, "2026-10-05")
+    _, _, summary = catalogs.build_catalogs(project, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/Guide(one).md"]
 
@@ -262,7 +250,7 @@ def test_catalogs_use_the_first_reference_definition_without_following_shadowed_
     write(tmp_path / "AGENTS.md", "[Guide][current]\n\n[current]: docs/live.md\n[current]: missing.md")
     write(tmp_path / "docs/live.md", "# Guide")
 
-    _, _, summary = catalogs.build_catalogs(tmp_path, tmp_path / "codex", "2026-10-05")
+    _, _, summary = catalogs.build_catalogs(tmp_path, day="2026-10-05")
 
     assert summary["project_paths"] == ["AGENTS.md", "docs/live.md"]
 
@@ -601,10 +589,10 @@ def test_external_skills_follow_installed_version_without_changing_catalog(tmp_p
     project_skill = skill(project / ".agents/skills/project/SKILL.md", "project")
     version_one = installed_package(codex, "github", version="1")
     first = skill(version_one / "skills/current/SKILL.md", "current")
-    a4_before, a5_before, _ = catalogs.build_catalogs(project, codex, "2026-11-09")
+    a4_before, a5_before, _ = catalogs.build_catalogs(project, day="2026-11-09")
 
     for catalog in (a4_before, a5_before):
-        assert "github:current" in catalog
+        assert "github:current" not in catalog
         assert str(first) not in catalog
         assert str(version_one) not in catalog
     assert "[project](../../../.agents/skills/project/SKILL.md)" in a4_before
@@ -621,7 +609,7 @@ def test_external_skills_follow_installed_version_without_changing_catalog(tmp_p
     shutil.rmtree(version_one)
     version_two = installed_package(codex, "github", version="2")
     second = skill(version_two / "skills/current/SKILL.md", "current")
-    a4_after, a5_after, _ = catalogs.build_catalogs(project, codex, "2026-11-09")
+    a4_after, a5_after, _ = catalogs.build_catalogs(project, day="2026-11-09")
     assert (a4_after, a5_after) == (a4_before, a5_before)
     code, output = _list_external_skills(monkeypatch, capsys, project, codex, "github:current")
     assert code == 0 and output["ok"] is True
@@ -841,7 +829,7 @@ def test_catalog_check_preserves_recorded_date_after_day_or_year_rollover(tmp_pa
     write(project / "AGENTS.md", "# AutoStop")
     for name in ("A4.md", "A5.md"):
         write(project / "docs/agent/modules" / name, "# Initial")
-    a4, a5, _ = catalogs.build_catalogs(project, codex, "2026-12-31")
+    a4, a5, _ = catalogs.build_catalogs(project, day="2026-12-31")
     write(project / "docs/agent/modules/A4.md", a4)
     write(project / "docs/agent/modules/A5.md", a5)
     monkeypatch.setattr(catalogs, "PROJECT", project)
