@@ -71,6 +71,14 @@ def _install(monkeypatch, *, outcome="identifier_mismatch", source_fields=None, 
         if failed:
             return response
         if operation == "vin_decode":
+            if outcome == "provider_busy" and not dry:
+                return {
+                    **response,
+                    "ok": False,
+                    "outcome": "provider_busy",
+                    "failure_class": "provider_busy",
+                    "execution": {"network_calls": 0},
+                }
             response.update(
                 ok=outcome != "identifier_mismatch",
                 outcome=outcome,
@@ -247,9 +255,17 @@ def test_fallback_outage_is_provider_failure_not_absent_vehicle(monkeypatch, sta
     assert result["article_candidates"] == []
 
 
-@pytest.mark.parametrize("resolve_oem", [False, True])
-def test_benchmark_and_resolver_share_fallback_without_redecoding(monkeypatch, resolve_oem):
-    calls = _install(monkeypatch)
+@pytest.mark.parametrize(
+    ("resolve_oem", "outcome", "live_budget"),
+    [
+        (False, "identifier_mismatch", 4),
+        (True, "identifier_mismatch", 6),
+        (False, "provider_busy", 3),
+        (True, "provider_busy", 5),
+    ],
+)
+def test_benchmark_and_resolver_share_fallback_without_redecoding(monkeypatch, resolve_oem, outcome, live_budget):
+    calls = _install(monkeypatch, outcome=outcome)
     result = vin_parts_benchmark.benchmark_vin_parts_lookup(
         [{"identifier": VIN, "crm_context": FACTS, "vehicle_type": "PC"}],
         requested_part="передние колодки",
@@ -257,13 +273,18 @@ def test_benchmark_and_resolver_share_fallback_without_redecoding(monkeypatch, r
         live_partsapi_identity=True,
         live_partsapi_oem=True,
         resolve_oem=resolve_oem,
-        max_live_calls=6,
+        max_live_calls=live_budget,
     )
     row = result["items"][0]
     selection = row["oem_resolution"]["tecdoc_vehicle_fallback"] if resolve_oem else row["tecdoc_vehicle_fallback"]
     assert selection["status"] == "matched"
     assert selection["selected_profile"]["tecdoc_car_id"] == 101
     assert sum(call["operation"] == "vin_decode" and not call["dry_run"] for call in calls) == 1
+    assert any(call["operation"] == "getCars" and not call["dry_run"] for call in calls)
+    assert result["summary"]["partsapi_live_call_count"] == live_budget
+    if resolve_oem:
+        assert any(call["operation"] == "articles" and not call["dry_run"] for call in calls)
+        assert row["oem_resolution"]["article_candidates"]
     assert row["identity"]["ready_for_tecdoc_candidate_lookup"] is True
     assert row["identity"]["ready_for_crm_writeback"] is False
     assert VIN not in json.dumps(result)

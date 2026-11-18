@@ -11,6 +11,7 @@ from .catalog_clients import (
     partsapi_catalog_lookup,
     partsapi_identifier_allows_candidate_lookup,
     partsapi_is_group_reference,
+    partsapi_network_call_count,
 )
 from .parts_intent import normalize_part_intent
 from .tecdoc_vehicle_selection import (
@@ -246,6 +247,7 @@ def _call_digest(call: dict[str, Any]) -> dict[str, Any]:
         "requires_fallback": bool(call.get("requires_fallback")),
         "quota_cost_estimate": call.get("quota_cost_estimate"),
         "attempt_count": call.get("attempt_count"),
+        "network_calls": partsapi_network_call_count(call),
         "max_attempts": call.get("max_attempts"),
         "attempts": call.get("attempts", []),
         "missing_env_names": call.get("missing_env_names") or request_plan.get("missing_env_names") or [],
@@ -1456,9 +1458,8 @@ def _resolve_vin_oem_parts(
             **kwargs,
         )
         call = _partsapi_bound_group_response(call, classification.normalized)
-        # An input/credential rejection did not consume an external request.
         if call_is_live:
-            live_calls_used += max(0, int(call.get("attempt_count") or 0))
+            live_calls_used += partsapi_network_call_count(call)
         calls.append(call)
         return call
 

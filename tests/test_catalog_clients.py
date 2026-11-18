@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 from autostop_manager import catalog_clients as catalog_clients_module
 from autostop_manager import config as manager_config
 from autostop_manager import vin_oem_resolver
+from autostop_manager.catalog_presentation import catalog_execution
 from autostop_manager.partsapi_methods import PARTSAPI_SHOP_METHODS
 from autostop_manager.catalog_clients import (
     PARTSAPI_METHOD_KEY_ENV_NAMES,
@@ -1609,6 +1610,38 @@ def test_partsapi_retry_is_bounded_to_three_attempts(monkeypatch):
     assert result["attempt_count"] == 3
     assert result["max_attempts"] == 3
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    ("reason", "failure_class", "prior_http_requests"),
+    [
+        ("provider_transport_busy", "provider_busy", 0),
+        ("provider_transport_unavailable", "provider_executor_unavailable", 0),
+        ("provider_transport_busy", "provider_busy", 1),
+    ],
+)
+def test_partsapi_local_rejection_does_not_count_as_http_request(
+    monkeypatch, reason, failure_class, prior_http_requests
+):
+    _clear_partsapi_method_env(monkeypatch)
+    _configure_partsapi_test_keys(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+    failures = iter(
+        [HTTPError("https://partsapi.example.test/api", 503, "unavailable", None, None)] * prior_http_requests
+        + [URLError(reason)]
+    )
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise next(failures)
+
+    monkeypatch.setattr(catalog_clients_module, "urlopen", fail_urlopen)
+    monkeypatch.setattr(catalog_clients_module.time, "sleep", lambda _seconds: None)
+    result = partsapi_catalog_lookup(operation="crosses_with_brand", part_number="DEMO", brand="DEMO", max_attempts=3)
+
+    assert result["outcome"] == failure_class
+    assert result["retryable"] is False
+    assert result["attempt_count"] == len(result["attempts"]) == prior_http_requests + 1
+    assert catalog_execution(result, elapsed_ms=0)["execution"]["network_calls"] == prior_http_requests
 
 
 def test_partsapi_5xx_is_not_reported_as_empty_result(monkeypatch):

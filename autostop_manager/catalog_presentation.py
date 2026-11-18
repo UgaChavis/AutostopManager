@@ -70,7 +70,7 @@ def invalid_catalog_detail(detail: Any) -> dict[str, Any] | None:
 
 
 def catalog_execution(payload: dict[str, Any], *, elapsed_ms: float, dry_run: bool = False) -> dict[str, Any]:
-    """Preserve backend accounting; legacy attempt_count counts actual HTTP attempts."""
+    """Preserve backend accounting and use attempt_count for legacy responses."""
     output = dict(payload)
     execution = dict(payload.get("execution") or {})
     processing = dict(payload.get("processing") or {})

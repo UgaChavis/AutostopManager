@@ -1585,6 +1585,14 @@ def _bounded_attempt_count(value: Any, *, limit: int = 3) -> int:
     return min(max(1, requested), limit)
 
 
+def partsapi_network_call_count(response: dict[str, Any]) -> int:
+    """Read the provider count, falling back to older attempt-only responses."""
+    network_calls = (response.get("execution") or {}).get("network_calls")
+    if network_calls is None:
+        network_calls = response.get("attempt_count")
+    return max(0, int(network_calls or 0))
+
+
 def _response_shape(payload: Any) -> str:
     if payload is None:
         return "null"
@@ -3733,6 +3741,12 @@ def partsapi_catalog_lookup(
             last_requires_provider_action = failure_class == "provider_ip_quota_exceeded"
             if not retryable:
                 break
+    base["execution"] = {
+        "network_calls": sum(
+            attempt.get("failure_class") not in ("provider_busy", "provider_executor_unavailable")
+            for attempt in attempts
+        )
+    }
     if not request_succeeded:
         return {
             **base,

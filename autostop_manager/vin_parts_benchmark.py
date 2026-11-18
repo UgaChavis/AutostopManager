@@ -5,7 +5,11 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from .catalog_adapters import _redact_identifier, build_oem_parts_provider_plan, catalog_provider_status
-from .catalog_clients import partsapi_catalog_lookup, partsapi_identifier_allows_candidate_lookup
+from .catalog_clients import (
+    partsapi_catalog_lookup,
+    partsapi_identifier_allows_candidate_lookup,
+    partsapi_network_call_count,
+)
 from .parts_intent import normalize_part_intent
 from .vehicle_identity import _as_mapping, decode_vehicle_identities, invalid_identity_result
 from .vehicle_identity_inputs import MAX_IDENTITY_ITEMS, PROFILE_KEYS, validate_identity_item
@@ -524,7 +528,7 @@ def benchmark_vin_parts_lookup(
                 dry_run=not call_is_live,
             )
             if call_is_live:
-                partsapi_live_calls_used += max(0, int(partsapi_identity_call.get("attempt_count") or 0))
+                partsapi_live_calls_used += partsapi_network_call_count(partsapi_identity_call)
                 identity = _identity_with_partsapi_agreement(
                     identity,
                     partsapi_identity_call,
@@ -558,7 +562,7 @@ def benchmark_vin_parts_lookup(
                     **kwargs,
                 )
                 if call_is_live:
-                    partsapi_live_calls_used += max(0, int(response.get("attempt_count") or 0))
+                    partsapi_live_calls_used += partsapi_network_call_count(response)
                 call_rows.append(response)
                 return response
 
