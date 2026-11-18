@@ -688,6 +688,11 @@ def denso_aftermarket_catalog_lookup(
                 )
             except (OSError, HTTPException, ValueError) as exc:
                 details.append({"part_key": part_key, "ok": False, "error": str(exc)})
+                if isinstance(exc, URLError) and exc.reason in (
+                    "provider_transport_busy",
+                    "provider_transport_unavailable",
+                ):
+                    break
                 continue
             detail_data = _dict_list(detail_payload.get("data"))
             details.append(
@@ -698,6 +703,7 @@ def denso_aftermarket_catalog_lookup(
                 }
             )
 
+    partial = deadline_exhausted or any(not detail["ok"] for detail in details)
     return {
         **base,
         "ok": True,
@@ -705,8 +711,8 @@ def denso_aftermarket_catalog_lookup(
         "offset": payload.get("offset", 0),
         "items": items,
         "details": details,
-        "partial": deadline_exhausted,
-        "requires_fallback": deadline_exhausted,
+        "partial": partial,
+        "requires_fallback": partial,
     }
 
 
@@ -792,6 +798,7 @@ def public_aftermarket_catalog_lookup(
         results.append(lookup(part_number=part_number, timeout=request_timeout, dry_run=dry_run, **params))
     deadline_exhausted = not dry_run and _remaining_timeout(deadline) is None
     success_count = sum(result.get("ok") is True for result in results)
+    partial = deadline_exhausted or any(result.get("partial") is True for result in results)
     return {
         "ok": success_count > 0,
         "provider": "public_aftermarket_catalogs",
@@ -799,9 +806,9 @@ def public_aftermarket_catalog_lookup(
         "success_count": success_count,
         "failure_count": len(results) - success_count,
         "results": results,
-        "partial": deadline_exhausted,
+        "partial": partial,
         "deadline_seconds": budget,
-        "requires_fallback": deadline_exhausted
+        "requires_fallback": partial
         or any(result.get("requires_fallback") is True or result.get("ok") is not True for result in results),
         "privacy": {"raw_identifier_is_sensitive": False, "secret_exposed": False},
     }

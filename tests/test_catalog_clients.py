@@ -5,7 +5,7 @@ from http.client import IncompleteRead
 from io import BytesIO
 import json
 import pytest
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 
 from autostop_manager import catalog_clients as catalog_clients_module
@@ -2180,6 +2180,37 @@ def test_denso_lookup_rejects_malformed_payload_without_crashing(monkeypatch):
 
     assert result["ok"] is False
     assert result["error"] == "DENSO returned a malformed search data payload."
+
+
+@pytest.mark.parametrize("reason", ["provider_transport_busy", "provider_transport_unavailable"])
+def test_public_aftermarket_keeps_partial_denso_results_when_detail_transport_rejects(monkeypatch, reason):
+    calls = []
+
+    def read(url, **_kwargs):
+        path = urlsplit(url).path
+        calls.append(path)
+        if path == "/api/v1/search":
+            return {"status": "success", "data": {"parts": [{"part_name": name} for name in ("P1", "P2", "P3")]}}
+        if path == "/api/v1/parts/P1":
+            return {"status": "success", "data": [{"name": "P1"}]}
+        raise URLError(reason)
+
+    monkeypatch.setattr(catalog_clients_module, "_read_json_url", read)
+    monkeypatch.setattr(catalog_clients_module, "mann_filter_catalog_lookup", lambda **_kwargs: {"ok": True})
+
+    result = public_aftermarket_catalog_lookup(provider="all", part_number="DEMO")
+
+    assert calls == ["/api/v1/search", "/api/v1/parts/P1", "/api/v1/parts/P2"]
+    assert result["ok"] is True
+    assert result["partial"] is result["requires_fallback"] is True
+    denso = result["results"][1]
+    assert denso["ok"] is True
+    assert denso["partial"] is denso["requires_fallback"] is True
+    assert [item["part_name"] for item in denso["items"]] == ["P1", "P2", "P3"]
+    first, failed = denso["details"]
+    assert first["items"][0]["name"] == "P1"
+    assert failed["part_key"] == "P2" and failed["ok"] is False
+    assert reason in failed["error"]
 
 
 def test_public_aftermarket_catalog_lookup_rejects_unknown_provider():
