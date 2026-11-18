@@ -55,6 +55,8 @@ def runtime(tmp_path):
         source = source.replace('if [[ "${EUID}" -ne 0 ]]; then', "if false; then")
         source = source.replace("/opt/autostop-work-telegram-releases/current", str(current))
         source = source.replace("/opt/autostop-manager-releases/*", f"{releases}/*")
+        if name == "work-telegram-python.sh":
+            source = source.replace("/opt/autostop-manager-releases", str(releases))
         source = source.replace("/run/autostop-work-telegram-control.lock", str(tmp_path / "lock"))
         source = source.replace("/etc/autostop-work-telegram/monitor.env", str(tmp_path / "monitor.env"))
         source = source.replace("/etc/autostop-work-telegram/wake.json", str(tmp_path / "wake.json"))
@@ -93,6 +95,65 @@ def test_missing_service_runtime_fails_without_a_checkout_fallback(runtime):
     assert result.returncode == 1
     assert result.stderr.strip() == "work_telegram_runtime_unavailable=true"
     assert not result.stdout
+
+
+def bridge_module(path, body):
+    package = path / "autostop_manager"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "telegram_bridge.py").write_text(body)
+
+
+def test_bridge_launcher_keeps_cwd_and_arguments_but_imports_its_own_pinned_release(runtime):
+    scripts, env, python, tmp_path = runtime
+    revision = "a" * 40
+    release = scripts.parent
+    (release / "REVISION").write_text(revision + "\n")
+    bridge_module(
+        release,
+        "import json, os, sys\n"
+        "print(json.dumps({'source': __file__, 'cwd': os.getcwd(), 'args': sys.argv[1:],"
+        " 'effective_python': os.environ['EFFECTIVE_PYTHON_INVOKED']}))\n",
+    )
+    old_cwd = tmp_path / "old-manager"
+    wrong_pythonpath = tmp_path / "other-imports"
+    bridge_module(old_cwd, "raise RuntimeError('used stale working directory')\n")
+    bridge_module(wrong_pythonpath, "raise RuntimeError('used stale PYTHONPATH')\n")
+    shell(python, f'export EFFECTIVE_PYTHON_INVOKED="$0"\nexec {shlex.quote(sys.executable)} "$@"\n')
+    args = ["job-complete-reply", "--receipt-key", 'literal * "quote"\nnext', ""]
+    launcher = release.parent / "current" / "scripts" / "work-telegram-python.sh"
+
+    result = subprocess.run(
+        ["bash", str(launcher), "bridge", "--run", revision, "--", *args],
+        cwd=old_cwd,
+        env={**env, "PYTHONPATH": str(wrong_pythonpath), "PYTHONSAFEPATH": "", "PYTHONHOME": str(wrong_pythonpath)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "source": str(release / "autostop_manager/telegram_bridge.py"),
+        "cwd": str(old_cwd),
+        "args": ["--account", "work", *args],
+        "effective_python": str(python),
+    }
+
+
+def test_bridge_launcher_rejects_mismatched_revision_before_execution(runtime):
+    scripts, env, _, _ = runtime
+    (scripts.parent / "REVISION").write_text("a" * 40 + "\n")
+    bridge_module(scripts.parent, "raise RuntimeError('invalid launcher executed the command')\n")
+    result = subprocess.run(
+        ["bash", str(scripts / "work-telegram-python.sh"), "bridge", "--run", "b" * 40, "--", "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1
+    assert result.stderr.strip() == "work_telegram_release_mismatch=true" and not result.stdout
 
 
 @pytest.mark.parametrize("work_aligned", [True, False])

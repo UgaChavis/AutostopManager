@@ -73,7 +73,25 @@ Wake подписывается на изменения реестра чере�
 
 Root-only wake `status` содержит `stage_timings`: общие для всех параллельных клиентских исполнителей этого wake-процесса RAM-агрегаты монотонных длительностей `peer_prepare`, `idle_wait`, `turn_lifecycle`, `finish_request` внутри автоматического исполнения. Режимы `new`/`recovery` разделяют новый вызов и локально наблюдаемый остаток известного хода; reconnect внутри вызова входит в его стадию. `count`/`sum_seconds`/`max_seconds` охватывают закрытые наблюдения с исходами `returned`/`raised`/`cancelled`; `in_flight` остаётся до фактического выхода await, включая задержанную cleanup. `finish_request.unsettled` считает нормальные возвраты без подтверждённой остановки либо с pending cleanup/stop; сам return не доказывает результат. Состояние слота и proof определяют прежние проверки.
 
-Агрегаты не содержат идентификаторов или клиентского содержания, сбрасываются при restart; count=0 даёт duration=null, ошибки измерителя увеличивают `dropped_samples`. `observed_seconds` — возраст измерителя с создания dispatcher. Это не ожидание в очереди, чистое inference, время первого ответа/доставки или всей сделки. Прямые reconcile/pause proof вне автоматического `_execute`, bootstrap/claim и промежуточные health-вызовы не измеряются; средние стадий не образуют парное полное время обращения. Сводка duty shell эти агрегаты не копирует.
+Для новых ходов Wake также измеряет `instruction_delivery` (подтверждение
+инструкций), `turn_start` (RPC старта) и `turn_execution` (от попытки старта
+до завершения хода). `turn_execution` включает работу модели и её инструменты
+и пересекается с измерениями Bridge. Сводка duty shell эти агрегаты не копирует.
+
+Root-only Bridge `job_status` возвращает `status.job_latency`. В режиме
+`new` доступны `history_page` для чтений страниц, `history` от первого
+чтения до подтверждения контекста, `send` для обращения к транспорту с новым
+текстовым результатом, `readback` для проверки сообщения и сохранения
+квитанции, `reply_to_terminal` от квитанции до сохранённого доказательства
+завершения. Подготовка отправки, ACK и восстановление уже начатой отправки
+не входят в замер нового текстового результата.
+
+Агрегаты сбрасываются при restart и не содержат идентификаторов или
+клиентского содержания. При `count=0` длительности равны `null`.
+Ошибки измерителя увеличивают `dropped_samples`. `observed_seconds` показывает
+возраст измерителя. Для отдельного задания снимки пригодны только при
+изоляции прогона и проверке числа наблюдений. Bootstrap, захват и
+окончательную очистку исполнителя фиксирует контрольный драйвер.
 
 Схема Telegram inbox 9 обновляет версии 1–8, сохраняя события, квитанции, duty, pause и неизвестные эффекты. Количество незавершённых указаний сохраняется без их текста; потерянный transient текст требует явного восстановления. Постоянные привязки клиентов не удаляются вместе с семидневной историей завершённых событий. Старые потенциально исполняющиеся задания остаются под общей проверкой; смешанный thread не назначается клиенту. Версии исполнителя и bridge проверяются до захвата. Writer схемы 8 и ниже не должен открывать схему 9. Правила миграции и возврата — в разделе [версии durable inbox](#версия-durable-inbox-и-покрытие-квитанций); миграция и совместимая процедура возврата относятся к отдельному выпуску, а не к подготовке исходного кода.
 
@@ -101,7 +119,7 @@ Root-only wake `status` содержит `stage_timings`: общие для вс
 
 В metadata видео `duration_seconds` сохраняет дробные секунды Telegram; целые значения остаются JSON integer. Лимит скачивания — `0 < duration_seconds <= 120`, без округления. Fingerprint целых длительностей сохраняется. Для дробных видео старый download/reply token требует нового dry-run; прежний idempotency key с другим fingerprint не разрешает повтор эффекта. Неизвестный исход исходящего подтверждай через точный `job-effect-readback` с исходным ключом; он сохраняет прежнюю привязку источника и не повторяет отправку.
 
-Work CLI: пользователь `autostop-work-telegram`, физический snapshot из `/opt/autostop-work-telegram-releases/current` в `PYTHONPATH`, `<runtime-python> -m autostop_manager.telegram_bridge --account work <command>`. Python текущей службы возвращает `bash <snapshot>/scripts/work-telegram-python.sh bridge` (для wake — `wake`): учитываются systemd drop-ins, старый путь venv не предполагается. Snapshot может находиться в Manager или work-Telegram releases. Управляющие job/duty операции запускаются root и не читают credentials. Проверяй `<command> --help`; для installed проверок cwd=/tmp и PYTHONSAFEPATH=1. Сверь effective `ExecStart` и installed `REVISION`; runtime-контракт — [manager-runtime.md](manager-runtime.md).
+Запуск рабочего CLI — `bash <snapshot>/scripts/work-telegram-python.sh bridge --run <revision> -- <command>`. Для задания используй физический snapshot и ревизию из инструкций Wake. Для обслуживания разреши `/opt/autostop-work-telegram-releases/current` в физический snapshot и прочитай его `REVISION`. Скрипт сверяет ревизию и загружает Bridge из этого snapshot с Python действующего `ExecStart`, включая systemd drop-ins. Snapshot может находиться в Manager или work-Telegram releases. Вызов с одним аргументом `bridge` или `wake` возвращает путь к соответствующему Python. Управляющие job/duty операции запускаются root и не читают credentials. Для точных параметров используй `<command> --help`. Подробнее в [контракте runtime](manager-runtime.md).
 
 | Команда bridge | Назначение |
 | --- | --- |
@@ -114,6 +132,7 @@ Work CLI: пользователь `autostop-work-telegram`, физически�
 | `send`, `send-photo`, `send-document` | Dry-run/apply, исходный ключ, независимый readback; рабочий ответ связан с заданием и версией. |
 | `send-voice` | Только personal: приватный outbox OGG/Opus, 10 MiB/10 минут, точный числовой private peer; dry-run/apply и идемпотентность, фактические voice/MIME/duration/size и скачанные байты. |
 | `job-read`, `job-refresh`, `job-result`, `job-handoff`, `job-effect-readback` | Прочитать/обновить контекст, завершить задание, передать владельцу или сверить старую отправку без повтора; job/lease/revision не публикуются клиенту. |
+| `job-complete-reply` | После подтверждённого текстового результата сверить исходную отправку, перечитать задание и записать `answered` одним вызовом. Передай `--job-id ID --lease LEASE --receipt-key KEY`. |
 | `job-client-control` | Только trusted Codex/root: exact peer/job, чтение и CAS-указание, пауза, передача человеку и явное возобновление. |
 | `job-claim`, `job-start-intent`, `job-turn-bound`, `job-subscribe` | Контракт исполнителя версии 3: получение, durable запуск, привязка и уведомления. |
 | `job-peer-thread-prepare`, `job-peer-thread-read`, `job-peer-thread-bind`, `job-peer-thread-unknown` | Root-only подготовка, точная сверка и сохранение текущей беседы клиента; неизвестное создание не повторяется. |

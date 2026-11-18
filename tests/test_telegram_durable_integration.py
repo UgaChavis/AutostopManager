@@ -547,6 +547,140 @@ def test_lost_send_response_blocks_replay_new_slot_and_revision(tmp_path, bundle
     asyncio.run(scenario())
 
 
+def test_job_complete_reply_uses_one_exact_read_to_close_verified_text_and_keeps_execution_slot(tmp_path, bundle):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            runtime.monitor.config = runtime.config
+            event = runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            ack = await send(runtime, job, kind="ack", text="Received")
+            await send(runtime, job, kind="ack", text="Received", dry=ack)
+            dry = await send(runtime, job, kind="result", text="Synthetic answer")
+            sent = await send(runtime, job, kind="result", text="Synthetic answer", dry=dry)
+            ledger = runtime.config.state_dir / "idempotency.json"
+            inode = ledger.stat().st_ino
+            reads = []
+            get_messages = runtime.client.get_messages
+
+            async def observe_read(entity, **kwargs):
+                reads.append((entity, kwargs))
+                return await get_messages(entity, **kwargs)
+
+            runtime.client.get_messages = observe_read
+            request = {"job_id": job["job_id"], "lease": job["lease"], "receipt_key": sent["receipt_key"]}
+            result = await runtime.jobs.request("job_complete_reply", **request)
+            assert result["receipt_key"] == sent["receipt_key"] and result["message_id"] == sent["message_id"]
+            assert result["job"]["state"] == "completed" and result["job"]["outcome"] == "answered"
+            assert result["job"]["event_ids"] == [event]
+            assert runtime.inbox.event_state(event) == "reply_verified"
+            assert runtime.inbox.execution_slot(job_id=job["job_id"]) is not None
+            assert reads == [(CLIENT, {"ids": sent["message_id"]})]
+            assert runtime.client.sent == 2 and ledger.stat().st_ino == inode
+
+            with pytest.raises(wake.WakeError, match=r"^inbox_job_not_active$"):
+                await runtime.jobs.request("job_complete_reply", **request)
+            assert reads == [(CLIENT, {"ids": sent["message_id"]})] and runtime.client.sent == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("fault", "error"),
+    [
+        ("ack", "job_complete_reply_receipt_invalid"),
+        ("other_attempt", "job_complete_reply_receipt_invalid"),
+        ("other_job", "job_complete_reply_receipt_invalid"),
+        ("wrong_lease", "inbox_lease_mismatch"),
+        ("unverified", "send_outcome_uncertain"),
+        ("wrong_message", "job_effect_readback_failed"),
+        ("new_inbound", "inbox_context_stale"),
+        ("pause", "inbox_execution_paused"),
+    ],
+)
+def test_job_complete_reply_rejects_wrong_receipt_or_lost_authority(tmp_path, bundle, fault, error):
+    async def scenario():
+        async with bridge_runtime(tmp_path) as runtime:
+            runtime.monitor.config = runtime.config
+            runtime.monitor.record(runtime.client.inbound(100))
+            job = await claim_running(runtime, bundle)
+            kind = "ack" if fault == "ack" else "result"
+            dry = await send(runtime, job, kind=kind, text="Synthetic answer")
+            if fault == "unverified":
+                runtime.client.lose_send_response = True
+                with pytest.raises(wake.WakeError, match=r"^telegram_operation_failed$"):
+                    await send(runtime, job, kind=kind, text="Synthetic answer", dry=dry)
+            else:
+                await send(runtime, job, kind=kind, text="Synthetic answer", dry=dry)
+            receipt_key = dry["idempotency_key"]
+            if fault == "other_attempt":
+                another = await send(runtime, job, kind="result", text="Another answer", slot=1)
+                await send(runtime, job, kind="result", text="Another answer", dry=another, slot=1)
+            elif fault == "other_job":
+                runtime.monitor.record(runtime.client.inbound(120, peer=OTHER))
+                other = await claim_running(runtime, bundle)
+                another = await send(runtime, other, kind="result", text="Another answer")
+                receipt_key = (await send(runtime, other, kind="result", text="Another answer", dry=another))[
+                    "receipt_key"
+                ]
+
+            readback_started = False
+            get_messages = runtime.client.get_messages
+
+            async def change_during_readback(entity, **kwargs):
+                nonlocal readback_started
+                readback_started = True
+                if fault == "new_inbound":
+                    runtime.monitor.record(runtime.client.inbound(110))
+                elif fault == "pause":
+                    revision = runtime.inbox.status()["execution_revision"]
+                    runtime.inbox.set_execution_paused(paused=True, expected_revision=revision)
+                elif fault == "wrong_message":
+                    runtime.client.messages[kwargs["ids"]].message = "Different outgoing message"
+                return await get_messages(entity, **kwargs)
+
+            runtime.client.get_messages = change_during_readback
+            sent = runtime.client.sent
+            inode = (runtime.config.state_dir / "idempotency.json").stat().st_ino
+            with pytest.raises(wake.WakeError, match=f"^{error}$"):
+                await runtime.jobs.request(
+                    "job_complete_reply",
+                    job_id=job["job_id"],
+                    lease="wrong-lease" if fault == "wrong_lease" else job["lease"],
+                    receipt_key=receipt_key,
+                )
+            assert readback_started == (fault in {"wrong_message", "new_inbound", "pause"})
+            assert runtime.client.sent == sent
+            assert (runtime.config.state_dir / "idempotency.json").stat().st_ino == inode
+            assert runtime.inbox.read_job(job["job_id"])["outcome"] is None
+            assert runtime.inbox.status()["open_events"] >= 1
+
+    asyncio.run(scenario())
+
+
+def test_job_complete_reply_cli_uses_singular_receipt_and_network_budget():
+    args = bridge.build_parser().parse_args(
+        [
+            "--account",
+            "work",
+            "job-complete-reply",
+            "--job-id",
+            "job-" + "a" * 32,
+            "--lease",
+            "lease",
+            "--receipt-key",
+            "tgjob-" + "b" * 64,
+        ]
+    )
+    request = bridge._job_cli_request(args)
+    assert request == {
+        "operation": "job_complete_reply",
+        "job_id": "job-" + "a" * 32,
+        "lease": "lease",
+        "receipt_key": "tgjob-" + "b" * 64,
+    }
+    assert bridge.server_budget(request) == 20 and bridge.rpc_budget(request) == 30
+
+
 @pytest.mark.parametrize(("operation", "suffix"), [("send_photo", ".jpg"), ("send_document", ".pdf")])
 def test_job_bound_media_receipt_is_verified_and_replay_does_not_resend(tmp_path, bundle, operation, suffix):
     async def scenario():
