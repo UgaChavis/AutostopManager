@@ -1428,13 +1428,22 @@ def _exist_more_offers(
         },
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:
-        wrapper = json.loads(_read_response_text(response, errors="replace"))
-    raw_offers = json.loads(wrapper.get("d") or "[]") if isinstance(wrapper, dict) else []
-    offers = [_exist_offer(offer, offer_type="direct") for offer in _exist_raw_offer_list(raw_offers)][
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            wrapper = json.loads(_read_response_text(response, errors="replace"))
+        encoded_offers = wrapper.get("d") if isinstance(wrapper, dict) else None
+        if not isinstance(encoded_offers, str):
+            raise ValueError("Exist more-offers response is missing JSON offer data.")
+        raw_offers = json.loads(encoded_offers)
+        if not isinstance(raw_offers, list):
+            raise ValueError("Exist more-offers response is not an offer list.")
+    except (OSError, HTTPException, ValueError) as exc:
+        return {"ok": False, "offers": [], "error": str(exc)}
+    offer_rows = _exist_raw_offer_list(raw_offers)
+    offers = [_exist_offer(offer, offer_type="direct") for offer in offer_rows][
         : _clamp_page_size(max_offers, default=10, maximum=50)
     ]
-    return {"ok": True, "offers": offers, "offer_count": len(_exist_raw_offer_list(raw_offers))}
+    return {"ok": True, "offers": offers, "offer_count": len(offer_rows)}
 
 
 def exist_price_lookup(

@@ -50,7 +50,15 @@ class _Response:
         return self.payload if limit < 0 else self.payload[:limit]
 
 
-def _responses(monkeypatch, items, *, candidates=None, hidden_pid="FORM-CONTEXT", hidden_hash="SYNTHETIC-HASH"):
+def _responses(
+    monkeypatch,
+    items,
+    *,
+    candidates=None,
+    hidden_pid="FORM-CONTEXT",
+    hidden_hash="SYNTHETIC-HASH",
+    more_offers_response='{"d": "[]"}',
+):
     calls = []
     price_html = _price_html(items, hidden_pid=hidden_pid, hidden_hash=hidden_hash)
 
@@ -62,7 +70,9 @@ def _responses(monkeypatch, items, *, candidates=None, hidden_pid="FORM-CONTEXT"
         assert timeout == 20.0
         if request.get_method() == "POST":
             assert url.path == "/Price/Default.aspx/GetQuery"
-            return _Response(json.dumps({"d": "[]"}))
+            if isinstance(more_offers_response, Exception):
+                raise more_offers_response
+            return _Response(more_offers_response)
         if url.path == "/Api/Parts/Search":
             return _Response("[]")
         if "pcode" in query:
@@ -437,3 +447,25 @@ def test_missing_more_offers_context_does_not_erase_selected_identity(monkeypatc
     assert result["selected_item"]["more_offers_loaded"] is False
     assert result["selected_item"]["more_offers_error"] == "Exist more-offers hidden fields are missing."
     assert all(call["method"] == "GET" for call in calls)
+
+
+@pytest.mark.parametrize(
+    "more_offers_response",
+    [TimeoutError("synthetic timeout"), '{"d": "invalid JSON"}', '{"d": [{}]}', '{"status": "error"}', '{"d": "{}"}'],
+    ids=["timeout", "invalid-json", "non-string-data", "missing-data", "not-an-offer-list"],
+)
+def test_failed_more_offers_preserves_price_and_selected_product(monkeypatch, more_offers_response):
+    item = {**_item(), "MinPrice": 2345, "DirectOffers": [{"Price": 2345}]}
+    calls = _responses(monkeypatch, [item], more_offers_response=more_offers_response)
+
+    result = catalog_clients.exist_price_lookup(pid="PID-A", include_more_offers=True)
+
+    _assert_reference(result)
+    assert result["needs_disambiguation"] is False
+    selected = result["selected_item"]
+    assert selected is result["items"][0]
+    assert selected["pid"] == "PID-A" and selected["part_number"] == "DEMO-A"
+    assert selected["min_price_rub"] == selected["offers"][0]["price_rub"] == 2345
+    assert selected["more_offers_loaded"] is False and selected["more_offers_count"] == 0
+    assert selected["more_offers_error"]
+    assert [call["method"] for call in calls] == ["GET", "POST"]
