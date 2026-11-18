@@ -1186,16 +1186,21 @@ def _exist_item(raw_item: dict[str, Any], *, max_offers: int = 10, base_url: str
     }
 
 
+def _parse_exist_catalog_candidate_rows(html_text: str, *, base_url: str | None = None) -> list[dict[str, Any]]:
+    parser = _ExistCatalogCandidateParser(base_url=base_url)
+    parser.feed(html_text)
+    return parser.candidates
+
+
 def parse_exist_catalog_candidates(
     html_text: str,
     *,
     base_url: str | None = None,
     max_candidates: int = 5,
 ) -> dict[str, Any]:
-    parser = _ExistCatalogCandidateParser(base_url=base_url)
-    parser.feed(html_text)
-    candidates = parser.candidates[: _clamp_page_size(max_candidates, default=5, maximum=50)]
-    return {"ok": True, "candidates": candidates, "candidate_count": len(parser.candidates)}
+    candidates = _parse_exist_catalog_candidate_rows(html_text, base_url=base_url)
+    limit = _clamp_page_size(max_candidates, default=5, maximum=50)
+    return {"ok": True, "candidates": candidates[:limit], "candidate_count": len(candidates)}
 
 
 def parse_exist_price_page(
@@ -1487,21 +1492,17 @@ def exist_price_lookup(
             search_payload = _exist_read_json(request_plan["search_url"], office_id=office, timeout=timeout)
             suggestions = _exist_search_suggestions(search_payload, base_url=request_plan["base_url"])
             pcode_html = _exist_read_text(request_plan["pcode_url"], office_id=office, timeout=timeout)
-            candidate_result = parse_exist_catalog_candidates(
-                pcode_html,
-                base_url=request_plan["base_url"],
-                max_candidates=max_candidates_value,
-            )
-            candidates = candidate_result["candidates"]
-            if candidates:
-                selected_candidate = _select_exist_candidate(candidates, brand=brand)
+            all_candidates = _parse_exist_catalog_candidate_rows(pcode_html, base_url=request_plan["base_url"])
+            candidates = all_candidates[:max_candidates_value]
+            if all_candidates:
+                selected_candidate = _select_exist_candidate(all_candidates, brand=brand)
                 if selected_candidate is None:
                     return {
                         **base,
                         "ok": True,
                         "search_suggestions": suggestions,
                         "candidates": candidates,
-                        "candidate_count": candidate_result["candidate_count"],
+                        "candidate_count": len(all_candidates),
                         "needs_disambiguation": True,
                         "selected_item": None,
                         "error": "Multiple Exist catalog candidates found; pass --brand to select one.",

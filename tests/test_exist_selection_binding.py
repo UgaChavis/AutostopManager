@@ -346,16 +346,36 @@ def test_empty_items_preserve_parse_success_without_false_multiple_choices(monke
     assert result["items"] == []
 
 
-def test_multiple_catalog_candidates_without_brand_still_stop_before_price_read(monkeypatch):
+@pytest.mark.parametrize("max_candidates", [1, 2])
+def test_multiple_catalog_candidates_without_brand_still_stop_before_price_read(monkeypatch, max_candidates):
     calls = _responses(monkeypatch, [_item()], candidates=[_candidate(), _candidate(pid="PID-B", brand="BRAND-B")])
 
-    result = catalog_clients.exist_price_lookup(part_number="DEMO-A")
+    result = catalog_clients.exist_price_lookup(part_number="DEMO-A", max_candidates=max_candidates)
 
     _assert_reference(result)
     assert result["selected_item"] is None
     assert result["needs_disambiguation"] is True
-    assert len(result["candidates"]) == 2
+    assert result["candidate_count"] == 2
+    assert len(result["candidates"]) == max_candidates
     assert len(calls) == 2
+
+
+def test_exact_brand_outside_preview_wins_over_visible_alias(monkeypatch):
+    visible = {"pid": "PID-A", "brand": "BRAND-B Europe"}
+    exact = {"pid": "PID-B", "brand": "BRAND-B"}
+    calls = _responses(
+        monkeypatch,
+        [_item(**visible), _item(**exact)],
+        candidates=[_candidate(**visible), _candidate(**exact)],
+    )
+
+    result = catalog_clients.exist_price_lookup(part_number="DEMO-A", brand="BRAND-B", max_candidates=1)
+
+    _assert_reference(result)
+    assert result["needs_disambiguation"] is False
+    assert [item["pid"] for item in result["candidates"]] == ["PID-A"]
+    assert result["selected_item"]["catalog_candidate"]["pid"] == "PID-B"
+    assert calls[2]["query"] == {"pid": ["PID-B"]}
 
 
 def test_more_offers_use_selected_row_and_preserve_distinct_form_context_pid(monkeypatch):
