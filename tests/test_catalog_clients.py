@@ -1783,7 +1783,16 @@ def test_extract_partsapi_cross_candidates_handles_with_brand_payload():
     assert candidates[0]["confidence"] == 0.6
 
 
-def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
+@pytest.mark.parametrize(
+    ("payload", "cross_number"),
+    [
+        ([{"brand": "NPS", "partNumber": "D735005", "crossBrand": "KYB", "crossNumber": "341123"}], "341123"),
+        ([{"brand1": "NPS", "number1": "D735005", "brand2": "KYB", "number2": "0341123"}], "0341123"),
+        ({"data": {"brand1": "NPS", "number1": "D735005", "brand2": "KYB", "number2": "0341123"}}, "0341123"),
+    ],
+    ids=["named-fields", "numbered-fields", "wrapped-numbered-fields"],
+)
+def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch, payload, cross_number):
     _clear_partsapi_method_env(monkeypatch)
     _configure_partsapi_test_keys(monkeypatch)
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
@@ -1792,16 +1801,7 @@ def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
         assert "method=getCrossesWithBrand" in request.full_url
         assert "number=D735005" in request.full_url
         assert "brand=NPS" in request.full_url
-        return _FakeResponse(
-            [
-                {
-                    "brand": "NPS",
-                    "partNumber": "D735005",
-                    "crossBrand": "KYB",
-                    "crossNumber": "341123",
-                }
-            ]
-        )
+        return _FakeResponse(payload)
 
     monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
 
@@ -1812,9 +1812,16 @@ def test_partsapi_crosses_with_brand_uses_cross_candidates_not_oem(monkeypatch):
     )
 
     assert result["ok"] is True
+    assert result["outcome"] == "success"
     assert result["oem_candidates"] == []
-    assert result["cross_candidates"][0]["brand"] == "KYB"
-    assert result["cross_candidates"][0]["part_number"] == "341123"
+    assert result["record_counts"]["cross_candidates"] == 1
+    (cross,) = result["cross_candidates"]
+    assert cross["source_brand"] == "NPS"
+    assert cross["source_part_number"] == "D735005"
+    assert cross["brand"] == "KYB"
+    assert cross["part_number"] == cross_number
+    assert cross["relationship"] == "cross"
+    assert cross["fitment_evidence"]["fitment_confirmed"] is False
     assert "secret-key" not in result["request_plan"]["redacted_url"]
 
 

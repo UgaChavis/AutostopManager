@@ -3162,12 +3162,17 @@ def extract_partsapi_parts_by_vin_candidates(
     return candidates
 
 
+_PARTSAPI_NUMBERED_CROSS_FIELDS = ("brand1", "number1", "brand2", "number2")
+
+
 def _partsapi_cross_records(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    if any(key in payload for key in ("crossBrand", "crossNumber", "partNumber")):
+    if any(key in payload for key in ("crossBrand", "crossNumber", "partNumber")) or all(
+        key in payload for key in _PARTSAPI_NUMBERED_CROSS_FIELDS
+    ):
         return [payload]
     records: list[dict[str, Any]] = []
     for key in ("result", "data", "items", "crosses"):
@@ -3184,13 +3189,17 @@ def extract_partsapi_cross_candidates(*, payload: Any, operation: str | None = N
     seen: set[tuple[str | None, str, str | None, str | None]] = set()
     for item in _partsapi_cross_records(payload):
         cross_number = _first_value(item, ("crossNumber", "cross_number", "replacementNumber", "replacement_number"))
-        if cross_number in (None, ""):
-            continue
         source_brand = _first_value(item, ("brand", "partBrand", "sourceBrand"))
         source_part_number = _first_value(item, ("partNumber", "part_number", "number", "sourceNumber"))
         cross_brand = _first_value(
             item, ("crossBrand", "cross_brand", "replacementBrand", "replacement_brand", "brandName")
         )
+        if cross_number is None:
+            # CROSSBASE returns the original and cross as two numbered pairs.
+            pair = tuple(item.get(key) for key in _PARTSAPI_NUMBERED_CROSS_FIELDS)
+            if not all(isinstance(value, str) and value.strip() for value in pair):
+                continue
+            source_brand, source_part_number, cross_brand, cross_number = pair
         part_name = _first_value(item, ("partname", "partName", "title", "name", "shortname"))
         normalized_cross_number = str(cross_number).strip()
         identity = (cross_brand, normalized_cross_number, source_brand, source_part_number)
