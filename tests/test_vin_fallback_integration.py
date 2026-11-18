@@ -51,7 +51,7 @@ def _cars():
     ]
 
 
-def _install(monkeypatch, *, outcome="identifier_mismatch", source_fields=None, cars=None, failure=None):
+def _install(monkeypatch, *, outcome="identifier_mismatch", source_fields=None, cars=None, engines=None, failure=None):
     calls = []
 
     def lookup(**kwargs):
@@ -106,6 +106,8 @@ def _install(monkeypatch, *, outcome="identifier_mismatch", source_fields=None, 
             response["payload"] = [{"modelId": 456, "modelName": "Touareg (CR)"}]
         elif operation == "getCars":
             response["vehicle_profiles"] = _cars() if cars is None else cars
+        elif operation == "engine_info" and engines is not None:
+            response["vehicle_profiles"] = engines
         elif operation == "search_tree":
             response["search_tree_rows"] = [{"NODE_3_TEXT": "Колодки тормозные", "NODE_3_STR_ID": 100470}]
         elif operation == "articles":
@@ -325,6 +327,46 @@ def test_fallback_keeps_global_live_budget(monkeypatch):
     assert calls[-1]["dry_run"] is True
     assert result["tecdoc_vehicle_fallback"]["status"] == "not_checked"
     assert any(row["stage"] == "partsapi_live_budget" for row in result["blockers"])
+
+
+@pytest.mark.parametrize("engine_model_id", [None, 999], ids=["same-id-variants", "second-variant-mismatch"])
+def test_fallback_reuses_engine_lookup_but_checks_each_variant(monkeypatch, engine_model_id):
+    engine = {"tecdoc_car_id": 101, "engine_code": "DENA", "model_id": engine_model_id}
+    calls = _install(
+        monkeypatch,
+        cars=[
+            {"tecdoc_car_id": 101, "power_kw_from": 165},
+            {"tecdoc_car_id": "00101", "model_id": 456, "power_kw_from": 180},
+        ],
+        engines=[engine],
+    )
+    result = vin_oem_resolver.resolve_vin_oem_parts(
+        identifier=VIN,
+        requested_part="передние колодки",
+        crm_context=FACTS,
+        vehicle_type="PC",
+        live_vpic=False,
+        live_partsapi_oem=True,
+        max_live_calls=5,
+    )
+
+    assert [call["operation"] for call in calls] == ["vin_decode", "getMakes", "getModels", "getCars", "engine_info"]
+    assert all(not call["dry_run"] for call in calls)
+    assert (calls[-1]["type_id"], calls[-1]["vehicle_type"], calls[-1]["lang_id"]) == (101, "PC", 16)
+    assert result["live_call_count"] == 5
+    assert not any(row["stage"] == "partsapi_live_budget" for row in result["blockers"])
+    fallback = result["tecdoc_vehicle_fallback"]
+    assert fallback["selected_profile"] is None
+    if engine_model_id is None:
+        assert fallback["status"] == "ambiguous_vehicle_modification"
+        assert "power_kw" in fallback["missing_fields"]
+        assert [(row["power_kw_from"], row["engine_code"]) for row in fallback["vehicle_profiles"]] == [
+            (165, "DENA"),
+            (180, "DENA"),
+        ]
+    else:
+        assert fallback["status"] == "provider_failed"
+        assert fallback["provider_outcome"] == "catalogue_reference_mismatch"
 
 
 def test_independent_power_conflict_revokes_exact_readiness_after_bad_decode(monkeypatch):

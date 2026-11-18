@@ -588,16 +588,22 @@ def _enrich_engines(
     if len(lacking_engine) > MAX_ENGINE_LOOKUPS:
         return {"status": "ambiguous_vehicle_modification", "vehicle_profiles": eligible, "missing_fields": ["engine"]}
     enriched = [profile for profile in profiles if profile not in lacking_engine]
+    details_by_car_id: dict[int | None, list[dict[str, Any]]] = {}
     for profile in lacking_engine:
-        engine = invoke("engine_info", type_id=_id(profile["tecdoc_car_id"]), vehicle_type=car_type, lang_id=16)
-        if not engine.get("ok") or engine.get("dry_run"):
-            return _provider_failure(engine)
-        details = [row for row in engine.get("vehicle_profiles") or [] if isinstance(row, dict)]
+        car_id = _id(profile["tecdoc_car_id"])
+        details = details_by_car_id.get(car_id)
+        if details is None:
+            engine = invoke("engine_info", type_id=car_id, vehicle_type=car_type, lang_id=16)
+            if not engine.get("ok") or engine.get("dry_run"):
+                return _provider_failure(engine)
+            details = [row for row in engine.get("vehicle_profiles") or [] if isinstance(row, dict)]
+            details_by_car_id[car_id] = details
+        # Reference checks still depend on each variant's make and model.
         if any(
             _reference_mismatch(
                 row,
                 car_type=car_type,
-                tecdoc_car_id=_id(profile["tecdoc_car_id"]),
+                tecdoc_car_id=car_id,
                 make_id=_id(profile.get("make_id")),
                 model_id=_id(profile.get("model_id")),
             )
