@@ -289,8 +289,12 @@ class StoreOwnerApiClient:
         form: dict[str, Any] | None = None,
         files: list[dict[str, Any]] | None = None,
         expected_revision: str | None = None,
+        revision_only: bool = False,
     ) -> dict[str, Any]:
-        """Validate one exact invocation without dispatching or returning raw inputs."""
+        """Validate one exact invocation without dispatching or returning raw inputs.
+
+        Revision-only callers can resolve the route without a request body.
+        """
 
         prepared = self._prepare_request(
             operation_id=operation_id,
@@ -302,6 +306,7 @@ class StoreOwnerApiClient:
             expected_revision=expected_revision,
             force_refresh=False,
             enforce_revision=False,
+            enforce_body=not revision_only,
         )
         if isinstance(prepared, dict):
             return prepared
@@ -342,6 +347,7 @@ class StoreOwnerApiClient:
             expected_revision=expected_revision,
             force_refresh=normalized_mode == "apply",
             enforce_revision=normalized_mode != "revision",
+            enforce_body=normalized_mode != "revision",
         )
         if isinstance(prepared, dict):
             return prepared
@@ -450,6 +456,7 @@ class StoreOwnerApiClient:
         expected_revision: str | None,
         force_refresh: bool,
         enforce_revision: bool,
+        enforce_body: bool,
     ) -> _PreparedInvocation | dict[str, Any]:
         normalized_operation = str(operation_id or "").strip()
         if _OPERATION_ID.fullmatch(normalized_operation) is None:
@@ -475,6 +482,7 @@ class StoreOwnerApiClient:
                 body=body,
                 form=normalized_form,
                 files=files or [],
+                enforce_required=enforce_body,
             )
         except (SchemaError, ValueError) as exc:
             code = str(exc)
@@ -1804,6 +1812,7 @@ def _request_payload(
     body: Any,
     form: dict[str, Any],
     files: list[dict[str, Any]],
+    enforce_required: bool = True,
 ) -> dict[str, Any]:
     if body is not None and (form or files):
         raise ValueError("store_owner_request_body_modes_conflict")
@@ -1836,7 +1845,7 @@ def _request_payload(
         field_names = []
         file_metadata = []
         canonical_sha256 = hashlib.sha256(b"").hexdigest()
-    if capability.request_required and data is None:
+    if enforce_required and capability.request_required and data is None:
         raise ValueError("store_owner_request_body_required")
     return {
         "data": data,

@@ -995,6 +995,18 @@ def _store_owner_concrete_path_matches(path_template: str, concrete_path: str) -
         if template_segment.startswith("{") and template_segment.endswith("}"):
             if not concrete_segment or concrete_segment in {".", ".."}:
                 return False
+        elif binding := re.fullmatch(r"\{[A-Za-z_][A-Za-z0-9_]*\}([^{}]+)", template_segment):
+            suffix = binding.group(1)
+            if not concrete_segment.endswith(suffix):
+                return False
+            value = concrete_segment[: -len(suffix)]
+            if (
+                not value
+                or value in {".", ".."}
+                or any(character in value for character in ("%", "{", "}"))
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            ):
+                return False
         elif template_segment != concrete_segment:
             return False
     return True

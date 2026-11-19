@@ -1564,6 +1564,58 @@ def test_store_owner_contract_rejects_request_fingerprint_or_concrete_path_misma
     assert "invalid_store_owner_query_sha256" in result["preflight"]["blocking_reasons"]
 
 
+@pytest.mark.parametrize(
+    ("concrete_path", "allowed"),
+    [
+        ("/api/v1/photos/photo-1:setMain", True),
+        ("/api/v1/photos/photo-1:setmain", False),
+        ("/api/v1/photos/photo-1:setMain-extra", False),
+        ("/api/v1/photos/photo-1", False),
+        ("/api/v1/photos/:setMain", False),
+        ("/api/v1/photos/.:setMain", False),
+        ("/api/v1/photos/..:setMain", False),
+        ("/api/v1/photos/../photo-1:setMain", False),
+        ("/api/v1/photos/photo-1/other:setMain", False),
+        ("/api/v1/photos/photo%2Fother:setMain", False),
+        ("/api/v1/photos/%2e%2e:setMain", False),
+        ("/api/v1/photos/photo-1:setMain?extra=true", False),
+        ("/api/v1/photos/photo-1:setMain#fragment", False),
+        ("/api/v1/photos/photo\\1:setMain", False),
+    ],
+)
+def test_store_owner_photo_action_binds_exact_suffix_in_one_segment(concrete_path, allowed):
+    result = prepare_action_contract(
+        domain="store_owner_api",
+        action="execute_owner_api",
+        target_id="photo-1",
+        planned_changes={
+            "operation_id": "set_main_api_v1_photos__photoId__setMain_post",
+            "method": "POST",
+            "path_template": "/api/v1/photos/{photoId}:setMain",
+            "plan_hash": "f" * 64,
+            "risk": "write",
+            "schema_hash": "a" * 64,
+            "concrete_path": concrete_path,
+            "query_fields": [],
+            "query_sha256": "b" * 64,
+            "request_sha256": "c" * 64,
+            "verification_class": "exact_entity",
+            "body_fields": [],
+            "form_fields": [],
+            "file_fields": [],
+        },
+        owner_intent="Set the requested synthetic photo as the main product image",
+        expected_revision="synthetic-photo-revision",
+        idempotency_key="store-owner-photo-suffix-001",
+        correlation_id="store-owner-photo-suffix-001",
+    )
+    assert result["ok"] is allowed
+    if allowed:
+        assert result["execution"]["ready"] is True
+    else:
+        assert "invalid_store_owner_concrete_path" in result["preflight"]["blocking_reasons"]
+
+
 def test_store_owner_api_contract_rejects_untyped_or_unversioned_request():
     result = prepare_action_contract(
         domain="store_owner_api",

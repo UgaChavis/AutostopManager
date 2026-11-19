@@ -183,6 +183,39 @@ def _revision_response(
     )
 
 
+def test_photo_revision_can_omit_multipart_body_while_write_modes_require_it(monkeypatch):
+    capability = OwnerCapability(
+        operation_id="upload_photos_bulk",
+        method="POST",
+        path_template="/api/v1/parts/{id}/photos:bulk",
+        risk="write",
+        request_content_types=("multipart/form-data",),
+        request_required=True,
+        path_parameters=("id",),
+        schema_hash="a" * 64,
+    )
+    client = _client_with_capability(capability)
+    path = "/api/v1/parts/card-1/photos:bulk"
+    revision = "f" * 64
+    opener = _Opener([_revision_response(capability, concrete_path=path, current_revision=revision)])
+    monkeypatch.setattr(store_owner_api, "bounded_urlopen", opener.open)
+    arguments = {"operation_id": capability.operation_id, "path_parameters": {"id": "card-1"}}
+
+    prepared = client.prepare_invocation(**arguments, revision_only=True)
+    assert prepared["ok"]
+    discovered = client.invoke(**arguments, mode="revision", expected_plan_hash=prepared["summary"]["plan_hash"])
+    assert discovered["summary"]["current_revision"] == revision
+    request = opener.requests[0][0]
+    assert request.method == "GET" and request.data is None
+    assert parse_qs(urlsplit(request.full_url).query) == {"method": ["POST"], "path": [path]}
+
+    assert client.prepare_invocation(**arguments)["error"]["code"] == "store_owner_request_body_required"
+    for mode in ("dry_run", "apply"):
+        result = client.invoke(**arguments, mode=mode, expected_revision=revision)
+        assert result["error"]["code"] == "store_owner_request_body_required"
+    assert len(opener.requests) == 1
+
+
 def _preflight_response(
     *,
     expected_revision: str | None,
