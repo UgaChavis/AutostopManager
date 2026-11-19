@@ -56,9 +56,13 @@ def test_all_executable_examples_match_actual_sdk_argument_models_without_tool_c
 
 def test_actual_registration_matches_independent_ast_and_all_provider_methods(catalog):
     registry, schemas = catalog
-    tree = ast.parse((ROOT / "autostop_manager/mcp_tools.py").read_text())
+    trees = (
+        ast.parse((ROOT / "autostop_manager/mcp_tools.py").read_text()),
+        ast.parse((ROOT / "autostop_manager/mcp_catalog_tools.py").read_text()),
+    )
     names = {
         keyword.value.value
+        for tree in trees
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "tool"
         for keyword in node.keywords
