@@ -87,11 +87,14 @@ def backup(source: Path, output: Path) -> dict[str, object]:
             with closing(sqlite3.connect(temporary, timeout=10)) as destination, destination:
                 copy_deadline = time.monotonic() + SOURCE_COPY_TIMEOUT_SECONDS
                 origin.backup(destination, pages=128, progress=progress)
+                # A WAL source can pass its journal mode to the copied file.
+                # Publish a standalone snapshot that also opens on read-only storage.
+                journal_mode = destination.execute("PRAGMA journal_mode=DELETE").fetchone()
                 check = destination.execute("PRAGMA quick_check").fetchone()
                 version = destination.execute(
                     "SELECT version FROM manager_automation_schema WHERE component = 'automation_center'"
                 ).fetchone()
-                if check != ("ok",) or version is None or type(version[0]) is not int:
+                if journal_mode != ("delete",) or check != ("ok",) or version is None or type(version[0]) is not int:
                     raise ValueError("automation_backup_verification_failed")
         os.chmod(temporary, 0o600, follow_symlinks=False)
         with temporary.open("rb") as backup_file:
