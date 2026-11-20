@@ -336,6 +336,11 @@ if [[ "${account}" == "work" ]]; then
 fi
 mv -- "${staging_dir}" "${release_dir}"
 
+work_bridge_status() {
+  sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${current_link}" \
+    "$@" "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
+}
+
 bridge_ready() {
   local status
   systemctl is-active --quiet "${service_unit}" || return 1
@@ -345,14 +350,46 @@ bridge_ready() {
       | grep -Eq '"authorized":[[:space:]]*true'
     return
   fi
-  status="$(
-    sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${current_link}" \
-      "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
-  )" || return 1
+  status="$(work_bridge_status)" || return 1
   grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
     && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
     && grep -Eq "\"inbound_enabled\":[[:space:]]*$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)" \
       <<<"${status}"
+}
+
+work_inbound_receipt() {
+  local status expected=false
+  if [[ "${work_inbound_expected}" -eq 1 ]]; then
+    expected=true
+  fi
+  printf 'inbound_expected=%s\n' "${expected}"
+  status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)" || status='{}'
+  if ! /usr/bin/python3 -I -c '
+import json
+import sys
+
+try:
+    status = json.load(sys.stdin)
+except (ValueError, RecursionError):
+    status = None
+
+state = "unknown"
+if isinstance(status, dict) and all(
+    status.get(key) is True for key in ("ok", "authorized", "transport_ready", "inbound_enabled")
+):
+    reconciliation = status.get("intake_reconciliation")
+    health = status.get("intake_health")
+    if reconciliation in ("held", "in_progress"):
+        state = reconciliation
+    elif reconciliation == "complete" and health == {"state": "ready", "error_code": None}:
+        state = "complete"
+
+restored = sys.argv[1] == "true" and state == "complete"
+print(f"inbound_restored={str(restored).lower()}")
+print(f"intake_reconciliation={state}")
+' "${expected}" <<<"${status}"; then
+    printf 'inbound_restored=false\nintake_reconciliation=unknown\n'
+  fi
 }
 
 start_work_bridge() {
@@ -584,7 +621,7 @@ if [[ "${account}" == "work" ]]; then
   echo "telegram_bridge_deployed=true"
   echo "account=work"
   echo "outbound=ready"
-  echo "inbound_restored=$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)"
+  work_inbound_receipt
   cleanup_initial_release_backups
   exit 0
 fi

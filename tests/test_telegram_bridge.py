@@ -561,20 +561,26 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="deploy-script fixture requires its root-only path")
 @pytest.mark.parametrize(
-    ("active_state", "unit_state", "voice_exit", "inbound_intent"),
+    ("active_state", "unit_state", "voice_exit", "inbound_intent", "receipt_case", "reconciliation"),
     [
-        ("inactive", "disabled", 1, False),
-        ("inactive", "disabled", 0, False),
-        ("active", "enabled", 0, False),
-        ("active", "enabled", 0, True),
-        ("inactive", "enabled", 0, False),
-        ("failed", "disabled", 0, False),
-        ("activating", "disabled", 0, False),
-        ("inactive", "masked", 0, False),
+        ("inactive", "disabled", 1, False, "old_shape", "unknown"),
+        ("inactive", "disabled", 0, False, "old_shape", "unknown"),
+        ("active", "enabled", 0, False, "complete", "unknown"),
+        ("active", "enabled", 0, True, "complete", "complete"),
+        ("active", "enabled", 0, True, "held", "held"),
+        ("active", "enabled", 0, True, "in_progress", "in_progress"),
+        ("active", "enabled", 0, True, "false_complete", "unknown"),
+        ("active", "enabled", 0, True, "old_shape", "unknown"),
+        ("active", "enabled", 0, True, "unavailable", "unknown"),
+        ("active", "enabled", 0, True, "malformed", "unknown"),
+        ("inactive", "enabled", 0, False, "old_shape", "unknown"),
+        ("failed", "disabled", 0, False, "old_shape", "unknown"),
+        ("activating", "disabled", 0, False, "old_shape", "unknown"),
+        ("inactive", "masked", 0, False, "old_shape", "unknown"),
     ],
 )
 def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
-    tmp_path, active_state, unit_state, voice_exit, inbound_intent
+    tmp_path, active_state, unit_state, voice_exit, inbound_intent, receipt_case, reconciliation
 ) -> None:
     source = tmp_path / "source"
     remote = tmp_path / "origin.git"
@@ -590,6 +596,23 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     unit_state_path = tmp_path / "unit-state"
     monitor_env = tmp_path / "monitor.env"
     automation_group_helper_called = tmp_path / "automation-group-helper-called"
+    voice_checked = tmp_path / "voice-checked"
+    transport_status: dict[str, object] = {
+        "ok": True,
+        "authorized": True,
+        "transport_ready": True,
+        "inbound_enabled": inbound_intent,
+    }
+    receipt_status = transport_status.copy()
+    if receipt_case not in {"old_shape", "malformed"}:
+        held = receipt_case in {"held", "false_complete"}
+        receipt_status["intake_health"] = {
+            "state": "held" if held else "ready",
+            "error_code": "history_reconciliation_failed" if held else None,
+        }
+        receipt_status["intake_reconciliation"] = (
+            "complete" if receipt_case in {"false_complete", "unavailable"} else receipt_case
+        )
     source.mkdir()
     for relative_path, content in {
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
@@ -599,7 +622,9 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "scripts/install-codex-wake.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/set-work-telegram-duty.sh": "#!/usr/bin/env bash\nexit 0\n",
         "scripts/run-work-telegram-media.sh": "#!/usr/bin/env bash\nexit 0\n",
-        "scripts/run-work-telegram-monitor-voice.sh": f"#!/usr/bin/env bash\nexit {voice_exit}\n",
+        "scripts/run-work-telegram-monitor-voice.sh": (
+            f'#!/usr/bin/env bash\nif [[ {voice_exit} -eq 0 ]]; then touch "$FAKE_VOICE_CHECKED"; fi\nexit {voice_exit}\n'
+        ),
         "deploy/telegram/faster-whisper-small.sha256": "fixture-model-manifest\n",
     }.items():
         path = source / relative_path
@@ -634,10 +659,13 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         (runtime_dir / "venv" / "bin").mkdir(parents=True)
         (runtime_dir / "venv" / "bin" / "python").write_text(
             "#!/bin/sh\n"
-            'case "$*" in *"telegram_bridge --account work status"*) '
-            'printf \'{"ok":true,"authorized":true,"transport_ready":true,'
-            '"inbound_enabled":%s}\\n\' "$FAKE_INBOUND_EXPECTED" ;; '
-            "*) : ;; esac\n",
+            'case "$*" in *"telegram_bridge --account work status"*)\n'
+            '  if [ -f "$FAKE_VOICE_CHECKED" ]; then\n'
+            "    printf '%s\\n' \"$FAKE_RECEIPT_STATUS\"\n"
+            '    exit "$FAKE_RECEIPT_EXIT"\n'
+            "  fi\n"
+            "  printf '%s\\n' \"$FAKE_TRANSPORT_STATUS\" ;;\n"
+            "esac\n",
             encoding="utf-8",
         )
         (runtime_dir / "venv" / "bin" / "python").chmod(0o755)
@@ -735,7 +763,10 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
             "FAKE_SYSTEMCTL_COUNT_FILE": str(daemon_reload_count),
             "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
             "FAKE_UNIT_STATE_PATH": str(unit_state_path),
-            "FAKE_INBOUND_EXPECTED": "true" if inbound_intent else "false",
+            "FAKE_VOICE_CHECKED": str(voice_checked),
+            "FAKE_TRANSPORT_STATUS": json.dumps(transport_status),
+            "FAKE_RECEIPT_STATUS": "{invalid" if receipt_case == "malformed" else json.dumps(receipt_status),
+            "FAKE_RECEIPT_EXIT": "1" if receipt_case == "unavailable" else "0",
             "FAKE_AUTOMATION_GROUP_HELPER_CALLED": str(automation_group_helper_called),
         },
     )
@@ -749,7 +780,12 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     elif voice_exit == 0:
         assert completed.returncode == 0, completed.stderr
         assert "outbound=ready" in completed.stdout
-        assert f"inbound_restored={str(inbound_intent).lower()}" in completed.stdout
+        restored = inbound_intent and reconciliation == "complete"
+        assert completed.stdout.splitlines()[-3:] == [
+            f"inbound_expected={str(inbound_intent).lower()}",
+            f"inbound_restored={str(restored).lower()}",
+            f"intake_reconciliation={reconciliation}",
+        ]
         assert (release_root / "current").resolve() != previous_release
         assert venv_link.resolve() == candidate_runtime / "venv"
         assert model_link.resolve() == candidate_runtime / "model"

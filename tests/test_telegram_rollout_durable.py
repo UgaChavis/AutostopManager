@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_work_bridge_ready_uses_release_not_cwd_after_sudo_environment_reset(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
-    match = re.search(r"(?ms)^bridge_ready\(\) \{\n.*?^\}", source)
-    assert match is not None
+    functions = re.findall(r"(?ms)^(?:work_bridge_status|bridge_ready)\(\) \{\n.*?^\}", source)
+    assert len(functions) == 2
     release = tmp_path / "release"
     package = release / "autostop_manager"
     package.mkdir(parents=True)
@@ -39,7 +39,7 @@ def test_work_bridge_ready_uses_release_not_cwd_after_sudo_environment_reset(tmp
     venv_python.chmod(0o755)
     shell = (
         "systemctl() { return 0; };\n"
-        'sudo() { shift 2; /usr/bin/env -i PATH="$PATH" "$@"; };\n' + match[0] + "\nbridge_ready\n"
+        'sudo() { shift 2; /usr/bin/env -i PATH="$PATH" "$@"; };\n' + "\n".join(functions) + "\nbridge_ready\n"
     )
     result = subprocess.run(
         ["bash", "-c", shell],
