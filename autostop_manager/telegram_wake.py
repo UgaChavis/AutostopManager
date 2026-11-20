@@ -1334,6 +1334,33 @@ class AppServer:
         await self._drop_connection()
 
 
+@dataclass(frozen=True)
+class _BridgeStatusOrder:
+    peer_pid: int
+    request_sequence: int
+
+
+def _prefer_bridge_status(
+    candidate: dict[str, Any], current: dict[str, Any], candidate_at: float | None, current_at: float | None
+) -> bool:
+    if not candidate:
+        return False
+    candidate_order = candidate.get("_bridge_status_order")
+    current_order = current.get("_bridge_status_order")
+    if isinstance(candidate_order, _BridgeStatusOrder) and isinstance(current_order, _BridgeStatusOrder):
+        candidate_generation, current_generation = candidate.get("generation"), current.get("generation")
+        if (
+            candidate_order.peer_pid == current_order.peer_pid
+            and type(candidate_generation) is int
+            and type(current_generation) is int
+            and min(candidate_generation, current_generation) >= 0
+            and candidate_generation != current_generation
+        ):
+            return candidate_generation > current_generation
+        return candidate_order.request_sequence >= current_order.request_sequence
+    return candidate_at is None or current_at is None or candidate_at >= current_at
+
+
 class BridgeJobs:
     """Authenticated root IPC; durable job state belongs exclusively to bridge."""
 
@@ -1350,7 +1377,9 @@ class BridgeJobs:
         self.stopping = False
         self.last_error: str | None = None
         self.subscription_writer: asyncio.StreamWriter | None = None
+        self.subscription_peer_pid: int | None = None
         self.cleanup_tasks: set[asyncio.Future[Any]] = set()
+        self._status_request_sequence = 0
         self.snapshot: dict[str, Any] = {}
         self.snapshot_at: float | None = None
         self.frame_at: float | None = None
@@ -1371,17 +1400,17 @@ class BridgeJobs:
             and frame_age < BRIDGE_STALE_SECONDS
         )
 
-    async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    async def _connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
         if os.geteuid() != 0:
             raise WakeError("wake_job_sender_denied")
         reader, writer = await asyncio.open_unix_connection(str(self.path), limit=MAX_JOB_RESPONSE_BYTES)
         sock = writer.get_extra_info("socket")
-        uid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
+        pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if uid != self.bridge_uid:
             writer.close()
             await writer.wait_closed()
             raise WakeError("wake_bridge_target_invalid")
-        return reader, writer
+        return reader, writer, pid
 
     def _transport_lost(self) -> None:
         self.connected = False
@@ -1393,11 +1422,15 @@ class BridgeJobs:
 
     async def request(self, operation: str, *, deadline: float | None = None, **params: Any) -> dict[str, Any]:
         deadline = deadline if deadline is not None else asyncio.get_running_loop().time() + BRIDGE_RPC_TIMEOUT
+        request_order = None
+        if operation in {"job_status", "job_execution_set"}:
+            self._status_request_sequence += 1
+            request_order = self._status_request_sequence
 
         async def exchange() -> dict[str, Any]:
             writer: asyncio.StreamWriter | None = None
             try:
-                reader, writer = await self._connect()
+                reader, writer, peer_pid = await self._connect()
                 writer.write(json.dumps({"operation": operation, **params}).encode() + b"\n")
                 await writer.drain()
                 try:
@@ -1422,6 +1455,9 @@ class BridgeJobs:
                     ):
                         raise WakeError(error)
                     raise WakeError("wake_job_response_invalid")
+                if request_order is not None and isinstance(response.get("status"), dict):
+                    # Only local observation metadata may decide which reply supersedes another.
+                    response["status"]["_bridge_status_order"] = _BridgeStatusOrder(peer_pid, request_order)
                 return response
             finally:
                 if writer is not None:
@@ -1446,9 +1482,10 @@ class BridgeJobs:
         while not self.stopping:
             writer: asyncio.StreamWriter | None = None
             try:
-                reader, writer = await asyncio.wait_for(self._connect(), BRIDGE_RPC_TIMEOUT)
+                reader, writer, peer_pid = await asyncio.wait_for(self._connect(), BRIDGE_RPC_TIMEOUT)
                 assert writer is not None
                 self.subscription_writer = writer
+                self.subscription_peer_pid = peer_pid
                 writer.write(
                     json.dumps(
                         {"operation": "job_subscribe", "after_generation": self.generation, "heartbeat": True}
@@ -1490,6 +1527,7 @@ class BridgeJobs:
                 return
             finally:
                 self.subscription_writer = None
+                self.subscription_peer_pid = None
                 if writer is not None:
                     await _close_writer_until(writer, asyncio.get_running_loop().time() + 1, self.cleanup_tasks)
             if not self.stopping:
@@ -1721,8 +1759,16 @@ class DurableWakeDispatcher:
         snapshot = getattr(self.jobs, "snapshot", {})
         snapshot_at = getattr(self.jobs, "snapshot_at", None)
         status = self.inbox_status
-        if snapshot and (snapshot_at is None or self.inbox_status_at is None or snapshot_at >= self.inbox_status_at):
+        if _prefer_bridge_status(snapshot, status, snapshot_at, self.inbox_status_at):
             status = snapshot
+        order = status.get("_bridge_status_order")
+        subscription_pid = getattr(self.jobs, "subscription_peer_pid", None)
+        if (
+            subscription_pid is not None
+            and isinstance(order, _BridgeStatusOrder)
+            and order.peer_pid != subscription_pid
+        ):
+            fresh = False
         remaining = (
             None if self.request_deadline is None else max(0, self.request_deadline - asyncio.get_running_loop().time())
         )
@@ -2139,10 +2185,15 @@ class DurableWakeDispatcher:
                 return
             self.last_health = (state, error)
 
+    def _observe_inbox_status(self, status: dict[str, Any]) -> None:
+        observed_at = asyncio.get_running_loop().time()
+        if _prefer_bridge_status(status, self.inbox_status, observed_at, self.inbox_status_at):
+            self.inbox_status = status
+            self.inbox_status_at = observed_at
+
     async def _read_status(self) -> None:
         result = await self.jobs.request("job_status")
-        self.inbox_status = _job_status_entity(result)
-        self.inbox_status_at = asyncio.get_running_loop().time()
+        self._observe_inbox_status(_job_status_entity(result))
 
     async def _read_job(self, job: dict[str, Any]) -> dict[str, Any]:
         result = _job_entity(await self.jobs.request("job_read", job_id=job["job_id"]))
@@ -2164,8 +2215,7 @@ class DurableWakeDispatcher:
             or status["execution_revision"] < revision
         ):
             raise WakeError("wake_job_status_invalid")
-        self.inbox_status = status
-        self.inbox_status_at = asyncio.get_running_loop().time()
+        self._observe_inbox_status(status)
 
     async def _review(self, job: dict[str, Any], code: str, *, global_hold: bool = True) -> None:
         # Binding may have committed while its response was lost: always reread.
