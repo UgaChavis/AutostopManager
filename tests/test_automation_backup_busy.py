@@ -1,4 +1,4 @@
-"""A source-lock budget must not become a deadline for a healthy SQLite copy."""
+"""The SQLite copy has separate source-lock and overall time limits."""
 
 from __future__ import annotations
 
@@ -180,4 +180,63 @@ def test_healthy_copy_progress_may_exceed_busy_budget_in_total(case, monkeypatch
             512 * 8192,
         )
     assert hashlib.sha256(case.source.read_bytes()).hexdigest() == original_hash
+    assert private_handles(case.source.parent) == []
+
+
+def test_continuously_changing_wal_exhausts_copy_budget_without_a_source_lock(case, monkeypatch):
+    with closing(case.connect(case.source)) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.executescript(
+            """
+            CREATE TABLE synthetic_payload(value BLOB);
+            INSERT INTO synthetic_payload VALUES (zeroblob(2097152));
+            CREATE TABLE synthetic_churn(counter INTEGER);
+            INSERT INTO synthetic_churn VALUES (0);
+            """
+        )
+        clock = SimpleNamespace(value=0.0)
+        remaining_pages = []
+
+        def write_after_copy_step(status, remaining, _total):
+            assert status == sqlite3.SQLITE_OK
+            remaining_pages.append(remaining)
+            clock.value += 1.0
+            if clock.value == 5.0:
+                pytest.fail("copy kept restarting beyond the synthetic deadline")
+            writer.execute("UPDATE synthetic_churn SET counter = counter + 1")
+            writer.commit()
+
+        with monkeypatch.context() as probe:
+            probe.setattr(case.module, "SOURCE_COPY_TIMEOUT_SECONDS", 3.0, raising=False)
+            probe.setattr(case.module, "time", SimpleNamespace(monotonic=lambda: clock.value))
+            observe_progress(case, probe, write_after_copy_step)
+            with pytest.raises(ValueError, match=r"^automation_backup_copy_timeout$"):
+                case.module.backup(case.source, case.output)
+
+    assert len(remaining_pages) == 3
+    assert len(set(remaining_pages)) == 1
+    assert not list(case.output.parent.iterdir())
+    assert private_handles(case.source.parent) == []
+
+    assert case.module.backup(case.source, case.output)["ok"] is True
+    assert_snapshot(case)
+    with closing(case.connect(case.output)) as connection:
+        assert connection.execute("SELECT counter FROM synthetic_churn").fetchone() == (3,)
+    assert private_handles(case.source.parent) == []
+
+
+def test_completed_copy_is_still_verified_after_copy_deadline(case, monkeypatch):
+    clock = SimpleNamespace(value=0.0)
+    monkeypatch.setattr(case.module, "SOURCE_COPY_TIMEOUT_SECONDS", 3.0)
+    monkeypatch.setattr(case.module, "time", SimpleNamespace(monotonic=lambda: clock.value))
+
+    def progress(status, _remaining, _total):
+        assert status == sqlite3.SQLITE_DONE
+        clock.value = 4.0
+
+    observe_progress(case, monkeypatch, progress)
+
+    assert case.module.backup(case.source, case.output)["ok"] is True
+    assert clock.value == 4.0
+    assert_snapshot(case)
     assert private_handles(case.source.parent) == []

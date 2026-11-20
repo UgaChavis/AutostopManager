@@ -16,6 +16,7 @@ from pathlib import Path
 
 DEFAULT_SOURCE = Path("/var/lib/autostop-manager-scheduler/registry.sqlite3")
 SOURCE_BUSY_TIMEOUT_SECONDS = 10.0
+SOURCE_COPY_TIMEOUT_SECONDS = 60.0
 
 
 def _absolute_path(raw: str, *, code: str) -> Path:
@@ -68,18 +69,23 @@ def backup(source: Path, output: Path) -> dict[str, object]:
 
         def progress(status: int, _remaining: int, _total: int) -> None:
             nonlocal busy_since
+            if status == sqlite3.SQLITE_DONE:
+                return
+            now = time.monotonic()
             if status in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
-                now = time.monotonic()
                 if busy_since is None:
                     busy_since = now
                 elif now - busy_since >= SOURCE_BUSY_TIMEOUT_SECONDS:
                     raise ValueError("automation_backup_source_busy")
             elif status == sqlite3.SQLITE_OK:
                 busy_since = None
+            if now >= copy_deadline:
+                raise ValueError("automation_backup_copy_timeout")
 
         source_uri = source.absolute().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(source_uri, uri=True, timeout=0)) as origin, origin:
             with closing(sqlite3.connect(temporary, timeout=10)) as destination, destination:
+                copy_deadline = time.monotonic() + SOURCE_COPY_TIMEOUT_SECONDS
                 origin.backup(destination, pages=128, progress=progress)
                 check = destination.execute("PRAGMA quick_check").fetchone()
                 version = destination.execute(
