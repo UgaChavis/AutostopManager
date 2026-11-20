@@ -1716,10 +1716,10 @@ class AutomationStore:
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,95}", result_code):
             raise AutomationError("automation_result_code_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
             row = connection.execute(
                 """
                 SELECT a.desired_state, a.revision, a.every_seconds, a.timezone,
@@ -1727,8 +1727,9 @@ class AutomationStore:
                 FROM manager_automations a
                 JOIN manager_automation_runtime r ON r.job_id = a.job_id
                 WHERE a.job_id = ? AND r.lease_owner_hash = ? AND r.fencing_token = ?
+                  AND r.lease_until > ?
                 """,
-                (job_id, owner_hash, fencing_token),
+                (job_id, owner_hash, fencing_token, now),
             ).fetchone()
             if row is None:
                 return False
@@ -1827,10 +1828,10 @@ class AutomationStore:
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
         if next_delay_seconds is not None and not 5 <= next_delay_seconds <= 24 * 60 * 60:
             raise AutomationError("automation_next_delay_invalid")
-        now_dt = utc_now()
-        now = isoformat(now_dt)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
             row = connection.execute(
                 """
                 SELECT a.desired_state, a.every_seconds, a.timezone, a.revision,
@@ -1839,8 +1840,9 @@ class AutomationStore:
                 FROM manager_automations a
                 JOIN manager_automation_runtime r ON r.job_id = a.job_id
                 WHERE a.job_id = ? AND r.lease_owner_hash = ? AND r.fencing_token = ?
+                  AND r.lease_until > ?
                 """,
-                (job_id, owner_hash, fencing_token),
+                (job_id, owner_hash, fencing_token, now),
             ).fetchone()
             if row is None:
                 return False

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Event, current_thread
 from uuid import uuid4
 
 import pytest
@@ -163,6 +165,72 @@ def test_new_manual_intent_survives_expiry_before_recovery_and_replay(case, seco
     )
     assert run_now(control, case.job) == {**accepted, "idempotent_replay": True}
     assert snapshot(reopened) == recovered
+
+
+@pytest.mark.parametrize("operation", ["finish_run", "cancel_run_claim"])
+def test_expired_run_cannot_skip_scheduled_recovery_after_writer_wait(case, monkeypatch, operation):
+    store = case.store
+    manual = store.claim_next_run(owner=OWNER)
+    assert manual and manual["run_id"] == case.first["run_id"]
+    assert store.finish_run(
+        job_id=manual["job_id"],
+        run_id=manual["run_id"],
+        owner=OWNER,
+        fencing_token=manual["fencing_token"],
+        succeeded=True,
+        result_code="ok",
+    )
+    due = automation_registry.parse_time(store.status()["jobs"][0]["next_run_at"])
+    assert due is not None
+    case.clock[0] = due
+    original = store.claim_next_run(owner=OWNER, lease_seconds=10)
+    assert original and original["trigger_kind"] == "schedule"
+    deadline = automation_registry.parse_time(original["lease_until"])
+    assert deadline is not None
+    case.clock[0] = deadline - timedelta(seconds=1)
+    assert is_current(store, original)
+    before = snapshot(store)
+
+    begin_attempted = Event()
+    original_connect = AutomationStore.connect
+
+    @contextmanager
+    def observed_connect(self):
+        with original_connect(self) as connection:
+            if self is store and current_thread().name.startswith("synthetic-run-finalization"):
+                connection.set_trace_callback(lambda sql: begin_attempted.set() if sql == "BEGIN IMMEDIATE" else None)
+            yield connection
+
+    monkeypatch.setattr(AutomationStore, "connect", observed_connect)
+    arguments = {
+        "job_id": original["job_id"],
+        "run_id": original["run_id"],
+        "owner": OWNER,
+        "fencing_token": original["fencing_token"],
+    }
+    if operation == "finish_run":
+        arguments.update(succeeded=True, result_code="ok")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="synthetic-run-finalization") as workers:
+        with original_connect(store) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            finalized = workers.submit(getattr(store, operation), **arguments)
+            assert begin_attempted.wait(timeout=3)
+            with pytest.raises(TimeoutError):
+                finalized.result(timeout=0.05)
+            case.clock[0] = deadline
+        assert finalized.result(timeout=3) is False
+
+    reopened = AutomationStore(store.path)
+    assert snapshot(reopened) == before
+    replacement = reopened.claim_next_run(owner="synthetic-replacement", lease_seconds=10)
+    assert replacement and replacement["trigger_kind"] == "schedule"
+    assert replacement["run_id"] != original["run_id"]
+    assert replacement["fencing_token"] == original["fencing_token"] + 1
+    recovered = snapshot(reopened)
+    assert recovered["runs"][original["run_id"]]["status"] == "failed"
+    assert recovered["runs"][original["run_id"]]["result_code"] == "automation_lease_expired"
+    assert recovered["runtime"]["next_run_at"] == before["runtime"]["next_run_at"]
+    assert [alert["kind"] for alert in recovered["outbox"]] == ["job_error_alert"]
 
 
 @pytest.mark.parametrize("pending_kind", ["queued", "running"])
