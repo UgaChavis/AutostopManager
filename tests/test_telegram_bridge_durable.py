@@ -1310,6 +1310,73 @@ def test_history_respects_enabled_windows_and_off_messages(tmp_path):
     monitor.inbox.close()
 
 
+@pytest.mark.parametrize("tip_deleted", [False, True])
+@pytest.mark.parametrize("jumps_past_tip", [False, True])
+def test_short_private_history_cannot_certify_observed_dialog_tip(tmp_path, tip_deleted, jumps_past_tip):
+    _config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    now = datetime.now(UTC)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    monitor.inbox.duty_set(True, at=(now - timedelta(minutes=10)).isoformat())
+    prefix = _message(100, at=now - timedelta(minutes=50))
+    tip = _message(105, at=now - timedelta(minutes=45))
+
+    class IncompleteHistoryClient(Client):
+        saw_tip = False
+        scans = 0
+
+        async def iter_messages(self, entity, **kwargs):
+            self.scans += 1
+            async for message in super().iter_messages(entity, **kwargs):
+                if self.saw_tip or message.id != tip.id:
+                    yield message
+            if jumps_past_tip and not self.saw_tip and tip.id in self.messages:
+                yield _message(106, at=tip.date)
+
+    client = IncompleteHistoryClient([prefix, tip])
+
+    def assert_uncovered():
+        assert monitor.inbox.checkpoint(42) == prefix.id
+        assert monitor.inbox.status()["open_events"] == 1
+        assert any(window["closed_at"] for window in monitor.inbox.recovery_windows())
+        assert monitor.inbox.health()["intake"] == {"state": "held", "error_code": "history_reconciliation_changed"}
+
+    async def scenario():
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert_uncovered()
+        assert monitor.reconcile_requested.is_set()
+        monitor.reconcile_requested.clear()
+
+        if tip_deleted:
+            client.messages.pop(tip.id)
+            client.update_revision += 1
+        else:
+            await bridge._reconcile_incoming_history(client, monitor)
+            assert_uncovered()
+            assert monitor.reconciliation_stopped and not monitor.reconcile_requested.is_set()
+            await bridge._reconcile_incoming_history(client, monitor)
+            assert client.scans == 2
+            client.saw_tip = True
+            monitor.note_reconciliation_update(tip)
+            assert monitor.reconcile_requested.is_set()
+            monitor.reconcile_requested.clear()
+
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.intake_reconciliation() == "complete"
+        assert all(window["closed_at"] is None for window in monitor.inbox.recovery_windows())
+        expected = prefix.id if tip_deleted else tip.id
+        assert monitor.inbox.checkpoint(42) == expected
+        expected_events = [prefix.id] if tip_deleted else [prefix.id, tip.id]
+        assert [monitor.resolve(row["event_id"]).message_id for row in monitor.events()] == expected_events
+        assert monitor.inbox.status()["gap_count"] == 0
+        assert client.sent == 0
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
 @pytest.mark.parametrize("checkpoint_current", [False, True])
 def test_retention_keeps_answered_input_deduplicated_before_startup_catchup(tmp_path, checkpoint_current):
     config, first = _runtime(tmp_path)

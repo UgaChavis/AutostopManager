@@ -6472,6 +6472,10 @@ async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) 
     }
 
 
+class _UncoveredHistoryTip(Exception):
+    """The history scan did not cover the dialog's previously observed tip."""
+
+
 async def _reconcile_peer_history(
     client: Any,
     entity: Any,
@@ -6479,6 +6483,7 @@ async def _reconcile_peer_history(
     monitor: DurableInboundMonitor,
     budget: int,
     *,
+    observed_tip: int | None = None,
     transport_generation: int | None = None,
 ) -> tuple[int, bool, bool]:
     if transport_generation is None:
@@ -6494,6 +6499,9 @@ async def _reconcile_peer_history(
         stamp = getattr(message, "date", None)
         if type(message_id) is not int or message_id <= 0 or not isinstance(stamp, datetime):
             raise BridgeError("history_message_invalid")
+        if observed_tip is not None and committed < observed_tip < message_id:
+            # Ascending history cannot cover an unseen tip by jumping over it.
+            break
         if consumed >= budget:
             complete = False
             break
@@ -6535,6 +6543,8 @@ async def _reconcile_peer_history(
     # Only the successfully committed prefix advances across a partial scan.
     if committed > checkpoint:
         monitor.inbox.advance_checkpoint(peer_id, committed)
+    if complete and observed_tip is not None and committed < observed_tip:
+        raise _UncoveredHistoryTip
     if complete:
         if committed:
             monitor.inbox.clear_gap(peer_id=peer_id, through_message_id=committed)
@@ -6650,14 +6660,20 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
         if not isinstance(latest_date, datetime) or type(latest_id) is not int or latest_id <= 0:
             raise BridgeError("history_message_invalid")
         if latest_date >= first_start:
-            consumed, peer_complete, capacity_blocked = await _reconcile_peer_history(
-                client,
-                entity,
-                peer_id,
-                monitor,
-                MAX_RECONCILE_MESSAGES - total_messages,
-                transport_generation=transport_generation,
-            )
+            try:
+                consumed, peer_complete, capacity_blocked = await _reconcile_peer_history(
+                    client,
+                    entity,
+                    peer_id,
+                    monitor,
+                    MAX_RECONCILE_MESSAGES - total_messages,
+                    observed_tip=latest_id,
+                    transport_generation=transport_generation,
+                )
+            except _UncoveredHistoryTip:
+                # Re-read the authoritative dialog list in case the old tip disappeared.
+                _restart_changed_reconciliation(monitor)
+                return
             total_messages += consumed
             if not peer_complete:
                 complete = False
