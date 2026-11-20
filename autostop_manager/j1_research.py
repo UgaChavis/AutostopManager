@@ -29,6 +29,7 @@ from .j1_fetch import (
     contains_sensitive,
     contains_unsafe_url,
     fetch_document,
+    parse_searxng_endpoint,
     public_url,
     redact_sensitive,
     search_public,
@@ -1928,10 +1929,9 @@ def probe() -> dict[str, Any]:
             conn.execute("SELECT COUNT(*) FROM documents_fts").fetchone()
         searxng = os.environ.get("AUTOSTOP_J1_SEARXNG_URL", "")
         if searxng:
-            from urllib.parse import urlsplit
-
-            parsed = urlsplit(searxng)
-            if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}:
+            try:
+                parse_searxng_endpoint(searxng)
+            except ValueError:
                 return _error("searxng_url_invalid")
         try:
             from .j1_browser import browser_status

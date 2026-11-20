@@ -896,22 +896,33 @@ def _clean_search_text(value: object, *, limit: int) -> str:
     return redact_sensitive(" ".join(plain.split()), limit=limit)
 
 
-def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
-    parsed = urlsplit(base_url)
+def parse_searxng_endpoint(base_url: str) -> tuple[str, int, str]:
+    """Validate the configured loopback endpoint without opening a connection."""
+    try:
+        parsed = urlsplit(base_url)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        raise ValueError("searxng_url_invalid") from None
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "::1"}
+        or host is None
+        or host not in {"127.0.0.1", "::1"}
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
         raise ValueError("searxng_url_invalid")
-    target = (parsed.path.rstrip("/") or "") + "/search?q=" + quote_plus(query) + "&format=json"
+    return host, port or 80, parsed.path.rstrip("/")
+
+
+def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
+    host, port, prefix = parse_searxng_endpoint(base_url)
+    target = prefix + "/search?q=" + quote_plus(query) + "&format=json"
     search_deadline = _SEARCH_DEADLINE.get()
     started = time.monotonic()
     deadline = started + 10 if search_deadline is None else min(started + _SEARXNG_ATTEMPT_SECONDS, search_deadline)
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=_deadline_timeout(None, deadline))
+    conn = http.client.HTTPConnection(host, port, timeout=_deadline_timeout(None, deadline))
     conn.response_class = _deadline_response_class(deadline)
     response: http.client.HTTPResponse | None = None
     try:

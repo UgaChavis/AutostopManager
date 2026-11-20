@@ -931,6 +931,57 @@ def test_public_request_rejects_oversize_and_compressed_responses(monkeypatch: p
     )
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://synthetic-user:synthetic-secret@127.0.0.1:8890",
+        "http://127.0.0.1:8890?synthetic=1",
+        "http://127.0.0.1:8890#synthetic",
+        "http://127.0.0.1:65536",
+        "http://127.0.0.1:synthetic",
+        "http://[::1:8890",
+        "https://127.0.0.1:8890",
+        "http://example.invalid:8890",
+    ],
+)
+def test_searxng_probe_and_executor_reject_same_invalid_endpoints(monkeypatch, endpoint):
+    with j1._db():
+        pass
+    monkeypatch.setenv("AUTOSTOP_J1_SEARXNG_URL", endpoint)
+    monkeypatch.setattr(j1_browser, "browser_status", lambda: {"browser_ready": False})
+    monkeypatch.setattr(j1_fetch.http.client, "HTTPConnection", lambda *_a, **_kw: pytest.fail("invalid endpoint used"))
+    fallback_urls = []
+
+    def reject_fallback_robots(url):
+        fallback_urls.append(url)
+        return False, 0.0
+
+    monkeypatch.setattr(j1_fetch, "_robots_policy", reject_fallback_robots)
+    assert j1.probe() == {"ok": False, "schema": j1.SCHEMA, "error": {"code": "searxng_url_invalid"}}
+    with pytest.raises(ValueError, match=r"^searxng_url_invalid$"):
+        j1_fetch._search_searxng("synthetic technical topic", endpoint)
+    assert not fallback_urls
+
+    assert j1_fetch.search_public("synthetic technical topic", searxng_url=endpoint) == ([], "search_unavailable")
+    assert fallback_urls == ["https://html.duckduckgo.com/html/?q=synthetic+technical+topic"]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["", "http://127.0.0.1", "http://127.0.0.1:8890", "http://[::1]:8890/subpath/"],
+)
+def test_probe_accepts_optional_and_valid_loopback_search_configuration(monkeypatch, endpoint):
+    with j1._db():
+        pass
+    monkeypatch.setenv("AUTOSTOP_J1_SEARXNG_URL", endpoint)
+    monkeypatch.setattr(j1_browser, "browser_status", lambda: {"browser_ready": False})
+    monkeypatch.setattr(j1_fetch.http.client, "HTTPConnection", lambda *_a, **_kw: pytest.fail("probe opened HTTP"))
+    monkeypatch.setattr(j1_fetch, "_robots_policy", lambda *_a: pytest.fail("probe started fallback"))
+    status = j1.probe()
+    assert status["ok"] and status["cache_ready"]
+    assert status["search_configured"] is bool(endpoint)
+
+
 def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     class Response:
         status = 200
