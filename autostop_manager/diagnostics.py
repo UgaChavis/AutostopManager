@@ -361,17 +361,41 @@ def watchdog_status() -> dict[str, Any]:
     return {"ok": all(checks.values()), "desired_state": "absent", "checks": checks}
 
 
-def _instruction_skill_evidence(skill: dict[str, Any], *, root: Path, bundle: Any, name: str) -> dict[str, Any]:
-    """Read constructed paths only; an escaping workspace alias must target this exact bundle file."""
+_INSTALLED_MANAGER_WORKSPACE = Path("/opt/AutostopManager")
+_INSTALLED_MANAGER_RELEASES = Path("/opt/autostop-manager-releases")
+
+
+def _installed_manager_alias_root(cwd: str, bundle: Any) -> Path | None:
+    """Verify the separate Manager release used by the stable workspace."""
+    if Path(cwd) != _INSTALLED_MANAGER_WORKSPACE:
+        return None
+    from .instruction_bundle import InstructionBundleError, load_instruction_bundle
+
+    try:
+        installed = (_INSTALLED_MANAGER_RELEASES / "current").resolve(strict=True)
+        if installed == Path(bundle.root):
+            return None
+        verified = load_instruction_bundle(installed, bundle.revision, allowed_roots=(_INSTALLED_MANAGER_RELEASES,))
+        return Path(verified.root)
+    except (InstructionBundleError, OSError, RuntimeError):
+        return None
+
+
+def _instruction_skill_evidence(
+    skill: dict[str, Any], *, root: Path, bundle: Any, name: str, installed_alias_root: Path | None = None
+) -> dict[str, Any]:
+    """Read constructed paths only, with known installed releases as alias targets."""
     relative = f".agents/skills/{name}/SKILL.md"
-    expected, canonical = root / relative, Path(bundle.root) / relative
+    expected = root / relative
+    release_paths = {Path(bundle.root) / relative}
+    if installed_alias_root is not None:
+        release_paths.add(installed_alias_root / relative)
     reported = skill.get("path")
     digest = safe_path = None
     try:
         resolved = expected.resolve(strict=True)
-        canonical_regular = canonical.resolve(strict=True) == canonical
-        if canonical_regular and resolved == canonical and reported in {str(expected), str(canonical)}:
-            candidate = canonical
+        if resolved in release_paths and reported in {str(expected), str(resolved)}:
+            candidate = resolved
         elif (
             reported == str(expected)
             and resolved.is_relative_to(root.resolve(strict=True))
@@ -412,6 +436,7 @@ def _discovered_instruction_skills(result: Any, *, cwd: str, bundle: Any) -> tup
             raise ValueError("instruction_discovery_invalid")
         views[row["cwd"]].append(row)
     discovered = []
+    installed_alias_root = _installed_manager_alias_root(cwd, bundle)
     for root, rows in views.items():
         for name in PROJECT_SKILLS:
             candidates = [
@@ -421,7 +446,13 @@ def _discovered_instruction_skills(result: Any, *, cwd: str, bundle: Any) -> tup
                 if isinstance(skill, dict) and skill.get("name") == name
             ]
             if len(rows) == 1 and len(candidates) == 1:
-                evidence = _instruction_skill_evidence(candidates[0], root=Path(root), bundle=bundle, name=name)
+                evidence = _instruction_skill_evidence(
+                    candidates[0],
+                    root=Path(root),
+                    bundle=bundle,
+                    name=name,
+                    installed_alias_root=installed_alias_root if root == cwd else None,
+                )
             else:
                 evidence = {
                     "path": None,

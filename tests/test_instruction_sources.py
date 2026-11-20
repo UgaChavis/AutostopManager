@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from autostop_manager import cli, diagnostics, instruction_bundle as bundles, telegram_wake as wake
-from tests.instruction_bundle_fakes import create_instruction_bundle
+from tests.instruction_bundle_fakes import create_instruction_bundle, seal_instruction_bundle
 
 
 @pytest.fixture
@@ -233,6 +233,27 @@ def test_canonical_workspace_skill_aliases_are_verified_without_rpc_path_reads(r
     assert result["raw_project_skill_differences"] == result["raw_project_skill_unverified"] == 0
     assert all(item["matches_selected_bundle"] is True for item in result["raw_skill_discovery"])
     assert result["instruction_model_context_verified"] is False
+
+
+@pytest.mark.parametrize("change", [None, "revision", "skill_bytes"])
+def test_stable_workspace_alias_verifies_only_matching_installed_skill_bytes(runtime, tmp_path, monkeypatch, change):
+    releases = tmp_path / "manager-releases"
+    alternate = create_instruction_bundle(releases / "installed", revision=("b" if change == "revision" else "a") * 40)
+    if change == "skill_bytes":
+        (alternate / ".agents/skills/manage-autostop-client/SKILL.md").write_text("Changed project policy.\n")
+        seal_instruction_bundle(alternate)
+    (releases / "current").symlink_to(alternate, target_is_directory=True)
+    shutil.rmtree(runtime.stale / ".agents")
+    (runtime.stale / ".agents").symlink_to(releases / "current/.agents", target_is_directory=True)
+    runtime.physical_paths = True
+    monkeypatch.setattr(diagnostics, "_INSTALLED_MANAGER_RELEASES", releases)
+    monkeypatch.setattr(diagnostics, "_INSTALLED_MANAGER_WORKSPACE", runtime.stale)
+
+    result = diagnostics.audit_instruction_sources()
+
+    assert result["ok"] is (change is None)
+    assert result["raw_project_skill_unverified"] == (len(bundles.PROJECT_SKILLS) if change == "revision" else 0)
+    assert result["raw_project_skill_differences"] == (1 if change == "skill_bytes" else 0)
 
 
 @pytest.mark.parametrize("kind", ["file", "directory"])
