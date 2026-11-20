@@ -294,7 +294,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         with os.fdopen(fd, "wb") as raw, tempfile.TemporaryDirectory(prefix=".crm-sqlite-", dir=parent) as scratch:
-            with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
+            with tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT, compresslevel=6) as archive:
                 info = _info("crm", root.stat(), True)
                 archive.addfile(info)
                 _record(digest, info)
