@@ -1510,6 +1510,10 @@ class BridgeJobs:
                         raise WakeError("wake_job_subscription_invalid")
                     self.frame_at = asyncio.get_running_loop().time()
                     await self._snapshot()
+                    order = self.snapshot.get("_bridge_status_order")
+                    if isinstance(order, _BridgeStatusOrder) and order.peer_pid != peer_pid:
+                        # The socket path already belongs to a replacement bridge.
+                        raise TransportLost("wake_bridge_subscription_replaced")
                     self.connected = True
                     attempt = 0
                     changed = first or generation != self.generation

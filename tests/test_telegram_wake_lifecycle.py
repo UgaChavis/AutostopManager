@@ -170,6 +170,123 @@ def test_rpc_eof_reconnects_subscription_and_keeps_worker_alive(tmp_path, bundle
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="production bridge IPC is root-only")
+def test_status_from_replacement_bridge_reconnects_an_open_subscription(tmp_path, quick_recovery):
+    async def scenario():
+        old_pid, new_pid = os.getpid(), os.getpid() + 1
+        current_pid = old_pid
+        calls = []
+        old_heartbeat = asyncio.Event()
+        old_disconnected = asyncio.Event()
+
+        async def bridge(reader, writer):
+            source = current_pid
+            generation = 41 if source == old_pid else 1
+            try:
+                request = json.loads(await reader.readline())
+                operation = request["operation"]
+                calls.append((source, operation))
+                if operation == "job_subscribe":
+                    writer.write(
+                        json.dumps({"ok": True, "generation": generation, "heartbeat": False}).encode() + b"\n"
+                    )
+                    await writer.drain()
+                    if source == old_pid:
+                        await old_heartbeat.wait()
+                        writer.write(b'{"ok":true,"generation":41,"heartbeat":true}\n')
+                        await writer.drain()
+                    await reader.read()
+                    if source == old_pid:
+                        old_disconnected.set()
+                else:
+                    assert operation == "job_status"
+                    status = {
+                        "worker_protocol": wake.WORKER_PROTOCOL,
+                        "context_mode": "parallel_peer_v1",
+                        "generation": generation,
+                        "pending_events": int(source == new_pid),
+                    }
+                    writer.write(json.dumps({"ok": True, "status": status}).encode() + b"\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        path = tmp_path / "bridge.sock"
+        async with await asyncio.start_unix_server(bridge, path=path):
+            jobs = wake.BridgeJobs(os.geteuid(), path)
+            connect = jobs._connect
+
+            async def changing_peer():
+                reader, writer, _pid = await connect()
+                return reader, writer, current_pid
+
+            jobs._connect = changing_peer
+            jobs.start()
+            try:
+                await until(lambda: jobs.status_fresh and jobs.generation == 41)
+                assert jobs.subscription_peer_pid == old_pid and not old_disconnected.is_set()
+                jobs.changed.clear()
+                current_pid = new_pid
+                old_heartbeat.set()
+                await asyncio.wait_for(old_disconnected.wait(), 1)
+                await until(lambda: jobs.status_fresh and jobs.generation == 1)
+                assert jobs.subscription_peer_pid == new_pid
+                assert jobs.snapshot["pending_events"] == 1 and jobs.changed.is_set()
+                assert calls == [
+                    (old_pid, "job_subscribe"),
+                    (old_pid, "job_status"),
+                    (new_pid, "job_status"),
+                    (new_pid, "job_subscribe"),
+                    (new_pid, "job_status"),
+                ]
+            finally:
+                old_heartbeat.set()
+                await jobs.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="production bridge IPC is root-only")
+@pytest.mark.parametrize("wrong_uid", [False, True])
+def test_bad_subscription_peer_or_status_does_not_retry(tmp_path, quick_recovery, wrong_uid):
+    async def scenario():
+        calls = []
+        received = asyncio.Event()
+
+        async def bridge(reader, writer):
+            try:
+                raw = await reader.readline()
+                calls.append(json.loads(raw)["operation"] if raw else None)
+                received.set()
+                if raw:
+                    payload = (
+                        b'{"ok":true,"generation":1,"heartbeat":false}\n'
+                        if calls[-1] == "job_subscribe"
+                        else b"invalid status reply\n"
+                    )
+                    writer.write(payload)
+                    await writer.drain()
+                    await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        path = tmp_path / "bridge.sock"
+        async with await asyncio.start_unix_server(bridge, path=path):
+            jobs = wake.BridgeJobs(os.geteuid() + int(wrong_uid), path)
+            jobs.start()
+            try:
+                await asyncio.wait_for(received.wait(), 1)
+                await asyncio.wait_for(jobs.listener, 1)
+                assert not jobs.status_fresh and jobs.last_error == "wake_job_subscription_invalid"
+                assert calls == ([None] if wrong_uid else ["job_subscribe", "job_status"])
+            finally:
+                await jobs.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("code", ["wake_job_response_invalid", "account_not_authorized", "provider_quota_exceeded"])
 def test_permanent_bridge_failure_holds_until_explicit_resume(tmp_path, bundle, code):
     async def scenario():
