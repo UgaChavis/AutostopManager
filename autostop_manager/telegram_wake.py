@@ -72,10 +72,18 @@ class TransportLost(WakeError):
 class RPCRejected(WakeError):
     """The server explicitly rejected a request; distinct from a lost response."""
 
-    def __init__(self, code: str, *, archived_thread: bool = False, missing_method: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        archived_thread: bool = False,
+        missing_method: str | None = None,
+        diagnostic_token: object | None = None,
+    ) -> None:
         super().__init__(code)
         self.archived_thread = archived_thread
         self.missing_method = missing_method
+        self.diagnostic_token = diagnostic_token
 
 
 class KnownTurnFailed(WakeError):
@@ -329,6 +337,7 @@ class AppServer:
         self.pausing = False
         self.outcome_unknown = False
         self.last_rpc_error_code: int | None = None
+        self._rpc_error_token: object | None = None
         self.generation = 0
         self.managed = False
         self.blocked = False
@@ -688,6 +697,7 @@ class AppServer:
     def _rpc_rejection(self, error: Any) -> RPCRejected:
         code = error.get("code") if isinstance(error, dict) else None
         self.last_rpc_error_code = code if type(code) is int else None
+        self._rpc_error_token = object()
         message = error.get("message") if isinstance(error, dict) and type(code) is int and code == -32600 else None
         thread_id = self.config.thread_id
         archived = isinstance(message, str) and message in {
@@ -702,7 +712,12 @@ class AppServer:
             if isinstance(message, str)
             else None
         )
-        return RPCRejected("codex_rpc_rejected", archived_thread=archived, missing_method=missing_method)
+        return RPCRejected(
+            "codex_rpc_rejected",
+            archived_thread=archived,
+            missing_method=missing_method,
+            diagnostic_token=self._rpc_error_token,
+        )
 
     def _notice_progress(self, message: dict[str, Any]) -> None:
         params = message.get("params")
@@ -786,6 +801,7 @@ class AppServer:
         if self.instruction_config is not None:
             params["config"] = {**params.get("config", {}), **self.instruction_config}
         archive_sequence = self.thread_archive_sequence
+        recovered_archive_token: object | None = None
         try:
             result = await self.request("thread/resume", params)
         except RPCRejected as exc:
@@ -810,6 +826,7 @@ class AppServer:
                 result = await self.request("thread/resume", params)
             except RPCRejected as retry_exc:
                 raise WakeError("codex_thread_resume_rejected") from retry_exc
+            recovered_archive_token = exc.diagnostic_token
         if archive_sequence != self.thread_archive_sequence:
             # An idle response from before an archive cannot authorize a start.
             raise TransportLost("codex_thread_archive_changed")
@@ -858,6 +875,9 @@ class AppServer:
         self.collaboration_mode = result.get("collaborationMode")
         self.worker_archived = False
         self.peer_unavailable = None
+        if recovered_archive_token is not None and self._rpc_error_token is recovered_archive_token:
+            self.last_rpc_error_code = None
+            self._rpc_error_token = None
         return str(status["type"])
 
     def peer_start_params(self, *, instruction_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1147,6 +1167,7 @@ class AppServer:
                     if self.pausing:
                         raise WakeError("codex_paused")
                     self.last_rpc_error_code = None
+                    self._rpc_error_token = None
                     resume_generation = self.generation
                     if await self.resume() == "unavailable":
                         raise WakeError("codex_thread_archived")

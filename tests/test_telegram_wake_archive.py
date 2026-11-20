@@ -48,6 +48,8 @@ class ArchiveServer:
             response = {"id": request["id"], "result": {}}
             if method == "thread/resume" and self.archived:
                 response = {"id": request["id"], "error": self.error}
+            elif method == "test/unrelated":
+                response = {"id": request["id"], "error": {"code": -32600, "message": "synthetic unrelated error"}}
             elif method in {"thread/read", "thread/resume", "thread/unarchive"}:
                 if method == "thread/unarchive":
                     if self.unarchive_error is not None:
@@ -102,6 +104,35 @@ def test_cold_archived_pinned_worker_recovers_exact_id_without_model_turn(tmp_pa
                 assert app.resumed_model == "gpt-6.1-sol"
                 assert app.config == config(path, bundle)
                 assert not app.outcome_unknown and app.active_turn is None
+                assert app.last_rpc_error_code is None
+            finally:
+                await app.close()
+
+    asyncio.run(scenario())
+
+
+def test_archived_worker_recovery_preserves_a_newer_rpc_error_with_the_same_code(tmp_path, bundle):
+    async def scenario():
+        server = ArchiveServer()
+        path = tmp_path / "app.sock"
+        async with unix_serve(server.handle, str(path), compression=None):
+            app = wake.AppServer(config(path, bundle))
+            app.managed = True
+            original = app.request
+
+            async def with_other_request(method, params):
+                result = await original(method, params)
+                if method == "thread/unarchive":
+                    with pytest.raises(wake.RPCRejected, match=r"^codex_rpc_rejected$"):
+                        await original("test/unrelated", {})
+                return result
+
+            try:
+                await app.connect()
+                app.request = with_other_request
+                assert await app.resume() == "idle"
+                assert server.methods().count("thread/unarchive") == 1
+                assert app.last_rpc_error_code == -32600
             finally:
                 await app.close()
 
@@ -123,6 +154,7 @@ def test_unarchive_rejection_stops_after_one_attempt_with_fixed_error(tmp_path, 
                 assert server.methods().count("thread/unarchive") == 1
                 assert server.methods().count("thread/resume") == 1
                 assert "turn/start" not in server.methods()
+                assert app.last_rpc_error_code == -32603
             finally:
                 await app.close()
 
@@ -361,6 +393,7 @@ def test_archive_readback_requires_exact_idle_visible_worker(tmp_path, bundle, t
                 with pytest.raises(wake.WakeError, match=r"^codex_thread_archive_target_invalid$"):
                     await app.resume()
                 assert "thread/unarchive" not in server.methods()
+                assert app.last_rpc_error_code == -32600
             finally:
                 await app.close()
 
