@@ -82,12 +82,15 @@ def _read_root_owned_file(path: str, *, maximum_bytes: int, exact_mode: int | No
         os.close(descriptor)
 
 
+def configured_release_root(override: str | None = None) -> str:
+    return os.environ.get("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", DEFAULT_RELEASE_ROOT) if override is None else override
+
+
 def active_release_revision(release_root: str | None = None) -> tuple[str, str]:
     """Return the sealed current Manager revision or a public readiness reason."""
 
     reject_obsolete_runtime_config()
-    configured_root = release_root or os.environ.get("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", DEFAULT_RELEASE_ROOT)
-    root = _safe_path(configured_root, limit=220)
+    root = _safe_path(configured_release_root(release_root), limit=220)
     if not root:
         return "", "browser_release_revision_unavailable"
     try:
@@ -112,7 +115,11 @@ def attestation_content(revision: str) -> bytes:
 
 
 def _attestation_revision(marker_path: str | None = None) -> str:
-    candidate = marker_path or os.environ.get("AUTOSTOP_J1_BROWSER_ISOLATION_MARKER", DEFAULT_ISOLATION_MARKER)
+    candidate = (
+        os.environ.get("AUTOSTOP_J1_BROWSER_ISOLATION_MARKER", DEFAULT_ISOLATION_MARKER)
+        if marker_path is None
+        else marker_path
+    )
     payload = _read_root_owned_file(candidate, maximum_bytes=128, exact_mode=0o600)
     if payload is None:
         return ""
@@ -127,7 +134,9 @@ def _attestation_revision(marker_path: str | None = None) -> str:
 
 
 def _socket_ready(socket_path: str | None = None) -> bool:
-    candidate = socket_path or os.environ.get("AUTOSTOP_J1_BROWSER_SOCKET", DEFAULT_SOCKET_PATH)
+    candidate = (
+        os.environ.get("AUTOSTOP_J1_BROWSER_SOCKET", DEFAULT_SOCKET_PATH) if socket_path is None else socket_path
+    )
     path = _safe_path(candidate, limit=100)
     if not path:
         return False
@@ -138,10 +147,12 @@ def _socket_ready(socket_path: str | None = None) -> bool:
     return stat.S_ISSOCK(info.st_mode) and info.st_uid == 10_001 and stat.S_IMODE(info.st_mode) == 0o600
 
 
-def browser_status() -> dict[str, Any]:
+def browser_status(
+    *, release_root: str | None = None, marker_path: str | None = None, socket_path: str | None = None
+) -> dict[str, Any]:
     """Return a redacted, cheap browser readiness state without network access."""
 
-    active_revision, reason = active_release_revision()
+    active_revision, reason = active_release_revision(release_root)
     if not active_revision:
         return {
             "browser_ready": False,
@@ -150,14 +161,14 @@ def browser_status() -> dict[str, Any]:
             "browser_attestation_revision": "",
             "browser_socket_ready": False,
         }
-    attested_revision = _attestation_revision()
+    attested_revision = _attestation_revision(marker_path)
     if not attested_revision:
         return {
             "browser_ready": False,
             "browser_reason": "browser_isolation_unverified",
             "browser_release_revision": active_revision,
             "browser_attestation_revision": "",
-            "browser_socket_ready": _socket_ready(),
+            "browser_socket_ready": _socket_ready(socket_path),
         }
     if attested_revision != active_revision:
         return {
@@ -165,9 +176,9 @@ def browser_status() -> dict[str, Any]:
             "browser_reason": "browser_isolation_stale",
             "browser_release_revision": active_revision,
             "browser_attestation_revision": attested_revision,
-            "browser_socket_ready": _socket_ready(),
+            "browser_socket_ready": _socket_ready(socket_path),
         }
-    socket_ready = _socket_ready()
+    socket_ready = _socket_ready(socket_path)
     return {
         "browser_ready": socket_ready,
         "browser_reason": "" if socket_ready else "browser_socket_unavailable",

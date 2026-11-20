@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import os
+import stat
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -225,7 +228,7 @@ def test_health_probe_reports_container_state_without_rendering(monkeypatch: pyt
     monkeypatch.setattr(
         j1_browser,
         "browser_status",
-        lambda: {
+        lambda **_kwargs: {
             "browser_ready": True,
             "browser_reason": "",
             "browser_release_revision": "a" * 40,
@@ -247,7 +250,7 @@ def test_health_probe_rejects_container_from_another_release(monkeypatch: pytest
     monkeypatch.setattr(
         j1_browser,
         "browser_status",
-        lambda: {
+        lambda **_kwargs: {
             "browser_ready": True,
             "browser_reason": "",
             "browser_release_revision": REVISION,
@@ -261,3 +264,72 @@ def test_health_probe_rejects_container_from_another_release(monkeypatch: pytest
 
     assert result["browser_containers_ready"] is False
     assert result["browser_container_reason"] == "browser_container_image_revision_invalid"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_probe_uses_the_same_release_and_paths_as_its_command_line(tmp_path, monkeypatch, capsys, explicit):
+    default_release = tmp_path / "environment-release"
+    selected_release = tmp_path / "selected-release"
+    default_release.mkdir()
+    selected_release.mkdir()
+    default_socket = "/run/j1-probe-fixture-default.sock"
+    selected_socket = "/run/j1-probe-fixture-missing.sock"
+    default_marker = str(default_release / "marker")
+    selected_marker = str(selected_release / "missing-marker")
+    selected_revision = "b" * 40
+    files = {
+        str(default_release / "REVISION"): REVISION.encode(),
+        str(selected_release / "REVISION"): selected_revision.encode(),
+        default_marker: j1_browser.attestation_content(REVISION),
+    }
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", str(default_release))
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_SOCKET", default_socket)
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_ISOLATION_MARKER", default_marker)
+    monkeypatch.setattr(j1_browser, "_read_root_owned_file", lambda path, **_kwargs: files.get(path))
+
+    def socket_info(path):
+        if path == default_socket:
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o600, st_uid=10001)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(j1_browser, "os", SimpleNamespace(path=os.path, environ=os.environ, lstat=socket_info))
+    monkeypatch.setattr(verify, "os", SimpleNamespace(geteuid=lambda: 0))
+    gate = []
+    monkeypatch.setattr(verify, "_verifier_runs_from_active_release", lambda root: gate.append(root) or True)
+    monkeypatch.setattr(verify, "_load_running_topology", lambda *_: _topology())
+    arguments = ["j1_browser_verify", "probe"]
+    if explicit:
+        arguments.extend(
+            ["--release-root", str(selected_release), "--socket", selected_socket, "--marker", selected_marker]
+        )
+    monkeypatch.setattr(sys, "argv", arguments)
+
+    verify.main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert gate == [str(selected_release if explicit else default_release)]
+    assert result["browser_release_revision"] == (selected_revision if explicit else REVISION)
+    assert result["browser_ready"] is not explicit
+    assert result["browser_socket_ready"] is not explicit
+    assert result["browser_containers_ready"] is not explicit
+    assert result["browser_reason"] == ("browser_isolation_unverified" if explicit else "")
+
+
+def test_attest_cli_keeps_its_defaults_with_probe_environment_overrides(monkeypatch, capsys):
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_RELEASE_ROOT", "/synthetic/release")
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_SOCKET", "/synthetic/socket")
+    monkeypatch.setenv("AUTOSTOP_J1_BROWSER_ISOLATION_MARKER", "/synthetic/marker")
+    monkeypatch.setattr(verify, "os", SimpleNamespace(geteuid=lambda: 0))
+    monkeypatch.setattr(sys, "argv", ["j1_browser_verify", "attest"])
+    monkeypatch.setattr(
+        verify, "_verifier_runs_from_active_release", lambda root: root == j1_browser.DEFAULT_RELEASE_ROOT
+    )
+    monkeypatch.setattr(verify, "verify_and_attest", lambda **paths: paths)
+
+    verify.main()
+
+    assert json.loads(capsys.readouterr().out) == {
+        "release_root": j1_browser.DEFAULT_RELEASE_ROOT,
+        "socket_path": j1_browser.DEFAULT_SOCKET_PATH,
+        "marker_path": j1_browser.DEFAULT_ISOLATION_MARKER,
+    }

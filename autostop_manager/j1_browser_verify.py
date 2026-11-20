@@ -385,10 +385,18 @@ def verify_and_attest(
     }
 
 
-def probe_browser_stack(command: Command = _command_output) -> dict[str, Any]:
+def probe_browser_stack(
+    command: Command = _command_output,
+    *,
+    release_root: str | None = None,
+    socket_path: str | None = None,
+    marker_path: str | None = None,
+) -> dict[str, Any]:
     """Read the current attestation and container topology without egress or mutation."""
 
-    browser_status = j1_browser.browser_status()
+    browser_status = j1_browser.browser_status(
+        release_root=release_root, socket_path=socket_path, marker_path=marker_path
+    )
     result: dict[str, Any] = {
         "ok": True,
         "schema": "autostop.j1.browser.health.v1",
@@ -431,21 +439,27 @@ def _verifier_runs_from_active_release(release_root: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify and attest the isolated J1 browser stack")
     parser.add_argument("command", choices=("attest", "probe"))
-    parser.add_argument("--release-root", default=j1_browser.DEFAULT_RELEASE_ROOT)
-    parser.add_argument("--socket", default=j1_browser.DEFAULT_SOCKET_PATH)
-    parser.add_argument("--marker", default=j1_browser.DEFAULT_ISOLATION_MARKER)
+    parser.add_argument("--release-root")
+    parser.add_argument("--socket")
+    parser.add_argument("--marker")
     args = parser.parse_args()
-    if os.geteuid() != 0 or not _verifier_runs_from_active_release(args.release_root):
+    release_root = args.release_root
+    if args.command == "probe":
+        release_root = j1_browser.configured_release_root(release_root)
+    elif release_root is None:
+        release_root = j1_browser.DEFAULT_RELEASE_ROOT
+    if os.geteuid() != 0 or not _verifier_runs_from_active_release(release_root):
         print(json.dumps({"ok": False, "error": "browser_verifier_release_required"}), file=sys.stderr)
         raise SystemExit(2)
     if args.command == "probe":
-        print(json.dumps(probe_browser_stack(), ensure_ascii=False))
+        result = probe_browser_stack(release_root=release_root, socket_path=args.socket, marker_path=args.marker)
+        print(json.dumps(result, ensure_ascii=False))
         return
     try:
         result = verify_and_attest(
-            release_root=args.release_root,
-            socket_path=args.socket,
-            marker_path=args.marker,
+            release_root=release_root,
+            socket_path=j1_browser.DEFAULT_SOCKET_PATH if args.socket is None else args.socket,
+            marker_path=j1_browser.DEFAULT_ISOLATION_MARKER if args.marker is None else args.marker,
         )
     except VerificationError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
