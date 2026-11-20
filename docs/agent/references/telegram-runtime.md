@@ -136,7 +136,7 @@ Root-only Bridge `job_status` возвращает `status.job_latency`. В ре
 | `send`, `send-photo`, `send-document` | Dry-run/apply, исходный ключ, независимый readback; рабочий ответ связан с заданием и версией. |
 | `send-voice` | Только personal: приватный outbox OGG/Opus, 10 MiB/10 минут, точный числовой private peer; dry-run/apply и идемпотентность, фактические voice/MIME/duration/size и скачанные байты. |
 | `job-read`, `job-refresh`, `job-result`, `job-handoff`, `job-effect-readback` | Прочитать/обновить контекст, завершить задание, передать владельцу или сверить старую отправку без повтора; job/lease/revision не публикуются клиенту. |
-| `job-complete-reply` | После подтверждённого текстового результата сверить исходную отправку, перечитать задание и записать `answered` одним вызовом. Передай `--job-id ID --lease LEASE --receipt-key KEY`. |
+| `job-complete-reply` | Записывает `answered` после независимой сверки, если единственная предпринятая отправка помимо ACK — подтверждённый текст `kind=result`. Передай `--job-id ID --lease LEASE --receipt-key KEY`. Закрытие передачи описано в [B1](../modules/B1.md). |
 | `job-client-control` | Только trusted Codex/root: exact peer/job, чтение и CAS-указание, пауза, передача человеку и явное возобновление. |
 | `job-claim`, `job-start-intent`, `job-turn-bound`, `job-subscribe` | Контракт исполнителя версии 3: получение, durable запуск, привязка и уведомления. |
 | `job-peer-thread-prepare`, `job-peer-thread-read`, `job-peer-thread-bind`, `job-peer-thread-unknown` | Root-only подготовка, точная сверка и сохранение текущей беседы клиента; неизвестное создание не повторяется. |
