@@ -292,6 +292,9 @@ class Windows:
         # that same file; ordinary put does not replace its security descriptor.
         self.run(transfer.CREATE, record, stage="create")
         _run_transport(transfer.SFTP, "upload", sftp=True, input=batch, stdout=subprocess.DEVNULL, timeout=21600)
+        self.flush_part(record)
+
+    def flush_part(self, record):
         self.run(transfer.FLUSH, record, stage="flush")
 
     def verify(self, record, *, final):
@@ -528,6 +531,9 @@ def deliver_once(dirfd, remote):
                 remote.write(record, stream)
                 if _identity(before) != _identity(os.fstat(stream.fileno())):
                     raise DeliveryError("source_changed", unknown=True)
+            else:
+                # The previous upload may have lost its connection before flushing.
+                remote.flush_part(record)
             remote.verify(record, final=False)
             remote.publish(record)
         remote.verify(record, final=True)

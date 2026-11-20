@@ -25,9 +25,11 @@ class FakeWindows:
         self.parts = {}
         self.finals = {}
         self.writes = []
+        self.flushes = []
         self.moves = []
         self.deletes = []
         self.fail_write = False
+        self.fail_flush = False
         self.fail_move_after_effect = False
         self.busy = False
         self.bad_inspection = None
@@ -60,6 +62,14 @@ class FakeWindows:
             raise delivery.DeliveryError("ssh_unknown", unknown=True)
         assert ident not in self.parts
         self.parts[ident] = data
+        self.flush_part(record)
+
+    def flush_part(self, record):
+        ident = record["id"]
+        assert len(self.parts[ident]) == record["size"]
+        self.flushes.append(ident)
+        if self.fail_flush:
+            raise delivery.DeliveryError("ssh_unknown", unknown=True, transport_diagnostic=("flush", "ssh_exit_255"))
 
     def verify(self, record, *, final):
         data = (self.finals if final else self.parts).get(record["id"])
@@ -307,6 +317,43 @@ def test_failed_write_is_retried_with_same_id_and_keeps_old_backups(store):
     assert set(remote.finals) == {old[-1]["id"], newest["id"]}
 
 
+def test_matching_partial_file_retries_flush_before_publishing_without_reupload(store):
+    root, fd = store
+    payload = b"synthetic"
+    record = prepare(store, 1, payload)
+    ident = record["id"]
+    source = root / record["file"]
+    remote = FakeWindows()
+    remote.fail_flush = True
+
+    for attempt in range(1, 3):
+        with pytest.raises(delivery.DeliveryError, match="ssh_unknown") as failure:
+            delivery.deliver_once(fd, remote)
+        assert failure.value.transport_diagnostic == ("flush", "ssh_exit_255")
+        assert remote.parts[ident] == payload
+        assert remote.writes == [ident]
+        assert remote.flushes == [ident] * attempt
+        assert remote.moves == []
+        assert remote.finals == {}
+        assert source.read_bytes() == payload
+        assert delivery.read_json(fd, "pending.json") == record
+        assert delivery.read_json(fd, "pending-ready.json") == record
+        assert delivery.read_json(fd, "delivery-intent.json") == record
+        status = delivery.read_json(fd, "delivery-status.json")
+        assert (status["status"], status["error_code"]) == ("unknown", "ssh_unknown")
+        assert delivery.journal(fd) == []
+
+    remote.fail_flush = False
+    delivery.deliver_once(fd, remote)
+    assert remote.writes == [ident]
+    assert remote.flushes == [ident] * 3
+    assert remote.moves == [ident]
+    assert remote.finals == {ident: payload}
+    assert delivery.journal(fd) == [record]
+    assert delivery.read_json(fd, "delivery-status.json")["status"] == "ok"
+    assert not source.exists()
+
+
 def test_unknown_move_rechecks_exact_final_without_duplicate_write(store):
     remote = FakeWindows()
     record = prepare(store, 1, b"synthetic")
@@ -317,6 +364,7 @@ def test_unknown_move_rechecks_exact_final_without_duplicate_write(store):
     assert (store[0] / record["file"]).exists()
     delivery.deliver_once(store[1], remote)
     assert remote.writes == [record["id"]]
+    assert remote.flushes == [record["id"]]
     assert remote.moves == [record["id"]]
     assert not (store[0] / record["file"]).exists()
 
