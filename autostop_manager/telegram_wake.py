@@ -3149,7 +3149,10 @@ class DurableWakeDispatcher:
             try:
                 sock = writer.get_extra_info("socket")
                 uid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
-                request = json.loads(await asyncio.wait_for(reader.readline(), 3))
+                raw = await asyncio.wait_for(reader.readline(), 3)
+                if not raw.endswith(b"\n"):
+                    raise WakeError("wake_request_invalid")
+                request = json.loads(raw)
                 if uid != 0:
                     raise WakeError("wake_sender_denied")
                 if request == {"operation": "status"}:
@@ -3233,7 +3236,16 @@ async def local_request(request: dict[str, Any], path: Path = SOCKET_PATH) -> di
         try:
             writer.write(json.dumps(request).encode() + b"\n")
             await writer.drain()
-            return dict(json.loads(await reader.readline()))
+            try:
+                raw = await reader.readline()
+                if not raw.endswith(b"\n"):
+                    raise WakeError("wake_response_invalid")
+                response = json.loads(raw)
+            except ValueError as exc:
+                raise WakeError("wake_response_invalid") from exc
+            if not isinstance(response, dict) or type(response.get("ok")) is not bool:
+                raise WakeError("wake_response_invalid")
+            return response
         finally:
             await _close_writer_until(writer, deadline, retained)
 

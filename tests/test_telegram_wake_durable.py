@@ -477,6 +477,73 @@ def test_control_socket_closes_after_schema_error(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-only control socket")
+def test_control_socket_does_not_pause_on_incomplete_frame(tmp_path):
+    async def scenario():
+        inbox, event_id = new_inbox(tmp_path)
+        app = wake.AppServer(wake.WakeConfig(THREAD, app_socket=str(tmp_path / "unused.sock")))
+        jobs = FakeJobs(inbox)
+        dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), jobs)
+        path = tmp_path / "w.sock"
+        before = inbox.status()
+        try:
+            async with await asyncio.start_unix_server(dispatcher.serve, path=str(path)):
+                reader, writer = await asyncio.open_unix_connection(str(path))
+                try:
+                    writer.write(b'{"operation":"pause"}')
+                    await writer.drain()
+                    writer.write_eof()
+                    reply = json.loads(await asyncio.wait_for(reader.readline(), 1))
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+                assert reply == {"ok": False, "error": "wake_request_invalid"}
+                assert inbox.status() == before
+                assert dispatcher.enabled and not jobs.calls
+
+                accepted = await wake.local_request({"operation": "pause"}, path)
+                assert accepted["ok"] is True
+                assert inbox.status()["execution_paused"] is True
+                assert inbox.status()["execution_revision"] == before["execution_revision"] + 1
+                assert inbox.resolve(event_id) is not None
+        finally:
+            inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (b'{"ok":true}', None),
+        (b'[["ok",true]]\n', None),
+        (b'{"ok":"yes"}\n', None),
+        (b'{"ok":true,"enabled":true}\n', {"ok": True, "enabled": True}),
+        (b'{"ok":false,"error":"wake_cleanup_pending"}\n', {"ok": False, "error": "wake_cleanup_pending"}),
+    ],
+)
+def test_control_client_requires_complete_object_reply(tmp_path, payload, expected):
+    async def scenario():
+        async def serve(reader, writer):
+            try:
+                assert await reader.readline() == b'{"operation": "resume"}\n'
+                writer.write(payload)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        path = tmp_path / "w.sock"
+        async with await asyncio.start_unix_server(serve, path=str(path)):
+            if expected is None:
+                with pytest.raises(wake.WakeError, match=r"^wake_response_invalid$"):
+                    await wake.local_request({"operation": "resume"}, path)
+            else:
+                assert await wake.local_request({"operation": "resume"}, path) == expected
+
+    asyncio.run(scenario())
+
+
 def test_durable_control_denies_non_root_even_bridge_uid(monkeypatch):
     class FakeSocket:
         def getsockopt(self, *_args):
