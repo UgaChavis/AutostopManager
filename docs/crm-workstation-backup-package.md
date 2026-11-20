@@ -2,7 +2,13 @@
 
 Перед обслуживанием сверь установленный `REVISION` пакета, ревизию работающей CRM и раздельные результаты копирования, возврата служб и доставки. Процедуру выпуска определяет [инструкция M2](agent/references/m2-server-update.md); подтверждённые точки восстановления описаны в [регламенте копирования](agent/references/complete-backup.md).
 
-Для согласованного выпуска пять проверенных файлов `crm_backup_coordinator.py`, `crm-snapshot.py`, `check-crm-snapshot-restore.py`, `deliver-crm-backup.py`, `transfer-crm-backup-windows.py` положить вместе в `/usr/local/libexec/autostop-crm-backup/`: root:root, каталог 0700, файлы 0600. Сохранить точный `REVISION` и SHA-256 manifest. Нужны `/usr/bin/python3` с `cryptography`, Docker, systemd и OpenSSH. SSH-алиас и закреплённый host key остаются в действующей root-конфигурации; секреты в пакет не копируются.
+Для согласованного выпуска пять проверенных файлов `crm_backup_coordinator.py`, `crm-snapshot.py`, `check-crm-snapshot-restore.py`, `deliver-crm-backup.py`, `transfer-crm-backup-windows.py` положить вместе в `/usr/local/libexec/autostop-crm-backup/`: root:root, каталог 0700, файлы 0600. Нужны `/usr/bin/python3` с `cryptography`, Docker, systemd и OpenSSH. SSH-алиас и закреплённый host key остаются в действующей root-конфигурации; секреты в пакет не копируются.
+
+Собери пять файлов из одного согласованного полного Git SHA в новом закрытом каталоге. Запиши этот SHA в `REVISION`.
+В `source-manifest.json` запиши JSON-объект, где ключи — имена пяти файлов, а значения — их SHA-256.
+Одной сверкой до установки и после неё подтверди совпадение `REVISION` с согласованным SHA и точный набор пяти имён в манифесте.
+Для каждого файла сверь значение из манифеста с SHA-256 его байтов и с SHA-256 байтов из `git show <SHA>:scripts/<имя>`.
+При расхождении приостанови выпуск пакета и заново подготовь комплект из согласованного SHA.
 
 В действующей конфигурации CRM сохранить mounts/networks/auth и установить `AUTOSTOP_CRM_BACKUP_CONTROL=1`. Scheduler и backup service должны получать `AUTOSTOP_AUTOMATION_CRM_REVISION` точной принятой CRM-ревизии из общего `/etc/autostop-manager/crm-backup-identity.env` (root:root 0600). На MNG1 scheduler уже читает его через последний identity dropin, backup service — через `EnvironmentFile`. Пустое, неверное или несовпадающее значение запрещает остановку CRM. Учесть порядок EnvironmentFile и проверить только это поле работающего scheduler, не выводить окружение. Исторические конфигурации не переписывать.
 
