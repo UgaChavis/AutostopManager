@@ -1935,10 +1935,10 @@ class AutomationStore:
             raise AutomationError("automation_cursor_name_invalid")
         if cursor_value is not None and (len(cursor_value) > 4096 or any(ord(char) < 32 for char in cursor_value)):
             raise AutomationError("automation_cursor_value_invalid")
-        now = isoformat(utc_now())
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now = isoformat(utc_now())
             runtime = connection.execute(
                 """
                 SELECT fencing_token FROM manager_automation_runtime

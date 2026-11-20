@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, current_thread
 from uuid import uuid4
 
 import pytest
 import httpx
 
+from autostop_manager import automation_registry as registry
 from autostop_manager.automation_control import AUTOMATION_CONTROL_PROTOCOL, AutomationControlService
 from autostop_manager.automation_jobs import (
     CRM_DIGEST_CONSUMER_ID,
@@ -520,6 +525,72 @@ def test_digest_ack_requires_current_claim_after_verified_readback(tmp_path: Pat
     assert fresh_notifier.applied == []
     assert [call for call in source.calls if call[0] == "ack"] == [("ack", "full-window-ack")]
     assert all(cursor["value"] is None for cursor in store.get_cursors(job_id=job_id).values())
+
+
+def test_digest_sending_cursor_rechecks_lease_after_writer_wait(tmp_path: Path, monkeypatch):
+    clock = datetime(2030, 1, 2, tzinfo=UTC)
+    monkeypatch.setattr(registry, "utc_now", lambda: clock)
+    store, service, job, claim = claimed_digest_run(tmp_path)
+    deadline = registry.parse_time(claim["lease_until"])
+    assert deadline is not None
+    source = FakeSource()
+    old_notifier = FakeNotifier()
+    executor = CrmDigestExecutor(store=store, source=source, notifier=old_notifier)
+    sending_cursor = Event()
+    enter_write = Event()
+    begin_attempted = Event()
+    original_update = AutomationStore.update_cursor
+    original_connect = AutomationStore.connect
+
+    def observed_update(self, **values):
+        if self is store and values["cursor_name"] == "delivery_state" and values["cursor_value"] == "sending":
+            sending_cursor.set()
+            assert enter_write.wait(timeout=3)
+        return original_update(self, **values)
+
+    @contextmanager
+    def observed_connect(self):
+        with original_connect(self) as connection:
+            if self is store and current_thread().name.startswith("synthetic-digest") and sending_cursor.is_set():
+                connection.set_trace_callback(lambda sql: begin_attempted.set() if sql == "BEGIN IMMEDIATE" else None)
+            yield connection
+
+    monkeypatch.setattr(AutomationStore, "update_cursor", observed_update)
+    monkeypatch.setattr(AutomationStore, "connect", observed_connect)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="synthetic-digest") as workers:
+        expired_run = workers.submit(executor, claim)
+        try:
+            assert sending_cursor.wait(timeout=3)
+            with original_connect(store) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                try:
+                    enter_write.set()
+                    assert begin_attempted.wait(timeout=3)
+                    with pytest.raises(TimeoutError):
+                        expired_run.result(timeout=0.05)
+                    clock = deadline
+                finally:
+                    writer.rollback()
+        finally:
+            enter_write.set()
+        result = expired_run.result(timeout=3)
+    assert result["result_code"] == "automation_fencing_conflict"
+    assert old_notifier.applied == []
+    assert not any(call[0] == "ack" for call in source.calls)
+    cursors = store.get_cursors(job_id=job["job_id"])
+    assert cursors["delivery_state"]["value"] == "prepared"
+    assert cursors["delivery_state"]["revision"] == 1
+
+    command(service, "run_now", {"job_id": job["job_id"]}, "run-after-expired-cursor-write", job["revision"])
+    new_claim = store.claim_next_run(owner="worker-b")
+    assert new_claim and new_claim["fencing_token"] > claim["fencing_token"]
+    new_notifier = FakeNotifier()
+    new_executor = CrmDigestExecutor(store=store, source=source, notifier=new_notifier)
+    resumed = new_executor({**new_claim, "lease_owner": "worker-b"})
+    assert resumed["ok"] is True
+    assert [attempt[2] for attempt in new_notifier.applied] == [f"crm-digest:{cursors['pending_digest_id']['value']}"]
+    assert new_notifier.lookups == []
+    assert [call for call in source.calls if call[0] == "ack"] == [("ack", "full-window-ack")]
 
 
 def test_renderer_uses_group_count_not_raw_event_count():
