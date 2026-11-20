@@ -400,6 +400,77 @@ def test_unexpected_worker_exit_is_observed_and_never_reports_ready(tmp_path, bu
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="Wake control IPC is root-only")
+@pytest.mark.parametrize("pause_times_out", [False, True], ids=["paused", "pause_lock_timeout"])
+def test_later_pause_keeps_dispatch_disabled_during_an_earlier_resume(tmp_path, monkeypatch, pause_times_out):
+    if pause_times_out:
+        monkeypatch.setattr(wake, "FAILED_RECOVERY_TIMEOUT", 0.15)
+
+    async def scenario():
+        with TelegramInbox(tmp_path / "inbox.sqlite3") as inbox:
+            inbox.duty_set(True)
+            jobs = FakeJobs(inbox)
+            resume_waiting, finish_resume = asyncio.Event(), asyncio.Event()
+            pause_waiting, finish_pause = asyncio.Event(), asyncio.Event()
+            request = jobs.request
+
+            async def delayed_execution_set(operation, **arguments):
+                if operation == "job_execution_set":
+                    waiting, finish = (
+                        (pause_waiting, finish_pause) if arguments["paused"] else (resume_waiting, finish_resume)
+                    )
+                    waiting.set()
+                    await finish.wait()
+                return await request(operation, **arguments)
+
+            jobs.request = delayed_execution_set
+            app = wake.AppServer(wake.WakeConfig(THREAD))
+            app.connected = True
+            app.ready_event.set()
+            dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), jobs)
+            dispatcher.work = asyncio.Event().wait
+            dispatcher.execution_state = "ready"
+            dispatcher._start_worker()
+            path = tmp_path / "wake.sock"
+            requests = []
+            server = await asyncio.start_unix_server(dispatcher.serve, path=path)
+            try:
+                async with asyncio.timeout(5):
+                    resume = asyncio.create_task(wake.local_request({"operation": "resume"}, path))
+                    requests.append(resume)
+                    await resume_waiting.wait()
+                    pause = asyncio.create_task(wake.local_request({"operation": "pause"}, path))
+                    requests.append(pause)
+                    await until(lambda: dispatcher.pause_requested and not dispatcher.enabled)
+                    if pause_times_out:
+                        assert await pause == {"ok": False, "error": "wake_pause_outcome_unknown"}
+                        assert dispatcher.terminal_stop_pending and not pause_waiting.is_set()
+                    finish_resume.set()
+                    assert await resume == {"ok": False, "error": "wake_resume_superseded_by_pause"}
+                    if not pause_times_out:
+                        await pause_waiting.wait()
+                    status = await wake.local_request({"operation": "status"}, path)
+                    assert not status["enabled"] and not status["queue_can_advance"] and dispatcher.pause_requested
+                    finish_pause.set()
+                    if not pause_times_out:
+                        paused = await pause
+                        assert paused["ok"] and paused["execution_paused"] and paused["stop_proof_verified"]
+                        assert not paused["enabled"] and paused["execution_state"] == "paused"
+                        assert dispatcher.worker.done()
+                    resumed = await wake.local_request({"operation": "resume"}, path)
+                    assert resumed["ok"] and resumed["enabled"] and not resumed["execution_paused"]
+                    assert not dispatcher.pause_requested and not dispatcher.worker.done()
+            finally:
+                finish_resume.set()
+                finish_pause.set()
+                await asyncio.gather(*requests, return_exceptions=True)
+                server.close()
+                await server.wait_closed()
+                await stop_dispatcher(dispatcher)
+
+    asyncio.run(scenario())
+
+
 def test_pause_interrupts_only_confirmed_owned_turn_and_reads_terminal_metadata(tmp_path, bundle):
     async def scenario():
         inbox, event_id = new_inbox(tmp_path)

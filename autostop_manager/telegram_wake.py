@@ -1812,6 +1812,7 @@ class DurableWakeDispatcher:
         self.terminal_stop_pending = False
         self.stop_proof_verified = False
         self.pause_requested = False
+        self._pause_sequence = 0
         self.bootstrap_checked = False
         self._stage_timings = _wake_stage_timings()
         # Work Telegram has only client traffic. Trusted control comes from
@@ -2323,7 +2324,10 @@ class DurableWakeDispatcher:
         return result
 
     async def _set_execution_paused(self, paused: bool) -> None:
+        pause_sequence = self._pause_sequence
         await self._read_status()
+        if not paused:
+            self._require_current_resume(pause_sequence)
         revision = self.inbox_status.get("execution_revision")
         if type(revision) is not int or revision < 1 or type(self.inbox_status.get("execution_paused")) is not bool:
             raise WakeError("wake_job_status_invalid")
@@ -2953,6 +2957,7 @@ class DurableWakeDispatcher:
             self.active = False
 
     async def pause(self, *, persist: bool = True) -> None:
+        self._pause_sequence += 1
         self.pause_requested = True
         self.enabled = False
         deadline = asyncio.get_running_loop().time() + FAILED_RECOVERY_TIMEOUT
@@ -2995,6 +3000,8 @@ class DurableWakeDispatcher:
 
     async def _pause_until(self, deadline: float, *, persist: bool) -> None:
         async with self.control_lock:
+            self.pause_requested = True
+            self.enabled = False
             persistence_error = None
             if persist:
                 try:
@@ -3074,6 +3081,10 @@ class DurableWakeDispatcher:
                     await _await_until(self._read_status(), deadline, self.cleanup_tasks)
                     await _await_until(self._health("paused"), deadline, self.cleanup_tasks)
 
+    def _require_current_resume(self, pause_sequence: int) -> None:
+        if pause_sequence != self._pause_sequence:
+            raise WakeError("wake_resume_superseded_by_pause")
+
     async def resume_execution(self) -> None:
         if any(
             not task.done()
@@ -3081,14 +3092,19 @@ class DurableWakeDispatcher:
             for task in tasks
         ) or (self.execution_task is not None and not self.execution_task.done()):
             raise WakeError("wake_cleanup_pending")
+        pause_sequence = self._pause_sequence
         if self.terminal_stop_pending:
+            # This recovery owns exactly one pause request.
+            pause_sequence += 1
             await self.pause()
         async with self.control_lock:
+            self._require_current_resume(pause_sequence)
             if self.active:
                 raise WakeError("wake_execution_active")
             # A paused manual recovery grant is checked transactionally before
             # changing any local transport/executor state.
             await self._set_execution_paused(False)
+            self._require_current_resume(pause_sequence)
             if self.app.blocked:
                 active, _cursor = await _active_job_page(self.jobs, limit=1)
                 if active:
@@ -3111,6 +3127,7 @@ class DurableWakeDispatcher:
                         # Replace a held transport while the hold is still set;
                         # this planned reconnect is not another outage incident.
                         await self.app._drop_connection()
+                    self._require_current_resume(pause_sequence)
                     self.app.blocked = False
                     self.app.pausing = False
                     self.app.recovery_error = None
@@ -3125,10 +3142,15 @@ class DurableWakeDispatcher:
                     self.supervisor = asyncio.create_task(self.app.supervise())
             elif self.app.pausing:
                 await _cancel_task(self.supervisor)
+                self._require_current_resume(pause_sequence)
                 self.app.pausing = False
                 self.app.ready_event.clear()
                 self.app.disconnected.set()
                 self.supervisor = asyncio.create_task(self.app.supervise())
+            start_worker = self.worker is None or self.worker.done()
+            if start_worker:
+                await _cancel_task(self.worker_monitor)
+            self._require_current_resume(pause_sequence)
             self.pause_requested = False
             self.bootstrap_checked = False
             self.enabled = True
@@ -3137,8 +3159,7 @@ class DurableWakeDispatcher:
             if self.jobs.listener is not None and self.jobs.listener.done():
                 self.jobs.last_error = None
                 self.jobs.start()
-            if self.worker is None or self.worker.done():
-                await _cancel_task(self.worker_monitor)
+            if start_worker:
                 self._start_worker()
             if self.lifecycle_monitor is None or self.lifecycle_monitor.done():
                 self.lifecycle_monitor = asyncio.create_task(self.observe_lifecycle())
