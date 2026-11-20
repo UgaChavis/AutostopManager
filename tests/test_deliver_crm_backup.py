@@ -172,6 +172,8 @@ def test_native_upload_failure_is_unknown_and_never_publishes(tmp_path, monkeypa
     with path.open("rb") as source, pytest.raises(delivery.DeliveryError, match="ssh_unknown") as error:
         delivery.Windows().write(record, source)
     assert error.value.unknown
+    expected_diagnostic = ("upload", "sftp_nonzero") if failed_stage == "sftp" else (failed_stage, "remote_nonzero")
+    assert error.value.transport_diagnostic == expected_diagnostic
     assert calls == {"create": ["ssh"], "sftp": ["ssh", "sftp"], "flush": ["ssh", "sftp", "ssh"]}[failed_stage]
     assert path.read_bytes() == data
 
@@ -207,6 +209,68 @@ def prepare(store, number, contents):
     delivery.write_json(fd, "pending-ready.json", record)
     delivery.write_json(fd, "attempt.json", {"attempt": ident, "copy": "ok"})
     return record
+
+
+def test_ssh_inspect_preserves_success_stdout_contract(store, monkeypatch, capsys):
+    record = prepare(store, 1, b"synthetic")
+    metadata = {"part": None, "final": {"size": record["size"], "sha256": record["sha256"]}}
+
+    def run(command, **options):
+        assert command[0] == "ssh"
+        assert options == {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+            "timeout": 21600,
+        }
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(metadata).encode())
+
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    assert delivery.Windows().inspect(record) == metadata
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [("timeout", "timeout"), ("os_error", "os_error"), (-15, "signal"), (255, "ssh_exit_255"), (7, "remote_nonzero")],
+)
+def test_transport_diagnostics_preserve_receipt_retry_and_scrub_stderr(store, monkeypatch, capsys, failure, reason):
+    root, fd = store
+    record = prepare(store, 1, b"synthetic")
+    private_command = ["ssh", "test-private-address", "test-private-arg"]
+    private_stdout = b"test-private-stdout"
+    private_stderr = b"test-private-stderr"
+    calls = []
+
+    def run(command, **options):
+        assert command[0] == "ssh"
+        assert options["stdout"] == subprocess.PIPE
+        assert options["stderr"] == subprocess.DEVNULL
+        assert options["timeout"] == 21600
+        calls.append(command[0])
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(private_command, 21600, output=private_stdout, stderr=private_stderr)
+        if failure == "os_error":
+            raise OSError("test-private-os-error")
+        return subprocess.CompletedProcess(private_command, failure, stdout=private_stdout, stderr=private_stderr)
+
+    monkeypatch.setattr(delivery, "ROOT", root)
+    monkeypatch.setattr(delivery, "refresh_status", lambda: None)
+    monkeypatch.setattr(delivery.subprocess, "run", run)
+    assert delivery.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == (
+        f"delivery incomplete: ssh_unknown\ndelivery transport failure: stage=inspect reason={reason}\n"
+    )
+    status = delivery.read_json(fd, "delivery-status.json")
+    assert set(status) == {"id", "status", "at", "error_code"}
+    assert (status["id"], status["status"], status["error_code"]) == (record["id"], "unknown", "ssh_unknown")
+    assert delivery.read_json(fd, "pending.json") == record
+    assert delivery.read_json(fd, "pending-ready.json") == record
+    assert delivery.read_json(fd, "delivery-intent.json") == record
+    assert (root / record["file"]).read_bytes() == b"synthetic"
+    assert calls == ["ssh"]
 
 
 def test_success_retains_only_two_known_completed_generations(store):

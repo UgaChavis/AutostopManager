@@ -69,10 +69,11 @@ try {
 
 
 class DeliveryError(Exception):
-    def __init__(self, code: str, *, unknown: bool = False):
+    def __init__(self, code: str, *, unknown: bool = False, transport_diagnostic: tuple[str, str] | None = None):
         super().__init__(code)
         self.code = code
         self.unknown = unknown
+        self.transport_diagnostic = transport_diagnostic
 
 
 def valid_record(value):
@@ -231,21 +232,33 @@ def _identity(st):
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
-class Windows:
-    def run(self, script, record, *, final=False, stdin=subprocess.DEVNULL, timeout=120):
-        command = transfer.command(script, record["id"], record["size"], final=final)
-        try:
-            result = subprocess.run(
-                command, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise DeliveryError("ssh_unknown", unknown=True) from exc
-        if result.returncode != 0:
-            raise DeliveryError("ssh_unknown", unknown=True)
+def _run_transport(command, stage: str, *, sftp: bool = False, **options):
+    try:
+        result = subprocess.run(command, stderr=subprocess.DEVNULL, **options)
+    except subprocess.TimeoutExpired as exc:
+        raise DeliveryError("ssh_unknown", unknown=True, transport_diagnostic=(stage, "timeout")) from exc
+    except OSError as exc:
+        raise DeliveryError("ssh_unknown", unknown=True, transport_diagnostic=(stage, "os_error")) from exc
+    if result.returncode == 0:
         return result.stdout
+    if result.returncode < 0:
+        reason = "signal"
+    elif sftp:
+        reason = "sftp_nonzero"
+    elif result.returncode == 255:
+        reason = "ssh_exit_255"
+    else:
+        reason = "remote_nonzero"
+    raise DeliveryError("ssh_unknown", unknown=True, transport_diagnostic=(stage, reason))
+
+
+class Windows:
+    def run(self, script, record, *, stage, final=False, stdin=subprocess.DEVNULL, timeout=120):
+        command = transfer.command(script, record["id"], record["size"], final=final)
+        return _run_transport(command, stage, stdin=stdin, stdout=subprocess.PIPE, timeout=timeout)
 
     def inspect(self, record):
-        data = self.run(STATUS, record, timeout=21600)
+        data = self.run(STATUS, record, stage="inspect", timeout=21600)
         try:
             value = json.loads(data, object_pairs_hook=_unique_pairs)
         except (UnicodeDecodeError, ValueError) as exc:
@@ -274,16 +287,9 @@ class Windows:
         batch = f'put "{local}" "{remote}"\n'.encode()
         # Precreate the empty file with its private ACL. Native SFTP truncates
         # that same file; ordinary put does not replace its security descriptor.
-        self.run(transfer.CREATE, record)
-        try:
-            result = subprocess.run(
-                transfer.SFTP, input=batch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=21600
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise DeliveryError("ssh_unknown", unknown=True) from exc
-        if result.returncode != 0:
-            raise DeliveryError("ssh_unknown", unknown=True)
-        self.run(transfer.FLUSH, record)
+        self.run(transfer.CREATE, record, stage="create")
+        _run_transport(transfer.SFTP, "upload", sftp=True, input=batch, stdout=subprocess.DEVNULL, timeout=21600)
+        self.run(transfer.FLUSH, record, stage="flush")
 
     def verify(self, record, *, final):
         try:
@@ -298,11 +304,11 @@ class Windows:
             raise DeliveryError("remote_integrity", unknown=True)
 
     def publish(self, record):
-        self.run(transfer.PUBLISH, record)
+        self.run(transfer.PUBLISH, record, stage="publish")
 
     def delete(self, record, observed, *, final):
         script = DELETE.replace("__SIZE__", str(observed["size"])).replace("__HASH__", observed["sha256"])
-        self.run(script, record, final=final, timeout=21600)
+        self.run(script, record, stage="delete", final=final, timeout=21600)
 
 
 def bounded_remote_digest(command, expected_size, timeout):
@@ -572,6 +578,9 @@ def main():
             os.close(guard)
     except (DeliveryError, OSError) as error:
         print(f"delivery incomplete: {getattr(error, 'code', 'local_error')}", file=sys.stderr)
+        if isinstance(error, DeliveryError) and error.transport_diagnostic is not None:
+            stage, reason = error.transport_diagnostic
+            print(f"delivery transport failure: stage={stage} reason={reason}", file=sys.stderr)
         return 1
     finally:
         os.close(dirfd)
