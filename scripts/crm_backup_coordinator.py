@@ -388,14 +388,21 @@ def status(path, record):
         "cleanup_pending": "; локальная очистка отложена",
     }
     note = notes.get(record.get("delivery_note"), "")
-    try:
-        load_state = run("systemctl", "show", TIMER, "-p", "LoadState", "--value")
-        active_state = run("systemctl", "show", TIMER, "-p", "ActiveState", "--value")
-        timer_state = (
-            "не установлен" if load_state == "not-found" else "включён" if active_state == "active" else "не активен"
-        )
-    except (Uncertain, OSError, subprocess.SubprocessError):
-        timer_state = "не подтверждён"
+    timer_state = "не подтверждён"
+    with suppress(Uncertain, OSError, subprocess.SubprocessError):
+        observed = run("systemctl", "show", TIMER, "-p", "LoadState", "-p", "ActiveState", "-p", "SubState")
+        properties = dict(line.split("=", 1) for line in observed.splitlines() if "=" in line)
+        load_state = properties.get("LoadState")
+        if load_state == "not-found":
+            timer_state = "не установлен"
+        elif load_state in {"loaded", "masked"}:
+            timer_state = {
+                ("active", "waiting"): "включён",
+                ("active", "running"): "включён",
+                ("active", "elapsed"): "без следующего запуска",
+                ("inactive", "dead"): "не активен",
+                ("failed", "failed"): "в состоянии ошибки",
+            }.get((properties.get("ActiveState"), properties.get("SubState")), timer_state)
     delivery = stage("delivery")
     delivery_text = "не требовалась" if delivery == "not_needed" else names[delivery]
     text = (

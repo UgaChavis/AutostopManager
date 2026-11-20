@@ -193,6 +193,42 @@ def test_receipt_mode_failure_closes_unpublished_temporary_file(tmp_path, monkey
     assert receipt.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize(
+    "load,active,substate,expected",
+    [
+        ("loaded", "", "", "не подтверждён"),
+        ("bad-setting", "active", "waiting", "не подтверждён"),
+        ("loaded", "active", "", "не подтверждён"),
+        ("loaded", "active", "elapsed", "без следующего запуска"),
+        ("loaded", "active", "waiting", "включён"),
+        ("loaded", "active", "running", "включён"),
+        ("loaded", "inactive", "dead", "не активен"),
+        ("masked", "inactive", "dead", "не активен"),
+        ("loaded", "failed", "failed", "в состоянии ошибки"),
+        ("not-found", "", "", "не установлен"),
+    ],
+)
+def test_backup_status_reports_the_observed_timer_state(tmp_path, monkeypatch, load, active, substate, expected):
+    properties = {"LoadState": load, "ActiveState": active, "SubState": substate}
+    calls = []
+
+    def show(*args):
+        assert args[:3] == ("systemctl", "show", m.TIMER)
+        calls.append(args)
+        if "--value" in args:
+            return properties[args[4]]
+        return "\n".join(f"{key}={value}" for key, value in properties.items())
+
+    monkeypatch.setattr(m, "run", show)
+    status_path = tmp_path / "status.md"
+    m.status(status_path, {"attempt": "a" * 32, "copy": "ok", "restore": "ok", "delivery": "ok"})
+
+    line = status_path.read_text().splitlines()[2]
+    assert line == f"Расписание: 02:00 Asia/Krasnoyarsk; таймер {expected}."
+    assert len(calls) == 1 and all(key in calls[0] for key in properties)
+    assert "--value" not in calls[0]
+
+
 def test_backup_restores_before_publishing_and_preserves_one_pending(ctx, monkeypatch):
     root, _, status, fake, _ = ctx
     original_publish = m.publish
