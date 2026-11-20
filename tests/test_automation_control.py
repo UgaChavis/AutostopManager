@@ -89,6 +89,69 @@ def test_unix_protocol_round_trip_and_peer_credentials(tmp_path: Path):
     assert not socket_path.exists()
 
 
+@pytest.mark.parametrize(
+    ("body", "ending", "valid"),
+    [
+        pytest.param({"ok": True, "data": {"ready": True}}, b"\n", True, id="success"),
+        pytest.param(
+            {
+                "ok": False,
+                "error": {
+                    "code": "automation_revision_conflict",
+                    "message": "automation_revision_conflict",
+                    "current_revision": 3,
+                },
+            },
+            b"\n",
+            True,
+            id="error-with-revision",
+        ),
+        pytest.param({"ok": True, "data": {"ready": True}}, b"", False, id="eof-before-newline"),
+        pytest.param({"ok": True}, b"\n", False, id="missing-data"),
+        pytest.param({"ok": True, "data": None}, b"\n", False, id="null-data"),
+        pytest.param({"ok": True, "data": []}, b"\n", False, id="non-object-data"),
+        pytest.param({"ok": True, "data": {}, "request_id": "different-id"}, b"\n", False, id="wrong-request"),
+    ],
+)
+def test_unix_client_requires_complete_matched_success_response(tmp_path, body, ending, valid):
+    async def scenario():
+        path = tmp_path / "control.sock"
+        requests = []
+
+        async def respond(reader, writer):
+            try:
+                raw = await reader.readline()
+                assert raw.endswith(b"\n")
+                request = json.loads(raw)
+                requests.append(request)
+                response = {
+                    "protocol": AUTOMATION_CONTROL_PROTOCOL,
+                    "request_id": request["request_id"],
+                    **body,
+                }
+                writer.write(json.dumps(response).encode() + ending)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        async with await asyncio.start_unix_server(respond, path=path):
+            client = AutomationControlClient(socket_path=path, timeout=2)
+            if valid:
+                result = await asyncio.to_thread(client.request, "status")
+                assert result == {
+                    "protocol": AUTOMATION_CONTROL_PROTOCOL,
+                    "request_id": requests[0]["request_id"],
+                    **body,
+                }
+            else:
+                with pytest.raises(AutomationError, match=r"^automation_response_invalid$"):
+                    await asyncio.to_thread(client.request, "status")
+        assert [request["operation"] for request in requests] == ["status"]
+
+    asyncio.run(scenario())
+
+
 def test_unix_protocol_rejects_unlisted_peer_uid(tmp_path: Path):
     async def scenario():
         socket_path = tmp_path / "control.sock"

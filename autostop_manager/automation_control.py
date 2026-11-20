@@ -787,7 +787,9 @@ class AutomationControlClient:
                 if len(chunks) > MAX_RESPONSE_BYTES:
                     raise AutomationError("automation_response_too_large")
             set_remaining_timeout()
-        line = bytes(chunks).split(b"\n", 1)[0]
+        line, separator, _ = bytes(chunks).partition(b"\n")
+        if not separator:
+            raise AutomationError("automation_response_invalid")
         try:
             response = json.loads(line)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -797,6 +799,7 @@ class AutomationControlClient:
             or response.get("protocol") != AUTOMATION_CONTROL_PROTOCOL
             or response.get("request_id") != request_id
             or type(response.get("ok")) is not bool
+            or (response["ok"] and not isinstance(response.get("data"), dict))
         ):
             raise AutomationError("automation_response_invalid")
         return response
