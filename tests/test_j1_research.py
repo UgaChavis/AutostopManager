@@ -54,6 +54,55 @@ def test_ordinary_worker_housekeeping_stays_in_disposable_cache(monkeypatch, tmp
     assert j1.research_status(created["job_id"])["status"] == "completed"
 
 
+@pytest.mark.parametrize(
+    ("queries", "failures", "retrieved", "unavailable"),
+    [
+        (["public failing query"], 1, 0, 0),
+        (["public failing query", "public failing alternate", "public source query"], 2, 1, 0),
+        (["public source query"], 0, 1, 0),
+        (["public unreadable source query"], 0, 0, 1),
+    ],
+)
+def test_completed_public_report_distinguishes_search_failures_from_unavailable_documents(
+    monkeypatch, queries, failures, retrieved, unavailable
+):
+    url = "https://example.org/public-source"
+
+    def search(query, **_kwargs):
+        if "failing" in query:
+            return [], "search_unavailable"
+        target = url + "-unreadable" if "unreadable" in query else url
+        return [{"url": target, "title": "Public source", "source": "synthetic"}], "synthetic"
+
+    def fetch(target, **_kwargs):
+        if target.endswith("-unreadable"):
+            return {"ok": False, "error": "requires_human"}
+        return {
+            "ok": True,
+            "url": target,
+            "title": "Public source",
+            "kind": "html",
+            "text": "Public technical information.",
+        }
+
+    monkeypatch.setattr(j1, "search_public", search)
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    job_id = j1.start_research("Check public source coverage", queries)["job_id"]
+    j1.run_worker(once=True)
+
+    status = j1.research_status(job_id)
+    result = j1.research_report(job_id)
+    report = result["report"]
+    expected_failures = [{"reason": "search_unavailable", "count": failures}] if failures else []
+    assert status["status"] == result["status"] == "completed"
+    assert status["search_failures"] == report["search_failures"] == expected_failures
+    assert report["evidence_confidence"]["retrieved_sources"] == retrieved
+    assert len(report["unavailable"]) == unavailable
+    limitations = {item["code"] for item in report["limitations"]}
+    assert ("search_access_limited" in limitations) is bool(failures)
+    assert ("source_access_limited" in limitations) is bool(unavailable)
+
+
 def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
     compact = "WBA" + "0" * 14  # synthetic VIN-shaped input
     separated = "WBA " + "0" * 6 + " " + "0" * 8

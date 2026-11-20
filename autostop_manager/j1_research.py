@@ -739,6 +739,17 @@ def _provider_coverage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, 
     ]
 
 
+def _search_failures(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    return [
+        {"reason": row["error"], "count": row["count"]}
+        for row in conn.execute(
+            """SELECT error,COUNT(*) AS count FROM queries
+               WHERE job_id=? AND status='failed' GROUP BY error ORDER BY count DESC, error LIMIT 5""",
+            (job_id,),
+        )
+    ]
+
+
 def _vin_api(job_id: str) -> Any:
     from .j1_vin_store import is_vin_job
 
@@ -785,14 +796,6 @@ def research_status(job_id: str) -> dict[str, Any]:
                     (job_id,),
                 )
             ]
-            search_failures = [
-                {"reason": item["error"], "count": item["count"]}
-                for item in conn.execute(
-                    """SELECT error,COUNT(*) AS count FROM queries
-                       WHERE job_id=? AND status='failed' GROUP BY error ORDER BY count DESC, error LIMIT 5""",
-                    (job_id,),
-                )
-            ]
             browser_attempts = conn.execute(
                 "SELECT COUNT(*) FROM documents WHERE job_id=? AND (browser_attempted=1 OR extraction_method='browser_dom')",
                 (job_id,),
@@ -830,7 +833,7 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "queries_done": queries["done"] or 0,
                 "queries_failed": queries["failed"] or 0,
                 "page_failures": failures,
-                "search_failures": search_failures,
+                "search_failures": _search_failures(conn, job_id),
                 "coverage": {
                     "languages": _coverage_rows(conn, job_id, "language", "language"),
                     "source_classes": _coverage_rows(conn, job_id, "source_class", "source_class"),
@@ -1254,6 +1257,7 @@ def _report_limitations(
     status: str,
     sources: list[dict[str, Any]],
     unavailable: list[dict[str, Any]],
+    search_failures: list[dict[str, Any]],
     frequency_measurements: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     limitations: list[dict[str, str]] = []
@@ -1269,6 +1273,8 @@ def _report_limitations(
         )
     if not frequency_measurements:
         limitations.append({"code": "frequency_not_measured", "detail": "no_qualified_population_measurement"})
+    if search_failures:
+        limitations.append({"code": "search_access_limited", "detail": "one_or_more_searches_returned_no_results"})
     if unavailable:
         limitations.append({"code": "source_access_limited", "detail": "one_or_more_public_sources_unavailable"})
     limitations.append({"code": "no_automatic_diagnosis", "detail": "source_text_requires_human_review"})
@@ -1294,6 +1300,7 @@ def research_report(job_id: str) -> dict[str, Any]:
             if job is None:
                 return _report_error("job_not_found", job_id=job_id)
             context = _stored_automotive_context(job["automotive_context"])
+            search_failures = _search_failures(conn, job_id)
             rows = conn.execute(
                 """SELECT id,url,canonical_url,title,body,source_class,source_basis,source_tier,
                           search_snippet,search_rank,retrieved_at
@@ -1370,6 +1377,7 @@ def research_report(job_id: str) -> dict[str, Any]:
         status=str(job["status"]),
         sources=sources,
         unavailable=unavailable,
+        search_failures=search_failures,
         frequency_measurements=frequency_measurements,
     )
     return {
@@ -1393,6 +1401,7 @@ def research_report(job_id: str) -> dict[str, Any]:
             "sources": sources,
             "duplicates": duplicates,
             "unavailable": unavailable,
+            "search_failures": search_failures,
             "limitations": limitations,
             "read_only": True,
             "fitment_confirmed": False,
