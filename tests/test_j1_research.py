@@ -147,6 +147,60 @@ def test_completed_public_report_distinguishes_search_failures_from_unavailable_
     assert ("source_access_limited" in limitations) is bool(unavailable)
 
 
+@pytest.mark.parametrize("phase", ["query", "document"])
+def test_worker_failure_closes_claimed_phase_without_losing_completed_evidence(monkeypatch, phase):
+    first_query = "existing public query"
+    next_query = "follow up public query"
+    source = "https://example.org/synthetic-source"
+    search_calls = []
+    fetch_calls = []
+
+    def search(query, **_kwargs):
+        search_calls.append(query)
+        url = source if query == first_query else source + "-next"
+        return [{"url": url}], "synthetic"
+
+    def fetch(url, **_kwargs):
+        fetch_calls.append(url)
+        body = "Synthetic public text." if url == source else "Additional technical instructions for replacing a motor."
+        return {"ok": True, "url": url, "title": "Public source", "kind": "text", "text": body}
+
+    monkeypatch.setattr(j1, "search_public", search)
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    job_id = j1.start_research("Check durable public evidence", [first_query])["job_id"]
+    j1.run_worker(once=True)
+    assert j1.research_add_queries(job_id, [next_query])["ok"]
+    if phase == "query":
+        failure = "BEFORE INSERT ON documents"
+    else:
+        failure = "BEFORE UPDATE OF status ON documents WHEN NEW.status='fetched'"
+    with j1._db() as conn:
+        conn.execute(f"CREATE TRIGGER fail_result {failure} BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
+        conn.commit()
+
+    j1.run_worker(once=True)
+    expected = [{"reason": "worker_failed", "count": 1}]
+    status = j1.research_status(job_id)
+    assert status["status"] == "failed"
+    assert status["error"] == "worker_failed"
+    assert status["pages_fetched"] == 1
+    assert status["queries_done"] == (1 if phase == "query" else 2)
+    assert status["queries_failed"] == int(phase == "query")
+    assert status["pages_unavailable"] == int(phase == "document")
+    assert status["search_failures"] == (expected if phase == "query" else [])
+    assert status["page_failures"] == (expected if phase == "document" else [])
+
+    j1.run_worker(once=True)
+    assert j1.research_status(job_id) == status
+    report = j1.research_report(job_id)["report"]
+    assert {item["url"] for item in report["sources"]} == {source}
+    assert report["search_failures"] == status["search_failures"]
+    assert [item["reason"] for item in report["unavailable"]] == [item["reason"] for item in status["page_failures"]]
+    assert not {"search_access_limited", "source_access_limited"} & {item["code"] for item in report["limitations"]}
+    assert search_calls == [first_query, next_query]
+    assert fetch_calls == ([source] if phase == "query" else [source, source + "-next"])
+
+
 def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
     compact = "WBA" + "0" * 14  # synthetic VIN-shaped input
     separated = "WBA " + "0" * 6 + " " + "0" * 8

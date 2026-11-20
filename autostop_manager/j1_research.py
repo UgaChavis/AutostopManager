@@ -49,6 +49,7 @@ _IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _URL_TOKEN = re.compile(r"(?i)(?<!\w)[a-z][a-z0-9+.-]*://[^\s<>]+")
 _WORD = re.compile(r"[^\W_]{3,}", flags=re.UNICODE)
 _STOP = False
+_WORKER_FAILED = "worker_failed"
 
 # The automotive profile remains a small extension of the generic public-web
 # corpus.  It is deliberately bounded more tightly because its automatic plan
@@ -1274,9 +1275,9 @@ def _report_limitations(
         )
     if not frequency_measurements:
         limitations.append({"code": "frequency_not_measured", "detail": "no_qualified_population_measurement"})
-    if search_failures:
+    if any(failure["reason"] != _WORKER_FAILED for failure in search_failures):
         limitations.append({"code": "search_access_limited", "detail": "one_or_more_searches_returned_no_results"})
-    if unavailable:
+    if any(source["reason"] != _WORKER_FAILED for source in unavailable):
         limitations.append({"code": "source_access_limited", "detail": "one_or_more_public_sources_unavailable"})
     limitations.append({"code": "no_automatic_diagnosis", "detail": "source_text_requires_human_review"})
     return limitations
@@ -1903,10 +1904,17 @@ def _run_locked_worker(*, once: bool) -> None:
                     # Startup can recover a running job if the stop-time write could not commit.
                     return
                 with _db() as conn:
-                    conn.execute(
-                        "UPDATE jobs SET status='failed',error='worker_failed',updated_at=? WHERE id=? AND status='running'",
-                        (_utcnow(), job_id),
-                    )
+                    failed = conn.execute(
+                        "UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status='running'",
+                        (_WORKER_FAILED, _utcnow(), job_id),
+                    ).rowcount
+                    if failed:
+                        # Close only the phases already claimed under this job.
+                        for table in ("queries", "documents"):
+                            conn.execute(
+                                f"UPDATE {table} SET status='failed',error=? WHERE job_id=? AND status='running'",
+                                (_WORKER_FAILED, job_id),
+                            )
                     conn.commit()
         elif once:
             return
