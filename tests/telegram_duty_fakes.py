@@ -9,10 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def duty_fixture(tmp_path, state, *, inbound=True, bridge_available=True, bypass_root=True):
-    (tmp_path / "lock").touch(mode=0o600)  # Provisioned by systemd-tmpfiles on the host.
     releases = tmp_path / "releases"
     release = releases / "revision"
     release.mkdir(parents=True)
+    (tmp_path / "lock").touch(mode=0o600)  # Provisioned by systemd-tmpfiles on the host.
     current = releases / "current"
     current.symlink_to(release)
     monitor = tmp_path / "monitor.env"

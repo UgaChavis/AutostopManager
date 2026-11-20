@@ -1253,7 +1253,7 @@ class AppServer:
         if generation != self.generation or not self.connected or (self.managed and not self.ready_event.is_set()):
             raise TransportLost("codex_start_connection_changed")
         if self.blocked:
-            raise WakeError("codex_recovery_blocked")
+            raise WakeError(self.recovery_error or "codex_recovery_blocked")
 
     async def _start_turn(
         self,
