@@ -1,13 +1,17 @@
 """Stale telemetry keeps its last observation; missing observations stay unknown."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import json
 import os
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from autostop_manager import telegram_wake as wake
+from autostop_manager.telegram_inbox import TelegramInbox
+from telegram_duty_fakes import duty_fixture
 from telegram_wake_fakes import THREAD
 
 
@@ -57,6 +61,76 @@ def test_status_without_an_observation_does_not_report_an_empty_queue():
         assert all(status[key] is None for key in ("queued", "needs_review", "held_peers", "oldest_pending_age"))
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Wake status IPC is root-only")
+def test_legacy_review_blocks_wake_readiness_without_changing_intake_status(tmp_path):
+    async def scenario():
+        instruction_root, revision = "/synthetic/instructions", "a" * 40
+        now = datetime.now(UTC)
+        inbox = TelegramInbox(tmp_path / "data" / "inbound.sqlite3")
+        inbox.duty_set(True, at=(now - timedelta(minutes=5)).isoformat())
+        assert inbox.record(42, 12) is not None
+        jobs = wake.BridgeJobs(os.geteuid(), tmp_path / "unused-bridge.sock")
+        jobs.connected = True
+        app = wake.AppServer(wake.WakeConfig(THREAD))
+        app.connected = True
+        app.ready_event.set()
+        dispatcher = wake.DurableWakeDispatcher(app, os.geteuid(), jobs)
+        dispatcher.execution_state = "ready"
+        dispatcher.worker = asyncio.create_task(asyncio.Event().wait())
+        path = tmp_path / "wake.sock"
+
+        async def status(*, ready, reason):
+            jobs.snapshot = inbox.status()
+            jobs.snapshot_at = jobs.frame_at = asyncio.get_running_loop().time()
+            result = await wake.local_request({"operation": "status"}, path)
+            assert result["status_fresh"] and result["connected"]
+            assert result["ready"] is ready
+            assert result["queue_can_advance"] is (reason is None)
+            assert result["queue_block_reason"] == reason
+            return result
+
+        try:
+            async with await asyncio.start_unix_server(dispatcher.serve, path=path):
+                await status(ready=True, reason=None)
+                inbox.duty_set(False)
+                await status(ready=True, reason="intake_off")
+                inbox.duty_set(True)
+                paused = inbox.set_execution_paused(paused=True, expected_revision=inbox.status()["execution_revision"])
+                await status(ready=False, reason="paused")
+                inbox.set_execution_paused(paused=False, expected_revision=paused["execution_revision"])
+                inbox.import_references(
+                    [
+                        {
+                            "event_id": "inbound-200",
+                            "peer_id": 43,
+                            "message_id": 13,
+                            "received_at": now.isoformat(),
+                            "state": "reply_verified",
+                        }
+                    ],
+                    instruction_root=instruction_root,
+                    instruction_revision=revision,
+                )
+                assert inbox.status()["compatibility_hold"] is True
+                assert inbox.claim(instruction_root=instruction_root, instruction_revision=revision) is None
+                held = await status(ready=False, reason="legacy_review")
+                assert held["intake_enabled"] is True and held["queued"] == 2 and held["needs_review"] == 1
+                return held
+        finally:
+            dispatcher.worker.cancel()
+            await asyncio.gather(dispatcher.worker, return_exceptions=True)
+            inbox.close()
+
+    held = asyncio.run(scenario())
+    script, env, _, _, log = duty_fixture(tmp_path / "duty", held)
+    result = subprocess.run(["bash", str(script), "--status"], env=env, capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0, result.stderr
+    duty = json.loads(result.stdout)
+    assert duty["wake_connected"] and duty["inbound_enabled"]
+    assert duty["wake_ready"] is False
+    assert log.read_text().splitlines() == ["is-active --quiet autostop-codex-wake.service"]
 
 
 def observed_status(generation, *, paused, pending, revision):

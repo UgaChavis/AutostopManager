@@ -1865,6 +1865,7 @@ class DurableWakeDispatcher:
             and not self.pause_requested
             and not self.terminal_stop_pending
             and not status.get("execution_paused")
+            and not status.get("compatibility_hold")
             and self.worker is not None
             and not self.worker.done()
             and self.execution_error is None
