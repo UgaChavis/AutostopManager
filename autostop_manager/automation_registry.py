@@ -2118,8 +2118,9 @@ class AutomationStore:
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,95}", result_code):
             raise AutomationError("automation_result_code_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now = isoformat(utc_now())
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = isoformat(utc_now())
             changed = connection.execute(
                 """
                 UPDATE manager_automation_outbox
@@ -2145,8 +2146,9 @@ class AutomationStore:
         if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,95}", result_code):
             raise AutomationError("automation_result_code_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now = isoformat(utc_now())
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = isoformat(utc_now())
             changed = connection.execute(
                 """
                 UPDATE manager_automation_outbox
@@ -2175,11 +2177,11 @@ class AutomationStore:
         if not 10 <= retry_seconds <= 24 * 60 * 60:
             raise AutomationError("automation_retry_invalid")
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
-        now_dt = utc_now()
-        now = isoformat(now_dt)
-        next_attempt_at = isoformat(now_dt + timedelta(seconds=retry_seconds))
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            now = isoformat(now_dt)
+            next_attempt_at = isoformat(now_dt + timedelta(seconds=retry_seconds))
             changed = connection.execute(
                 """
                 UPDATE manager_automation_outbox

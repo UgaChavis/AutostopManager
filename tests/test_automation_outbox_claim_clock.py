@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -210,3 +210,62 @@ def test_outbox_claim_gets_full_lease_after_waiting_for_sqlite_writer(tmp_path: 
         fencing_token=claim["fencing_token"],
         claimed_revision=claim["claimed_revision"],
     )
+
+
+@pytest.mark.parametrize("mutation", ["cancel_outbox_claim", "block_outbox_claim", "finish_outbox"])
+def test_outbox_completion_rechecks_lease_after_writer_wait(tmp_path: Path, monkeypatch, mutation):
+    clock = [START]
+    monkeypatch.setattr(registry, "utc_now", lambda: clock[0])
+    store, outbox_id = _due_notification(tmp_path / "registry.sqlite3")
+    claim = store.claim_outbox(owner=OWNER)
+    assert claim
+    if mutation == "block_outbox_claim":
+        # An absent receipt can block the item only during a live recovery lease.
+        clock[0] = registry.parse_time(claim["lease_until"])
+        claim = store.claim_outbox(owner=OWNER)
+        assert claim and claim["recovery_only"]
+    deadline = registry.parse_time(claim["lease_until"])
+    clock[0] = deadline - timedelta(seconds=1)
+    begin_attempted = threading.Event()
+    original_connect = registry.AutomationStore.connect
+
+    @contextmanager
+    def observed_connect(self):
+        with original_connect(self) as connection:
+            if self is store and threading.current_thread().name.startswith("synthetic-outbox-finalization"):
+                connection.set_trace_callback(lambda sql: begin_attempted.set() if sql.startswith("BEGIN") else None)
+            yield connection
+
+    monkeypatch.setattr(registry.AutomationStore, "connect", observed_connect)
+    args = {"outbox_id": outbox_id, "owner": OWNER, "fencing_token": claim["fencing_token"]}
+    if mutation == "finish_outbox":
+        args.update(sent=False, result_code="synthetic_retryable_failure")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="synthetic-outbox-finalization") as executor:
+        with original_connect(store) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            try:
+                future = executor.submit(getattr(store, mutation), **args)
+                assert begin_attempted.wait(timeout=3)
+                with pytest.raises(TimeoutError):
+                    future.result(timeout=0.05)
+                clock[0] = deadline
+            finally:
+                writer.rollback()
+        assert future.result(timeout=3) is False
+
+    next_owner = "replacement-outbox-owner"
+    recovered = store.claim_outbox(owner=next_owner)
+    assert recovered
+    assert recovered["recovery_only"] is True
+    assert recovered["fencing_token"] == claim["fencing_token"] + 1
+    assert recovered["outbox_id"] == claim["outbox_id"]
+    assert recovered["idempotency_key"] == claim["idempotency_key"]
+    assert store.finish_outbox(
+        outbox_id=outbox_id, owner=next_owner, fencing_token=recovered["fencing_token"], sent=True, result_code="ok"
+    )
+    with store.connect() as connection:
+        row = connection.execute(
+            "SELECT status, attempts, result_code FROM manager_automation_outbox WHERE outbox_id = ?",
+            (outbox_id,),
+        ).fetchone()
+    assert tuple(row) == ("sent", 1, "ok")
