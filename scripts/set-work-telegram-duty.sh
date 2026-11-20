@@ -24,13 +24,17 @@ if [[ $# -eq 3 ]]; then
   expected_release_dir="$3"
   [[ -n "${expected_release_dir}" ]] || { usage; exit 2; }
 fi
-exec 9>"${control_lock}"
 if [[ "${operation}" == "--status" ]]; then
+  if [[ ! -f "${control_lock}" || -L "${control_lock}" ]] || ! { exec 9<"${control_lock}"; } 2>/dev/null; then
+    printf '%s\n' '{"ok":false,"error":"duty_control_lock_unavailable"}'
+    exit 1
+  fi
   if ! flock -xn 9; then
     printf '%s\n' '{"ok":false,"error":"duty_control_busy"}'
     exit 1
   fi
 else
+  exec 9>"${control_lock}"
   flock -x 9
 fi
 if [[ -n "${expected_release_dir}" ]]; then

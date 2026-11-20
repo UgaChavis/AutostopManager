@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import os
 import subprocess
 
 import pytest
@@ -99,13 +100,47 @@ def test_status_preserves_observed_counts_and_freshness(tmp_path, fresh, pending
     assert status["status_fresh"] is fresh
 
 
-def test_status_reports_busy_control_without_waiting_or_mutating(tmp_path):
+@pytest.mark.parametrize("held_lock", [None, fcntl.LOCK_SH, fcntl.LOCK_EX], ids=["free", "shared", "exclusive"])
+def test_status_preserves_the_preprovisioned_lock(tmp_path, held_lock):
     script, env, monitor, intent, log = duty_fixture(tmp_path, {})
-    with (tmp_path / "lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    lock_path = tmp_path / "lock"
+    lock_path.write_bytes(b"synthetic lock sentinel\n")
+    os.utime(lock_path, ns=(1_000_000_000, 1_000_000_000))
+    before = lock_path.stat()
+    with lock_path.open("r+b") as lock:
+        if held_lock is not None:
+            fcntl.flock(lock, held_lock)
         result = subprocess.run(["bash", str(script), "--status"], env=env, capture_output=True, text=True, timeout=3)
+    if held_lock is None:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["ok"] is True
+    else:
+        assert result.returncode == 1
+        assert json.loads(result.stdout) == {"ok": False, "error": "duty_control_busy"}
+        assert not log.exists()
+    assert monitor.read_text() == intent
+    after = lock_path.stat()
+    assert (after.st_dev, after.st_ino, after.st_mtime_ns) == (before.st_dev, before.st_ino, before.st_mtime_ns)
+    assert lock_path.read_bytes() == b"synthetic lock sentinel\n"
+
+
+@pytest.mark.parametrize("lock_kind", ["missing", "symlink", "directory"])
+def test_status_fails_closed_when_the_lock_is_unavailable(tmp_path, lock_kind):
+    script, env, monitor, intent, log = duty_fixture(tmp_path, {})
+    lock_path = tmp_path / "lock"
+    lock_path.unlink()
+    other_file = tmp_path / "other"
+    other_file.write_bytes(b"separate inode\n")
+    if lock_kind == "symlink":
+        lock_path.symlink_to(other_file)
+    elif lock_kind == "directory":
+        lock_path.mkdir()
+    result = subprocess.run(["bash", str(script), "--status"], env=env, capture_output=True, text=True, timeout=3)
     assert result.returncode == 1
-    assert json.loads(result.stdout) == {"ok": False, "error": "duty_control_busy"}
+    assert json.loads(result.stdout) == {"ok": False, "error": "duty_control_lock_unavailable"}
+    assert not result.stderr
+    assert lock_path.exists() is (lock_kind != "missing")
+    assert other_file.read_bytes() == b"separate inode\n"
     assert monitor.read_text() == intent
     assert not log.exists()
 

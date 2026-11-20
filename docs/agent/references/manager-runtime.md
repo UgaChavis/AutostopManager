@@ -314,7 +314,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/deploy_telegram_bridge.sh` | Work требует `--account work --no-start [revision]`. Флаг сохранён для совместимости. Установка включает и запускает bridge с прежней настройкой приёма. Для personal используй `--account personal [revision]`. |
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
-| `scripts/set-work-telegram-duty.sh` | `--status` не меняет duty, но открывает с усечением или создаёт технический lock-файл и на время проверки берёт неблокирующую эксклюзивную блокировку; при занятости возвращает `duty_control_busy`. `--enable|--disable` меняют duty. |
+| `scripts/set-work-telegram-duty.sh` | `--status` открывает существующий технический lock-файл только для чтения и берёт неблокирующую эксклюзивную блокировку. При занятости возвращает `duty_control_busy`, при недоступном файле — `duty_control_lock_unavailable`. `--enable|--disable` меняют duty. |
 | `scripts/work-telegram-python.sh` | `bridge`, `wake`, `personal` возвращают Python соответствующей службы из effective systemd ExecStart. `bridge --run <revision> -- <command>` запускает рабочий Bridge из физического snapshot после сверки его ревизии. |
 | `scripts/export-work-telegram-inbox.py` | Экспортирует точные legacy-ссылки в новый root-private файл до согласованного переключения; без копирования переписки или replay. |
 | `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe --file EXACT_FILE [--language ru] [--delete-after]`, `preview --file EXACT_FILE [--delete-after]` или `self-check`; `--language` доступен только `transcribe`. |
