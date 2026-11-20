@@ -1346,19 +1346,25 @@ def backup(
                     raise Uncertain("host or Docker daemon restarted during snapshot")
         except Exception as exc:  # noqa: BLE001 - restore services after every snapshot failure.
             copy_error = exc
-            r = amend(root, r["attempt"], {"copy": "failed"})
+            # A failed copy-status write must not preempt the recovery journal.
+            with suppress(OSError):
+                amend(root, r["attempt"], {"copy": "failed"})
             refresh_best_effort(root, status_path)
         try:
-            r = recover(root, status_path, system)
+            r = recover(root, status_path, system, interrupted=copy_error is not None)
         except Exception:
             r = amend(root, r["attempt"], {"restore": "unknown"})
             refresh_best_effort(root, status_path)
             raise
-        if copy_error:
-            if staged is not None:
-                staged.unlink(missing_ok=True)
-            raise copy_error
         try:
+            if copy_error is not None:
+                if r["copy"] != "failed":
+                    try:
+                        amend(root, r["attempt"], {"copy": "failed"})
+                    except OSError as receipt_error:
+                        raise copy_error from receipt_error
+                    refresh_best_effort(root, status_path)
+                raise copy_error
             try:
                 published, previous, previous_info = publish(root, staged, r["attempt"])
             except Exception:

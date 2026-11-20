@@ -1,3 +1,4 @@
+import errno
 import importlib.util
 import json
 import os
@@ -321,6 +322,45 @@ def test_m2_write_failure_after_stop_does_not_change_copy_outcome(ctx, monkeypat
         pending = m.load_pending(root / "pending.json")
         assert result["copy"] == "ok" and pending != previous
         assert list(root.glob("crm-*.tar.gz")) == [root / pending["file"]]
+
+
+@pytest.mark.parametrize("failure_persists", [False, True])
+def test_failed_copy_receipt_does_not_skip_service_recovery(ctx, monkeypatch, failure_persists):
+    root, _, _, fake, _ = ctx
+    run(ctx)
+    previous = m.load_pending(root / "pending.json")
+    fake.actions.clear()
+    real_save = m.save
+    failed_receipts = []
+
+    def bad_snapshot(path, _initial):
+        assert fake.crm()["state"] == "exited"
+        path.write_bytes(b"owned synthetic staging file")
+        raise RuntimeError("synthetic snapshot validation failure")
+
+    def fail_receipt(path, record):
+        if path == root / "attempt.json" and record["copy"] == "failed" and (failure_persists or not failed_receipts):
+            failed_receipts.append(record["phase"])
+            raise OSError(errno.EIO, "synthetic copy failure receipt write failure")
+        real_save(path, record)
+
+    monkeypatch.setattr(m, "snapshot_command", bad_snapshot)
+    monkeypatch.setattr(m, "save", fail_receipt)
+
+    with pytest.raises(RuntimeError, match="synthetic snapshot validation failure") as failure:
+        run(ctx)
+
+    assert fake.actions == [("stop", "scheduler"), ("stop", "crm"), ("start", "crm"), ("start", "scheduler")]
+    assert fake.crm()["state"] == "running" and fake.scheduler()["state"] == "active"
+    record = m.load(root / "attempt.json")
+    assert record["phase"] == "complete" and record["restore"] == "ok"
+    assert record["copy"] == ("unknown" if failure_persists else "failed")
+    assert failed_receipts == (["crm_stop_done", "complete"] if failure_persists else ["crm_stop_done"])
+    if failure_persists:
+        assert isinstance(failure.value.__cause__, OSError) and failure.value.__cause__.errno == errno.EIO
+    assert m.load_pending(root / "pending.json") == m.load_pending(root / "pending-ready.json") == previous
+    assert list(root.glob("crm-*.tar.gz")) == [root / previous["file"]]
+    assert not list(root.glob(".staged-*.tar.gz"))
 
 
 def test_restart_during_snapshot_rejects_copy_and_restores(ctx, monkeypatch):
