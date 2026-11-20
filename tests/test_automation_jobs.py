@@ -624,6 +624,60 @@ def test_digest_sending_cursor_rechecks_claim_after_writer_wait(tmp_path: Path, 
     assert [call for call in source.calls if call[0] == "ack"] == [("ack", "full-window-ack")]
 
 
+@pytest.mark.parametrize(
+    ("operation", "previous"),
+    [("register", None), ("read", "register"), ("summarize", "read")],
+)
+@pytest.mark.parametrize("invalidated_by", ["revision", "release_hold"])
+def test_digest_does_not_dispatch_change_feed_writes_after_supersession(
+    tmp_path: Path, monkeypatch, operation, previous, invalidated_by
+):
+    store, service, job, claim = claimed_digest_run(tmp_path)
+    source = FakeSource()
+    notifier = FakeNotifier()
+
+    def invalidate():
+        if invalidated_by == "revision":
+            changed = command(
+                service,
+                "set_schedule",
+                {"job_id": job["job_id"], "schedule": {"every_minutes": 30}},
+                "schedule-before-feed-write-0001",
+                job["revision"],
+            )
+            assert changed["job"]["revision"] == job["revision"] + 1
+        else:
+            with store.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                held = store.set_global_hold(
+                    connection,
+                    enabled=True,
+                    reason="release",
+                    actor_hash="a" * 64,
+                    attempt_hash="d" * 64,
+                    expected_revision=0,
+                )
+            assert held["global_hold"]["enabled"] is True
+
+    if previous is None:
+        invalidate()
+    else:
+        previous_call = getattr(source, previous)
+
+        def invalidate_before_reply(**kwargs):
+            result = previous_call(**kwargs)
+            invalidate()
+            return result
+
+        monkeypatch.setattr(source, previous, invalidate_before_reply)
+    outcome = CrmDigestExecutor(store=store, source=source, notifier=notifier)(claim)
+
+    assert outcome["result_code"] == "automation_claim_superseded"
+    assert operation not in {call[0] for call in source.calls}
+    assert notifier.previewed == notifier.applied == []
+    assert store.get_cursors(job_id=job["job_id"]) == {}
+
+
 def test_renderer_uses_group_count_not_raw_event_count():
     rendered = render_crm_digest(digest_payload(groups=3, raw_events=20))
 

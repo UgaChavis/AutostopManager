@@ -678,11 +678,14 @@ class CrmDigestExecutor:
     def _execute(self, claim: Mapping[str, Any]) -> dict[str, Any]:
         self._claim_fields(claim)
         self._heartbeat(claim)
+        self._require_current_claim(claim)
         registration = self.source.register()
         if registration.get("consumer_id") != CRM_DIGEST_CONSUMER_ID:
             raise AutomationJobError("automation_crm_registration_invalid")
         self._resume_pending(claim, registration)
         self._heartbeat(claim)
+        # A first-page read can open a durable delivery window in CRM.
+        self._require_current_claim(claim)
         page = self.source.read(cursor=None)
         if page.get("consumer_id") != CRM_DIGEST_CONSUMER_ID or not isinstance(page.get("events"), list):
             raise AutomationJobError("automation_crm_page_invalid")
@@ -691,6 +694,7 @@ class CrmDigestExecutor:
         page_ack = page.get("ack")
         if not isinstance(page_ack, str) or not page_ack or len(page_ack) > 4096:
             raise AutomationJobError("automation_crm_page_invalid")
+        self._require_current_claim(claim)
         digest = validate_digest(self.source.summarize(ack=page_ack))
         ack = digest.get("ack")
         if not isinstance(ack, str) or not ack or len(ack) > 4096:
