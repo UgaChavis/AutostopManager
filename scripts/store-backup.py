@@ -161,8 +161,13 @@ def create_backup(root, lock_path):
             raise RuntimeError("backup_disk_reserve_insufficient")
         name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + str(os.getpid())
         partial, final = root / (".partial-" + name), root / name
-        partial.mkdir(mode=0o700)
-        stage = partial
+        # A pending SIGTERM must see our stage only after mkdir proves ownership.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            partial.mkdir(mode=0o700)
+            stage = partial
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         dump = stage / "database.dump"
         with dump.open("xb") as output:
             quiet_run(

@@ -1,9 +1,11 @@
 """Synthetic boundaries for the one-generation host backup helper."""
 
+from datetime import UTC, datetime
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -96,11 +98,17 @@ backup.SOURCES = {"files/synthetic.txt": Path(source)}
 backup.container_identity = lambda: {"db": "synthetic"}
 actual_create, actual_uid = backup.create_backup, os.geteuid
 actual_run = backup.quiet_run
+actual_mkdir = Path.mkdir
 
 def create_backup(*args):
     # The CLI checks root before the test runs with its real filesystem owner.
     os.geteuid = actual_uid
     return actual_create(*args)
+
+def mkdir(path, *args, **kwargs):
+    actual_mkdir(path, *args, **kwargs)
+    if stage == "creation" and path.name.startswith(".partial-"):
+        os.kill(os.getpid(), signal.SIGTERM)
 
 def backup_command(_arguments, *, input_file=None, output_file=None):
     if output_file is None:
@@ -125,15 +133,20 @@ def interrupt_before_retirement(_root, _current):
 backup.create_backup = create_backup
 backup.quiet_run = backup_command
 backup.retire_previous = interrupt_before_retirement
+Path.mkdir = mkdir
 os.geteuid = lambda: 0
 sys.argv = [script, "--root", root, "--lock", lock]
 backup.main()
 '''
-        existing_partial = self.root / ".partial-unrelated"
-        existing_partial.mkdir()
         child_pid = self.base / "child.pid"
-        for stage in ("dump", "retirement"):
+        for stage in ("creation", "dump", "retirement"):
             with self.subTest(stage=stage):
+                root = self.base / stage
+                root.mkdir(mode=0o700)
+                previous = root / self.old.name
+                shutil.copytree(self.old, previous)
+                existing_partial = root / ".partial-unrelated"
+                existing_partial.mkdir()
                 result = subprocess.run(
                     [
                         sys.executable,
@@ -141,7 +154,7 @@ backup.main()
                         "-c",
                         probe,
                         str(SPEC.origin),
-                        str(self.root),
+                        str(root),
                         str(self.base / "backup.lock"),
                         str(self.source),
                         str(child_pid),
@@ -153,15 +166,28 @@ backup.main()
                 )
                 self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
                 self.assertEqual(result.stdout, "")
-                self.assertEqual(list(self.root.glob(".partial-*")), [existing_partial])
-                self.assertEqual((self.old / "database.dump").read_bytes(), b"old valid backup")
+                self.assertEqual(list(root.glob(".partial-*")), [existing_partial])
+                self.assertEqual((previous / "database.dump").read_bytes(), b"old valid backup")
                 if stage == "dump":
                     with self.assertRaises(ProcessLookupError):
                         os.kill(int(child_pid.read_text()), 0)
-                    self.assertEqual(set(self.root.iterdir()), {existing_partial, self.old})
-                else:
-                    (current,) = set(self.root.iterdir()) - {existing_partial, self.old}
+                if stage == "retirement":
+                    (current,) = set(root.iterdir()) - {existing_partial, previous}
                     self.assertTrue(json.loads((current / "manifest.json").read_text())["complete"])
+                else:
+                    self.assertEqual(set(root.iterdir()), {existing_partial, previous})
+
+    def test_staging_name_collision_preserves_existing_directory(self):
+        existing = self.root / ".partial-20261120T033000Z-1234"
+        existing.mkdir()
+        sentinel = existing / "existing"
+        sentinel.write_text("preexisting fixture")
+        with patch.object(backup, "datetime") as clock, patch.object(backup.os, "getpid", return_value=1234):
+            clock.now.return_value = datetime(2026, 11, 20, 3, 30, tzinfo=UTC)
+            with self.assertRaises(FileExistsError):
+                self.create()
+        self.assertEqual(sentinel.read_text(), "preexisting fixture")
+        self.assertEqual(set(self.root.iterdir()), {existing, self.old})
 
     def test_file_archive_checks_content_and_permissions(self):
         records, paths = backup.inventory({"input": self.source})
