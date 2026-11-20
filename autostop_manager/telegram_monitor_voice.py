@@ -209,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     request.add_argument("--self-check", action="store_true")
     parser.add_argument("--language", default="ru")
     parser.add_argument(
-        "--owner", action="store_true", help="Read an exact trusted owner event after durable M1 routing"
+        "--owner", action="store_true", help="Transcribe a historical owner event with an existing routing receipt"
     )
     return parser
 
