@@ -129,7 +129,8 @@ Root-only Bridge `job_status` возвращает `status.job_latency`. В ре
 
 | Команда bridge | Назначение |
 | --- | --- |
-| `status`, `monitor-status`, `monitor-events` | Content-free состояние транспорта, приёма, очереди и ошибок. |
+| `status`, `monitor-status` | Состояние транспорта, приёма, очереди и ошибок без текста переписки. |
+| `monitor-events` | Страница метаданных сохранённых событий, включая завершённые, в порядке записи в реестр. По умолчанию 100 строк, `--limit` от 1 до 255. При `has_more=true` передай `next_after_event_id` в `--after-event-id`. |
 | `owner-status`, `owner-configure` | Проверить привязку владельца; configure меняет её только по поручению и с readback. |
 | `dialogs`, `search`, `resolve-phone` | Разрешённый поиск диалога; не заменяет адресата рабочего события. |
 | `monitor-target`, `monitor-read`, `monitor-context`, `read` | Точный адресат, роль и разрешённый контекст; context не заменяет исходящие в read. |
