@@ -2,7 +2,11 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -75,6 +79,89 @@ class StoreBackupTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.create(fail)
         self.assertEqual(list(self.root.iterdir()), [self.old])
+
+    def test_sigterm_cleans_only_its_staging_directory(self):
+        probe = '''
+import importlib.util
+import os
+from pathlib import Path
+import signal
+import sys
+
+script, root, lock, source, child_pid, stage = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("store_backup_probe", script)
+backup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(backup)
+backup.SOURCES = {"files/synthetic.txt": Path(source)}
+backup.container_identity = lambda: {"db": "synthetic"}
+actual_create, actual_uid = backup.create_backup, os.geteuid
+actual_run = backup.quiet_run
+
+def create_backup(*args):
+    # The CLI checks root before the test runs with its real filesystem owner.
+    os.geteuid = actual_uid
+    return actual_create(*args)
+
+def backup_command(_arguments, *, input_file=None, output_file=None):
+    if output_file is None:
+        return
+    if stage != "dump":
+        output_file.write(b"PGDMP synthetic archive")
+        return
+    code = """
+import os, signal, sys, time
+from pathlib import Path
+Path(sys.argv[1]).write_text(str(os.getpid()))
+sys.stdout.buffer.write(b"PGDMP partial archive")
+sys.stdout.flush()
+os.kill(os.getppid(), signal.SIGTERM)
+time.sleep(5)
+"""
+    actual_run([sys.executable, "-B", "-c", code, child_pid], output_file=output_file)
+
+def interrupt_before_retirement(_root, _current):
+    os.kill(os.getpid(), signal.SIGTERM)
+
+backup.create_backup = create_backup
+backup.quiet_run = backup_command
+backup.retire_previous = interrupt_before_retirement
+os.geteuid = lambda: 0
+sys.argv = [script, "--root", root, "--lock", lock]
+backup.main()
+'''
+        existing_partial = self.root / ".partial-unrelated"
+        existing_partial.mkdir()
+        child_pid = self.base / "child.pid"
+        for stage in ("dump", "retirement"):
+            with self.subTest(stage=stage):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-c",
+                        probe,
+                        str(SPEC.origin),
+                        str(self.root),
+                        str(self.base / "backup.lock"),
+                        str(self.source),
+                        str(child_pid),
+                        stage,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 128 + signal.SIGTERM, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(list(self.root.glob(".partial-*")), [existing_partial])
+                self.assertEqual((self.old / "database.dump").read_bytes(), b"old valid backup")
+                if stage == "dump":
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(int(child_pid.read_text()), 0)
+                    self.assertEqual(set(self.root.iterdir()), {existing_partial, self.old})
+                else:
+                    (current,) = set(self.root.iterdir()) - {existing_partial, self.old}
+                    self.assertTrue(json.loads((current / "manifest.json").read_text())["complete"])
 
     def test_file_archive_checks_content_and_permissions(self):
         records, paths = backup.inventory({"input": self.source})

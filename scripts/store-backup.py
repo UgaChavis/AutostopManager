@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import tarfile
@@ -159,8 +160,9 @@ def create_backup(root, lock_path):
         if shutil.disk_usage(root).free < required + 2 * 1024**3:
             raise RuntimeError("backup_disk_reserve_insufficient")
         name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + str(os.getpid())
-        stage, final = root / (".partial-" + name), root / name
-        stage.mkdir(mode=0o700)
+        partial, final = root / (".partial-" + name), root / name
+        partial.mkdir(mode=0o700)
+        stage = partial
         dump = stage / "database.dump"
         with dump.open("xb") as output:
             quiet_run(
@@ -208,6 +210,7 @@ def create_backup(root, lock_path):
             os.fsync(output.fileno())
         sync_directory(stage)
         stage.rename(final)
+        stage = None
         sync_directory(root)
         removed = retire_previous(root, final)
         return {
@@ -217,9 +220,15 @@ def create_backup(root, lock_path):
             "retired_generations": removed,
         }
     finally:
-        if stage is not None and stage.exists():
-            shutil.rmtree(stage)
-        os.close(lock_fd)
+        try:
+            if stage is not None and stage.exists():
+                shutil.rmtree(stage)
+        finally:
+            os.close(lock_fd)
+
+
+def terminate(signum, _frame):
+    raise SystemExit(128 + signum)
 
 
 def main():
@@ -227,6 +236,7 @@ def main():
     parser.add_argument("--root", type=Path, default=Path("/var/backups/autostop-current/store"))
     parser.add_argument("--lock", type=Path, default=Path("/run/lock/autostop24-db-backup.lock"))
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, terminate)
     try:
         if os.geteuid() != 0:
             raise RuntimeError("root_required")
