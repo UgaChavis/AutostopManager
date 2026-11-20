@@ -1,3 +1,4 @@
+import gzip
 import importlib.util
 import hashlib
 import io
@@ -267,6 +268,24 @@ class CrmSnapshotTest(unittest.TestCase):
         destination.mkdir(mode=0o700)
         with self.assertRaises(ValueError):
             restore.check_archive(changed, destination)
+
+    def test_missing_or_corrupt_gzip_footer_fails_restore(self):
+        path = self.stage / "snapshot.tar.gz"
+        snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        original = path.read_bytes()
+        cases = {
+            "missing": (original[:-8], EOFError),
+            "truncated": (original[:-1], EOFError),
+            "bad-crc": (original[:-8] + bytes([original[-8] ^ 1]) + original[-7:], gzip.BadGzipFile),
+        }
+        for label, (damaged, error) in cases.items():
+            with self.subTest(label=label):
+                archive = self.stage / f"{label}.tar.gz"
+                archive.write_bytes(damaged)
+                destination = self.base / f"restore-{label}"
+                destination.mkdir(mode=0o700)
+                with self.assertRaises(error):
+                    restore.check_archive(archive, destination)
 
     def test_sqlite_attachment_is_preserved_byte_for_byte(self):
         attachment = self.source / "attachments" / "database-attachment"

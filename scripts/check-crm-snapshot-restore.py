@@ -98,8 +98,13 @@ def check_archive(archive_path: Path, destination: Path):
                 if os.geteuid() == 0:
                     os.chown(out, entry.uid, entry.gid)
                 _record(digest, entry, h.hexdigest())
+        # Tar iteration ends at the first zero block. Read the remaining tar
+        # padding through gzip EOF so gzip validates its CRC and length footer.
+        padding = archive.fileobj.read(tarfile.RECORDSIZE + 1)
     if (
-        not isinstance(manifest, dict)
+        not tarfile.BLOCKSIZE <= len(padding) <= tarfile.RECORDSIZE
+        or any(padding)
+        or not isinstance(manifest, dict)
         or type(manifest.get("schema")) is not int
         or manifest["schema"] not in (1, 2)
         or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("crm_revision", "")))
