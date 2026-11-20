@@ -33,7 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("--approve", required=True, help="Exact cold manifest SHA256 from the private policy")
     destination = restore.add_mutually_exclusive_group(required=True)
     destination.add_argument("--output", type=Path, help="New path within an existing root-private directory")
-    destination.add_argument("--activate-original", action="store_true", help="Atomically restore the absent historical path")
+    destination.add_argument(
+        "--activate-original", action="store_true", help="Atomically restore the absent historical path"
+    )
     arguments = parser.parse_args(argv)
     try:
         policy = core.load_policy(arguments.policy)
@@ -42,8 +44,13 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "apply":
             result = core.apply(policy, arguments.manifest, arguments.approve)
         elif arguments.command == "restore-tg-runtime":
-            result = cold_restore.restore(policy, arguments.revision, arguments.approve,
-                                          output=arguments.output, activate=arguments.activate_original)
+            result = cold_restore.restore(
+                policy,
+                arguments.revision,
+                arguments.approve,
+                output=arguments.output,
+                activate=arguments.activate_original,
+            )
         else:
             function = {"maintain": core.maintain, "pg-retain": core.pg_retain, "recover-ci": core.recover_ci}[
                 arguments.command
@@ -54,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             key: result[key]
             for key in (
                 "ok",
+                "busy",
                 "manifest_sha256",
                 "candidate_count",
                 "free_before",

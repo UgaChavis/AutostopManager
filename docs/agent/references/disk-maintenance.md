@@ -39,6 +39,8 @@ receipts и восстановление CI — `/var/lib/autostop-manager/priva
 Общий cleanup lock, native locks PostgreSQL, CRM deploy и рабочего Telegram
 исключают пересечение с копированием и выпуском. Занятость lock означает отсутствие
 удалений в этой попытке; отдельно проверь результат `recover-ci` и владельца lock.
+Если cleanup lock занят, `recover-ci` возвращает код 0 и `{"busy":true,"ok":true}`.
+Попытка отложена, предыдущая квитанция восстановления сохраняется.
 
 Ручной порядок: `autostop-disk-maintenance plan --output /ROOT_PRIVATE/manifest.json`,
 затем `apply --manifest /ROOT_PRIVATE/manifest.json --approve SHA256_ФАЙЛА`.

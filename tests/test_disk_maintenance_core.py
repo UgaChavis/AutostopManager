@@ -391,11 +391,34 @@ def test_failed_resume_is_durable_then_recovery_retries(setup, monkeypatch):
     assert util.read_json(Path(policy["state_root"]) / "last-result.json", private=True) == result
 
 
-def test_recovery_timer_never_resumes_running_main(setup):
+def test_recovery_timer_never_resumes_running_main(setup, monkeypatch, capsys):
     policy, _, _, calls = setup
+    entry_path = Path(__file__).parents[1] / "scripts" / "autostop-disk-maintenance.py"
+    spec = importlib.util.spec_from_file_location("disk_maintenance_entry", entry_path)
+    entry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entry)
+    monkeypatch.setattr(entry, "core", core)
+    monkeypatch.setattr(core, "load_policy", lambda path: policy)
+    state = Path(policy["state_root"])
+    ci_state = state / "ci-state.json"
+    receipt = state / "last-recovery.json"
+    util.atomic_json(ci_state, {"phase": "paused"})
+    util.atomic_json(receipt, {"previous_receipt": True})
+    previous = receipt.read_bytes()
+
     with core.locked(Path(policy["locks"]["cleanup"])):
         assert core.recover_ci(policy) == {"ok": True, "busy": True}
-    assert not calls and not (Path(policy["state_root"]) / "last-recovery.json").exists()
+        assert entry.main(["recover-ci"]) == 0
+        assert json.loads(capsys.readouterr().out) == {"ok": True, "busy": True}
+    assert not calls and receipt.read_bytes() == previous
+    assert util.read_json(ci_state, private=True)["phase"] == "paused"
+
+    assert entry.main(["recover-ci"]) == 0
+    completed = json.loads(capsys.readouterr().out)
+    assert completed["ok"] and completed["ci_restored"]
+    assert "busy" not in completed
+    assert calls == ["resume"] and util.read_json(ci_state, private=True)["phase"] == "restored"
+    assert util.read_json(receipt, private=True)["ci_restored"] is True
 
 
 def test_pg_retention_never_reads_pending_ci_or_calls_gh(setup, monkeypatch):
