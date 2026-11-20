@@ -2,7 +2,7 @@ import errno
 import importlib.util
 import json
 import os
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
 import pytest
@@ -159,6 +159,38 @@ def test_private_state_requires_owner_and_private_mode(tmp_path, monkeypatch):
     snapshot.chmod(0o644)
     with snapshot.open("rb") as stream, pytest.raises(m.Uncertain, match="unsafe snapshot"):
         m._checked_stat(stream)
+
+
+def test_receipt_mode_failure_closes_unpublished_temporary_file(tmp_path, monkeypatch):
+    receipt = tmp_path / "receipt"
+    m.durable(receipt, b"previous receipt")
+    opened = []
+
+    def fail_fchmod(fd, mode):
+        assert mode == 0o600
+        opened.append(fd)
+        raise OSError(errno.EIO, "synthetic receipt mode update failure")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(m.os, "fchmod", fail_fchmod)
+            with pytest.raises(OSError) as failure:
+                m.durable(receipt, b"new receipt")
+        assert failure.value.errno == errno.EIO
+        assert len(opened) == 1
+        with pytest.raises(OSError) as closed:
+            os.fstat(opened[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        for fd in opened:
+            with suppress(OSError):
+                os.close(fd)
+
+    assert receipt.read_bytes() == b"previous receipt"
+    assert not list(tmp_path.glob(".crm-*"))
+    m.durable(receipt, b"new receipt")
+    assert receipt.read_bytes() == b"new receipt"
+    assert receipt.stat().st_mode & 0o777 == 0o600
 
 
 def test_backup_restores_before_publishing_and_preserves_one_pending(ctx, monkeypatch):

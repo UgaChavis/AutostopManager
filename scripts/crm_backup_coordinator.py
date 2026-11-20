@@ -340,8 +340,8 @@ def durable(path, data):
     path = Path(path)
     fd, temp = tempfile.mkstemp(prefix=".crm-", dir=path.parent)
     try:
-        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), 0o600)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
