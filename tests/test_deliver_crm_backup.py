@@ -353,12 +353,32 @@ def test_old_missing_source_leaves_partial_file_and_allows_new_pointer(store):
     assert remote.parts[first["id"]] == b"incomplete"
 
 
+@pytest.mark.parametrize("contents", [b"short", b"synthetic archive followed by extra bytes"])
+def test_wrong_local_archive_length_is_rejected_before_reading(store, monkeypatch, contents):
+    root, fd = store
+    record = prepare(store, 1, b"synthetic archive")
+    (root / record["file"]).write_bytes(contents)
+    remote = FakeWindows()
+
+    def unexpected_digest(_stream):
+        pytest.fail("archive bytes were read despite a known size mismatch")
+
+    monkeypatch.setattr(delivery.transfer, "digest", unexpected_digest)
+    with pytest.raises(delivery.DeliveryError, match="source_integrity"):
+        delivery.deliver_once(fd, remote)
+    status = delivery.read_json(fd, "delivery-status.json")
+    assert (status["id"], status["status"], status["error_code"]) == (record["id"], "failed", "source_integrity")
+    assert delivery.read_json(fd, "delivery-intent.json") == delivery.read_json(fd, "pending.json") == record
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+
+
 def test_damaged_retired_source_preserves_old_files_and_allows_new_pointer(store):
     remote = FakeWindows()
     first = prepare(store, 1, b"first")
     delivery.write_json(store[1], "delivery-intent.json", first)
     old_path = store[0] / first["file"]
-    old_path.write_bytes(b"damaged old source")
+    # A same-length corruption still has to fail the full checksum validation.
+    old_path.write_bytes(b"other")
     remote.parts[first["id"]] = b"unknown partial"
     remote.finals[first["id"]] = b"unknown old final"
     newer = prepare(store, 2, b"newer")
@@ -373,7 +393,7 @@ def test_damaged_retired_source_preserves_old_files_and_allows_new_pointer(store
     assert remote.finals[newer["id"]] == b"newer"
     assert delivery.read_json(store[1], "pending.json") is None
     assert delivery.journal(store[1]) == [newer]
-    assert old_path.read_bytes() == b"damaged old source"
+    assert old_path.read_bytes() == b"other"
     assert remote.parts[first["id"]] == b"unknown partial"
     assert remote.finals[first["id"]] == b"unknown old final"
     assert remote.deletes == []

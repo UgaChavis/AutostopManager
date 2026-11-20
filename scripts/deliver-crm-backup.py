@@ -220,9 +220,12 @@ def pending_record(dirfd):
 
 def verify_source(stream, record):
     before = os.fstat(stream.fileno())
+    expected_size = record["size"]
+    if before.st_size != expected_size:
+        raise DeliveryError("source_integrity")
     size, digest = transfer.digest(stream)
     after = os.fstat(stream.fileno())
-    if size != record["size"] or digest.hex() != record["sha256"] or _identity(before) != _identity(after):
+    if size != expected_size or digest.hex() != record["sha256"] or _identity(before) != _identity(after):
         raise DeliveryError("source_integrity")
     stream.seek(0)
     return after
