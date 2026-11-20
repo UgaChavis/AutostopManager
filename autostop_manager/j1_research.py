@@ -1564,6 +1564,11 @@ def _claim_job(conn: sqlite3.Connection) -> str | None:
     return row["id"] if row else None
 
 
+def _lock_running_job(conn: sqlite3.Connection, job_id: str) -> bool:
+    conn.execute("BEGIN IMMEDIATE")
+    return conn.execute("SELECT 1 FROM jobs WHERE id=? AND status='running'", (job_id,)).fetchone() is not None
+
+
 def _discovery_metadata(row: dict[str, Any], url: str, canonical_url: str) -> tuple[str, str, str, str, str, int, str]:
     """Normalize discovery-only fields before they enter the temporary corpus."""
 
@@ -1627,8 +1632,7 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
     if _STOP and not results:
         return False
     with _db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        if conn.execute("SELECT 1 FROM jobs WHERE id=? AND status='running'", (job_id,)).fetchone() is None:
+        if not _lock_running_job(conn, job_id):
             return False
         current_count = conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
         for row in results:
@@ -1735,7 +1739,7 @@ def _work_public_job(job_id: str) -> None:
             except Exception:  # noqa: BLE001 - one malformed page must not fail the corpus.
                 fetch_result = {"ok": False, "error": "fetch_failed"}
             with _db() as conn:
-                if conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()[0] != "running":
+                if not _lock_running_job(conn, job_id):
                     return
                 # Keep prior usage even when a retry or recovery yields static text.
                 conn.execute(
@@ -1801,6 +1805,10 @@ def _work_public_job(job_id: str) -> None:
                         # body and therefore remain useful at capacity.
                         if _cache_size() + len(body.encode("utf-8")) * 3 > MAX_CORPUS_BYTES:
                             _prune(conn)
+                            # Pruning commits before vacuum. Cancellation can
+                            # win while those transactions are released.
+                            if not conn.in_transaction and not _lock_running_job(conn, job_id):
+                                return
                         if _cache_size() + len(body.encode("utf-8")) * 3 > MAX_CORPUS_BYTES:
                             conn.execute(
                                 "UPDATE documents SET status='failed',error='cache_capacity_reached',extraction_method=? WHERE id=?",

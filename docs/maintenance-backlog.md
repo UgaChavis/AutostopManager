@@ -31,3 +31,5 @@ R01/R02 исторически приняты в [Review 14](https://github.com/
 Старые обязательные повторные полные циклы, дополнительные clone/venv и порог
 30 GiB заменены текущим порядком обслуживания. Обязательные итоговые проверки
 и post-merge CI сохраняются.
+
+История ввода ежедневной копии CRM сохранена в [прежнем минимальном контракте](https://github.com/UgaChavis/AutostopManager/blob/69e79cae25aa063b4513e6c2dae2e11744eca7ca/docs/crm-workstation-backup-minimal-contract.md). Установка, восстановление и проверка действующего порядка описаны в [пакете копирования CRM](crm-workstation-backup-package.md).

@@ -1240,6 +1240,122 @@ def _j1003_legacy_document():
     return job_id, document_id, url
 
 
+def _claimed_public_document():
+    created = j1.start_research("Synthetic document completion", ["public document evidence"])
+    job_id = created["job_id"]
+    document_id = "0" * 31 + "1"
+    url = "https://example.org/public-document"
+    with j1._db() as conn:
+        conn.execute("UPDATE queries SET status='done' WHERE job_id=?", (job_id,))
+        conn.execute(
+            "INSERT INTO documents(id,job_id,url,created_at) VALUES(?,?,?,?)",
+            (document_id, job_id, url, j1._utcnow()),
+        )
+        conn.commit()
+        assert j1._claim_job(conn) == job_id
+    return job_id, document_id
+
+
+def test_document_completion_serializes_cancel_with_result_write(j1003_offline, monkeypatch):
+    job_id, document_id = _claimed_public_document()
+    completion_checked = Event()
+    release_completion = Event()
+    cancel_started = Event()
+    fetched = Event()
+    transaction = []
+    order = []
+    connect = sqlite3.connect
+
+    class StatusRow:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            cursor = super().execute(sql, *args, **kwargs)
+            if current_thread().name != "j1-document-completion" or not fetched.is_set():
+                return cursor
+            if not completion_checked.is_set() and sql.startswith(("SELECT status FROM jobs", "SELECT 1 FROM jobs")):
+                row = cursor.fetchone()
+                cursor.close()
+                transaction.append(self.in_transaction)
+                completion_checked.set()
+                assert release_completion.wait(5)
+                return StatusRow(row)
+            if sql.startswith("INSERT INTO documents_fts"):
+                order.append("document_written")
+            return cursor
+
+    def fetch(url, **_kwargs):
+        fetched.set()
+        return {"ok": True, "url": url, "kind": "html", "text": "Synthetic public document"}
+
+    def worker():
+        current_thread().name = "j1-document-completion"
+        j1._work_job(job_id)
+
+    def cancel():
+        cancel_started.set()
+        receipt = j1.research_cancel(job_id)
+        order.append("cancel_acknowledged")
+        return receipt
+
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *args, **kwargs: connect(*args, **kwargs, factory=ObservedConnection)
+    )
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        running = pool.submit(worker)
+        try:
+            assert completion_checked.wait(2)
+            cancellation = pool.submit(cancel)
+            assert cancel_started.wait(2)
+            if not transaction[0]:
+                assert cancellation.result(timeout=3)["status"] == "cancelled"
+        finally:
+            release_completion.set()
+        running.result(timeout=3)
+        assert cancellation.result(timeout=3)["ok"]
+    assert order == ["document_written", "cancel_acknowledged"]
+    with j1._db() as conn:
+        assert conn.execute("SELECT status FROM documents WHERE id=?", (document_id,)).fetchone()[0] == "fetched"
+
+
+def test_document_completion_rechecks_cancel_after_corpus_pruning(j1003_offline, monkeypatch):
+    job_id, document_id = _claimed_public_document()
+    pruned = False
+
+    def prune(conn):
+        nonlocal pruned
+        conn.commit()
+        assert j1.research_cancel(job_id)["status"] == "cancelled"
+        pruned = True
+
+    monkeypatch.setattr(j1, "MAX_CORPUS_BYTES", 1_000)
+    monkeypatch.setattr(j1, "_cache_size", lambda: 0 if pruned else 1_000)
+    monkeypatch.setattr(j1, "_prune", prune)
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda url, **_kwargs: {
+            "ok": True,
+            "url": url,
+            "kind": "html",
+            "text": "Synthetic public document",
+            "browser_attempted": True,
+        },
+    )
+    j1._work_job(job_id)
+    with j1._db() as conn:
+        row = conn.execute("SELECT body,browser_attempted FROM documents WHERE id=?", (document_id,)).fetchone()
+        assert tuple(row) == ("", 1)
+        assert conn.execute("SELECT 1 FROM documents_fts WHERE document_id=?", (document_id,)).fetchone() is None
+    assert pruned
+
+
 def test_j1003_migration_commits_backfill_before_domain_transaction(j1003_offline):
     _job_id, document_id, url = _j1003_legacy_document()
     with j1._db() as connection:
