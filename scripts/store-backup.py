@@ -24,6 +24,10 @@ SOURCES = {
     "settings/docker-compose.yml": Path("/opt/autostop-app/docker-compose.yml"),
     "settings/deploy-current.env": Path("/opt/autostop-app-deploys/current.env"),
 }
+STORE_FILE_MOUNTS = {
+    "uploads": "/var/data/uploads",
+    "photos": "/var/data/quote-request-vin-photos",
+}
 
 
 def digest(path):
@@ -110,6 +114,13 @@ def container_identity():
     db, app = json.loads(result.stdout)
     if not db["State"]["Running"] or db["State"].get("Health", {}).get("Status") != "healthy":
         raise RuntimeError("postgres_not_healthy")
+    mounts = app.get("Mounts")
+    if not isinstance(mounts, list):
+        raise RuntimeError("store_file_mount_mismatch")
+    for name, destination in STORE_FILE_MOUNTS.items():
+        matches = [mount for mount in mounts if mount.get("Destination") == destination]
+        if len(matches) != 1 or matches[0].get("Source") != str(SOURCES[name]):
+            raise RuntimeError("store_file_mount_mismatch")
     return {
         "db": {"id": db["Id"], "image": db["Image"], "pid": db["State"]["Pid"]},
         "app": {"id": app["Id"], "image": app["Image"], "pid": app["State"]["Pid"]},

@@ -18,6 +18,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 backup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(backup)
+inspect_containers = backup.container_identity
 
 
 class StoreBackupTests(unittest.TestCase):
@@ -71,6 +72,74 @@ class StoreBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "source_changed"):
             self.create(mutate)
         self.assertEqual(list(self.root.iterdir()), [self.old])
+
+    def test_backup_binds_current_file_mounts_before_and_after_capture(self):
+        uploads = self.base / "uploads"
+        photos = self.base / "photos"
+        uploads.mkdir()
+        photos.mkdir()
+        (uploads / "synthetic.txt").write_text("synthetic upload")
+        (photos / "synthetic.txt").write_text("synthetic photo")
+        mounts = [
+            {"Source": str(uploads), "Destination": "/var/data/uploads", "Type": "volume", "RW": False},
+            {"Source": str(photos), "Destination": "/var/data/quote-request-vin-photos", "Type": "volume", "RW": True},
+        ]
+        changed_uploads = [{**mounts[0], "Source": str(self.base / "other-uploads")}, mounts[1]]
+        changed_photos = [mounts[0], {**mounts[1], "Source": str(self.base / "other-photos")}]
+        db = {"Id": "db", "Image": "db-image", "State": {"Running": True, "Pid": 11, "Health": {"Status": "healthy"}}}
+        app = {"Id": "app", "Image": "app-image", "State": {"Pid": 12}}
+
+        def inspected(file_mounts):
+            return subprocess.CompletedProcess([], 0, stdout=json.dumps([db, {**app, "Mounts": file_mounts}]).encode())
+
+        for case, first, second in (
+            ("changed-uploads", changed_uploads, changed_uploads),
+            ("changed-photos", changed_photos, changed_photos),
+            ("missing", mounts[:1], mounts[:1]),
+            ("duplicate", [*mounts, mounts[0]], [*mounts, mounts[0]]),
+            ("changed-during-capture", mounts, changed_photos),
+            ("valid", mounts, mounts),
+        ):
+            with self.subTest(case=case):
+                root = self.base / case
+                root.mkdir(mode=0o700)
+                previous = root / self.old.name
+                shutil.copytree(self.old, previous)
+                with (
+                    patch.object(backup, "SOURCES", {"uploads": uploads, "photos": photos}),
+                    patch.object(backup, "container_identity", inspect_containers),
+                    patch.object(
+                        backup.subprocess, "run", side_effect=[inspected(first), inspected(second)]
+                    ) as inspect,
+                    patch.object(backup, "quiet_run", side_effect=self.command) as postgres,
+                ):
+                    if case == "valid":
+                        result = backup.create_backup(root, self.base / "mount-test.lock")
+                        current = Path(result["backup"])
+                        manifest = json.loads((current / "manifest.json").read_text())
+                        self.assertEqual(
+                            manifest["container_identity"],
+                            {
+                                "db": {"id": "db", "image": "db-image", "pid": 11},
+                                "app": {"id": "app", "image": "app-image", "pid": 12},
+                            },
+                        )
+                        self.assertTrue(
+                            {"uploads/synthetic.txt", "photos/synthetic.txt"} <= manifest["source_files"].keys()
+                        )
+                        self.assertEqual(list(root.iterdir()), [current])
+                        self.assertEqual(inspect.call_count, 2)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "store_file_mount_mismatch"):
+                            backup.create_backup(root, self.base / "mount-test.lock")
+                        self.assertEqual(list(root.iterdir()), [previous])
+                        self.assertEqual((previous / "database.dump").read_bytes(), b"old valid backup")
+                        if case == "changed-during-capture":
+                            self.assertTrue(postgres.called)
+                            self.assertEqual(inspect.call_count, 2)
+                        else:
+                            postgres.assert_not_called()
+                            self.assertEqual(inspect.call_count, 1)
 
     def test_archive_validation_failure_preserves_previous(self):
         def fail(args, **kwargs):
