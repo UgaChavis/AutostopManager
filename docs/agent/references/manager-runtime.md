@@ -311,7 +311,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/attest-j1-browser-stack.sh` | Создаёт release-bound marker после topology probe. |
 | `scripts/install-telegram-bridge.sh` | Account release: `--account personal|work --revision <commit>`. |
 | `scripts/provision-telegram-transcription-model.sh` | Подготавливает voice model: `--account work --revision <commit>`. |
-| `scripts/deploy_telegram_bridge.sh` | Меняет release/service: work требует `--account work --no-start [revision]`; personal — `--account personal [revision]`, `--no-start` для него запрещён. |
+| `scripts/deploy_telegram_bridge.sh` | Work требует `--account work --no-start [revision]`. Флаг сохранён для совместимости. Установка включает и запускает bridge с прежней настройкой приёма. Для personal используй `--account personal [revision]`. |
 | `scripts/install-codex-wake.sh` | Меняет unit/chat/config с backup/rollback; без аргументов. |
 | `scripts/authorize-telegram-account.sh` | Интерактивная авторизация `--account personal|work`. |
 | `scripts/set-work-telegram-duty.sh` | `--status` не меняет duty, но открывает с усечением или создаёт технический lock-файл и на время проверки берёт неблокирующую эксклюзивную блокировку; при занятости возвращает `duty_control_busy`. `--enable|--disable` меняют duty. |

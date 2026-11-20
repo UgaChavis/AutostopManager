@@ -5,7 +5,9 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRANCH="AutostopManager"
 
 usage() {
-  echo "usage: $0 --account personal|work [--no-start] [revision]" >&2
+  printf 'usage: %s --account personal [revision]\n       %s --account work --no-start [revision]\n' "$0" "$0" >&2
+  printf '%s\n' 'Work requires --no-start for compatibility. Deployment enables and starts the bridge.' \
+    'The bridge uses the existing inbound configuration.' >&2
 }
 
 if [[ $# -lt 2 || "$1" != "--account" ]]; then
