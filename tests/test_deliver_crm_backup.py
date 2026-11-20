@@ -523,6 +523,36 @@ def test_unconfirmed_pending_prevents_all_remote_operations(store, case):
     assert delivery.read_json(store[1], "delivery-intent.json") == record
 
 
+@pytest.mark.parametrize("marker", ["pending.json", "pending-ready.json", "delivery-intent.json"])
+def test_present_null_marker_refuses_rotation(store, marker):
+    root, fd = store
+    remote = FakeWindows()
+    records = []
+    for number in (1, 2, 3):
+        payload = f"generation-{number}".encode()
+        record = prepare(store, number, payload)
+        records.append(record)
+        delivery.remember(fd, record)
+        remote.finals[record["id"]] = payload
+    for name in ("pending.json", "pending-ready.json"):
+        delivery.unlink_file(fd, name)
+    delivery.set_status(fd, records[-1], "ok", "rotation_pending")
+    delivery.write_json(fd, marker, None)
+
+    with pytest.raises(delivery.DeliveryError, match=r"^invalid_metadata$"):
+        delivery.deliver_once(fd, remote)
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert delivery.journal(fd) == records
+    assert delivery.read_json(fd, "delivery-status.json")["error_code"] == "rotation_pending"
+    assert (root / marker).read_bytes() == b"null\n"
+
+    delivery.unlink_file(fd, marker)
+    delivery.deliver_once(fd, remote)
+    assert remote.deletes == [(records[0]["id"], True)]
+    assert delivery.journal(fd) == records[1:]
+    assert delivery.read_json(fd, "delivery-status.json")["error_code"] is None
+
+
 def test_pending_loses_readiness_during_transfer_no_cleanup_or_rotation(store):
     remote = FakeWindows()
     old = []

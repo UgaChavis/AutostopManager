@@ -120,9 +120,13 @@ def read_json(dirfd, name, *, missing=None):
         if len(data) > 1024 * 1024:
             raise DeliveryError("metadata_too_large")
     try:
-        return json.loads(data, object_pairs_hook=_unique_pairs)
+        value = json.loads(data, object_pairs_hook=_unique_pairs)
     except (UnicodeDecodeError, ValueError) as exc:
         raise DeliveryError("invalid_metadata") from exc
+    # Only a missing file may supply the caller's absence value.
+    if value is None:
+        raise DeliveryError("invalid_metadata")
+    return value
 
 
 def write_json(dirfd, name, value):
