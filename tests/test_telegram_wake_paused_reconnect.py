@@ -61,7 +61,7 @@ def test_paused_reconnect_only_clears_verified_obsolete_bridge_error(monkeypatch
         if blocker == "instruction_invalid":
             raise wake.WakeError("wake_instruction_bundle_invalid")
 
-    monkeypatch.setattr(wake, "validate_instruction_bundle", validate)
+    monkeypatch.setattr(wake, "_load_instruction_bundle", validate)
 
     async def scenario():
         status = {

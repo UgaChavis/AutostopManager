@@ -335,11 +335,35 @@ def _load_instruction_bundle(root: str, revision: str) -> VerifiedInstructionBun
         raise WakeError("wake_" + exc.code) from None
 
 
+class _InstructionVerifier:
+    """One fresh read at a time across all of a Wake worker's connections."""
+
+    def __init__(self) -> None:
+        self.active: asyncio.Task[VerifiedInstructionBundle] | None = None
+
+    async def load(self, root: str, revision: str) -> VerifiedInstructionBundle:
+        while self.active is not None and not self.active.done():
+            await asyncio.wait({self.active})
+        task = asyncio.create_task(asyncio.to_thread(_load_instruction_bundle, root, revision))
+        self.active = task
+
+        def finished(done: asyncio.Task[VerifiedInstructionBundle]) -> None:
+            if self.active is done:
+                self.active = None
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(finished)
+        # Cancellation stops the caller, while the read retains its slot until it exits.
+        return await asyncio.shield(task)
+
+
 class AppServer:
     """JSON-RPC over the local WebSocket; payloads stay in memory, never in logs."""
 
-    def __init__(self, config: WakeConfig) -> None:
+    def __init__(self, config: WakeConfig, *, instruction_verifier: _InstructionVerifier | None = None) -> None:
         self.config = config
+        self.instruction_verifier = instruction_verifier or _InstructionVerifier()
         self.websocket: Any = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
@@ -403,12 +427,16 @@ class AppServer:
         self.instruction_config = config
         self.instruction_delivery_state = "prepared"
 
-    def _instruction_item(self) -> dict[str, Any] | None:
+    async def _instruction_item(self) -> dict[str, Any] | None:
         bundle = self.instruction_bundle
         if bundle is None:
             return None
-        current = _load_instruction_bundle(bundle.root, bundle.revision)
-        if current.sha256 != bundle.sha256:
+        current = await self.instruction_verifier.load(bundle.root, bundle.revision)
+        if (
+            self.instruction_bundle is not bundle
+            or (self.config.instruction_root, self.config.instruction_revision) != (bundle.root, bundle.revision)
+            or current.sha256 != bundle.sha256
+        ):
             raise WakeError("wake_instruction_bundle_mismatch")
         try:
             return bundle.developer_item("client")
@@ -1193,6 +1221,18 @@ class AppServer:
                     await self.wait_idle()
             await self._wait_turn(generation, notification_only=True)
 
+    def _require_turn_context(self, generation: int, thread_id: str, archive_sequence: int) -> None:
+        if self.pausing:
+            raise WakeError("codex_paused")
+        if self.worker_archived or archive_sequence != self.thread_archive_sequence:
+            raise WakeError("codex_thread_archived")
+        if thread_id != self.config.thread_id:
+            raise WakeError("codex_start_connection_changed")
+        if generation != self.generation or not self.connected or (self.managed and not self.ready_event.is_set()):
+            raise TransportLost("codex_start_connection_changed")
+        if self.blocked:
+            raise WakeError("codex_recovery_blocked")
+
     async def _start_turn(
         self,
         text: str,
@@ -1202,6 +1242,7 @@ class AppServer:
         timings: _StageTimings | None = None,
         execution: ExitStack | None = None,
     ) -> int:
+        turn_thread_id = self.config.thread_id
         while True:
             await self.ensure_ready()
             try:
@@ -1226,22 +1267,16 @@ class AppServer:
                     turn_generation = self.generation
                     turn_archive_sequence = self.thread_archive_sequence
                     turn_notification_sequence = self.thread_notification_sequence
-                    instruction_item = self._instruction_item()
+                    instruction_item = await self._instruction_item()
+                    self._require_turn_context(turn_generation, turn_thread_id, turn_archive_sequence)
+                    if turn_notification_sequence != self.thread_notification_sequence:
+                        raise WakeError("codex_thread_context_changed")
                     if before_start is not None:
                         await before_start()
                         self.outcome_unknown = True
                         # If the connection changes while the intent is committed, do not guess
                         # whether start is still safe. The durable job requires reconciliation.
-                        if self.worker_archived or turn_archive_sequence != self.thread_archive_sequence:
-                            raise WakeError("codex_thread_archived")
-                        if (
-                            turn_generation != self.generation
-                            or not self.connected
-                            or (self.managed and not self.ready_event.is_set())
-                        ):
-                            raise TransportLost("codex_start_connection_changed")
-                        if self.blocked:
-                            raise WakeError(self.recovery_error or "codex_recovery_blocked")
+                        self._require_turn_context(turn_generation, turn_thread_id, turn_archive_sequence)
                     self.outcome_unknown = True
                     instruction_timing = (
                         timings.measure("new", "instruction_delivery")
@@ -1661,11 +1696,12 @@ async def _active_job_page(
     return page, cursor
 
 
-def job_instruction(job: dict[str, Any]) -> str:
+def job_instruction(job: dict[str, Any], bundle: VerifiedInstructionBundle) -> str:
     """Only service refs/leases enter the wake prompt; no customer body is persisted."""
     root = job["instruction_root"]
     revision = job["instruction_revision"]
-    validate_instruction_bundle(root, revision)
+    if (root, revision) != (bundle.root, bundle.revision):
+        raise WakeError("wake_instruction_bundle_mismatch")
     binding = json.dumps(
         {key: job[key] for key in ("job_id", "lease", "revision", "event_ids")},
         ensure_ascii=False,
@@ -1961,7 +1997,7 @@ class DurableWakeDispatcher:
         config = replace(self.bootstrap_app.config, thread_id=thread_id)
         if bundle is not None:
             config = replace(config, instruction_root=bundle.root, instruction_revision=bundle.revision)
-        app = AppServer(config)
+        app = AppServer(config, instruction_verifier=self.bootstrap_app.instruction_verifier)
         app.client_peer = True
         if verify_settings:
             app.resume_overrides = self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
@@ -2049,12 +2085,20 @@ class DurableWakeDispatcher:
         if self.app.peer_unavailable != "archived":
             raise WakeError("codex_thread_archive_changed")
 
+    def _require_job_execution_enabled(self) -> None:
+        if not self.enabled or self.pause_requested or (self.parent is not None and self.parent.pause_requested):
+            raise WakeError("codex_paused")
+
     async def _select_peer(self, job: dict[str, Any]) -> None:
         if job.get("context_mode") != "peer_v1":
             raise WakeError("wake_legacy_context_requires_review")
-        bundle = _load_instruction_bundle(job["instruction_root"], job["instruction_revision"])
+        bundle = await self.bootstrap_app.instruction_verifier.load(
+            job["instruction_root"], job["instruction_revision"]
+        )
+        self._require_job_execution_enabled()
         await self.bootstrap_app.ensure_ready()
         instruction_config = await self.bootstrap_app.worker_instruction_config()
+        self._require_job_execution_enabled()
         response = await self.jobs.request("job_peer_thread_prepare", **self._guard(job))
         mapping = response.get("peer_thread")
         if not isinstance(mapping, dict):
@@ -2073,6 +2117,7 @@ class DurableWakeDispatcher:
             if self.app.peer_unavailable == "archived":
                 await self._check_archived_peer_idle(thread_id, mapping.get("reviewed_turn_id"))
             await self._retire_peer(asyncio.get_running_loop().time() + CONNECT_TIMEOUT)
+            self._require_job_execution_enabled()
             response = await self.jobs.request(
                 "job_peer_thread_rotate",
                 **self._guard(job),
@@ -2090,6 +2135,7 @@ class DurableWakeDispatcher:
                 if mapping.get("created") is not True:
                     raise WakeError("wake_peer_thread_unknown")
                 await self.bootstrap_app.ensure_ready()
+                self._require_job_execution_enabled()
                 result = await self.bootstrap_app.request(
                     "thread/start", self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
                 )
@@ -2476,10 +2522,11 @@ class DurableWakeDispatcher:
         self.terminal_stop_pending = False
         self.request_deadline = self._deadline(job)
 
-        async def before_start() -> None:
+        async def before_start(app: AppServer) -> None:
             nonlocal job
-            if not self.enabled or self.pause_requested:
-                raise WakeError("codex_paused")
+            self._require_job_execution_enabled()
+            if self.app is not app:
+                raise WakeError("codex_start_connection_changed")
             response = await self.jobs.request(
                 "job_start_intent",
                 job_id=job["job_id"],
@@ -2529,8 +2576,12 @@ class DurableWakeDispatcher:
                     await self.app.wait_idle()
                 await self._health("running")
                 with self._stage_timings.measure(mode, "turn_lifecycle"):
-                    await self.app.run_job_turn(
-                        job_instruction(job), before_start, bind_turn, timings=self._stage_timings
+                    app = self.app
+                    bundle = app.instruction_bundle
+                    if bundle is None:
+                        raise WakeError("wake_instruction_bundle_required")
+                    await app.run_job_turn(
+                        job_instruction(job, bundle), lambda: before_start(app), bind_turn, timings=self._stage_timings
                     )
 
         code = None
@@ -2757,6 +2808,10 @@ class DurableWakeDispatcher:
             return
         await self._execute(job, recovering=True)
 
+    def _require_instruction_pin(self, root: str, revision: str) -> None:
+        if (root, revision) != (self.app.config.instruction_root, self.app.config.instruction_revision):
+            raise WakeError("wake_instruction_release_mismatch")
+
     async def work(self) -> None:
         try:
             while True:
@@ -2776,7 +2831,13 @@ class DurableWakeDispatcher:
                     root, revision = self.app.config.instruction_root, self.app.config.instruction_revision
                     if root is None or revision is None:
                         raise WakeError("wake_instruction_bundle_required")
-                    validate_instruction_bundle(root, revision)
+                    await self.bootstrap_app.instruction_verifier.load(root, revision)
+                    if not self.enabled or self.pause_requested:
+                        continue
+                    if self.execution_error is not None:
+                        await self._health("held", self.execution_error)
+                        continue
+                    self._require_instruction_pin(root, revision)
                     await self._read_status()
                     intake_enabled = self.inbox_status.get("enabled", self.inbox_status.get("intake_enabled"))
                     if type(intake_enabled) is not bool:
@@ -2834,6 +2895,7 @@ class DurableWakeDispatcher:
                     while self.enabled and not self.pause_requested:
                         if self.cleanup_pending:
                             raise WakeError("wake_cleanup_pending")
+                        self._require_instruction_pin(root, revision)
                         response = await self.jobs.request(
                             "job_claim",
                             instruction_root=root,
@@ -3119,6 +3181,10 @@ class DurableWakeDispatcher:
         for app in (self.app, self.bootstrap_app):
             with suppress(OSError, TimeoutError, WakeError):
                 await _await_until(app.close(), deadline, self.cleanup_tasks)
+        verification = self.bootstrap_app.instruction_verifier.active
+        if verification is not None and not verification.done():
+            _retain_cleanup(verification, self.cleanup_tasks)
+            await asyncio.wait({verification}, timeout=max(0, deadline - asyncio.get_running_loop().time()))
 
 
 def job_instruction_template() -> str:

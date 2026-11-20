@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from dataclasses import replace
 import json
 import os
+import threading
+from unittest.mock import AsyncMock
 
 import pytest
 from instruction_bundle_fakes import create_instruction_bundle
@@ -68,6 +71,148 @@ def assert_worker_config(config, pinned):
     assert config["project_doc_max_bytes"] == 0
     assert config["skills.include_instructions"] is False
     assert "skills" not in config and "skills.config" not in config
+
+
+def hold_verification(monkeypatch):
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    load = wake._load_instruction_bundle
+    calls = []
+
+    def delayed(root, revision):
+        calls.append((root, revision))
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(3), "verification hold was not released"
+        return load(root, revision)
+
+    monkeypatch.setattr(wake, "_load_instruction_bundle", delayed)
+    return entered, release, calls
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Wake status IPC is root-only")
+def test_worker_answers_unix_status_during_pinned_verification(tmp_path, pinned, monkeypatch):
+    async def scenario():
+        entered, release, calls = hold_verification(monkeypatch)
+        server = MockServer(peer_threads=True)
+        path = tmp_path / "status.sock"
+        async with running(tmp_path, pinned, server) as (_inbox, jobs, dispatcher):
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                async with await asyncio.start_unix_server(dispatcher.serve, path=path):
+                    status = await asyncio.wait_for(wake.local_request({"operation": "status"}, path), 1)
+                assert status["ok"] and calls == [(str(pinned[0]), REVISION)]
+                assert not any(operation == "job_claim" for operation, _arguments in jobs.calls)
+            finally:
+                release.set()
+            await until(lambda: dispatcher.completed == 1)
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_verification_uses_its_slot_until_the_read_finishes(tmp_path, pinned, monkeypatch):
+    async def scenario():
+        entered, release, calls = hold_verification(monkeypatch)
+        verifier = wake.AppServer(config_for(pinned, str(tmp_path / "app.sock"))).instruction_verifier
+        key = str(pinned[0]), REVISION
+        first = asyncio.create_task(verifier.load(*key))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            entered.clear()
+            second = asyncio.create_task(verifier.load(*key))
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(entered.wait(), 0.05)
+            assert calls == [key]
+        finally:
+            release.set()
+        assert (await asyncio.wait_for(second, 1)).revision == REVISION
+        assert (await verifier.load(*key)).revision == REVISION
+        assert calls == [key, key, key]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ("pause", "codex_paused"),
+        ("archive", "codex_thread_archived"),
+        ("generation", "codex_start_connection_changed"),
+        ("thread", "codex_start_connection_changed"),
+        ("foreign_turn", "codex_thread_context_changed"),
+        ("pin", "wake_instruction_bundle_mismatch"),
+        ("digest", "wake_instruction_bundle_mismatch"),
+    ],
+)
+def test_changes_during_final_verification_prevent_intent_and_turn(tmp_path, pinned, monkeypatch, change, error):
+    async def scenario():
+        config = config_for(pinned, str(tmp_path / "app.sock"))
+        app = wake.AppServer(config)
+        bundle = wake._load_instruction_bundle(str(pinned[0]), REVISION)
+        app.prepare_instructions(bundle, {})
+        app.connected = True
+        app.managed = change == "thread"
+        app.ready_event.set()
+        app.resume = AsyncMock(return_value="idle")
+        app.request = AsyncMock(side_effect=AssertionError("stale verification cannot authorize RPC"))
+        intent = AsyncMock()
+        entered, release, _calls = hold_verification(monkeypatch)
+        task = asyncio.create_task(app._start_turn("synthetic", before_start=intent))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            if change == "pause":
+                app.pausing = True
+            elif change == "archive":
+                app.thread_archive_sequence += 1
+            elif change == "generation":
+                app.generation += 1
+            elif change == "thread":
+                app.config = replace(app.config, thread_id="12345678-1234-1234-1234-123456789000")
+            elif change == "foreign_turn":
+                app.thread_notification_sequence += 1
+            elif change == "pin":
+                app.config = replace(app.config, instruction_revision="b" * 40)
+            else:
+                (pinned[0] / "AGENTS.md").write_text("modified after original verification\n")
+        finally:
+            release.set()
+        with pytest.raises(wake.WakeError, match=error):
+            await asyncio.wait_for(task, 1)
+        intent.assert_not_called()
+        app.request.assert_not_called()
+        assert not app.turn_start_attempted and not app.outcome_unknown
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["pause", "archive", "generation"])
+def test_changes_during_start_intent_keep_unknown_without_injecting(tmp_path, pinned, change):
+    async def scenario():
+        app = wake.AppServer(config_for(pinned, str(tmp_path / "app.sock")))
+        app.prepare_instructions(wake._load_instruction_bundle(str(pinned[0]), REVISION), {})
+        app.connected = True
+        app.resume = AsyncMock(return_value="idle")
+        app.request = AsyncMock(side_effect=AssertionError("stale intent cannot authorize RPC"))
+
+        async def commit_intent():
+            if change == "pause":
+                app.pausing = True
+            elif change == "archive":
+                app.thread_archive_sequence += 1
+            else:
+                app.generation += 1
+
+        intent = AsyncMock(side_effect=commit_intent)
+        with pytest.raises(wake.WakeError):
+            await app._start_turn("synthetic", before_start=intent)
+        intent.assert_awaited_once()
+        app.request.assert_not_called()
+        assert not app.turn_start_attempted and app.outcome_unknown
+
+    asyncio.run(scenario())
 
 
 def test_canonical_policy_precedes_generation_and_preserves_execution_settings(tmp_path, pinned):
