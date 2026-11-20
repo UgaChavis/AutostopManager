@@ -22,7 +22,7 @@ Defaults: `{"expected_revision":null,"payload":null}`.
 {"operation":"__invalid__"}
 ```
 
-Выход: ok and roles/items/receipt for reads; ok and role/item for an accepted action.
+Выход: ok и role или item для принятого изменения.
 Ошибки и неполнота: role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable.
 
 - Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.

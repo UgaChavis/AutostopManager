@@ -7121,15 +7121,13 @@
         "limit": 30
       },
       "outputs": [
-        "ok and roles/items/receipt for reads; ok and role/item for an accepted action"
+        "ok и roles для status, items для списков и отдельных записей, receipt для owner_receipt"
       ],
       "errors": [
-        "role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable"
+        "role_read_invalid при недопустимом запросе, role_item_not_found при отсутствии записи, automation_control_unavailable при недоступном контроллере"
       ],
       "limitations": [
-        "Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.",
-        "Рабочие знания и наблюдения не расширяют полномочия.",
-        "Реестр не закрепляет чаты, не создаёт цели и не запускает фоновую работу."
+        "Чтение не создаёт хранилище реестра."
       ],
       "example": {},
       "invalid_example": {
@@ -7166,7 +7164,7 @@
         "expected_revision": null
       },
       "outputs": [
-        "ok and roles/items/receipt for reads; ok and role/item for an accepted action"
+        "ok и role или item для принятого изменения"
       ],
       "errors": [
         "role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable"

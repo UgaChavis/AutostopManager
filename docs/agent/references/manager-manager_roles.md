@@ -22,11 +22,9 @@ Defaults: `{"limit":30,"operation":"status","reference_id":"","role":"M1"}`.
 {"operation":"__invalid__"}
 ```
 
-Выход: ok and roles/items/receipt for reads; ok and role/item for an accepted action.
-Ошибки и неполнота: role_revision_conflict, role_idempotency_conflict, role_owner_required, role_approval_stale; automation_control_unavailable.
+Выход: ok и roles для status, items для списков и отдельных записей, receipt для owner_receipt.
+Ошибки и неполнота: role_read_invalid при недопустимом запросе, role_item_not_found при отсутствии записи, automation_control_unavailable при недоступном контроллере.
 
-- Изменение роли не заменяет разрешение владельца на финансовое действие, отправку сотруднику или выпуск.
-- Рабочие знания и наблюдения не расширяют полномочия.
-- Реестр не закрепляет чаты, не создаёт цели и не запускает фоновую работу.
+- Чтение не создаёт хранилище реестра.
 
 Подробный контракт: [справочник](manager-roles.md).
