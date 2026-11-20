@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import hashlib
 import hmac
 import json
@@ -1382,6 +1383,105 @@ def test_capacity_keeps_checkpoint_before_missing_message(tmp_path):
     assert monitor.inbox.gaps()[0]["message_id"] == 101
     assert monitor.reconcile_requested.is_set() is False
     monitor.inbox.close()
+
+
+def test_bot_dispositions_resume_capacity_recovery_once(tmp_path, monkeypatch):
+    config, monitor = _runtime(tmp_path, max_events=2)
+    monitor.transport_ready = True
+    bots = [_message(100, peer=41), _message(102, peer=43)]
+    bot_ids = [monitor.record(message, source_kind="bot") for message in bots]
+    missing = _message(101, peer=42)
+
+    class CountingClient(Client):
+        scans = 0
+
+        async def iter_dialogs(self, **kwargs):
+            self.scans += 1
+            async for dialog in super().iter_dialogs(**kwargs):
+                dialog.entity.bot = dialog.id in {41, 43}
+                yield dialog
+
+        async def send_message(self, *_args, **_kwargs):
+            raise AssertionError("reconciliation must not send a replay")
+
+    client = CountingClient([*bots, missing])
+
+    async def scenario():
+        sweep_finished = asyncio.Event()
+
+        async def no_notifications(*_args):
+            sweep_finished.set()
+
+        monkeypatch.setattr(bridge, "_deliver_incident_notifications", no_notifications)
+        monitor.request_reconciliation()
+        worker = asyncio.create_task(bridge._reconcile_incoming_loop(client, config, monitor))
+        try:
+            await asyncio.wait_for(sweep_finished.wait(), timeout=2)
+            assert monitor.status()["intake_health"] == {"state": "held", "error_code": "inbound_monitor_full"}
+            assert monitor.status()["gap_count"] == 1
+            assert monitor.inbox.checkpoint(missing.chat_id) == 0
+            assert not monitor.reconcile_requested.is_set()
+            signal_revision = monitor.reconciliation_signal_revision
+            sweep_finished.clear()
+
+            for event_id in bot_ids:
+                result = await bridge._handle_operation(
+                    client,
+                    config,
+                    {"operation": "monitor_mark", "event_id": event_id, "disposition": "no_reply_needed"},
+                    inbound_monitor=monitor,
+                )
+                assert result == {"ok": True, "event": {"event_id": event_id, "state": "no_reply_needed"}}
+            assert monitor.reconcile_requested.is_set()
+            assert monitor.reconciliation_signal_revision == signal_revision + 1
+
+            await asyncio.wait_for(sweep_finished.wait(), timeout=2)
+            assert client.scans == 2
+            assert not monitor.reconcile_requested.is_set()
+            assert monitor.intake_reconciliation() == "complete"
+            assert monitor.status()["gap_count"] == 0
+            assert monitor.status()["bot_pending_events"] == 0
+            assert monitor.status()["pending_events"] == 1
+            assert monitor.inbox.checkpoint(missing.chat_id) == missing.id
+            client_refs = [monitor.resolve(row["event_id"]) for row in monitor.events() if row["state"] == "open"]
+            assert [(ref.peer_id, ref.message_id) for ref in client_refs] == [(missing.chat_id, missing.id)]
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+            monitor.inbox.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("enabled", "intake_error"),
+    [(True, None), (True, "history_reconciliation_failed"), (False, "inbound_monitor_full")],
+)
+def test_bot_disposition_does_not_schedule_unrelated_reconciliation(tmp_path, enabled, intake_error):
+    config, monitor = _runtime(tmp_path)
+    try:
+        event_id = monitor.record(_message(100), source_kind="bot")
+        monitor.inbox.duty_set(enabled)
+        monitor.capture_enabled = enabled
+        monitor.inbox.set_health("intake", "held" if intake_error else "ready", intake_error)
+        request = {"operation": "monitor_mark", "event_id": event_id, "disposition": "no_reply_needed"}
+
+        with pytest.raises(bridge.BridgeError, match="inbound_disposition_invalid"):
+            asyncio.run(
+                bridge._handle_operation(
+                    object(), config, {**request, "disposition": "reply_verified"}, inbound_monitor=monitor
+                )
+            )
+        assert monitor.inbox.event_state(event_id) == "bot_pending"
+        assert not monitor.reconcile_requested.is_set()
+
+        result = asyncio.run(bridge._handle_operation(object(), config, request, inbound_monitor=monitor))
+        assert result["event"]["state"] == "no_reply_needed"
+        assert not monitor.reconcile_requested.is_set()
+        assert monitor.reconciliation_signal_revision == 0
+    finally:
+        monitor.inbox.close()
 
 
 def test_history_storage_failure_is_not_reported_as_capacity(tmp_path, monkeypatch):

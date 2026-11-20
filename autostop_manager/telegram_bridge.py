@@ -1052,7 +1052,14 @@ class DurableInboundMonitor(InboundMonitor):
 
     def mark_no_reply_needed(self, event_id: str) -> dict[str, str]:
         if self.inbox.event_state(event_id) == "bot_pending":
+            resume_intake = (
+                self.capture_enabled
+                and not self.reconcile_requested.is_set()
+                and self.inbox.health().get("intake") == {"state": "held", "error_code": "inbound_monitor_full"}
+            )
             self.inbox.acknowledge_bot_notification(event_id)
+            if resume_intake:
+                self.request_reconciliation()
             self.changed()
             return {"event_id": event_id, "state": "no_reply_needed"}
         self.require_open(event_id)
@@ -6652,7 +6659,7 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
         monitor.reconciliation_completed_revision = signal_revision
     monitor.changed()
     # Continue a finite backlog by task notification, never by interval polling.
-    # Capacity failures resume only after a job-result/resolve frees room.
+    # Capacity failures wait for an external recovery signal, including terminal dispositions that free room.
     if not complete and not capacity_blocked:
         monitor.reconcile_requested.set()
 
