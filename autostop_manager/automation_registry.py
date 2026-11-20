@@ -418,7 +418,7 @@ SCHEMA_STATEMENTS = (
 )
 
 _SCHEMA_OBJECTS = frozenset(statement.split("IF NOT EXISTS ", 1)[1].split()[0] for statement in SCHEMA_STATEMENTS)
-_SCHEMA_UPGRADE_COLUMNS = {
+_SCHEMA_UPGRADE_COLUMNS: dict[str, dict[str, tuple[str, str | None]]] = {
     "manager_automations": {
         "schedule_timezone": (
             "TEXT NOT NULL DEFAULT 'Asia/Krasnoyarsk'",
