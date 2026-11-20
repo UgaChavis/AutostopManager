@@ -17,18 +17,19 @@ Defaults: `{}`.
 
 Синтетический вход (форма, не утверждение о реальном автомобиле/артикуле):
 ```json
-{"dry_run":true,"motor_id":"42","operation":"norms_times","sub_category_id":"0","top_category_id":"0"}
+{"dry_run":true,"motor_id":"42","operation":"norms_times","sub_category_id":"20","top_category_id":"10"}
 ```
 Вход, отклоняемый схемой до исполнения инструмента:
 ```json
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: outcome и autonorms_rows с работами и исходным workTime для переданного двигателя и ветки; detail=full сохраняет сырой ответ провайдера.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Норматив не реальная длительность; overlap не считается дважды.
 - API method отличается от facade operation; key назначает сервер, secrets не принимаются.
-- TecDoc/maintenance/AUTONORMS ID namespace не взаимозаменяемы; указанные IDs в примере синтетические.
+- TopCatId и SubCatId берутся из одной подтверждённой ветки AUTONORMS. Пустая выдача относится только к отправленной комбинации двигателя и категорий.
+- ID в примере синтетические и предназначены для dry_run.
 
 Подробный контракт: [справочник](../references/partsapi.md).

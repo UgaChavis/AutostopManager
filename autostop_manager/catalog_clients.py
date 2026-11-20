@@ -264,7 +264,10 @@ PARTSAPI_OPERATIONS: dict[str, dict[str, Any]] = {
         "required": ("motor_id", "top_category_id", "sub_category_id"),
         "params": {"motorId": "motor_id", "TopCatId": "top_category_id", "SubCatId": "sub_category_id"},
         "docs_url": "https://partsapi.ru/method/doc/GetNormsTimes",
-        "role": "AUTONORMS work list and norm-hours for one engine and work category.",
+        "role": (
+            "Work norms for an AUTONORMS engine and verified category pair. "
+            "An empty response applies only to the submitted engine and categories. The API requires both IDs."
+        ),
     },
     "fill_volumes": {
         "method": "GetFillVolumes",
