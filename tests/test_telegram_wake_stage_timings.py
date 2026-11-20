@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -632,7 +633,7 @@ def test_full_status_roundtrip_stays_private_and_within_existing_reader_limit(tm
             app.recovery_state = "reconciling"
             app.last_disconnect_at = "2026-10-24T23:59:59.123456+00:00"
             app.last_disconnect_code = 1006
-            app.last_rpc_error_code = -32603
+            app._rpc_rejection({"code": -32603, "message": "secret-client-rpc"}, method="mcpServerStatus/list")
             app.reconnect_attempts = 10**9
             app.active_turn = "secret-client-turn"
             app.active_event_id = "secret-client-event"
@@ -640,7 +641,24 @@ def test_full_status_roundtrip_stays_private_and_within_existing_reader_limit(tm
             path = str(tmp_path / "status.sock")
             async with await asyncio.start_unix_server(dispatcher.serve, path=path):
                 response = await wake.local_request({"operation": "status"}, path)
+                diagnostic = response["rpc_rejection"]
+                basic = {key: value for key, value in response.items() if key != "rpc_rejection"}
+                limit = wake.MAX_WAKE_STATUS_BYTES
+                basic["instruction_root"] = "/synthetic/"
+                padding = limit - 2 - len(json.dumps(basic).encode())
+                basic["instruction_root"] += "x" * padding
+                assert len(json.dumps(basic).encode()) + 1 == limit - 1
+                padded = basic | {"rpc_rejection": diagnostic}
+                assert len(json.dumps(padded).encode()) + 1 > limit
+                with monkeypatch.context() as patch:
+                    patch.setattr(dispatcher, "status", lambda: dict(padded))
+                    assert await wake.local_request({"operation": "status"}, path) == basic
             assert response["ok"] and response["queue_block_reason"] == "stop_pending"
+            assert response["rpc_error_code"] == -32603
+            assert set(diagnostic) == {"method", "observed_at", "classification"}
+            assert diagnostic["method"] == "mcpServerStatus/list" and diagnostic["classification"] == "other"
+            assert diagnostic["observed_at"].endswith("Z")
+            assert datetime.fromisoformat(diagnostic["observed_at"]).microsecond == 0
             snapshot = response["stage_timings"]
             assert snapshot == timings.snapshot()
             assert set(snapshot) == {"scope", "observed_seconds", "dropped_samples", "new", "recovery"}
@@ -652,7 +670,7 @@ def test_full_status_roundtrip_stays_private_and_within_existing_reader_limit(tm
                     assert set(cell) == keys | ({"unsettled"} if stage == "finish_request" else set())
                     assert all(type(value) in {int, float} or value is None for value in cell.values())
             serialized = json.dumps(response, allow_nan=False).encode() + b"\n"
-            assert len(serialized) < 4096
+            assert len(serialized) < wake.MAX_WAKE_STATUS_BYTES
             assert b"secret-client" not in serialized
             app.request.assert_not_awaited()
 

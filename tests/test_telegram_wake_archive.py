@@ -25,6 +25,19 @@ def test_archive_and_missing_require_exact_integer_rpc_code(code):
     for message in (archive_message(), f"no rollout found for thread id {THREAD}", f"thread not loaded: {THREAD}"):
         rejection = app._rpc_rejection({"code": code, "message": message})
         assert not rejection.archived_thread and rejection.missing_method is None
+        if type(code) is int:
+            assert app.last_rpc_rejection["classification"] == "other"
+        else:
+            assert app.last_rpc_rejection is None
+
+
+def test_exact_missing_thread_rejection_has_fixed_diagnostic():
+    app = wake.AppServer(wake.WakeConfig(THREAD))
+    rejection = app._rpc_rejection({"code": -32600, "message": f"thread not loaded: {THREAD}"}, method="thread/read")
+    assert rejection.missing_method == "thread/read"
+    assert app.last_rpc_rejection["method"] == "thread/read"
+    assert app.last_rpc_rejection["classification"] == "missing"
+    assert THREAD not in json.dumps(app.last_rpc_rejection)
 
 
 class ArchiveServer:
@@ -105,6 +118,8 @@ def test_cold_archived_pinned_worker_recovers_exact_id_without_model_turn(tmp_pa
                 assert app.config == config(path, bundle)
                 assert not app.outcome_unknown and app.active_turn is None
                 assert app.last_rpc_error_code is None
+                assert app.last_rpc_rejection is None
+                assert app._pending_rpc_methods == {}
             finally:
                 await app.close()
 
@@ -133,6 +148,8 @@ def test_archived_worker_recovery_preserves_a_newer_rpc_error_with_the_same_code
                 assert await app.resume() == "idle"
                 assert server.methods().count("thread/unarchive") == 1
                 assert app.last_rpc_error_code == -32600
+                assert app.last_rpc_rejection["classification"] == app.last_rpc_rejection["method"] == "other"
+                assert app._pending_rpc_methods == {}
             finally:
                 await app.close()
 
@@ -155,6 +172,7 @@ def test_unarchive_rejection_stops_after_one_attempt_with_fixed_error(tmp_path, 
                 assert server.methods().count("thread/resume") == 1
                 assert "turn/start" not in server.methods()
                 assert app.last_rpc_error_code == -32603
+                assert app.last_rpc_rejection["method"] == "thread/unarchive"
             finally:
                 await app.close()
 
@@ -394,6 +412,8 @@ def test_archive_readback_requires_exact_idle_visible_worker(tmp_path, bundle, t
                     await app.resume()
                 assert "thread/unarchive" not in server.methods()
                 assert app.last_rpc_error_code == -32600
+                assert app.last_rpc_rejection["method"] == "thread/resume"
+                assert app.last_rpc_rejection["classification"] == "archived"
             finally:
                 await app.close()
 

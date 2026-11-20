@@ -52,6 +52,7 @@ HEARTBEAT_TIMEOUT = 20
 FAILED_RECOVERY_TIMEOUT = 20
 MAX_TURN_NOTIFICATIONS = 32
 MAX_JOB_RESPONSE_BYTES = 1024 * 1024
+MAX_WAKE_STATUS_BYTES = 4096
 ACTIVE_JOB_PAGE_SIZE = 50
 MAX_ACTIVE_JOB_PAGES = 201
 BRIDGE_RPC_TIMEOUT = 5
@@ -59,6 +60,22 @@ BRIDGE_STALE_SECONDS = 30
 REQUEST_TIMEOUT_SECONDS = 20 * 60
 PROGRESS_RENEW_INTERVAL_SECONDS = 60
 WORKER_PROTOCOL = 3
+_RPC_DIAGNOSTIC_METHODS = frozenset(
+    {
+        "initialize",
+        "mcpServerStatus/list",
+        "thread/archive",
+        "thread/inject_items",
+        "thread/name/set",
+        "thread/read",
+        "thread/resume",
+        "thread/start",
+        "thread/turns/list",
+        "thread/unarchive",
+        "turn/interrupt",
+        "turn/start",
+    }
+)
 
 
 class WakeError(RuntimeError):
@@ -326,6 +343,7 @@ class AppServer:
         self.websocket: Any = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
+        self._pending_rpc_methods: dict[int, str] = {}
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(MAX_TURN_NOTIFICATIONS)
         self.sequence = 0
         self.connected = False
@@ -338,6 +356,7 @@ class AppServer:
         self.outcome_unknown = False
         self.last_rpc_error_code: int | None = None
         self._rpc_error_token: object | None = None
+        self.last_rpc_rejection: dict[str, str] | None = None
         self.generation = 0
         self.managed = False
         self.blocked = False
@@ -523,6 +542,9 @@ class AppServer:
         ident = self.sequence
         future = asyncio.get_running_loop().create_future()
         self.pending[ident] = future
+        self._pending_rpc_methods[ident] = (
+            method if isinstance(method, str) and method in _RPC_DIAGNOSTIC_METHODS else "other"
+        )
         try:
 
             async def exchange() -> Any:
@@ -532,6 +554,7 @@ class AppServer:
             return await _await_until(exchange(), asyncio.get_running_loop().time() + 90, self.cleanup_tasks)
         finally:
             self.pending.pop(ident, None)
+            self._pending_rpc_methods.pop(ident, None)
             if not future.done():
                 future.cancel()
             elif not future.cancelled():
@@ -694,7 +717,12 @@ class AppServer:
         # retaining turn items or unrelated manual turns.
         self.events.put_nowait({"method": method, "params": {"turn": {"id": turn["id"], "status": turn.get("status")}}})
 
-    def _rpc_rejection(self, error: Any) -> RPCRejected:
+    def _clear_rpc_rejection(self) -> None:
+        self.last_rpc_error_code = None
+        self._rpc_error_token = None
+        self.last_rpc_rejection = None
+
+    def _rpc_rejection(self, error: Any, *, method: str | None = None) -> RPCRejected:
         code = error.get("code") if isinstance(error, dict) else None
         self.last_rpc_error_code = code if type(code) is int else None
         self._rpc_error_token = object()
@@ -710,6 +738,20 @@ class AppServer:
                 f"thread not loaded: {thread_id}": "thread/read",
             }.get(message)
             if isinstance(message, str)
+            else None
+        )
+        classification = "other"
+        if archived:
+            classification = "archived"
+        elif missing_method is not None:
+            classification = "missing"
+        self.last_rpc_rejection = (
+            {
+                "method": method if isinstance(method, str) and method in _RPC_DIAGNOSTIC_METHODS else "other",
+                "observed_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "classification": classification,
+            }
+            if self.last_rpc_error_code is not None
             else None
         )
         return RPCRejected(
@@ -747,7 +789,8 @@ class AppServer:
                     future = self.pending.get(message["id"])
                     if future is not None and not future.done():
                         if "error" in message:
-                            future.set_exception(self._rpc_rejection(message["error"]))
+                            method = self._pending_rpc_methods.get(message["id"])
+                            future.set_exception(self._rpc_rejection(message["error"], method=method))
                         else:
                             future.set_result(message.get("result"))
                 elif "id" in message:
@@ -876,8 +919,7 @@ class AppServer:
         self.worker_archived = False
         self.peer_unavailable = None
         if recovered_archive_token is not None and self._rpc_error_token is recovered_archive_token:
-            self.last_rpc_error_code = None
-            self._rpc_error_token = None
+            self._clear_rpc_rejection()
         return str(status["type"])
 
     def peer_start_params(self, *, instruction_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1166,8 +1208,7 @@ class AppServer:
                 async with self.start_lock:
                     if self.pausing:
                         raise WakeError("codex_paused")
-                    self.last_rpc_error_code = None
-                    self._rpc_error_token = None
+                    self._clear_rpc_rejection()
                     resume_generation = self.generation
                     if await self.resume() == "unavailable":
                         raise WakeError("codex_thread_archived")
@@ -1778,6 +1819,7 @@ class DurableWakeDispatcher:
         )
         cleanup = self.cleanup_pending
         queue_reason = self._queue_block_reason(status, fresh=fresh, cleanup=cleanup)
+        rpc_rejection = self.app.last_rpc_rejection
         return {
             "ok": True,
             "enabled": self.enabled,
@@ -1819,6 +1861,7 @@ class DurableWakeDispatcher:
             "recoverable_failure": bool(status.get("needs_review", status.get("needs_review_jobs", 0))),
             "last_error": self.last_error or self.app.recovery_error,
             "rpc_error_code": self.app.last_rpc_error_code,
+            **({"rpc_rejection": dict(rpc_rejection)} if rpc_rejection is not None else {}),
             "retention": "durable_refs",
             "trigger": "telegram_event",
             "polling": False,
@@ -3031,7 +3074,11 @@ class DurableWakeDispatcher:
                     raise WakeError("wake_request_invalid")
             except (ValueError, TypeError, KeyError, OSError, TimeoutError, WakeError) as exc:
                 response = {"ok": False, "error": str(exc) if isinstance(exc, WakeError) else "wake_request_failed"}
-            writer.write(json.dumps(response).encode() + b"\n")
+            encoded = json.dumps(response).encode() + b"\n"
+            if len(encoded) >= MAX_WAKE_STATUS_BYTES and "rpc_rejection" in response:
+                response.pop("rpc_rejection")
+                encoded = json.dumps(response).encode() + b"\n"
+            writer.write(encoded)
             await _await_until(writer.drain(), asyncio.get_running_loop().time() + 2, self.cleanup_tasks)
         except (OSError, ConnectionError, TimeoutError):
             pass
@@ -3088,7 +3135,7 @@ async def local_request(request: dict[str, Any], path: Path = SOCKET_PATH) -> di
     retained: set[asyncio.Future[Any]] = set()
 
     async def exchange() -> dict[str, Any]:
-        reader, writer = await asyncio.open_unix_connection(str(path), limit=4096)
+        reader, writer = await asyncio.open_unix_connection(str(path), limit=MAX_WAKE_STATUS_BYTES)
         try:
             writer.write(json.dumps(request).encode() + b"\n")
             await writer.drain()
