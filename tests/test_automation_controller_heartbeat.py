@@ -298,6 +298,32 @@ def test_periodic_heartbeat_preserves_reconciliation_error_until_retry(monkeypat
     asyncio.run(scenario())
 
 
+def test_scheduler_keeps_error_during_retries_and_restores_ready_after_success(tmp_path):
+    async def scenario():
+        observed = []
+
+        class RetryingRegistry(AutomationStore):
+            def reconcile_next_job(self):
+                status = self.status()
+                observed.append((status["controller"]["state"], status["readiness"]["ready"]))
+                if len(observed) <= 2:
+                    raise RuntimeError("synthetic recurring registry failure")
+                if len(observed) == 4:
+                    daemon.stopping.set()
+                return super().reconcile_next_job()
+
+        store = RetryingRegistry(tmp_path / "registry.sqlite3")
+        store.initialize()
+        daemon = AutomationDaemon(
+            store=store, timer_controller=NoTimers(), control_server=NoServer(), tick_seconds=0.01
+        )
+        await asyncio.wait_for(daemon.scheduler_loop(), WATCHDOG)
+
+        assert observed == [("active", True), ("error", False), ("error", False), ("active", True)]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "elapsed,expected_state", [(-600, "stale"), (-1, "stale"), (0, "active"), (30, "active"), (31, "stale")]
 )

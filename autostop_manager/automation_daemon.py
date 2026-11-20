@@ -364,27 +364,26 @@ class AutomationDaemon:
         try:
             while not self.stopping.is_set():
                 try:
-                    controller_state = "active"
-                    self.store.controller_heartbeat(owner=self.owner)
+                    # Keep a reported failure visible until work succeeds again.
+                    self.store.controller_heartbeat(owner=self.owner, state=controller_state)
                     reconciled = self.store.reconcile_next_job()
+                    immediate_next_tick = False
                     if reconciled is not None:
-                        if not reconciled.get("applied"):
-                            # An active lease can keep this revision pending. Yield
-                            # so control requests and shutdown can run while waiting.
-                            with suppress(TimeoutError):
-                                await asyncio.wait_for(self.stopping.wait(), timeout=self.tick_seconds)
-                        else:
-                            # Successful synchronous batches must also offer control a turn.
-                            await asyncio.sleep(0)
-                        continue
-                    outbox = self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
-                    if outbox is not None:
+                        # An active lease can keep a revision pending until a later tick.
+                        immediate_next_tick = bool(reconciled.get("applied"))
+                    elif (
+                        outbox := self.store.claim_outbox(owner=self.owner, lease_seconds=self.lease_seconds)
+                    ) is not None:
                         await self._execute_outbox(outbox)
-                        await asyncio.sleep(0)
-                        continue
-                    claim = self.store.claim_next_run(owner=self.owner, lease_seconds=self.lease_seconds)
-                    if claim is not None:
+                        immediate_next_tick = True
+                    elif (
+                        claim := self.store.claim_next_run(owner=self.owner, lease_seconds=self.lease_seconds)
+                    ) is not None:
                         await self._execute_claim(claim)
+                        immediate_next_tick = True
+                    controller_state = "active"
+                    if immediate_next_tick:
+                        # Completed batches offer control and shutdown a turn.
                         await asyncio.sleep(0)
                         continue
                 except Exception:  # noqa: BLE001 - retry without logging private state.

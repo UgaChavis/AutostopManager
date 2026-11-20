@@ -723,7 +723,7 @@ def test_scheduler_loop_prioritizes_each_work_class_and_recovers_errors(monkeypa
     class Store:
         def controller_heartbeat(self, **values):
             events.append(("heartbeat", values))
-            if mode == "error" and "state" not in values:
+            if mode == "error" and values.get("state", "active") == "active":
                 raise RuntimeError("transient")
             if mode == "error":
                 daemon.stopping.set()
