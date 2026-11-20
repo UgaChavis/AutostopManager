@@ -437,6 +437,91 @@ def test_revision_change_during_preview_aborts_before_apply_or_ack(tmp_path: Pat
     assert not any(call[0] == "ack" for call in source.calls)
 
 
+@pytest.mark.parametrize("recovering", [False, True])
+@pytest.mark.parametrize("transition", ["revision", "release_hold"])
+def test_digest_ack_requires_current_claim_after_verified_readback(tmp_path: Path, monkeypatch, recovering, transition):
+    store, service, job, claim = claimed_digest_run(tmp_path)
+    job_id = job["job_id"]
+    revision = job["revision"]
+    source = FakeSource()
+    original_notifier = FakeNotifier()
+
+    def next_claim(key, owner):
+        command(service, "run_now", {"job_id": job_id}, key, revision)
+        claimed = store.claim_next_run(owner=owner)
+        assert claimed
+        return {**claimed, "lease_owner": owner}
+
+    if recovering:
+        monkeypatch.setattr(original_notifier, "readback", lambda **_kwargs: {"verified": False})
+        interrupted = CrmDigestExecutor(store=store, source=source, notifier=original_notifier)(claim)
+        assert interrupted["result_code"] == "automation_delivery_readback_failed"
+        assert store.finish_run(
+            job_id=job_id,
+            run_id=claim["run_id"],
+            owner=claim["lease_owner"],
+            fencing_token=claim["fencing_token"],
+            succeeded=False,
+            result_code=interrupted["result_code"],
+        )
+        claim = next_claim("run-after-interrupted-readback", "worker-b")
+
+    def set_hold(enabled, expected_revision):
+        with store.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result = store.set_global_hold(
+                connection,
+                enabled=enabled,
+                reason="release" if enabled else None,
+                actor_hash=hashlib.sha256(b"synthetic-release-operator").hexdigest(),
+                attempt_hash="d" * 64,
+                expected_revision=expected_revision,
+            )
+        assert result["global_hold"]["enabled"] is enabled
+
+    notifier = FakeNotifier() if recovering else original_notifier
+    readback = notifier.readback
+
+    def transition_during_readback(**kwargs):
+        nonlocal revision
+        receipt = readback(**kwargs)
+        if transition == "revision":
+            changed = command(
+                service,
+                "set_schedule",
+                {"job_id": job_id, "schedule": {"every_minutes": 30}},
+                "schedule-during-readback-0001",
+                revision,
+            )
+            assert changed["job"]["revision"] == revision + 1
+            revision = changed["job"]["revision"]
+        else:
+            set_hold(True, 0)
+        return receipt
+
+    monkeypatch.setattr(notifier, "readback", transition_during_readback)
+    invalidated = CrmDigestExecutor(store=store, source=source, notifier=notifier)(claim)
+    assert invalidated["result_code"] == "automation_claim_superseded"
+    assert not any(call[0] == "ack" for call in source.calls)
+    assert len(original_notifier.applied) == 1
+    assert store.get_cursors(job_id=job_id)["delivery_state"]["value"] == "delivered_unacked"
+    assert store.cancel_run_claim(
+        job_id=job_id, run_id=claim["run_id"], owner=claim["lease_owner"], fencing_token=claim["fencing_token"]
+    )
+    if transition == "release_hold":
+        assert store.claim_next_run(owner="worker-c") is None
+        set_hold(False, 1)
+
+    fresh_notifier = FakeNotifier()
+    fresh_claim = next_claim("run-after-control-transition", "worker-c")
+    result = CrmDigestExecutor(store=store, source=source, notifier=fresh_notifier)(fresh_claim)
+    assert result["result_code"] == "no_changes"
+    assert fresh_notifier.readbacks == notifier.readbacks
+    assert fresh_notifier.applied == []
+    assert [call for call in source.calls if call[0] == "ack"] == [("ack", "full-window-ack")]
+    assert all(cursor["value"] is None for cursor in store.get_cursors(job_id=job_id).values())
+
+
 def test_renderer_uses_group_count_not_raw_event_count():
     rendered = render_crm_digest(digest_payload(groups=3, raw_events=20))
 

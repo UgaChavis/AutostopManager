@@ -660,6 +660,7 @@ class CrmDigestExecutor:
         if readback.get("verified") is not True or int(readback.get("message_id") or 0) != message_id:
             raise AutomationJobError("automation_delivery_readback_failed", outcome_uncertain=True)
         self._set_cursor(claim, "delivery_state", "delivered_unacked")
+        self._require_current_claim(claim)
         acknowledged = self.source.acknowledge(ack=pending_ack)
         if type(acknowledged.get("acked_sequence")) is not int or int(acknowledged["acked_sequence"]) < through:
             raise AutomationJobError("automation_crm_ack_invalid", outcome_uncertain=True)
@@ -735,6 +736,7 @@ class CrmDigestExecutor:
             raise AutomationJobError("automation_delivery_readback_failed", outcome_uncertain=True)
         self._heartbeat(claim)
         self._set_cursor(claim, "delivery_state", "delivered_unacked")
+        self._require_current_claim(claim)
         acknowledged = self.source.acknowledge(ack=ack)
         if type(acknowledged.get("acked_sequence")) is not int or int(acknowledged["acked_sequence"]) < through:
             raise AutomationJobError("automation_crm_ack_invalid", outcome_uncertain=True)
