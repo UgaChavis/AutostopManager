@@ -116,7 +116,11 @@ def used_bytes(root: Path) -> int:
     total = 0
     for directory, _, files in os.walk(root, followlinks=False):
         for name in files:
-            details = (Path(directory) / name).lstat()
+            try:
+                details = (Path(directory) / name).lstat()
+            except FileNotFoundError:
+                # A SQLite commit or retention can remove the listed entry.
+                continue
             if stat.S_ISREG(details.st_mode):
                 total += details.st_size
     return total

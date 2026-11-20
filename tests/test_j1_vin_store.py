@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -73,6 +73,46 @@ def assert_disk_deidentified(disk: Path, *, expected_queries: int = 0) -> None:
         assert connection.execute("SELECT COUNT(*) FROM queries").fetchone()[0] == expected_queries
         assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0] == 0
+
+
+def test_runtime_status_survives_sqlite_journal_disappearing_during_scan(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    database = root / "synthetic.sqlite3"
+    journal = root / "synthetic.sqlite3-journal"
+    original_lstat = Path.lstat
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] == "delete"
+        connection.execute("CREATE TABLE fixture (value INTEGER)")
+        connection.execute("INSERT INTO fixture VALUES (1)")
+        assert journal.is_file()
+
+        def commit_during_scan(path: Path):
+            if path == journal:
+                connection.commit()
+            return original_lstat(path)
+
+        monkeypatch.setattr(Path, "lstat", commit_during_scan)
+        assert store.runtime_status()["ready"] is True
+        assert not journal.exists()
+        assert store.used_bytes(root) == database.stat().st_size
+        monkeypatch.setattr(store, "MAX_STORE_BYTES", database.stat().st_size - 1)
+        assert store.runtime_status()["error"] == "vin_storage_limit_reached"
+
+
+def test_runtime_status_does_not_ignore_unreadable_storage_entry(private_stores, monkeypatch) -> None:
+    root, _disk = private_stores
+    inaccessible = root / "synthetic.sqlite3"
+    inaccessible.touch()
+    original_lstat = Path.lstat
+
+    def deny_during_scan(path: Path):
+        if path == inaccessible:
+            raise PermissionError("synthetic stat denied")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", deny_during_scan)
+
+    assert store.runtime_status() == {"enabled": True, "ready": False, "error": "vin_store_unavailable"}
 
 
 def test_private_tmpfs_state_and_persistent_queue_stub_are_separate(private_stores) -> None:
