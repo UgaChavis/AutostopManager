@@ -352,7 +352,8 @@ def test_expired_uncertain_outbox_uses_lookup_without_resend(tmp_path: Path, leg
     assert verifier.calls == [("lookup", first_claim["idempotency_key"], expected_hash)]
 
 
-def test_expired_uncertain_outbox_not_found_is_visibly_blocked(tmp_path: Path):
+@pytest.mark.parametrize("readback_problem", ["not_found", "notifier_missing", "invalid_payload"])
+def test_expired_uncertain_outbox_without_verified_readback_is_visibly_blocked(tmp_path: Path, readback_problem):
     path = tmp_path / "manager.sqlite3"
     store = AutomationStore(path)
     service = AutomationControlService(store)
@@ -373,7 +374,13 @@ def test_expired_uncertain_outbox_not_found_is_visibly_blocked(tmp_path: Path):
             "UPDATE manager_automation_outbox SET lease_until = '2000-01-01T00:00:00Z' WHERE outbox_id = ?",
             (queued["outbox_id"],),
         )
-    second_daemon = AutomationDaemon(store=store, notifier=FakeNotifier())
+        if readback_problem == "invalid_payload":
+            connection.execute(
+                "UPDATE manager_automation_outbox SET payload_json = '{}' WHERE outbox_id = ?",
+                (queued["outbox_id"],),
+            )
+    notifier = None if readback_problem == "notifier_missing" else FakeNotifier()
+    second_daemon = AutomationDaemon(store=store, notifier=notifier)
     recovery_claim = store.claim_outbox(owner=second_daemon.owner)
     assert recovery_claim and recovery_claim["recovery_only"] is True
 
@@ -381,10 +388,23 @@ def test_expired_uncertain_outbox_not_found_is_visibly_blocked(tmp_path: Path):
 
     with sqlite3.connect(path) as connection:
         state = connection.execute(
-            "SELECT status, result_code, lease_until FROM manager_automation_outbox WHERE outbox_id = ?",
+            """SELECT status, result_code, lease_until, attempts, idempotency_key
+            FROM manager_automation_outbox WHERE outbox_id = ?""",
             (queued["outbox_id"],),
         ).fetchone()
-    assert state == ("sending", "automation_delivery_manual_reconciliation_required", None)
+        connection.execute(
+            "UPDATE manager_automation_outbox SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE outbox_id = ?",
+            (queued["outbox_id"],),
+        )
+    assert state == (
+        "sending",
+        "automation_delivery_manual_reconciliation_required",
+        None,
+        1,
+        first_claim["idempotency_key"],
+    )
+    if notifier is not None:
+        assert [call[0] for call in notifier.calls] == (["lookup"] if readback_problem == "not_found" else [])
     assert store.claim_outbox(owner="must-not-resend") is None
 
 

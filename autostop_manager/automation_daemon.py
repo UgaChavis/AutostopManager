@@ -229,26 +229,27 @@ class AutomationDaemon:
                     )
                 else:
                     text = "Центр автоматизаций: CRM-дайджест снова работает. Инцидент закрыт."
-        if text is None:
-            self.store.finish_outbox(
-                outbox_id=str(claim["outbox_id"]),
-                owner=self.owner,
-                fencing_token=int(claim["fencing_token"]),
-                sent=False,
-                result_code="automation_outbox_payload_invalid",
-            )
-            return
-        if self.notifier is None:
-            self.store.finish_outbox(
-                outbox_id=str(claim["outbox_id"]),
-                owner=self.owner,
-                fencing_token=int(claim["fencing_token"]),
-                sent=False,
-                result_code="automation_telegram_unavailable",
-            )
+        recovery_only = claim.get("recovery_only") is True
+        if text is None or self.notifier is None:
+            if recovery_only:
+                # An unavailable readback leaves the earlier delivery uncertain.
+                self.store.block_outbox_claim(
+                    outbox_id=str(claim["outbox_id"]),
+                    owner=self.owner,
+                    fencing_token=int(claim["fencing_token"]),
+                )
+            else:
+                result_code = "automation_outbox_payload_invalid" if text is None else "automation_telegram_unavailable"
+                self.store.finish_outbox(
+                    outbox_id=str(claim["outbox_id"]),
+                    owner=self.owner,
+                    fencing_token=int(claim["fencing_token"]),
+                    sent=False,
+                    result_code=result_code,
+                )
             return
         expected_hash = hashlib.sha256(text.encode()).hexdigest()
-        if claim.get("recovery_only") is True:
+        if recovery_only:
             try:
                 lookup = await asyncio.to_thread(
                     self.notifier.lookup,
