@@ -1129,6 +1129,13 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
         ranked = _rank_discovered_results(query, discovered)
         if ranked:
             return ranked, "searxng"
+        try:
+            found = _relevant_search_results(query, _search_searxng(query, searxng_url))
+        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
+            found = []
+        ranked = _rank_discovered_results(query, [{**row, "engine": "searxng_default"} for row in found])
+        if ranked:
+            return ranked, "searxng"
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     allowed, delay = _robots_policy(url)
     if not allowed:

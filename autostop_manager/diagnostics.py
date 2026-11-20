@@ -79,7 +79,6 @@ SKILL_DOCUMENTS = (
     ".agents/skills/manage-owner-telegram/SKILL.md",
     ".agents/skills/manage-autostop-client/SKILL.md",
     ".agents/skills/manage-autostop-store/SKILL.md",
-    ".agents/skills/manage-fst-vpn/SKILL.md",
     ".agents/skills/manage-owner-instagram/SKILL.md",
 )
 TEXT_DOCUMENTS = ("AGENTS.md", MODULE_DOCUMENTS["A1"], MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"], *SKILL_DOCUMENTS)
@@ -111,7 +110,6 @@ EXTERNAL_SKILL_PACKAGES = frozenset(
         "visualize",
     }
 )
-FST_ACCESS_DOCUMENT = Path("/root/.codex/CODEX_VPN_FST_ACCESS.md")
 ROLE_JOURNAL_ROOT = Path("/var/lib/autostop-manager/roles/M2")
 ROLE_JOURNAL_ENTRIES = {ROLE_JOURNAL_ROOT / "current-state.md", ROLE_JOURNAL_ROOT / "journal/INDEX.md"}
 
@@ -178,9 +176,6 @@ def _local_link_path(
             MODULE_DOCUMENTS["A5"],
         } and _codex_skill_entrypoint(candidate)
         allowed_external = allowed_external or (
-            document_name == ".agents/skills/manage-fst-vpn/SKILL.md" and candidate == FST_ACCESS_DOCUMENT
-        )
-        allowed_external = allowed_external or (
             document_name in {MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"]} and candidate in ROLE_JOURNAL_ENTRIES
         )
         if not allowed_external:
@@ -192,8 +187,6 @@ def _local_link_path(
         allowed = allowed or (
             _codex_skill_entrypoint(candidate) and _codex_skill_entrypoint(resolved, resolve_roots=True)
         )
-    if document_name == ".agents/skills/manage-fst-vpn/SKILL.md":
-        allowed = allowed or resolved == FST_ACCESS_DOCUMENT.resolve()
     if document_name in {MODULE_DOCUMENTS["M1"], MODULE_DOCUMENTS["M2"]}:
         allowed = allowed or (
             candidate in ROLE_JOURNAL_ENTRIES and resolved.is_relative_to(ROLE_JOURNAL_ROOT.resolve())

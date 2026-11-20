@@ -78,7 +78,6 @@ def test_documents_fit_budget_and_cover_operational_skills():
     assert {path.parent.name for path in (ROOT / ".agents/skills").glob("*/SKILL.md")} == {
         "manage-autostop-client",
         "manage-autostop-store",
-        "manage-fst-vpn",
         "manage-owner-instagram",
         "manage-owner-telegram",
     }

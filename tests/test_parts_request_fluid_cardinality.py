@@ -121,6 +121,23 @@ def test_named_liter_position_does_not_supply_the_filters_unknown_quantity(parse
     assert len({row["item_id"] for row in items}) == 2
 
 
+def test_explicit_engine_oil_is_classified_without_guessing_specification(parse):
+    response = parse("масляный фильтр — 2 шт и моторное масло 4 л")
+
+    filter_item, oil_item = response["data"]["items"]
+    assert response["outcome"] == "success"
+    assert (filter_item["intent"]["intent_id"], filter_item["quantity"]) == ("oil_filter", 2)
+    assert (oil_item["intent"]["intent_id"], oil_item["quantity"], oil_item["unit"]) == ("engine_oil", 4, "liter")
+    assert oil_item["intent"]["clarification_required"] is True
+    assert oil_item["intent"]["clarification_fields"] == ["oil_specification"]
+    assert oil_item["intent"]["partsapi_category_candidates"] == []
+
+
+@pytest.mark.parametrize("text", ["фильтр моторного масла", "engine oil filter"])
+def test_explicit_engine_oil_filter_stays_a_single_filter(text):
+    assert normalize_part_intent(text)["intent_id"] == "oil_filter"
+
+
 @pytest.mark.parametrize("separator", [" и ", " and ", " а также ", " & ", " / ", "+"])
 def test_existing_conjunctions_keep_the_named_liter_position(parse, separator):
     response = parse("масляный фильтр" + separator + "масло 4 л")

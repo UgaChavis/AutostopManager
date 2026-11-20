@@ -924,6 +924,48 @@ def test_extract_partsapi_plate_and_part_name_payloads():
     assert candidates[0]["product_name"] == "Масляный фильтр"
 
 
+@pytest.mark.parametrize(
+    ("payload", "outcome"),
+    [
+        ([{"partname": "Масляный фильтр"}], "success"),
+        ([{"partname": "Неизвестная деталь / Unknown part"}], "empty_result"),
+        ([{"partname": "Масляный фильтр"}, {"partname": "Воздушный фильтр"}], "unparsed_response"),
+    ],
+)
+def test_partsapi_name_only_payload_binds_only_the_exact_request(monkeypatch, payload, outcome):
+    _clear_partsapi_method_env(monkeypatch)
+    monkeypatch.setenv("PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY", "name-secret")
+    monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
+
+    def fake_urlopen(request, timeout=20.0):
+        assert "method=getPartnameByBrandNumber" in request.full_url
+        assert "brand=MANN-FILTER" in request.full_url
+        assert "number=W71295" in request.full_url
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("autostop_manager.catalog_clients.urlopen", fake_urlopen)
+
+    result = partsapi_catalog_lookup(
+        operation="part_name_by_brand_number",
+        brand="MAHLE",
+        part_number="OC1038",
+        provider_parameters={"brand": "MANN-FILTER", "number": "W71295"},
+    )
+
+    assert result["outcome"] == outcome
+    assert result["oem_candidates"] == []
+    if outcome != "success":
+        assert result["article_candidates"] == []
+        assert result["empty_payload"] is (outcome == "empty_result")
+        return
+    (candidate,) = result["article_candidates"]
+    assert candidate["product_name"] == "Масляный фильтр"
+    assert (candidate["brand"], candidate["part_number"]) == ("MANN-FILTER", "W71295")
+    assert candidate["raw_keys"] == ["partname"]
+    assert candidate["article_identity_source"] == "request_parameters"
+    assert candidate["fitment_evidence"] == {"fitment_confirmed": False}
+
+
 def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.delenv("PARTSAPI_KEY", raising=False)

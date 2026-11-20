@@ -1616,9 +1616,25 @@ def _response_shape(payload: Any) -> str:
     return type(payload).__name__
 
 
-def _partsapi_explicitly_empty_payload(payload: Any) -> bool:
+_PARTSAPI_UNKNOWN_PART_NAMES = frozenset({"неизвестная деталь / unknown part", "неизвестная деталь", "unknown part"})
+
+
+def _partsapi_name_only_response(payload: Any) -> str | None:
+    if not isinstance(payload, list) or len(payload) != 1:
+        return None
+    row = payload[0]
+    if not isinstance(row, dict) or set(row) != {"partname"} or not isinstance(row["partname"], str):
+        return None
+    return " ".join(row["partname"].split()) or None
+
+
+def _partsapi_explicitly_empty_payload(payload: Any, *, operation: str) -> bool:
     if payload in (None, [], {}):
         return True
+    if operation == "part_name_by_brand_number":
+        name_only = _partsapi_name_only_response(payload)
+        if name_only and name_only.casefold() in _PARTSAPI_UNKNOWN_PART_NAMES:
+            return True
     if not isinstance(payload, dict):
         return False
     envelope_keys = {"data", "result", "array", "items", "articles", "crosses"}
@@ -3421,12 +3437,18 @@ def extract_partsapi_article_candidates(
 ) -> list[dict[str, Any]]:
     candidates = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
+    params = request_parameters or {}
+    name_only = _partsapi_name_only_response(payload) if operation == "part_name_by_brand_number" else None
+    if name_only and name_only.casefold() in _PARTSAPI_UNKNOWN_PART_NAMES:
+        return []
     for item in _partsapi_article_records(payload):
         part_number = _first_value(
             item, ("ART_ARTICLE_NR", "ARL_DISPLAY_NR", "articleNumber", "article_number", "number")
         )
         article_id = _first_value(item, ("ART_ID", "ARL_ART_ID", "articleId", "article_id"))
         brand = _first_value(item, ("ART_SUP_BRAND", "SUP_BRAND", "ARL_BRA_BRAND", "brand", "supplierBrand"))
+        if name_only and params.get("number") and params.get("brand"):
+            part_number, brand = params["number"], params["brand"]
         if part_number in (None, "") and article_id in (None, ""):
             continue
         identity = (
@@ -3456,6 +3478,9 @@ def extract_partsapi_article_candidates(
                 "raw_keys": sorted(str(key) for key in item),
             }
         )
+        if name_only:
+            candidates[-1]["product_name"] = name_only
+            candidates[-1]["article_identity_source"] = "request_parameters"
         if operation == "article":
             candidates[-1].update(
                 oe_references=_partsapi_article_oe_references(item.get("OEM_NUMBERS")),
@@ -3815,7 +3840,7 @@ def partsapi_catalog_lookup(
     )
     article_candidates = (
         extract_partsapi_article_candidates(
-            payload=payload, operation=operation, request_parameters={**params, "brand": brand}
+            payload=payload, operation=operation, request_parameters={"brand": brand, **params}
         )
         if operation
         in {
@@ -3859,7 +3884,7 @@ def partsapi_catalog_lookup(
     article_criteria_rows = (
         extract_partsapi_article_criteria_rows(payload=payload) if operation == "article_criteria" else []
     )
-    empty_payload = _partsapi_explicitly_empty_payload(payload)
+    empty_payload = _partsapi_explicitly_empty_payload(payload, operation=operation)
     record_counts = {
         "vehicle_profiles": len(vehicle_profiles),
         "oem_candidates": len(oem_candidates),

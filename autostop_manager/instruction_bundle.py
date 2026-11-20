@@ -23,7 +23,6 @@ from .instruction_inventory import active_instruction_candidates, collect_instru
 PROJECT_SKILLS = (
     "manage-autostop-client",
     "manage-autostop-store",
-    "manage-fst-vpn",
     "manage-owner-instagram",
     "manage-owner-telegram",
 )

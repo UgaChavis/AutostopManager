@@ -966,6 +966,36 @@ def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest
     assert calls == ["!bing RFC 2606 reserved DNS names", "!yahoo RFC 2606 reserved DNS names"]
 
 
+def test_search_uses_searxng_defaults_then_filters_and_ranks(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
+        calls.append(query)
+        if query.startswith("!bing "):
+            return []
+        if query.startswith("!yahoo "):
+            raise ValueError("searxng_failed")
+        return [
+            {"url": "https://example.org/unrelated", "title": "Unrelated page", "source": "searxng"},
+            {"url": "https://example.org/brakes", "title": "Brake pads operation", "source": "searxng"},
+        ]
+
+    monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: pytest.fail("public fallback should not run after SearXNG succeeds"),
+    )
+    query = "brake pads operation"
+    rows, source = j1_fetch.search_public(query, searxng_url="http://127.0.0.1:8080")
+
+    assert calls == [f"!bing {query}", f"!yahoo {query}", query]
+    assert source == "searxng"
+    assert [(row["url"], row["engines"], row["search_rank"]) for row in rows] == [
+        ("https://example.org/brakes", ["searxng_default"], 1)
+    ]
+
+
 def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
@@ -977,7 +1007,7 @@ def test_search_reports_unavailable_when_all_engines_drift(monkeypatch: pytest.M
     monkeypatch.setattr(j1_fetch, "_robots_policy", lambda _url: (False, 1.0))
     rows, source = j1_fetch.search_public("brake pads operation", searxng_url="http://127.0.0.1:8080")
     assert rows == [] and source == "search_unavailable"
-    assert calls == ["!bing brake pads operation", "!yahoo brake pads operation"]
+    assert calls == ["!bing brake pads operation", "!yahoo brake pads operation", "brake pads operation"]
 
 
 def test_stage1_url_aware_input_accepts_bulletin_but_rejects_vin_url() -> None:
