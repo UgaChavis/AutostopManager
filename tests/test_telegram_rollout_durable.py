@@ -9,6 +9,8 @@ import sqlite3
 import subprocess
 import sys
 
+import pytest
+
 from telegram_duty_fakes import duty_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +98,63 @@ def test_durable_enable_keeps_intake_when_execution_is_held(tmp_path):
     calls = log.read_text()
     assert "duty-set --enabled" in calls
     assert "restart" not in calls and "stop " not in calls
+
+
+@pytest.mark.parametrize("failure", ["pause_unknown", "media_stop"])
+def test_duty_disable_does_not_replay_partial_changes(tmp_path, failure):
+    script, env, monitor, _, log = duty_fixture(
+        tmp_path, {"ok": True, "enabled": False, "ready": False, "execution_state": "held"}
+    )
+    package = tmp_path / "releases/revision/autostop_manager"
+    package.mkdir()
+    (package / "telegram_inbox.py").write_text("")
+    bridge = tmp_path / "bin/bridge-python"
+    bridge.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  '-m autostop_manager.telegram_bridge --account work duty-set --disabled')\n"
+        "    printf 'duty-close\\n' >> \"$FAKE_LOG\";;\n"
+        "  *) exec " + shlex.quote(sys.executable) + ' "$@";;\nesac\n'
+    )
+    bridge.chmod(0o755)
+    script.write_text(script.read_text().replace(f'venv_python="{sys.executable}"', f'venv_python="{bridge}"'))
+    (tmp_path / "bin/wake-python").write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        '*" pause") printf "pause\\n" >> "$FAKE_LOG"; [ "$FAILURE" != pause_unknown ];;\n'
+        '*) printf "%s\\n" "$WAKE_STATE";;\nesac\n'
+    )
+    (tmp_path / "bin/sudo").write_text(
+        '#!/bin/sh\ninbound=true\nif grep -qx duty-close "$FAKE_LOG"; then inbound=false; fi\n'
+        'printf \'{"ok":true,"transport_ready":true,"inbound_enabled":%s}\\n\' "$inbound"\n'
+    )
+    (tmp_path / "bin/systemctl").write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_LOG"\n'
+        'case "$*" in\n'
+        '  "is-active --quiet autostop-codex-wake.service") [ ! -f "$FAKE_WAKE_DISABLED" ];;\n'
+        '  "disable --now autostop-codex-wake.service") touch "$FAKE_WAKE_DISABLED";;\n'
+        '  show*) printf "loaded\\n";;\n'
+        '  list-units*) printf "autostop-work-telegram-media-fixture.service loaded active running\\n";;\n'
+        '  stop*) [ "$FAILURE" != media_stop ];;\n'
+        "esac\n"
+    )
+    env.update(FAILURE=failure, FAKE_WAKE_DISABLED=str(tmp_path / "wake-disabled"))
+    result = subprocess.run(["bash", str(script), "--disable"], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    assert "work_telegram_duty_disable_failed=true" in result.stderr
+    assert "work_telegram_duty=disabled" not in result.stdout
+    calls = log.read_text().splitlines()
+    assert calls.count("duty-close") == calls.count("pause") == 1
+    assert calls.count("restart autostop-work-telegram.service") == int(failure == "media_stop")
+    assert calls.count("stop autostop-work-telegram-media-fixture.service") == int(failure == "media_stop")
+    assert monitor.exists() is (failure == "pause_unknown")
+
+    status = subprocess.run(["bash", str(script), "--status"], env=env, capture_output=True, text=True, timeout=10)
+    assert status.returncode == 0, status.stderr
+    report = json.loads(status.stdout)
+    assert report["transport_ready"] is True and report["inbound_enabled"] is False
+    assert report["wake_active"] is (failure == "pause_unknown")
+    assert report["execution_state"] == ("held" if failure == "pause_unknown" else "unavailable")
+    assert all(call.startswith("is-active ") for call in log.read_text().splitlines()[len(calls) :])
 
 
 def test_rollback_refuses_ram_only_release_before_stopping_current_bridge(tmp_path):

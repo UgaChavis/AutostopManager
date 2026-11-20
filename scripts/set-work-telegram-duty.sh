@@ -198,7 +198,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   return 1
 }
 
-cleanup_incomplete_duty() {
+cleanup_incomplete_enable() {
   local exit_code="$?"
   if [[ -n "${pending_monitor_env}" && -f "${pending_monitor_env}" && ! -L "${pending_monitor_env}" ]]; then unlink -- "${pending_monitor_env}" || true; fi
   # A failed repeated enable must preserve an existing queue or blocked turn.
@@ -277,16 +277,14 @@ print(json.dumps({
 }, separators=(",", ":"), sort_keys=True))'
     ;;
   --disable)
-    trap cleanup_incomplete_duty EXIT
     disable_duty || { echo "work_telegram_duty_disable_failed=true" >&2; exit 1; }
-    trap - EXIT
     printf '%s\n' "work_telegram_duty=disabled" "monitoring=off" "outbound=ready"
     ;;
   --enable)
     if [[ -f "${monitor_env}" ]] && grep -qx 'AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING=1' "${monitor_env}"; then
       preserve_existing_duty=1
     fi
-    trap cleanup_incomplete_duty EXIT
+    trap cleanup_incomplete_enable EXIT
     enable_duty || { echo "work_telegram_duty_enable_failed=true" >&2; exit 1; }
     trap - EXIT
     if durable_release; then
