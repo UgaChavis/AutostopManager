@@ -6570,11 +6570,24 @@ def _hold_invalid_reconciliation_transport(monitor: DurableInboundMonitor, gener
     return True
 
 
-def _restart_changed_reconciliation(monitor: DurableInboundMonitor) -> None:
+def _admission_gap_hold_reason(monitor: DurableInboundMonitor) -> str | None:
+    reason = monitor.inbox.uncovered_admission_gap_reason()
+    if reason is None:
+        return None
+    current = monitor.inbox.health().get("intake", {})
+    previous = current.get("error_code")
+    if current.get("state") == "held" and isinstance(previous, str):
+        return previous
+    return "inbound_monitor_full" if reason == "capacity" else reason
+
+
+def _restart_changed_reconciliation(
+    monitor: DurableInboundMonitor, *, error_code: str = "history_reconciliation_changed"
+) -> None:
     """Drop only the dialog offset and retry from already committed peer checkpoints."""
     monitor.inbox.clear_reconciliation_cursor()
     monitor.reset_reconciliation_fence()
-    monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
+    monitor.inbox.set_health(component="intake", state="held", error_code=error_code)
     if monitor.reconciliation_restarts == 0:
         monitor.reconciliation_restarts = 1
         monitor.reconcile_requested.set()
@@ -6690,13 +6703,18 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
     cursor_advanced = (
         last_nonprivate != prior_nonprivate if last_nonprivate is not None else last_cursor != prior_cursor
     )
+    admission_hold = _admission_gap_hold_reason(monitor)
     if complete:
         if final_fence != monitor.reconciliation_fence:
             # Telegram orders dialogs by their latest message. Any update can
             # move an unvisited dialog above our cursor, including before its
             # event callback arrives. One full rescan is finite; a second
             # unstable sweep waits for a new external recovery signal.
-            _restart_changed_reconciliation(monitor)
+            _restart_changed_reconciliation(monitor, error_code=admission_hold or "history_reconciliation_changed")
+            return
+        if admission_hold is not None:
+            # An omitted dialog cannot prove a known admission gap recovered.
+            _restart_changed_reconciliation(monitor, error_code=admission_hold)
             return
         if any(window["closed_at"] is not None for window in windows) and not (
             monitor.reconciliation_transport_hook_current()
@@ -6730,7 +6748,7 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
         if complete
         else "inbound_monitor_full"
         if capacity_blocked
-        else "history_reconciliation_incomplete",
+        else admission_hold or "history_reconciliation_incomplete",
     )
     if (
         complete

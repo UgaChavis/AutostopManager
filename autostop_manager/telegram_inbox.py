@@ -2656,6 +2656,20 @@ class TelegramInbox:
     def gaps(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self._db.execute("SELECT * FROM gaps ORDER BY received_at,peer_id")]
 
+    def uncovered_admission_gap_reason(self) -> str | None:
+        """Find a known missed event in an open or unrecovered duty window."""
+        row = self._db.execute(
+            "SELECT g.reason_code FROM gaps g LEFT JOIN checkpoints c USING(peer_id) "
+            "WHERE g.reason_code IN ('capacity','inbound_capture_failed') "
+            "AND (c.message_id IS NULL OR c.message_id<g.message_id) "
+            "AND EXISTS (SELECT 1 FROM duty_windows w WHERE (w.closed_at IS NULL OR w.recovered_at IS NULL) "
+            "AND (w.closed_at IS NULL OR w.closed_at>g.received_at) "
+            "AND (w.opened_at<=g.received_at OR (g.reason_code='capacity' "
+            "AND substr(w.opened_at,1,19)=substr(g.received_at,1,19)))) "
+            "ORDER BY g.received_at,g.peer_id LIMIT 1"
+        ).fetchone()
+        return None if row is None else str(row[0])
+
     def clear_gap(self, *, peer_id: int, through_message_id: int) -> None:
         _positive(peer_id, "inbound_peer_invalid")
         _positive(through_message_id, "inbound_message_invalid")

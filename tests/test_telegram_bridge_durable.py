@@ -1377,6 +1377,86 @@ def test_short_private_history_cannot_certify_observed_dialog_tip(tmp_path, tip_
         monitor.inbox.close()
 
 
+@pytest.mark.parametrize(
+    ("reason", "intake_error", "opening_second"),
+    [
+        ("capacity", "inbound_monitor_full", False),
+        ("capacity", "inbound_monitor_full", True),
+        ("inbound_capture_failed", "inbound_capture_failed", False),
+    ],
+)
+def test_missing_peer_keeps_admission_gap_and_original_incident_open(tmp_path, reason, intake_error, opening_second):
+    _config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    now = datetime.now(UTC)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    opened_at = (now - timedelta(minutes=10)).replace(microsecond=500000)
+    monitor.inbox.duty_set(True, at=opened_at.isoformat())
+    received_at = opened_at.replace(microsecond=0) if opening_second else now - timedelta(minutes=45)
+    message = _message(100, at=received_at)
+    monitor.inbox.mark_gap(peer_id=42, message_id=message.id, received_at=message.date.isoformat(), reason_code=reason)
+    monitor.inbox.set_health("intake", "held", intake_error)
+    opening = monitor.inbox.pending_notifications()[0]
+    monitor.inbox.notification_verified(opening["notification_id"], "verified-opening")
+    client = Client([])
+
+    async def scenario():
+        for retry in (True, False):
+            await bridge._reconcile_incoming_history(client, monitor)
+            assert monitor.inbox.health()["intake"] == {"state": "held", "error_code": intake_error}
+            assert monitor.inbox.status()["gap_count"] == 1
+            assert any(window["closed_at"] for window in monitor.inbox.recovery_windows())
+            assert not monitor.inbox.pending_notifications()
+            assert monitor.reconcile_requested.is_set() is retry
+            monitor.reconcile_requested.clear()
+        assert monitor.reconciliation_stopped
+        client.messages[message.id] = message
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.inbox.events() == []
+
+        monitor.note_reconciliation_update(message)
+        assert monitor.reconcile_requested.is_set()
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.intake_reconciliation() == "complete"
+        assert monitor.inbox.status()["gap_count"] == 0
+        assert monitor.inbox.checkpoint(42) == message.id
+        assert all(window["closed_at"] is None for window in monitor.inbox.recovery_windows())
+        recovery = monitor.inbox.pending_notifications()
+        assert [(row["kind"], row["incident_id"]) for row in recovery] == [("recovery", opening["incident_id"])]
+        assert client.sent == 0
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize("unrelated", ["covered", "off_duty", "recovered_window", "review_only"])
+def test_unrelated_gap_does_not_block_completed_reconciliation(tmp_path, unrelated):
+    _config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    now = datetime.now(UTC)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    monitor.inbox.duty_set(True, at=(now - timedelta(minutes=10)).isoformat())
+    when = now - timedelta(minutes=20 if unrelated == "off_duty" else 45)
+    reason = "boundary_instruction_unavailable" if unrelated == "review_only" else "capacity"
+    if unrelated == "covered":
+        monitor.inbox.advance_checkpoint(42, 100)
+    if unrelated == "recovered_window":
+        monitor.inbox.mark_window_recovered(monitor.inbox.recovery_windows()[0]["window_id"])
+    monitor.inbox.mark_gap(peer_id=42, message_id=100, received_at=when.isoformat(), reason_code=reason)
+
+    try:
+        asyncio.run(bridge._reconcile_incoming_history(Client([]), monitor))
+        assert monitor.intake_reconciliation() == "complete"
+        assert monitor.inbox.status()["gap_count"] == 1
+        assert all(window["closed_at"] is None for window in monitor.inbox.recovery_windows())
+        assert not monitor.reconcile_requested.is_set()
+    finally:
+        monitor.inbox.close()
+
+
 @pytest.mark.parametrize("checkpoint_current", [False, True])
 def test_retention_keeps_answered_input_deduplicated_before_startup_catchup(tmp_path, checkpoint_current):
     config, first = _runtime(tmp_path)
