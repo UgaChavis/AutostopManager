@@ -1666,32 +1666,43 @@ class AutomationStore:
 
         owner_hash = hashlib.sha256(owner.encode()).hexdigest()
         with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT r.lease_until
-                FROM manager_automation_runs q
-                JOIN manager_automations a ON a.job_id = q.job_id
-                JOIN manager_automation_runtime r ON r.job_id = q.job_id
-                JOIN manager_automation_controller_runtime c ON c.singleton = 1
-                WHERE q.run_id = ? AND q.job_id = ? AND q.status = 'running'
-                  AND q.lease_owner_hash = ? AND q.fencing_token = ?
-                  AND r.lease_owner_hash = ? AND r.fencing_token = ?
-                  AND a.archived_at IS NULL AND a.desired_state = 'on' AND a.revision = ?
-                  AND c.hold_enabled = 0
-                """,
-                (
-                    run_id,
-                    job_id,
-                    owner_hash,
-                    fencing_token,
-                    owner_hash,
-                    fencing_token,
-                    claimed_revision,
-                ),
-            ).fetchone()
+            lease_until = self._run_claim_lease_until(
+                connection,
+                job_id=job_id,
+                run_id=run_id,
+                owner_hash=owner_hash,
+                fencing_token=fencing_token,
+                claimed_revision=claimed_revision,
+            )
         # Sample time after the database read so connection/query waits cannot reuse stale time.
-        lease_until = parse_time(row["lease_until"]) if row is not None else None
         return lease_until is not None and lease_until > utc_now()
+
+    @staticmethod
+    def _run_claim_lease_until(
+        connection: sqlite3.Connection,
+        *,
+        job_id: str,
+        run_id: str,
+        owner_hash: str,
+        fencing_token: int,
+        claimed_revision: int,
+    ) -> datetime | None:
+        row = connection.execute(
+            """
+            SELECT r.lease_until
+            FROM manager_automation_runs q
+            JOIN manager_automations a ON a.job_id = q.job_id
+            JOIN manager_automation_runtime r ON r.job_id = q.job_id
+            JOIN manager_automation_controller_runtime c ON c.singleton = 1
+            WHERE q.run_id = ? AND q.job_id = ? AND q.status = 'running'
+              AND q.lease_owner_hash = ? AND q.fencing_token = ?
+              AND r.lease_owner_hash = ? AND r.fencing_token = ?
+              AND a.archived_at IS NULL AND a.desired_state = 'on' AND a.revision = ?
+              AND c.hold_enabled = 0
+            """,
+            (run_id, job_id, owner_hash, fencing_token, owner_hash, fencing_token, claimed_revision),
+        ).fetchone()
+        return parse_time(row["lease_until"]) if row is not None else None
 
     def cancel_run_claim(
         self,
@@ -1930,7 +1941,9 @@ class AutomationStore:
         expected_revision: int,
         owner: str,
         fencing_token: int,
+        required_run: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
+        """Update the cursor, optionally requiring a current run ID and claimed revision in the same transaction."""
         if CURSOR_NAME_PATTERN.fullmatch(cursor_name) is None:
             raise AutomationError("automation_cursor_name_invalid")
         if cursor_value is not None and (len(cursor_value) > 4096 or any(ord(char) < 32 for char in cursor_value)):
@@ -1948,6 +1961,18 @@ class AutomationStore:
             ).fetchone()
             if runtime is None or int(runtime["fencing_token"]) != fencing_token:
                 raise AutomationError("automation_fencing_conflict")
+            if required_run is not None:
+                run_id, claimed_revision = required_run
+                lease_until = self._run_claim_lease_until(
+                    connection,
+                    job_id=job_id,
+                    run_id=run_id,
+                    owner_hash=owner_hash,
+                    fencing_token=fencing_token,
+                    claimed_revision=claimed_revision,
+                )
+                if lease_until is None or lease_until <= utc_now():
+                    raise AutomationError("automation_claim_superseded")
             current = connection.execute(
                 "SELECT revision FROM manager_automation_cursors WHERE job_id = ? AND cursor_name = ?",
                 (job_id, cursor_name),

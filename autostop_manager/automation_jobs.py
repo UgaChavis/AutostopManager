@@ -578,8 +578,16 @@ class CrmDigestExecutor:
         item = self.store.get_cursors(job_id=job_id).get(name)
         return (item.get("value"), int(item["revision"])) if item else (None, 0)
 
-    def _set_cursor(self, claim: Mapping[str, Any], name: str, value: str | None) -> None:
-        job_id, _run_id, owner, fencing_token = self._claim_fields(claim)
+    def _set_cursor(
+        self, claim: Mapping[str, Any], name: str, value: str | None, *, require_current_claim: bool = False
+    ) -> None:
+        job_id, run_id, owner, fencing_token = self._claim_fields(claim)
+        required_run = None
+        if require_current_claim:
+            claimed_revision = claim.get("claimed_revision")
+            if type(claimed_revision) is not int:
+                raise AutomationJobError("automation_claim_superseded")
+            required_run = run_id, claimed_revision
         _old_value, revision = self._cursor(job_id, name)
         self.store.update_cursor(
             job_id=job_id,
@@ -588,6 +596,7 @@ class CrmDigestExecutor:
             expected_revision=revision,
             owner=owner,
             fencing_token=fencing_token,
+            required_run=required_run,
         )
 
     def _clear_pending(self, claim: Mapping[str, Any]) -> None:
@@ -713,8 +722,7 @@ class CrmDigestExecutor:
         ):
             raise AutomationJobError("automation_notification_preview_invalid")
         self._heartbeat(claim)
-        self._require_current_claim(claim)
-        self._set_cursor(claim, "delivery_state", "sending")
+        self._set_cursor(claim, "delivery_state", "sending", require_current_claim=True)
         try:
             applied = self.notifier.apply(
                 text,

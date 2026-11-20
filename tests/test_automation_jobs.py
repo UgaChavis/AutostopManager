@@ -527,10 +527,13 @@ def test_digest_ack_requires_current_claim_after_verified_readback(tmp_path: Pat
     assert all(cursor["value"] is None for cursor in store.get_cursors(job_id=job_id).values())
 
 
-def test_digest_sending_cursor_rechecks_lease_after_writer_wait(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("invalidated_by", ["lease", "revision", "release_hold"])
+def test_digest_sending_cursor_rechecks_claim_after_writer_wait(tmp_path: Path, monkeypatch, invalidated_by):
     clock = datetime(2030, 1, 2, tzinfo=UTC)
     monkeypatch.setattr(registry, "utc_now", lambda: clock)
     store, service, job, claim = claimed_digest_run(tmp_path)
+    job_id = job["job_id"]
+    revision = job["revision"]
     deadline = registry.parse_time(claim["lease_until"])
     assert deadline is not None
     source = FakeSource()
@@ -555,33 +558,61 @@ def test_digest_sending_cursor_rechecks_lease_after_writer_wait(tmp_path: Path, 
                 connection.set_trace_callback(lambda sql: begin_attempted.set() if sql == "BEGIN IMMEDIATE" else None)
             yield connection
 
+    def set_hold(connection, enabled, expected_revision):
+        result = store.set_global_hold(
+            connection,
+            enabled=enabled,
+            reason="release" if enabled else None,
+            actor_hash=hashlib.sha256(b"synthetic-release-operator").hexdigest(),
+            attempt_hash="d" * 64,
+            expected_revision=expected_revision,
+        )
+        assert result["global_hold"]["enabled"] is enabled
+
     monkeypatch.setattr(AutomationStore, "update_cursor", observed_update)
     monkeypatch.setattr(AutomationStore, "connect", observed_connect)
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="synthetic-digest") as workers:
-        expired_run = workers.submit(executor, claim)
+        waiting_run = workers.submit(executor, claim)
         try:
             assert sending_cursor.wait(timeout=3)
             with original_connect(store) as writer:
                 writer.execute("BEGIN IMMEDIATE")
-                try:
-                    enter_write.set()
-                    assert begin_attempted.wait(timeout=3)
-                    with pytest.raises(TimeoutError):
-                        expired_run.result(timeout=0.05)
+                enter_write.set()
+                assert begin_attempted.wait(timeout=3)
+                with pytest.raises(TimeoutError):
+                    waiting_run.result(timeout=0.05)
+                if invalidated_by == "lease":
                     clock = deadline
-                finally:
-                    writer.rollback()
+                elif invalidated_by == "revision":
+                    changed = store.set_schedule(
+                        writer, job_id=job_id, schedule_payload={"every_minutes": 30}, expected_revision=revision
+                    )
+                    assert changed["job"]["revision"] == revision + 1
+                    revision = changed["job"]["revision"]
+                else:
+                    set_hold(writer, True, 0)
         finally:
             enter_write.set()
-        result = expired_run.result(timeout=3)
-    assert result["result_code"] == "automation_fencing_conflict"
+        result = waiting_run.result(timeout=3)
+    expected_error = "automation_fencing_conflict" if invalidated_by == "lease" else "automation_claim_superseded"
+    assert result["result_code"] == expected_error
     assert old_notifier.applied == []
     assert not any(call[0] == "ack" for call in source.calls)
-    cursors = store.get_cursors(job_id=job["job_id"])
+    cursors = store.get_cursors(job_id=job_id)
     assert cursors["delivery_state"]["value"] == "prepared"
     assert cursors["delivery_state"]["revision"] == 1
 
-    command(service, "run_now", {"job_id": job["job_id"]}, "run-after-expired-cursor-write", job["revision"])
+    if invalidated_by != "lease":
+        assert store.cancel_run_claim(
+            job_id=job_id, run_id=claim["run_id"], owner=claim["lease_owner"], fencing_token=claim["fencing_token"]
+        )
+    if invalidated_by == "release_hold":
+        assert store.claim_next_run(owner="worker-b") is None
+        with original_connect(store) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            set_hold(writer, False, 1)
+
+    command(service, "run_now", {"job_id": job_id}, "run-after-rejected-cursor-write", revision)
     new_claim = store.claim_next_run(owner="worker-b")
     assert new_claim and new_claim["fencing_token"] > claim["fencing_token"]
     new_notifier = FakeNotifier()
