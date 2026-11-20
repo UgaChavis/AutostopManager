@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 
 import pytest
 from websockets.asyncio.server import unix_serve
@@ -38,6 +39,46 @@ def test_exact_missing_thread_rejection_has_fixed_diagnostic():
     assert app.last_rpc_rejection["method"] == "thread/read"
     assert app.last_rpc_rejection["classification"] == "missing"
     assert THREAD not in json.dumps(app.last_rpc_rejection)
+
+
+def test_rpc_status_follows_arrival_order_and_exact_clears_across_connections(monkeypatch):
+    stamp = datetime(2026, 11, 20, 2, 3, 4, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return stamp
+
+    monkeypatch.setattr(wake, "datetime", FixedDatetime)
+
+    async def scenario():
+        bootstrap = wake.AppServer(wake.WakeConfig(THREAD))
+        dispatcher = wake.DurableWakeDispatcher(bootstrap, 123)
+        older_peer = wake.AppServer(wake.WakeConfig(THREAD), rpc_status=bootstrap._rpc_status)
+        newer_peer = wake.AppServer(wake.WakeConfig(THREAD), rpc_status=bootstrap._rpc_status)
+        bootstrap._rpc_rejection({"code": -32090, "message": "private bootstrap details"}, method="thread/read")
+        older_peer._rpc_rejection({"code": -32600, "message": "private peer details"}, method="turn/start")
+        newer_peer._rpc_rejection({"code": -32600, "message": "private method details"}, method="thread/inject_items")
+        bootstrap._clear_rpc_rejection()
+        older_peer._clear_rpc_rejection()
+        assert dispatcher.status()["rpc_error_code"] == -32600
+        assert dispatcher.status()["rpc_rejection"] == {
+            "method": "thread/inject_items",
+            "observed_at": "2026-11-20T02:03:04Z",
+            "classification": "other",
+        }
+
+        bootstrap._rpc_rejection({"code": -32091, "message": "private bootstrap details"}, method="thread/resume")
+        newer_peer._clear_rpc_rejection()
+        older_peer._rpc_rejection({"message": "invalid code and private diagnostic"}, method="turn/start")
+        status = dispatcher.status()
+        assert status["rpc_error_code"] == -32091 and status["rpc_rejection"]["method"] == "thread/resume"
+        assert "private" not in json.dumps(status)
+
+        bootstrap._clear_rpc_rejection()
+        assert dispatcher.status()["rpc_error_code"] is None and "rpc_rejection" not in dispatcher.status()
+
+    asyncio.run(scenario())
 
 
 class ArchiveServer:

@@ -306,6 +306,15 @@ def test_explicit_start_rejection_does_not_lock_next_real_client_request(tmp_pat
                 assert inbox.read_job(failed_id)["state"] == "failed_waiting_input"
                 assert inbox.read_job(failed_id)["execution_proof"] == "not_started"
                 assert inbox.execution_slot() is None and not inbox.active_jobs()
+                await until(lambda: not dispatcher.executions)
+                assert app.last_rpc_error_code is None  # The rejection belonged to the retired peer connection.
+                status_path = tmp_path / "status.sock"
+                async with await asyncio.start_unix_server(dispatcher.serve, path=status_path):
+                    status = await wake.local_request({"operation": "status"}, status_path)
+                assert status["ready"] and status["failed"] == 1 and status["last_error"] is None
+                assert status["rpc_error_code"] == -32600
+                assert status["rpc_rejection"]["method"] == "turn/start"
+                assert status["rpc_rejection"]["classification"] == "other"
                 starts = sum(call.get("method") == "turn/start" for call in server.calls)
                 assert inbox.record(123, 1) == event_id
                 jobs.changed.set()
@@ -317,6 +326,7 @@ def test_explicit_start_rejection_does_not_lock_next_real_client_request(tmp_pat
                 await until(lambda: dispatcher.completed == 1)
                 assert inbox.status()["open_events"] == 0
                 assert not dispatcher.app.blocked
+                assert dispatcher.status()["rpc_rejection"] == status["rpc_rejection"]
             finally:
                 await stop_dispatcher(dispatcher)
                 inbox.close()

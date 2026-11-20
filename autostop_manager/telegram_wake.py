@@ -358,12 +358,24 @@ class _InstructionVerifier:
         return await asyncio.shield(task)
 
 
+@dataclass(slots=True)
+class _RpcStatus:
+    latest: tuple[object, int, dict[str, str]] | None = None
+
+
 class AppServer:
     """JSON-RPC over the local WebSocket; payloads stay in memory, never in logs."""
 
-    def __init__(self, config: WakeConfig, *, instruction_verifier: _InstructionVerifier | None = None) -> None:
+    def __init__(
+        self,
+        config: WakeConfig,
+        *,
+        instruction_verifier: _InstructionVerifier | None = None,
+        rpc_status: _RpcStatus | None = None,
+    ) -> None:
         self.config = config
         self.instruction_verifier = instruction_verifier or _InstructionVerifier()
+        self._rpc_status = rpc_status or _RpcStatus()
         self.websocket: Any = None
         self.reader: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[Any]] = {}
@@ -746,14 +758,18 @@ class AppServer:
         self.events.put_nowait({"method": method, "params": {"turn": {"id": turn["id"], "status": turn.get("status")}}})
 
     def _clear_rpc_rejection(self) -> None:
+        latest = self._rpc_status.latest
+        if latest is not None and latest[0] is self._rpc_error_token:
+            self._rpc_status.latest = None
         self.last_rpc_error_code = None
         self._rpc_error_token = None
         self.last_rpc_rejection = None
 
     def _rpc_rejection(self, error: Any, *, method: str | None = None) -> RPCRejected:
         code = error.get("code") if isinstance(error, dict) else None
+        self._clear_rpc_rejection()
         self.last_rpc_error_code = code if type(code) is int else None
-        self._rpc_error_token = object()
+        token = self._rpc_error_token = object()
         message = error.get("message") if isinstance(error, dict) and type(code) is int and code == -32600 else None
         thread_id = self.config.thread_id
         archived = isinstance(message, str) and message in {
@@ -782,6 +798,8 @@ class AppServer:
             if self.last_rpc_error_code is not None
             else None
         )
+        if self.last_rpc_error_code is not None and self.last_rpc_rejection is not None:
+            self._rpc_status.latest = (token, self.last_rpc_error_code, self.last_rpc_rejection)
         return RPCRejected(
             "codex_rpc_rejected",
             archived_thread=archived,
@@ -1856,7 +1874,7 @@ class DurableWakeDispatcher:
         )
         cleanup = self.cleanup_pending
         queue_reason = self._queue_block_reason(status, fresh=fresh, cleanup=cleanup)
-        rpc_rejection = self.app.last_rpc_rejection
+        _, rpc_error_code, rpc_rejection = self.bootstrap_app._rpc_status.latest or (None, None, None)
         return {
             "ok": True,
             "enabled": self.enabled,
@@ -1898,7 +1916,7 @@ class DurableWakeDispatcher:
             "failed": self.failed,
             "recoverable_failure": bool(status.get("needs_review", status.get("needs_review_jobs", 0))),
             "last_error": self.last_error or self.app.recovery_error,
-            "rpc_error_code": self.app.last_rpc_error_code,
+            "rpc_error_code": rpc_error_code,
             **({"rpc_rejection": dict(rpc_rejection)} if rpc_rejection is not None else {}),
             "retention": "durable_refs",
             "trigger": "telegram_event",
@@ -1999,7 +2017,11 @@ class DurableWakeDispatcher:
         config = replace(self.bootstrap_app.config, thread_id=thread_id)
         if bundle is not None:
             config = replace(config, instruction_root=bundle.root, instruction_revision=bundle.revision)
-        app = AppServer(config, instruction_verifier=self.bootstrap_app.instruction_verifier)
+        app = AppServer(
+            config,
+            instruction_verifier=self.bootstrap_app.instruction_verifier,
+            rpc_status=self.bootstrap_app._rpc_status,
+        )
         app.client_peer = True
         if verify_settings:
             app.resume_overrides = self.bootstrap_app.peer_start_params(instruction_config=instruction_config)
