@@ -24,7 +24,7 @@ Defaults: `{"lang":"ru"}`.
 {"operation":[]}
 ```
 
-Выход: source/parser/outcome и raw payload; специализированные profiles/tree/article/labor данные только для распознанных методов; generic payload сохраняется без выдуманных нормализованных полей.
+Выход: source/parser/outcome и raw payload; `article_candidates[].product_name` содержит первое название; необязательный `article_candidates[].product_name_variants` хранит несколько разных названий того же артикула в порядке поставщика, включая первое.
 Ошибки и неполнота: invalid_input сохраняет ошибочный вход как отказ; empty/partial/unsupported не success; configuration/auth/quota/provider/parse ошибки различаются для сетевого источника.
 
 - Маркировка/EAN/наименование сами не становятся OEM.

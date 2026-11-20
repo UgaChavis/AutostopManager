@@ -21,6 +21,10 @@ class PartIntentRule:
     clarification_fields: tuple[str, ...] = ()
 
 
+_ENGINE_OIL_RU = r"\bмоторн\w*\s+масл(?:о|а|у|ом|е)\b"
+_ENGINE_OIL_EN = r"\bengine[-\s]+oil\b"
+
+
 def _paired_axle_patterns(front: str, rear: str, part: str) -> tuple[str, ...]:
     join = r"\s*(?:/|,|&|\+|(?:,\s*)?(?:и\b|а\s+также\b|and\b)(?:\s+(?:также|also)\b)?)\s*"
     end = r"(?=\s*(?:$|[,;.!?]))"
@@ -276,8 +280,10 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         patterns=(
             r"маслян\w*\s+фильтр",
             r"фильтр\w*\s+масл",
-            r"\bфильтр\w*\s+моторн\w*\s+масл(?:о|а|у|ом|е)\b",
-            r"\b(?:engine[-\s]+)?oil\s+filter\b",
+            rf"\b(?:маслян\w*\s+)?фильтр\w*\s+(?:для\s+)?(?:очистки\s+)?{_ENGINE_OIL_RU}",
+            rf"{_ENGINE_OIL_EN}[-\s]+filter\b",
+            rf"\b(?:oil[-\s]+)?filter\s+for\s+{_ENGINE_OIL_EN}",
+            r"\boil\s+filter\b",
         ),
         catalog_groups_ru=("двигатель", "система смазки", "масляный фильтр"),
         catalog_groups_en=("engine", "lubrication", "oil filter"),
@@ -291,7 +297,7 @@ PART_INTENT_RULES: tuple[PartIntentRule, ...] = (
         intent_id="engine_oil",
         canonical_name_ru="моторное масло",
         canonical_name_en="engine oil",
-        patterns=(r"\bмоторн\w*\s+масл(?:о|а|у|ом|е)\b", r"\bengine[-\s]+oil\b"),
+        patterns=(_ENGINE_OIL_RU, _ENGINE_OIL_EN),
         catalog_groups_ru=(),
         catalog_groups_en=(),
         positions=(),

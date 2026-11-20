@@ -54,6 +54,50 @@ def test_ordinary_worker_housekeeping_stays_in_disposable_cache(monkeypatch, tmp
     assert j1.research_status(created["job_id"])["status"] == "completed"
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_search_stop_preserves_discoveries_and_requeues_only_running_jobs(monkeypatch, cancel):
+    completed_query = "first public technical query"
+    interrupted_query = "second public technical query"
+    first_url = "https://example.org/first"
+    partial_url = "https://example.org/partial"
+    second_url = "https://example.org/second"
+    job_id = j1.start_research("Synthetic public research", [completed_query, interrupted_query])["job_id"]
+    calls = []
+
+    def search(query, *, stop_requested, **_kwargs):
+        calls.append(query)
+        if query == completed_query:
+            return [{"url": first_url}], "searxng"
+        if calls.count(interrupted_query) == 1:
+            if cancel:
+                assert j1.research_cancel(job_id)["status"] == "cancelled"
+            j1._on_stop(signal.SIGTERM, None)
+            assert stop_requested()
+            return [{"url": partial_url}], "search_interrupted"
+        return [{"url": partial_url}, {"url": second_url}], "searxng"
+
+    monkeypatch.setattr(j1, "search_public", search)
+    monkeypatch.setattr(j1, "fetch_document", lambda *_args, **_kwargs: {"ok": False, "error": "requires_human"})
+    j1.run_worker(once=True)
+    assert j1.research_status(job_id)["status"] == ("cancelled" if cancel else "queued")
+    with j1._db() as conn:
+        assert list(map(tuple, conn.execute("SELECT query,status FROM queries ORDER BY id"))) == [
+            (completed_query, "done"),
+            (interrupted_query, "running" if cancel else "pending"),
+        ]
+        urls = {row[0] for row in conn.execute("SELECT url FROM documents")}
+        assert urls == ({first_url} if cancel else {first_url, partial_url})
+    if not cancel:
+        monkeypatch.setattr(j1, "_STOP", False)
+        j1.run_worker(once=True)
+        assert j1.research_status(job_id)["status"] == "completed"
+        assert calls == [completed_query, interrupted_query, interrupted_query]
+        with j1._db() as conn:
+            assert sorted(row[0] for row in conn.execute("SELECT url FROM documents")) == sorted(
+                [first_url, partial_url, second_url]
+            )
+
+
 @pytest.mark.parametrize(
     ("queries", "failures", "retrieved", "unavailable"),
     [
@@ -894,6 +938,9 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
         def read(self, _count: int) -> bytes:
             return b'{"results":[{"url":"https://example.org/article","title":"Public report"},{"url":"http://127.0.0.1/private","title":"Private"}]}'
 
+        def close(self) -> None:
+            pass
+
     class FakeConnection:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
@@ -950,6 +997,55 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
             "search_rank": 1,
         }
     ]
+
+
+def test_search_fallback_obeys_one_budget_through_robots(monkeypatch):
+    now = 100.0
+    query = "public technical query"
+    calls = []
+
+    def searxng(value, _base_url):
+        nonlocal now
+        calls.append(value)
+        assert j1_fetch._SEARCH_DEADLINE.get() == 100.0 + j1_fetch.SEARCH_BUDGET_SECONDS
+        now += j1_fetch._SEARXNG_ATTEMPT_SECONDS
+        return []
+
+    def robots(_url):
+        nonlocal now
+        assert now < 100.0 + j1_fetch.SEARCH_BUDGET_SECONDS
+        now = 100.0 + j1_fetch.SEARCH_BUDGET_SECONDS
+        return True, 1.0
+
+    monkeypatch.setattr(j1_fetch.time, "monotonic", lambda: now)
+    monkeypatch.setattr(j1_fetch, "_search_searxng", searxng)
+    monkeypatch.setattr(j1_fetch, "_robots_policy", robots)
+    monkeypatch.setattr(j1_fetch, "_request_public", lambda *_args, **_kwargs: pytest.fail("budget exhausted"))
+    assert j1_fetch.search_public(query, searxng_url="http://127.0.0.1:8890") == ([], "search_timeout")
+    assert calls == [f"!bing {query}", f"!yahoo {query}", query]
+    assert j1_fetch._SEARCH_DEADLINE.get() is None
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_search_keeps_results_when_deadline_or_stop_prevents_fallback(monkeypatch, stopped):
+    now = 100.0
+    calls = []
+
+    def searxng(value, _base_url):
+        nonlocal now
+        calls.append(value)
+        if not stopped:
+            now += j1_fetch.SEARCH_BUDGET_SECONDS
+        return [{"url": "https://example.org/guide", "title": "Public technical guide", "source": "searxng"}]
+
+    monkeypatch.setattr(j1_fetch.time, "monotonic", lambda: now)
+    monkeypatch.setattr(j1_fetch, "_search_searxng", searxng)
+    rows, provider = j1_fetch.search_public(
+        "public technical guide", searxng_url="http://127.0.0.1:8890", stop_requested=lambda: stopped and bool(calls)
+    )
+    assert provider == ("search_interrupted" if stopped else "searxng")
+    assert [(row["url"], row["engines"]) for row in rows] == [("https://example.org/guide", ["bing"])]
+    assert calls == ["!bing public technical guide"]
 
 
 def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: pytest.MonkeyPatch) -> None:

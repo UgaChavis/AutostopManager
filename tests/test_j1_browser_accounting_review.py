@@ -291,7 +291,7 @@ def test_page_budget_survives_resume_without_more_renderer_pages(monkeypatch, di
     initial = urls if resume == "worker_restart" else urls[:-1]
     job_id, answers = queue_job(monkeypatch, direct_api, initial, max_pages=total)
     j1.run_worker(once=True)
-    budget(direct_api, job_id, j1.MAX_BROWSER_PAGES, state="running" if resume == "worker_restart" else "completed")
+    budget(direct_api, job_id, j1.MAX_BROWSER_PAGES, state="queued" if resume == "worker_restart" else "completed")
     assert len(seen.renders) == j1.MAX_BROWSER_PAGES
     if resume == "add_queries":
         query = "Synthetic additional public evidence"

@@ -121,8 +121,9 @@ def test_named_liter_position_does_not_supply_the_filters_unknown_quantity(parse
     assert len({row["item_id"] for row in items}) == 2
 
 
-def test_explicit_engine_oil_is_classified_without_guessing_specification(parse):
-    response = parse("масляный фильтр — 2 шт и моторное масло 4 л")
+@pytest.mark.parametrize("filter_name", ["масляный фильтр", "масляный фильтр для моторного масла"])
+def test_explicit_engine_oil_is_classified_without_guessing_specification(parse, filter_name):
+    response = parse(f"{filter_name} — 2 шт и моторное масло 4 л")
 
     filter_item, oil_item = response["data"]["items"]
     assert response["outcome"] == "success"
@@ -133,7 +134,18 @@ def test_explicit_engine_oil_is_classified_without_guessing_specification(parse)
     assert oil_item["intent"]["partsapi_category_candidates"] == []
 
 
-@pytest.mark.parametrize("text", ["фильтр моторного масла", "engine oil filter"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "фильтр моторного масла",
+        "масляный фильтр для моторного масла 1 шт",
+        "фильтр для моторного масла 1 шт",
+        "фильтр очистки моторного масла 1 шт",
+        "engine oil filter",
+        "engine oil-filter",
+        "oil filter for engine oil",
+    ],
+)
 def test_explicit_engine_oil_filter_stays_a_single_filter(text):
     assert normalize_part_intent(text)["intent_id"] == "oil_filter"
 

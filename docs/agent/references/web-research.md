@@ -132,6 +132,8 @@ Jobs не являются долговременной customer memory. Лок�
 
 Static search использует loopback `AUTOSTOP_J1_SEARXNG_URL`, может иметь fallback. Fetch HTML/PDF соблюдает robots/rate limits и URL/privacy guards. Static J1 работает без browser. Browser использует Unix socket renderer и отдельный egress proxy; запрещены login/cookies/CAPTCHA. Проверяются Docker networks, DNS/private-address guards, socket и SHA-bound marker `root:root 0600`. Отсутствие prerequisite отключает browser path; marker вручную не создаётся.
 
+Для поиска по одному запросу общий бюджет в J1 составляет 18 секунд, включая SearXNG и резервный поиск DuckDuckGo. Тайм-аут поиска отражается как `search_timeout`. При штатной остановке незавершённый запрос возвращается в очередь. Уже записанные результаты доступны после запуска.
+
 Static HTTP ограничивает время отдельного обмена, включая чтение заголовков, тела,
 chunk sizes и trailers; непрерывная передача по байту не продлевает этот deadline.
 Это не общий deadline DNS, всех redirect/robots checks и rate-limit ожиданий.

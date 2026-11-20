@@ -129,6 +129,65 @@ def test_http_exchange_deadline_bounds_continuous_drip(exchange, phase: str) -> 
         j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=0.06)
 
 
+def test_searxng_exchange_deadline_bounds_continuous_drip(exchange, monkeypatch):
+    exchange(_drip_segments("body"))
+    monkeypatch.setattr(
+        j1_fetch.http.client,
+        "HTTPConnection",
+        lambda host, port, timeout: j1_fetch._PinnedHTTP(host, "1.1.1.1", 80, timeout),
+    )
+    token = j1_fetch._SEARCH_DEADLINE.set(time.monotonic() + 0.06)
+    try:
+        with pytest.raises(TimeoutError):
+            j1_fetch._search_searxng("public technical query", "http://127.0.0.1:8890")
+    finally:
+        j1_fetch._SEARCH_DEADLINE.reset(token)
+
+
+def test_search_dns_times_out_without_starting_more_blocked_resolvers(monkeypatch):
+    slot = threading.BoundedSemaphore(1)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def resolve(host, port):
+        calls.append((host, port))
+        entered.set()
+        assert release.wait(2), "synthetic DNS resolver not released"
+        return "1.1.1.1"
+
+    monkeypatch.setattr(j1_fetch, "_SEARCH_DNS_SLOTS", slot)
+    monkeypatch.setattr(j1_fetch, "_public_address", resolve)
+    try:
+        with pytest.raises(TimeoutError):
+            j1_fetch._search_address("example.org", 443, time.monotonic() + 0.06)
+        assert entered.wait(1)
+        with pytest.raises(TimeoutError):
+            j1_fetch._search_address("example.com", 443, time.monotonic() + 1)
+        assert calls == [("example.org", 443)]
+    finally:
+        release.set()
+        assert slot.acquire(timeout=1)
+        slot.release()
+
+
+def test_search_robot_timeout_does_not_cache_a_restriction(monkeypatch):
+    origin = "https://example.org"
+    monkeypatch.setattr(j1_fetch, "_ROBOTS", {})
+
+    def timed_out(*_args, **_kwargs):
+        raise TimeoutError("public_http_deadline")
+
+    monkeypatch.setattr(j1_fetch, "_request_public", timed_out)
+    token = j1_fetch._SEARCH_DEADLINE.set(time.monotonic() + 1)
+    try:
+        with pytest.raises(TimeoutError):
+            j1_fetch._robots_policy(origin + "/report")
+    finally:
+        j1_fetch._SEARCH_DEADLINE.reset(token)
+    assert origin not in j1_fetch._ROBOTS
+
+
 @pytest.mark.parametrize("phase", ["headers", "body", "chunk_size", "trailers"])
 @pytest.mark.parametrize("idle_timeout, expected_elapsed", [(None, 0.06), (0.01, 0.06), (0.002, 0.002)])
 def test_http_request_enforces_exact_deadline_without_scheduler_timing(

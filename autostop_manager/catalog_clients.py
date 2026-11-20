@@ -1622,22 +1622,27 @@ def _response_shape(payload: Any) -> str:
 _PARTSAPI_UNKNOWN_PART_NAMES = frozenset({"неизвестная деталь / unknown part", "неизвестная деталь", "unknown part"})
 
 
-def _partsapi_name_only_response(payload: Any) -> str | None:
-    if not isinstance(payload, list) or len(payload) != 1:
+def _partsapi_name_only_response(payload: Any) -> list[str] | None:
+    """Read variants in provider order, returning an empty list for a known no-match reply."""
+    if not isinstance(payload, list) or not payload:
         return None
-    row = payload[0]
-    if not isinstance(row, dict) or set(row) != {"partname"} or not isinstance(row["partname"], str):
-        return None
-    return " ".join(row["partname"].split()) or None
+    names: dict[str, None] = {}
+    for row in payload:
+        if not isinstance(row, dict) or set(row) != {"partname"} or not isinstance(row["partname"], str):
+            return None
+        name = " ".join(row["partname"].split())
+        if not name:
+            return None
+        if name.casefold() not in _PARTSAPI_UNKNOWN_PART_NAMES:
+            names[name] = None
+    return list(names)
 
 
 def _partsapi_explicitly_empty_payload(payload: Any, *, operation: str) -> bool:
     if payload in (None, [], {}):
         return True
-    if operation == "part_name_by_brand_number":
-        name_only = _partsapi_name_only_response(payload)
-        if name_only and name_only.casefold() in _PARTSAPI_UNKNOWN_PART_NAMES:
-            return True
+    if operation == "part_name_by_brand_number" and _partsapi_name_only_response(payload) == []:
+        return True
     if not isinstance(payload, dict):
         return False
     envelope_keys = {"data", "result", "array", "items", "articles", "crosses"}
@@ -3439,18 +3444,23 @@ def extract_partsapi_article_candidates(
     *, payload: Any, operation: str | None = "search_articles", request_parameters: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     candidates = []
-    seen: set[tuple[str | None, str | None, str | None]] = set()
+    seen: dict[tuple[str | None, str | None, str | None], dict[str, Any]] = {}
+    names_by_identity: dict[tuple[str | None, str | None, str | None], dict[str, None]] = {}
     params = request_parameters or {}
-    name_only = _partsapi_name_only_response(payload) if operation == "part_name_by_brand_number" else None
-    if name_only and name_only.casefold() in _PARTSAPI_UNKNOWN_PART_NAMES:
-        return []
-    for item in _partsapi_article_records(payload):
+    name_lookup = operation == "part_name_by_brand_number"
+    name_only = _partsapi_name_only_response(payload) if name_lookup else None
+    records = _partsapi_article_records(payload)
+    if name_only is not None:
+        if not name_only or not params.get("number") or not params.get("brand"):
+            return []
+        records = [{"partname": name_only[0]}]
+    for item in records:
         part_number = _first_value(
             item, ("ART_ARTICLE_NR", "ARL_DISPLAY_NR", "articleNumber", "article_number", "number")
         )
         article_id = _first_value(item, ("ART_ID", "ARL_ART_ID", "articleId", "article_id"))
         brand = _first_value(item, ("ART_SUP_BRAND", "SUP_BRAND", "ARL_BRA_BRAND", "brand", "supplierBrand"))
-        if name_only and params.get("number") and params.get("brand"):
+        if name_only is not None:
             part_number, brand = params["number"], params["brand"]
         if part_number in (None, "") and article_id in (None, ""):
             continue
@@ -3459,9 +3469,15 @@ def extract_partsapi_article_candidates(
             str(part_number) if part_number not in (None, "") else None,
             str(brand) if brand not in (None, "") else None,
         )
+        product_name = _first_value(
+            item, ("ART_PRODUCT_NAME", "productName", "product_name", "partname", "partName", "name")
+        )
+        if name_lookup and isinstance(product_name, str):
+            name = " ".join(product_name.split())
+            if name and name.casefold() not in _PARTSAPI_UNKNOWN_PART_NAMES:
+                names_by_identity.setdefault(identity, {})[name] = None
         if identity in seen:
             continue
-        seen.add(identity)
         candidates.append(
             {
                 "provider": "partsapi_ru",
@@ -3472,24 +3488,28 @@ def extract_partsapi_article_candidates(
                 "supplier_id": _first_value(item, ("SUP_ID",)),
                 "product_group": _first_value(item, ("PRODUCT_GROUP",)),
                 "product_group_id": _first_value(item, ("PT_ID",)),
-                "product_name": _first_value(
-                    item, ("ART_PRODUCT_NAME", "productName", "product_name", "partname", "partName", "name")
-                ),
+                "product_name": product_name,
                 "found_via": _first_value(item, ("FOUND_VIA", "foundVia", "found_via")),
                 "fitment_evidence": {"fitment_confirmed": False},
                 "confidence": 0.5,
                 "raw_keys": sorted(str(key) for key in item),
             }
         )
-        if name_only:
-            candidates[-1]["product_name"] = name_only
+        seen[identity] = candidates[-1]
+        if name_only is not None:
             candidates[-1]["article_identity_source"] = "request_parameters"
+            names_by_identity[identity] = dict.fromkeys(name_only)
         if operation == "article":
             candidates[-1].update(
                 oe_references=_partsapi_article_oe_references(item.get("OEM_NUMBERS")),
                 criteria=_partsapi_article_embedded_criteria(item.get("ARTICLE_CRITERIA")),
                 supersession={"superseded": item.get("SUPERSEDED"), "superseded_by": item.get("SUPERSEDED BY")},
             )
+    for identity, names in names_by_identity.items():
+        candidate = seen[identity]
+        candidate["product_name"] = next(iter(names))
+        if len(names) > 1:
+            candidate["product_name_variants"] = list(names)
     _partsapi_article_followups(candidates, operation, request_parameters)
     return candidates
 

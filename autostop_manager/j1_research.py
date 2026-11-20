@@ -1597,6 +1597,97 @@ def _work_job(job_id: str) -> None:
         run_job(job_id)
         return
 
+    try:
+        _work_public_job(job_id)
+    finally:
+        if _STOP:
+            with _db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                requeued = conn.execute(
+                    "UPDATE jobs SET status='queued',updated_at=? WHERE id=? AND status='running'",
+                    (_utcnow(), job_id),
+                ).rowcount
+                if requeued:
+                    for table in ("queries", "documents"):
+                        conn.execute(
+                            f"UPDATE {table} SET status='pending' WHERE job_id=? AND status='running'", (job_id,)
+                        )
+                conn.commit()
+
+
+def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
+    try:
+        results, provider = search_public(
+            query,
+            searxng_url=os.environ.get("AUTOSTOP_J1_SEARXNG_URL", ""),
+            stop_requested=lambda: _STOP,
+        )
+    except Exception:  # noqa: BLE001 - one provider error must not fail the corpus.
+        results, provider = [], "search_failed"
+    if _STOP and not results:
+        return False
+    with _db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM jobs WHERE id=? AND status='running'", (job_id,)).fetchone() is None:
+            return False
+        current_count = conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
+        for row in results:
+            if current_count >= max_pages:
+                break
+            url = public_url(row.get("url", ""))
+            canonical_url = _canonical_url(url)
+            if not url or not canonical_url:
+                continue
+            # Preserve the original result URL for traceability while
+            # avoiding a second fetch of its tracking-only variant.
+            if conn.execute(
+                """SELECT 1 FROM documents WHERE job_id=?
+                   AND (canonical_url=? OR (canonical_url='' AND url=?)) LIMIT 1""",
+                (job_id, canonical_url, url),
+            ).fetchone():
+                continue
+            (
+                title,
+                source_class,
+                source_basis,
+                source_tier,
+                snippet,
+                search_rank,
+                search_engines,
+            ) = _discovery_metadata(row, url, canonical_url)
+            inserted = conn.execute(
+                """INSERT OR IGNORE INTO documents(
+                       id,job_id,url,canonical_url,title,source,source_class,source_basis,source_tier,
+                       search_snippet,search_rank,search_engines,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    uuid4().hex,
+                    job_id,
+                    url,
+                    canonical_url,
+                    title,
+                    _clean_input(str(row.get("source") or ""), limit=40),
+                    source_class,
+                    source_basis,
+                    source_tier,
+                    snippet,
+                    search_rank,
+                    search_engines,
+                    _utcnow(),
+                ),
+            )
+            current_count += inserted.rowcount
+        if provider != "search_interrupted":
+            conn.execute(
+                "UPDATE queries SET status=?,provider=?,error=? WHERE id=?",
+                ("done" if results else "failed", provider[:40], "" if results else provider[:80], query_id),
+            )
+        conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_utcnow(), job_id))
+        conn.commit()
+    return True
+
+
+def _work_public_job(job_id: str) -> None:
     while not _STOP:
         from .j1_vin_store import prune as prune_vin
 
@@ -1633,67 +1724,11 @@ def _work_job(job_id: str) -> None:
                 conn.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (_utcnow(), job_id))
                 conn.commit()
                 return
+        if _STOP:
+            return
         if phase == "query":
-            try:
-                results, provider = search_public(query, searxng_url=os.environ.get("AUTOSTOP_J1_SEARXNG_URL", ""))
-            except Exception:  # noqa: BLE001 - one provider error must not fail the corpus.
-                results, provider = [], "search_failed"
-            with _db() as conn:
-                if conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()[0] != "running":
-                    return
-                current_count = conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
-                for row in results:
-                    if current_count >= job["max_pages"]:
-                        break
-                    url = public_url(row.get("url", ""))
-                    canonical_url = _canonical_url(url)
-                    if not url or not canonical_url:
-                        continue
-                    # Preserve the original result URL for traceability while
-                    # avoiding a second fetch of its tracking-only variant.
-                    if conn.execute(
-                        """SELECT 1 FROM documents WHERE job_id=?
-                           AND (canonical_url=? OR (canonical_url='' AND url=?)) LIMIT 1""",
-                        (job_id, canonical_url, url),
-                    ).fetchone():
-                        continue
-                    (
-                        title,
-                        source_class,
-                        source_basis,
-                        source_tier,
-                        snippet,
-                        search_rank,
-                        search_engines,
-                    ) = _discovery_metadata(row, url, canonical_url)
-                    inserted = conn.execute(
-                        """INSERT OR IGNORE INTO documents(
-                               id,job_id,url,canonical_url,title,source,source_class,source_basis,source_tier,
-                               search_snippet,search_rank,search_engines,created_at
-                           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (
-                            uuid4().hex,
-                            job_id,
-                            url,
-                            canonical_url,
-                            title,
-                            _clean_input(str(row.get("source") or ""), limit=40),
-                            source_class,
-                            source_basis,
-                            source_tier,
-                            snippet,
-                            search_rank,
-                            search_engines,
-                            _utcnow(),
-                        ),
-                    )
-                    current_count += inserted.rowcount
-                conn.execute(
-                    "UPDATE queries SET status=?,provider=?,error=? WHERE id=?",
-                    ("done" if results else "failed", provider[:40], "" if results else provider[:80], query_id),
-                )
-                conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_utcnow(), job_id))
-                conn.commit()
+            if not _work_query(job_id, query_id, query, job["max_pages"]):
+                return
         else:
             try:
                 fetch_result = fetch_document(url, allow_browser=allow_browser)
@@ -1855,6 +1890,9 @@ def _run_locked_worker(*, once: bool) -> None:
             try:
                 _work_job(job_id)
             except Exception:  # noqa: BLE001 - errors are reported without URLs or source text.
+                if _STOP:
+                    # Startup can recover a running job if the stop-time write could not commit.
+                    return
                 with _db() as conn:
                     conn.execute(
                         "UPDATE jobs SET status='failed',error='worker_failed',updated_at=? WHERE id=? AND status='running'",

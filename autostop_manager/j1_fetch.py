@@ -7,6 +7,8 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextvars import ContextVar
 import html
 from html.parser import HTMLParser
 import http.client
@@ -38,6 +40,11 @@ MAX_TEXT_CHARS = 50_000
 MAX_SEARCH_RESULTS = 20
 MAX_SEARCH_RESULTS_PER_DOMAIN = 3
 MAX_SEARCH_SNIPPET_CHARS = 600
+# Leave time for committing results and requeueing before the worker's 30s stop limit.
+SEARCH_BUDGET_SECONDS = 18.0
+_SEARXNG_ATTEMPT_SECONDS = 5.0
+_SEARCH_DEADLINE: ContextVar[float | None] = ContextVar("j1_search_deadline", default=None)
+_SEARCH_DNS_SLOTS = threading.BoundedSemaphore(2)
 MAX_DOCUMENT_RETRIES = 1
 _RETRY_DELAY_SECONDS = 0.25
 _VIN = re.compile(
@@ -244,6 +251,41 @@ def _deadline_timeout(timeout: float | None, deadline: float | None) -> float | 
     return min(timeout, remaining) if timeout is not None else remaining
 
 
+def _search_address(host: str, port: int, deadline: float) -> str:
+    """Bound the blocking resolver without leaving unbounded resolver threads."""
+
+    _deadline_timeout(None, deadline)
+    slots = _SEARCH_DNS_SLOTS
+    if not slots.acquire(blocking=False):
+        raise TimeoutError("public_http_deadline")
+    outcome: list[str | Exception] = []
+
+    def resolve() -> None:
+        try:
+            outcome.append(_public_address(host, port))
+        except (OSError, ValueError) as exc:
+            outcome.append(exc)
+        finally:
+            slots.release()
+
+    worker = threading.Thread(target=resolve, daemon=True)
+    try:
+        worker.start()
+    except RuntimeError:
+        slots.release()
+        raise TimeoutError("public_http_deadline") from None
+    worker.join(_deadline_timeout(None, deadline))
+    if worker.is_alive():
+        raise TimeoutError("public_http_deadline")
+    _deadline_timeout(None, deadline)
+    if not outcome:
+        raise OSError("public_dns_failed")
+    address = outcome[0]
+    if isinstance(address, Exception):
+        raise address
+    return address
+
+
 class _DeadlineReader(io.RawIOBase):
     """Apply a wall deadline to every raw read, including headers and chunks."""
 
@@ -334,12 +376,15 @@ def _request_public(
     current = public_url(url)
     if not current:
         raise ValueError("unsafe_url")
+    search_deadline = _SEARCH_DEADLINE.get()
     for _ in range(4):
         deadline = time.monotonic() + timeout
+        if search_deadline is not None:
+            deadline = min(deadline, search_deadline)
         parsed = urlsplit(current)
         host = parsed.hostname or ""
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        ip = _public_address(host, port)
+        ip = _public_address(host, port) if search_deadline is None else _search_address(host, port, deadline)
         connection = (
             _PinnedHTTPS(host, ip, port, timeout) if parsed.scheme == "https" else _PinnedHTTP(host, ip, port, timeout)
         )
@@ -414,7 +459,12 @@ def _robots_policy(url: str) -> tuple[bool, float]:
             policy = (parser, True, min(max(float(crawl_delay), 1.0), 30.0))
         else:
             policy = (None, False, 1.0)
-    except (OSError, ValueError, TimeoutError, http.client.HTTPException):
+    except TimeoutError:
+        # A short search budget does not establish this host's robots policy.
+        if _SEARCH_DEADLINE.get() is not None:
+            raise
+        policy = (None, False, 1.0)
+    except (OSError, ValueError, http.client.HTTPException):
         policy = (None, False, 1.0)
     with _ROBOTS_LOCK:
         _ROBOTS[origin] = (time.monotonic() + 3600, *policy)
@@ -424,8 +474,12 @@ def _robots_policy(url: str) -> tuple[bool, float]:
 
 def _rate_limit(origin: str, delay: float) -> None:
     with _RATE_LOCK:
-        wait = max(0.0, _HOST_NEXT.get(origin, 0.0) - time.monotonic())
-        _HOST_NEXT[origin] = time.monotonic() + wait + delay
+        now = time.monotonic()
+        wait = max(0.0, _HOST_NEXT.get(origin, 0.0) - now)
+        search_deadline = _SEARCH_DEADLINE.get()
+        if search_deadline is not None and now + wait >= search_deadline:
+            raise TimeoutError("public_http_deadline")
+        _HOST_NEXT[origin] = now + wait + delay
     if wait:
         time.sleep(wait)
 
@@ -854,15 +908,27 @@ def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
     ):
         raise ValueError("searxng_url_invalid")
     target = (parsed.path.rstrip("/") or "") + "/search?q=" + quote_plus(query) + "&format=json"
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=10)
+    search_deadline = _SEARCH_DEADLINE.get()
+    started = time.monotonic()
+    deadline = started + 10 if search_deadline is None else min(started + _SEARXNG_ATTEMPT_SECONDS, search_deadline)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=_deadline_timeout(None, deadline))
+    conn.response_class = _deadline_response_class(deadline)
+    response: http.client.HTTPResponse | None = None
     try:
         conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
         response = conn.getresponse()
         if response.status != 200:
             raise ValueError("searxng_failed")
-        payload = json.loads(response.read(1_000_001))
+        body = response.read(1_000_001)
+        if len(body) > 1_000_000:
+            raise ValueError("searxng_response_too_large")
+        payload = json.loads(body)
     finally:
-        conn.close()
+        try:
+            if response is not None:
+                response.close()
+        finally:
+            conn.close()
     rows = payload.get("results", []) if isinstance(payload, dict) else []
     found: list[dict[str, str]] = []
     for row in rows[:30] if isinstance(rows, list) else []:
@@ -1106,7 +1172,9 @@ class _DDGLinks(HTMLParser):
             self._snippet.append(data)
 
 
-def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, Any]], str]:
+def search_public(
+    query: str, *, searxng_url: str = "", stop_requested: Callable[[], bool] | None = None
+) -> tuple[list[dict[str, Any]], str]:
     """Search configured local engines, then rank safe public discoveries."""
 
     direct_url = public_url(query)
@@ -1117,10 +1185,27 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
         ), "direct_url"
     if contains_sensitive(query):
         return [], "sensitive_query"
+    deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
+    token = _SEARCH_DEADLINE.set(deadline)
+    try:
+        return _search_discovery(query, searxng_url, deadline, stop_requested or (lambda: False))
+    finally:
+        _SEARCH_DEADLINE.reset(token)
+
+
+def _search_discovery(
+    query: str, searxng_url: str, deadline: float, stop_requested: Callable[[], bool]
+) -> tuple[list[dict[str, Any]], str]:
+    if stop_requested():
+        return [], "search_interrupted"
     if searxng_url:
         # Collect results from the configured local engines before falling back.
         discovered: list[dict[str, Any]] = []
         for engine in _SEARXNG_ENGINES:
+            if stop_requested():
+                return _rank_discovered_results(query, discovered), "search_interrupted"
+            if time.monotonic() >= deadline:
+                break
             try:
                 found = _relevant_search_results(query, _search_searxng("!" + engine + " " + query, searxng_url))
                 discovered.extend({**row, "engine": engine} for row in found)
@@ -1129,6 +1214,10 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
         ranked = _rank_discovered_results(query, discovered)
         if ranked:
             return ranked, "searxng"
+        if stop_requested():
+            return [], "search_interrupted"
+        if time.monotonic() >= deadline:
+            return [], "search_timeout"
         try:
             found = _relevant_search_results(query, _search_searxng(query, searxng_url))
         except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
@@ -1136,12 +1225,28 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
         ranked = _rank_discovered_results(query, [{**row, "engine": "searxng_default"} for row in found])
         if ranked:
             return ranked, "searxng"
+    return _search_duckduckgo(query, deadline, stop_requested)
+
+
+def _search_duckduckgo(
+    query: str, deadline: float, stop_requested: Callable[[], bool]
+) -> tuple[list[dict[str, Any]], str]:
+    if stop_requested():
+        return [], "search_interrupted"
+    if time.monotonic() >= deadline:
+        return [], "search_timeout"
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
-    allowed, delay = _robots_policy(url)
-    if not allowed:
-        return [], "search_unavailable"
-    _rate_limit("https://html.duckduckgo.com", delay)
     try:
+        allowed, delay = _robots_policy(url)
+        if not allowed:
+            return [], "search_unavailable"
+        if stop_requested():
+            return [], "search_interrupted"
+        if time.monotonic() >= deadline:
+            return [], "search_timeout"
+        _rate_limit("https://html.duckduckgo.com", delay)
+        if stop_requested():
+            return [], "search_interrupted"
         status, _, body, _ = _request_public(url, max_bytes=MAX_HTML_BYTES)
         if status != 200:
             return [], "search_unavailable"
@@ -1149,5 +1254,7 @@ def search_public(query: str, *, searxng_url: str = "") -> tuple[list[dict[str, 
         parser.feed(body.decode("utf-8", "replace"))
         ranked = _rank_discovered_results(query, [{**row, "engine": "duckduckgo"} for row in parser.rows])
         return (ranked, "duckduckgo") if ranked else ([], "search_unavailable")
-    except (OSError, TimeoutError, ValueError, http.client.HTTPException):
+    except TimeoutError:
+        return [], "search_timeout"
+    except (OSError, ValueError, http.client.HTTPException):
         return [], "search_unavailable"

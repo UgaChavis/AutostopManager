@@ -72,6 +72,13 @@ getArticle выдаёт `article_candidates[].oe_references` только из `
 сохраняются; номер самой aftermarket-статьи не становится OEM. OE-reference и размеры
 не подтверждают VIN-применимость, список номеров не задаёт направление замены.
 
+`getPartnameByBrandNumber` возвращает первое название в `article_candidates[].product_name`.
+Если у одного артикула несколько разных названий, `product_name_variants` содержит их в
+порядке поставщика, включая первое. Массив объектов с единственным полем `partname` привязывается
+к фактически отправленным `brand` и `number` (`article_identity_source="request_parameters"`).
+Варианты не подтверждают применимость. В `detail="summary"` список вариантов ограничивается
+25 элементами с общим количеством в `presentation.lists`.
+
 decodeVINus отделяет transport success от полноты и привязки VIN. Распознанный ответ
 NHTSA/vPIC сохраняет это происхождение; другая неизвестная форма остаётся unknown.
 Поля `Error Code`/`Error Text` поддерживаются вместе с `ErrorCode`/`ErrorText`;

@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 from autostop_manager import catalog_clients as catalog_clients_module
 from autostop_manager import config as manager_config
 from autostop_manager import vin_oem_resolver
-from autostop_manager.catalog_presentation import catalog_execution
+from autostop_manager.catalog_presentation import SUMMARY_LIST_LIMIT, catalog_execution, present_catalog
 from autostop_manager.partsapi_methods import PARTSAPI_SHOP_METHODS
 from autostop_manager.catalog_clients import (
     PARTSAPI_METHOD_KEY_ENV_NAMES,
@@ -925,14 +925,20 @@ def test_extract_partsapi_plate_and_part_name_payloads():
 
 
 @pytest.mark.parametrize(
-    ("payload", "outcome"),
+    ("payload", "outcome", "names"),
     [
-        ([{"partname": "Масляный фильтр"}], "success"),
-        ([{"partname": "Неизвестная деталь / Unknown part"}], "empty_result"),
-        ([{"partname": "Масляный фильтр"}, {"partname": "Воздушный фильтр"}], "unparsed_response"),
+        ([{"partname": "Масляный фильтр"}], "success", ["Масляный фильтр"]),
+        (
+            [{"partname": name} for name in ("Масляный  фильтр", "Unknown part", "Фильтр масла", "Масляный фильтр")],
+            "success",
+            ["Масляный фильтр", "Фильтр масла"],
+        ),
+        ([{"partname": "Неизвестная деталь / Unknown part"}], "empty_result", []),
+        ([{"partname": "Unknown part"}, {"partname": "Неизвестная деталь"}], "empty_result", []),
+        ([{"partname": "Масляный фильтр"}, {"partname": 123}], "unparsed_response", []),
     ],
 )
-def test_partsapi_name_only_payload_binds_only_the_exact_request(monkeypatch, payload, outcome):
+def test_partsapi_name_only_payload_binds_only_the_exact_request(monkeypatch, payload, outcome, names):
     _clear_partsapi_method_env(monkeypatch)
     monkeypatch.setenv("PARTSAPI_PARTNAME_BY_BRAND_NUMBER_KEY", "name-secret")
     monkeypatch.setenv("PARTSAPI_BASE_URL", "https://partsapi.example.test/api")
@@ -959,11 +965,75 @@ def test_partsapi_name_only_payload_binds_only_the_exact_request(monkeypatch, pa
         assert result["empty_payload"] is (outcome == "empty_result")
         return
     (candidate,) = result["article_candidates"]
-    assert candidate["product_name"] == "Масляный фильтр"
+    assert candidate["product_name"] == names[0]
+    assert candidate.get("product_name_variants", [candidate["product_name"]]) == names
     assert (candidate["brand"], candidate["part_number"]) == ("MANN-FILTER", "W71295")
     assert candidate["raw_keys"] == ["partname"]
     assert candidate["article_identity_source"] == "request_parameters"
     assert candidate["fitment_evidence"] == {"fitment_confirmed": False}
+
+
+@pytest.mark.parametrize("first_name", ["Oil filter", "  Unknown   part  "])
+def test_partsapi_name_variants_stay_with_their_explicit_article_identity(first_name):
+    payload = {
+        "data": [
+            {"brand": "DEMO", "number": "ABC123", "partname": first_name},
+            {"brand": "DEMO", "number": "ABC123", "partname": "Oil filter"},
+            {"brand": "DEMO", "number": "ABC123", "partname": "Lubrication filter"},
+            {"brand": "DEMO", "number": "ABC123", "partname": "Unknown part"},
+            {"brand": "DEMO", "number": "ABC123", "partname": "Lubrication   filter"},
+            {"brand": "OTHER", "number": "ABC123", "partname": "Air filter"},
+            {"brand": "DEMO", "number": "DEF456", "partname": "Fuel filter"},
+            {"brand": "DEMO", "number": "XYZ789", "partname": "Unknown part"},
+            {"brand": "DEMO", "number": "XYZ789", "partname": "Неизвестная деталь"},
+            {"partname": "Unbound name"},
+        ]
+    }
+    candidates = extract_partsapi_article_candidates(
+        payload=payload,
+        operation="part_name_by_brand_number",
+        request_parameters={"brand": "DEMO", "number": "ABC123"},
+    )
+
+    assert [(item["brand"], item["part_number"], item["product_name"]) for item in candidates] == [
+        ("DEMO", "ABC123", "Oil filter"),
+        ("OTHER", "ABC123", "Air filter"),
+        ("DEMO", "DEF456", "Fuel filter"),
+        ("DEMO", "XYZ789", "Unknown part"),
+    ]
+    assert candidates[0]["product_name_variants"] == ["Oil filter", "Lubrication filter"]
+    assert all("article_identity_source" not in item for item in candidates)
+    assert all("product_name_variants" not in item for item in candidates[1:])
+    plain = extract_partsapi_article_candidates(payload=payload, operation="search_articles")
+    assert plain[0]["product_name"] == first_name
+    assert all("product_name_variants" not in item for item in plain)
+
+
+def test_partsapi_name_variants_are_retained_and_bounded_in_summary():
+    names = [f"Filter name {index}" for index in range(SUMMARY_LIST_LIMIT + 1)]
+    payload = [{"partname": name} for name in names]
+    parameters = {"brand": "DEMO", "number": "ABC123"}
+    operation = "part_name_by_brand_number"
+    assert extract_partsapi_article_candidates(payload=payload, operation=operation) == []
+    assert (
+        extract_partsapi_article_candidates(payload=payload, operation=operation, request_parameters={"brand": "DEMO"})
+        == []
+    )
+
+    candidates = extract_partsapi_article_candidates(
+        payload=payload, operation=operation, request_parameters=parameters
+    )
+    summary = present_catalog({"article_candidates": candidates, "payload": payload}, "summary")
+
+    assert candidates[0]["product_name_variants"] == names
+    assert summary["article_candidates"][0]["product_name"] == names[0]
+    assert summary["article_candidates"][0]["product_name_variants"] == names[:SUMMARY_LIST_LIMIT]
+    assert summary["presentation"]["lists"]["article_candidates[0].product_name_variants"] == {
+        "total": len(names),
+        "returned": SUMMARY_LIST_LIMIT,
+        "truncated": True,
+    }
+    assert "payload" not in summary
 
 
 def test_partsapi_search_tree_and_article_operations_use_safe_params(monkeypatch):
