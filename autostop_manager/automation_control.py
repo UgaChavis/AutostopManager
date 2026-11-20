@@ -150,7 +150,11 @@ class AutomationControlService:
             state: Mapping[str, Any] = raw_state if isinstance(raw_state, Mapping) else {}
             desired_state = saved.get("desired_state", state.get("desired_state", "off"))
             desired_period = saved.get("period_minutes", state.get("period_minutes"))
-            actual_state = state.get("actual_state", "unknown")
+            sub_state = state.get("sub_state")
+            elapsed = (
+                live.get("inspection_ok") is True and state.get("active_state") == "active" and sub_state == "elapsed"
+            )
+            actual_state = "error" if elapsed else state.get("actual_state", "unknown")
             expected_actual = "active" if desired_state == "on" else "inactive"
             inspection_error = (
                 None
@@ -177,13 +181,14 @@ class AutomationControlService:
                     "locked": live["locked"],
                     "desired_state": desired_state,
                     "actual_state": actual_state,
+                    **({"sub_state": sub_state} if sub_state else {}),
                     "period_minutes": desired_period,
                     "actual_period_minutes": state.get("period_minutes"),
                     "revision": int(saved.get("revision", 0)),
                     "next_run_at": state.get("next_run_at"),
                     "last_run_at": state.get("last_run_at"),
                     "reconcile_state": "inspection_error" if inspection_error else ("drift" if drift else "in_sync"),
-                    "error_code": state.get("error_code")
+                    "error_code": ("system_timer_elapsed" if elapsed else state.get("error_code"))
                     or inspection_error
                     or ("system_timer_drift" if drift else None),
                 }
@@ -230,6 +235,7 @@ class AutomationControlService:
                 "timer_id": timer.get("timer_id"),
                 "desired_state": timer.get("desired_state"),
                 "actual_state": timer.get("actual_state"),
+                **({"sub_state": timer["sub_state"]} if "sub_state" in timer else {}),
                 "revision": timer.get("revision"),
                 "reconcile_state": timer.get("reconcile_state"),
                 "error_code": timer.get("error_code"),

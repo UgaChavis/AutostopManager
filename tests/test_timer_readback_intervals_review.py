@@ -205,6 +205,7 @@ def test_timer_readback_contract(
         policy.unit_name,
         "--property=LoadState",
         "--property=ActiveState",
+        "--property=SubState",
         "--property=UnitFileState",
         "--property=NextElapseUSecRealtime",
         "--property=NextElapseUSecMonotonic",

@@ -152,6 +152,7 @@ class SystemTimerController:
             policy.unit_name,
             "--property=LoadState",
             "--property=ActiveState",
+            "--property=SubState",
             "--property=UnitFileState",
             "--property=NextElapseUSecRealtime",
             "--property=NextElapseUSecMonotonic",
@@ -176,9 +177,11 @@ class SystemTimerController:
         one = lambda key, default="": (properties.get(key) or [default])[-1]  # noqa: E731
         period_minutes = _systemd_period_minutes(properties.get("TimersMonotonic", []))
         last_run = one("LastTriggerUSec") or None
-        next_run = one("NextElapseUSecRealtime") or None
         active_state = one("ActiveState") or "unknown"
-        if next_run is None and period_minutes is not None and active_state == "active":
+        sub_state = one("SubState")
+        elapsed = active_state == "active" and sub_state == "elapsed"
+        next_run = None if elapsed else (one("NextElapseUSecRealtime") or None)
+        if not elapsed and next_run is None and period_minutes is not None and active_state == "active":
             parsed_last = parse_time(last_run)
             if parsed_last is None and last_run:
                 try:
@@ -198,6 +201,7 @@ class SystemTimerController:
         state = {
             "load_state": load_state,
             "active_state": active_state,
+            **({"sub_state": sub_state} if sub_state else {}),
             "unit_file_state": unit_file_state,
             "desired_state": "on" if unit_file_state in {"enabled", "enabled-runtime"} else "off",
             "actual_state": "active" if active_state == "active" else active_state,
