@@ -11,6 +11,7 @@ from autostop_manager import public_automotive_evidence as evidence
 
 CONTEXT = {"make": "SyntheticMake", "model": "SyntheticModel", "model_year": 2020, "limit": 1}
 COUNT_ERROR = "NHTSA recall response contains an invalid Count"
+RESULTS_ERROR = "NHTSA recall response contains invalid results"
 
 
 def _payload(count_json):
@@ -112,15 +113,50 @@ def test_existing_retrieval_and_decode_errors_remain_source_failures(monkeypatch
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected"),
-    [(b"null", 0), (b"[]", 0), (b'"synthetic"', 0), (b'{"Count":5,"results":{}}', 5)],
+    "payload",
+    [
+        b"null",
+        b"[]",
+        b'"synthetic"',
+        b'{"message":"synthetic-upstream-detail"}',
+        b'{"Count":5}',
+        b'{"Count":5,"results":{}}',
+        b'{"Count":1,"results":["synthetic-upstream-detail"]}',
+        b'{"Count":1,"results":[]}',
+    ],
 )
-def test_existing_non_object_payload_and_non_list_results_tolerance_is_preserved(monkeypatch, payload, expected):
+def test_malformed_results_are_source_failure_not_evidence_of_no_recalls(monkeypatch, payload):
+    attempts = []
+
+    def fetch(url, **_kwargs):
+        attempts.append(url)
+        return payload
+
+    monkeypatch.setattr(evidence, "_safe_get_bytes", fetch)
+    result = evidence.lookup_public_automotive_evidence(**CONTEXT, topics=["recalls"])
+
+    assert result["ok"] is False
+    assert result["confidence"] == "low"
+    (source,) = result["evidence"]
+    assert source["ok"] is False
+    assert source["source_id"] == "nhtsa_datasets_apis"
+    assert source["records"] == []
+    assert source["error"] == RESULTS_ERROR
+    assert "record_count" not in source
+    assert "synthetic-upstream-detail" not in json.dumps(result)
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("payload", [b'{"Count":0,"results":[]}', b'{"results":[]}'])
+def test_explicit_empty_results_are_successful(monkeypatch, payload):
     monkeypatch.setattr(evidence, "_safe_get_bytes", lambda *_args, **_kwargs: payload)
-    result = evidence.lookup_nhtsa_recalls(**CONTEXT)
+    result = evidence.lookup_public_automotive_evidence(**CONTEXT, topics=["recalls"])
+
     assert result["ok"] is True
-    assert result["record_count"] == expected
-    assert result["records"] == []
+    (source,) = result["evidence"]
+    assert source["ok"] is True
+    assert source["record_count"] == 0
+    assert source["records"] == []
 
 
 def test_count_fallback_uses_raw_rows_before_filtering_and_display_limit(monkeypatch):

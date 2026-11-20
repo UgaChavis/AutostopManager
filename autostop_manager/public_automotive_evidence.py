@@ -150,15 +150,16 @@ def lookup_nhtsa_recalls(
     checked_at = _utc_now()
     try:
         payload = json.loads(_safe_get_bytes(request_url, timeout=timeout).decode("utf-8"))
-        source_rows = payload.get("results") if isinstance(payload, dict) else []
-        if not isinstance(source_rows, list):
-            source_rows = []
+        if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+            raise ValueError("NHTSA recall response contains invalid results")
+        source_rows = payload["results"]
+        usable_rows = [row for row in source_rows if isinstance(row, dict)]
         try:
-            record_count = (
-                int(payload.get("Count") or len(source_rows)) if isinstance(payload, dict) else len(source_rows)
-            )
+            record_count = int(payload.get("Count") or len(source_rows))
         except (TypeError, ValueError, OverflowError):
             raise ValueError("NHTSA recall response contains an invalid Count") from None
+        if (source_rows and not usable_rows) or (not source_rows and record_count != 0):
+            raise ValueError("NHTSA recall response contains invalid results")
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         return {
             "ok": False,
@@ -171,7 +172,7 @@ def lookup_nhtsa_recalls(
             "error": str(exc),
         }
 
-    records = [_nhtsa_recall_record(row) for row in source_rows if isinstance(row, dict)][: _normalise_limit(limit)]
+    records = [_nhtsa_recall_record(row) for row in usable_rows[: _normalise_limit(limit)]]
     return {
         "ok": True,
         "source_id": "nhtsa_datasets_apis",
