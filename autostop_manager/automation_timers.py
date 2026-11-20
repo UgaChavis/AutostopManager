@@ -23,6 +23,9 @@ from .automation_registry import AutomationError, AutomationStore, isoformat, pa
 
 SYSTEMD_TIMER_PATTERN = re.compile(r"[A-Za-z0-9_.@-]{1,120}\.timer\Z")
 _MAX_STATUS_WORKERS = 5
+_SYSTEMD_ACTIVE_STATES = frozenset(
+    {"active", "inactive", "failed", "activating", "deactivating", "maintenance", "reloading", "refreshing"}
+)
 
 
 @dataclass(frozen=True)
@@ -174,7 +177,7 @@ class SystemTimerController:
         period_minutes = _systemd_period_minutes(properties.get("TimersMonotonic", []))
         last_run = one("LastTriggerUSec") or None
         next_run = one("NextElapseUSecRealtime") or None
-        active_state = one("ActiveState", "unknown")
+        active_state = one("ActiveState") or "unknown"
         if next_run is None and period_minutes is not None and active_state == "active":
             parsed_last = parse_time(last_run)
             if parsed_last is None and last_run:
@@ -189,10 +192,11 @@ class SystemTimerController:
                     # The read period remains valid even when its inferred date
                     # cannot be represented by Python's datetime/timedelta.
                     next_run = None
+        load_state = one("LoadState") or "unknown"
         unit_file_state = one("UnitFileState", "unknown")
         result_state = one("Result", "unknown")
         state = {
-            "load_state": one("LoadState", "unknown"),
+            "load_state": load_state,
             "active_state": active_state,
             "unit_file_state": unit_file_state,
             "desired_state": "on" if unit_file_state in {"enabled", "enabled-runtime"} else "off",
@@ -218,7 +222,12 @@ class SystemTimerController:
             "name": policy.display_name,
             "control_mode": policy.control_mode,
             "locked": policy.control_mode == "read_only",
-            "inspection_ok": result.returncode == 0 and unit_file_state not in {"", "unknown"},
+            "inspection_ok": (
+                result.returncode == 0
+                and load_state in {"loaded", "masked"}
+                and active_state in _SYSTEMD_ACTIVE_STATES
+                and unit_file_state not in {"", "unknown", "invalid", "bad"}
+            ),
             "state": state,
         }
 

@@ -72,7 +72,7 @@ def inspect(tmp_path, *, active_state, next_run="", last_run=LAST_RUN, unit_stat
 @pytest.mark.parametrize("next_run", ["", NEXT_RUN, "Mon 2026-10-26 12:15:00 UTC"])
 def test_nonactive_timer_has_no_inferred_next_run_but_keeps_explicit_readback(tmp_path, active_state, next_run):
     result = inspect(tmp_path, active_state=active_state, next_run=next_run, unit_state="disabled")
-    assert result["inspection_ok"] is True
+    assert result["inspection_ok"] is (active_state in {"inactive", "failed"})
     assert result["state"]["next_run_at"] == (next_run or None)
     assert result["state"]["last_run_at"] == LAST_RUN
     assert result["state"]["period_minutes"] == 15
