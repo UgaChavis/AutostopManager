@@ -59,6 +59,29 @@ def _write_failure(code: str, response: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _is_missing_card_response(payload: Mapping[str, Any], card_id: object) -> bool:
+    if (
+        not isinstance(card_id, str)
+        or not card_id
+        or payload.get("ok") is not False
+        or payload.get("status") != "failed"
+    ):
+        return False
+    summary = payload.get("summary")
+    source = payload.get("data")
+    if (
+        not isinstance(summary, Mapping)
+        or summary.get("name") != "get_card"
+        or summary.get("risk") != "read"
+        or not isinstance(source, Mapping)
+        or source.get("ok") is not False
+    ):
+        return False
+    error = source.get("error")
+    details = error.get("details") if isinstance(error, Mapping) and error.get("code") == "not_found" else None
+    return isinstance(details, Mapping) and details.get("card_id") == card_id
+
+
 class CrmPartsStoreTransport(Protocol):
     def invoke(self, name: str, arguments: dict[str, Any], *, idempotency_key: str = "") -> dict[str, Any]: ...
 
@@ -133,6 +156,14 @@ class LoopbackCrmPartsStoreTransport:
                     )
                     payload = _payload_from_tool_result(result)
                     if getattr(result, "isError", False) or not isinstance(payload, dict):
+                        # Gateway marks a completed lookup with a missing card as an MCP error.
+                        structured = getattr(result, "structuredContent", None)
+                        if (
+                            name == "get_card"
+                            and isinstance(structured, Mapping)
+                            and _is_missing_card_response(structured, arguments.get("card_id"))
+                        ):
+                            return _failure("card_not_found")
                         return _failure("crm_capability_failed", uncertain=_RISKS[name] == "write")
                     return payload
 
@@ -244,9 +275,13 @@ def parts_store_cards(  # noqa: C901 - one bounded CRUD action router
     if not exact_id:
         return _failure("card_id_required")
     read = gateway.invoke("get_card", {"card_id": exact_id})
-    current = _card(read) if read.get("ok") is True else None
-    if current is None:
+    if read.get("ok") is False and read.get("error") == "card_not_found":
         return _failure("card_not_found")
+    if read.get("ok") is not True:
+        return _failure("crm_get_failed")
+    current = _card(read)
+    if current is None:
+        return _failure("crm_get_invalid")
     if current.get("id") != exact_id or current.get("column") != PARTS_STORE_COLUMN:
         return _failure("card_outside_parts_store")
     if action == "get":

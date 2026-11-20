@@ -113,8 +113,10 @@ def test_parts_store_card_create_list_append_and_other_column_is_rejected():
     assert len([name for name, _, _ in gateway.calls if name == "update_card"]) == writes_before
 
 
-def test_loopback_transport_uses_live_schema_and_preserves_full_get_card_shape(monkeypatch):
+@pytest.fixture
+def loopback_gateway(monkeypatch):
     calls: list[tuple[str, dict[str, Any]]] = []
+    raw_replies: list[SimpleNamespace | Exception] = []
 
     class FakeHttpClient:
         def __init__(self, **_kwargs):
@@ -159,25 +161,10 @@ def test_loopback_transport_uses_live_schema_and_preserves_full_get_card_shape(m
                         "data": {"input_schema": {"type": "object"}},
                     },
                 )
-            return SimpleNamespace(
-                isError=False,
-                structuredContent={
-                    "ok": True,
-                    "data": {
-                        "ok": True,
-                        "data": {
-                            "card": {
-                                "id": "store-1",
-                                "column": PARTS_STORE_COLUMN,
-                                "title": "Synthetic",
-                                "vehicle": "",
-                                "description": "A" * 5000,
-                                "updated_at": "r1",
-                            }
-                        },
-                    },
-                },
-            )
+            reply = raw_replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
 
     monkeypatch.setattr(crm_parts_store.httpx, "AsyncClient", FakeHttpClient)
     monkeypatch.setattr(crm_parts_store, "streamable_http_client", fake_stream)
@@ -189,6 +176,31 @@ def test_loopback_transport_uses_live_schema_and_preserves_full_get_card_shape(m
             bearer_token="synthetic-token",
         )
     )
+    return transport, calls, raw_replies
+
+
+def test_loopback_transport_uses_live_schema_and_preserves_full_get_card_shape(loopback_gateway):
+    transport, calls, raw_replies = loopback_gateway
+    reply = SimpleNamespace(
+        isError=False,
+        structuredContent={
+            "ok": True,
+            "data": {
+                "ok": True,
+                "data": {
+                    "card": {
+                        "id": "store-1",
+                        "column": PARTS_STORE_COLUMN,
+                        "title": "Synthetic",
+                        "vehicle": "",
+                        "description": "A" * 5000,
+                        "updated_at": "r1",
+                    }
+                },
+            },
+        },
+    )
+    raw_replies.extend((reply, reply))
     read = transport.invoke("get_card", {"card_id": "store-1"})
     assert crm_parts_store._card(read)["description"] == "A" * 5000
     assert calls[1][1]["allow_large_output"] is True
@@ -197,6 +209,68 @@ def test_loopback_transport_uses_live_schema_and_preserves_full_get_card_shape(m
     )
     assert calls[3][1]["idempotency_key"] == "synthetic-create-1"
     assert calls[3][1]["arguments"]["column"] == PARTS_STORE_COLUMN
+
+
+def _card_lookup_error(code, *, card_id="store-1", name="get_card"):
+    return SimpleNamespace(
+        isError=True,
+        structuredContent={
+            "ok": False,
+            "status": "failed",
+            "summary": {"name": name, "risk": "read"},
+            "data": {"ok": False, "data": None, "error": {"code": code, "details": {"card_id": card_id}}},
+            "warnings": ["raw_capability_failed"],
+        },
+    )
+
+
+@pytest.mark.parametrize("operation", ["get", "append_note"])
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        pytest.param(_card_lookup_error("not_found"), "card_not_found", id="confirmed-absence"),
+        pytest.param(_card_lookup_error("not_found", card_id="store-other"), "crm_get_failed", id="wrong-card"),
+        pytest.param(_card_lookup_error("not_found", name="search_cards"), "crm_get_failed", id="wrong-capability"),
+        pytest.param(_card_lookup_error("board_api_unreachable"), "crm_get_failed", id="upstream-unreachable"),
+        pytest.param(OSError("Synthetic transport failure"), "crm_get_failed", id="transport-failure"),
+        pytest.param(
+            SimpleNamespace(isError=True, structuredContent={"ok": False, "status": "blocked"}),
+            "crm_get_failed",
+            id="gateway-blocked",
+        ),
+        pytest.param(
+            SimpleNamespace(isError=False, structuredContent={"ok": True, "data": {"data": {}}}),
+            "crm_get_invalid",
+            id="malformed-success",
+        ),
+    ],
+)
+def test_parts_store_exact_lookup_distinguishes_absence_and_unavailable_data(
+    loopback_gateway, operation, reply, expected
+):
+    transport, calls, raw_replies = loopback_gateway
+    raw_replies.append(reply)
+
+    result = parts_store_cards(
+        operation,
+        transport=transport,
+        card_id="store-1",
+        note="Synthetic next step",
+        expected_updated_at="r1",
+        idempotency_key="synthetic-note-1",
+    )
+
+    assert result == {
+        "ok": False,
+        "status": "blocked",
+        "error": expected,
+        "column": "parts_store",
+        "outcome_uncertain": False,
+    }
+    assert [(tool, arguments["name"]) for tool, arguments in calls] == [
+        ("get_raw_capability_schema", "get_card"),
+        ("call_raw_capability", "get_card"),
+    ]
 
 
 def test_parts_store_create_exposes_only_safe_gateway_failure_code():
