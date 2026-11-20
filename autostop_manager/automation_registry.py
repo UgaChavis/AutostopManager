@@ -1309,7 +1309,10 @@ class AutomationStore:
         now = utc_now()
         heartbeat_at = parse_time(controller["heartbeat_at"] if controller else None)
         controller_state = str(controller["state"] if controller else "stopped")
-        if controller_state == "active" and (
+        hold_enabled = controller is not None and bool(controller["hold_enabled"])
+        if hold_enabled:
+            controller_state = "held"
+        elif controller_state == "active" and (
             heartbeat_at is None or not timedelta(0) <= now - heartbeat_at <= timedelta(seconds=30)
         ):
             controller_state = "stale"
@@ -1319,12 +1322,12 @@ class AutomationStore:
             "can_manage": True,
             "schema_version": AUTOMATION_SCHEMA_VERSION,
             "controller": {
-                "state": "held" if controller and bool(controller["hold_enabled"]) else controller_state,
+                "state": controller_state,
                 "heartbeat_at": controller["heartbeat_at"] if controller else None,
                 "started_at": controller["started_at"] if controller else None,
             },
             "global_hold": {
-                "enabled": bool(controller["hold_enabled"]) if controller else False,
+                "enabled": hold_enabled,
                 "reason": controller["hold_reason"] if controller else None,
                 "attempt_hash": controller["hold_attempt_hash"] if controller else None,
                 "revision": int(controller["hold_revision"]) if controller else 0,

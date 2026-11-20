@@ -699,6 +699,56 @@ def _write_request(service, operation, payload, *, key, revision=None, actor_kin
     return service.handle(request)
 
 
+def test_readiness_reports_global_hold_with_a_fresh_heartbeat(tmp_path, monkeypatch):
+    instructions = tmp_path / "instructions"
+    instruction_project(instructions)
+    monkeypatch.setattr(automation_control, "PROJECT_ROOT", instructions)
+    store = AutomationStore(tmp_path / "manager.sqlite3")
+    store.initialize()
+    store.controller_heartbeat(owner="synthetic-worker")
+    service = AutomationControlService(
+        store,
+        timer_controller=SimpleNamespace(list_status=list),
+        readiness_provider=lambda: {
+            "ready": True,
+            "checks": {"crm_digest_executor": "ready", "notification_transport": "ready"},
+        },
+    )
+    readiness = _base_request(operation="readiness")
+    assert service.handle(readiness)["ready"] is True
+
+    _write_request(
+        service,
+        "set_global_hold",
+        {"enabled": True, "reason": "maintenance"},
+        key="readiness-hold-0001",
+        revision=0,
+        actor_kind="system",
+    )
+    status = service.handle(_base_request(operation="status"))
+    assert status["controller"]["state"] == "held"
+    assert store.readiness()["ready"] is False
+    for observed in (service.handle(readiness), status["readiness"]):
+        assert observed["ready"] is False
+        assert observed["checks"]["controller"] == "held"
+        assert observed["warnings"] == ["controller"]
+        assert observed["execution_packet"]["controller"]["state"] == "held"
+        assert observed["execution_packet"]["dependencies"]["controller"] == "held"
+
+    _write_request(
+        service,
+        "set_global_hold",
+        {"enabled": False},
+        key="readiness-hold-0002",
+        revision=1,
+        actor_kind="system",
+    )
+    restored = service.handle(readiness)
+    assert restored["ready"] is True
+    assert restored["checks"]["controller"] == "ready"
+    assert restored["warnings"] == []
+
+
 def test_mutations_fail_closed_for_hold_unready_and_malformed_targets(tmp_path):
     store = AutomationStore(tmp_path / "manager.sqlite3")
     job = store.seed_defaults()["job"]
