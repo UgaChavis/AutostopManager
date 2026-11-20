@@ -1590,6 +1590,168 @@ def test_dialogue_cursor_resumes_past_bounded_page(tmp_path, monkeypatch):
     monitor.inbox.close()
 
 
+class NonprivatePrefixClient(Client):
+    def __init__(self, count, *, unusable=None, on_resume=None):
+        from telethon import utils
+        from telethon.tl.types import InputPeerChannel, InputPeerChat
+
+        self.private = _message(count + 1)
+        super().__init__([self.private])
+        self.offsets = []
+        self.private_reads = 0
+        self.on_resume = on_resume
+        self.dialogs = []
+        stamp = self.private.date + timedelta(seconds=1)
+        for message_id in range(1, count + 1):
+            peer = InputPeerChat(message_id) if message_id % 2 else InputPeerChannel(message_id, access_hash=7)
+            peer_id = utils.get_peer_id(peer)
+            message = SimpleNamespace(id=message_id, chat_id=peer_id, date=stamp)
+            if unusable == "naive-date":
+                message.date = stamp.replace(tzinfo=None)
+            elif unusable == "wrong-message-peer":
+                message.chat_id = 123456
+            if unusable == "missing-input-peer":
+                peer = None
+            elif unusable == "wrong-input-peer":
+                peer = InputPeerChat(999)
+            elif unusable == "invalid-input-peer":
+                peer = InputPeerChat(None)
+            self.dialogs.append(SimpleNamespace(id=peer_id, is_user=False, input_entity=peer, message=message))
+        self.dialogs.append(SimpleNamespace(id=42, is_user=True, entity=User(42), message=self.private))
+
+    async def iter_dialogs(self, *, limit, **offset):
+        assert limit == bridge.MAX_RECONCILE_DIALOGS + 1
+        index = offset.get("offset_id", 0)
+        self.offsets.append(index)
+        if index:
+            anchor = self.dialogs[index - 1]
+            assert offset == {
+                "offset_id": index,
+                "offset_date": anchor.message.date,
+                "offset_peer": anchor.input_entity,
+                "ignore_pinned": True,
+            }
+            if self.on_resume == "empty":
+                return
+        start = 0 if self.on_resume == "repeat" else index
+        for dialog in self.dialogs[start : start + limit]:
+            yield dialog
+
+    async def iter_messages(self, entity, **kwargs):
+        assert entity == 42, "non-private history must not be read"
+        self.private_reads += 1
+        async for message in super().iter_messages(entity, **kwargs):
+            yield message
+
+    async def get_messages(self, *_args, **_kwargs):
+        raise AssertionError("continuation must not read its skipped group or channel anchor")
+
+    async def send_message(self, *_args, **_kwargs):
+        raise AssertionError("reconciliation must not send")
+
+
+@pytest.mark.parametrize("pages", [1, 2])
+def test_nonprivate_page_prefix_recovers_private_events_without_persisting_group_offsets(tmp_path, pages):
+    _config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    limit = bridge.MAX_RECONCILE_DIALOGS
+    client = NonprivatePrefixClient(limit * pages)
+    try:
+        for _ in range(pages):
+            monitor.reconcile_requested.clear()
+            asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+            assert monitor.reconcile_requested.is_set()
+            assert monitor.inbox.reconciliation_cursor() is None
+            assert monitor.inbox.checkpoints() == [] and monitor.inbox.events() == []
+        monitor.reconcile_requested.clear()
+        asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        assert client.offsets == [offset * limit for offset in range(pages + 1)]
+        assert client.private_reads == 1
+        assert monitor.intake_reconciliation() == "complete"
+        assert not monitor.reconcile_requested.is_set() and monitor.reconciliation_nonprivate_offset is None
+        assert [row["peer_id"] for row in monitor.inbox.checkpoints()] == [42]
+        (event,) = monitor.inbox.events()
+        assert monitor.resolve(event["event_id"]).message_id == client.private.id
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize(
+    "unusable", ["naive-date", "wrong-message-peer", "missing-input-peer", "wrong-input-peer", "invalid-input-peer"]
+)
+def test_unusable_nonprivate_page_offset_fails_closed(tmp_path, monkeypatch, unusable):
+    _config, monitor = _runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    client = NonprivatePrefixClient(2, unusable=unusable)
+    try:
+        with pytest.raises(bridge.BridgeError, match="reconciliation_cursor_unavailable"):
+            asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        assert client.offsets == [0] and client.private_reads == 0
+        assert not monitor.reconcile_requested.is_set()
+        assert monitor.inbox.reconciliation_cursor() is None and monitor.inbox.events() == []
+    finally:
+        monitor.inbox.close()
+
+
+def test_unusable_nonprivate_dialog_does_not_block_private_dialog_within_page(tmp_path, monkeypatch):
+    _config, monitor = _runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    client = NonprivatePrefixClient(1, unusable="invalid-input-peer")
+    try:
+        asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        assert client.offsets == [0] and client.private_reads == 1
+        assert len(monitor.inbox.events()) == 1
+        assert not monitor.reconcile_requested.is_set()
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize("on_resume", ["repeat", "empty"])
+def test_inconsistent_nonprivate_continuation_cannot_complete_or_repeat(tmp_path, monkeypatch, on_resume):
+    _config, monitor = _runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    client = NonprivatePrefixClient(2, on_resume=on_resume)
+    try:
+        asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        monitor.reconcile_requested.clear()
+        with pytest.raises(bridge.BridgeError, match="reconciliation_cursor_unavailable"):
+            asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+        assert client.offsets == [0, 2] and client.private_reads == 0
+        assert not monitor.reconcile_requested.is_set()
+        assert monitor.intake_reconciliation() != "complete"
+    finally:
+        monitor.inbox.close()
+
+
+@pytest.mark.parametrize("change_transport", [False, True])
+def test_nonprivate_page_offset_is_reset_on_fence_change(tmp_path, monkeypatch, change_transport):
+    _config, monitor = _runtime(tmp_path)
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    client = NonprivatePrefixClient(2)
+
+    def sweep():
+        monitor.reconcile_requested.clear()
+        asyncio.run(bridge._reconcile_incoming_history(client, monitor))
+
+    try:
+        sweep()
+        if change_transport:
+            monitor.reconciliation_transport_generation += 1
+        else:
+            client.update_revision += 1
+        sweep()
+        if not change_transport:
+            assert monitor.reconciliation_nonprivate_offset is None
+            assert monitor.inbox.health()["intake"]["error_code"] == "history_reconciliation_changed"
+            sweep()
+        sweep()
+        assert client.offsets == ([0, 0, 2] if change_transport else [0, 2, 0, 2])
+        assert monitor.inbox.health()["intake"]["state"] == "ready"
+        assert len(monitor.inbox.events()) == 1
+    finally:
+        monitor.inbox.close()
+
+
 @pytest.mark.parametrize("disappearances", [1, 2])
 def test_disappearing_dialogue_cursor_restarts_once_then_waits_for_private_update(
     tmp_path, monkeypatch, disappearances
