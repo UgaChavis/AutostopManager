@@ -481,31 +481,51 @@ def set_status(dirfd, record, status, error=None):
     refresh_status()
 
 
+def confirmed_cleanup_pending(dirfd, record):
+    with suppress(DeliveryError, OSError):
+        previous = read_json(dirfd, "delivery-status.json")
+        if (
+            isinstance(previous, dict)
+            and previous.get("id") == record["id"]
+            and previous.get("status") == "ok"
+            and previous.get("error_code") == "cleanup_pending"
+        ):
+            return record in journal(dirfd)
+    return False
+
+
+def rotate_when_idle(dirfd, remote):
+    rotate(dirfd, remote)
+    status = read_json(dirfd, "delivery-status.json")
+    if (
+        isinstance(status, dict)
+        and status.get("status") == "ok"
+        and status.get("error_code") in {"rotation_pending", "cleanup_pending"}
+    ):
+        rows = journal(dirfd)
+        if rows and status.get("id") == rows[-1]["id"]:
+            set_status(dirfd, rows[-1], "ok")
+
+
 def deliver_once(dirfd, remote):
     # Recover the visible M2 state even when the preceding run already
     # delivered and removed its pending pointer before refresh failed.
     refresh_status()
     pending = pending_record(dirfd)
     record = read_json(dirfd, "delivery-intent.json")
+    cleanup_retry = False
     if record is None:
         record = pending
         if record is None:
-            rotate(dirfd, remote)
-            status = read_json(dirfd, "delivery-status.json")
-            if (
-                isinstance(status, dict)
-                and status.get("status") == "ok"
-                and status.get("error_code") in {"rotation_pending", "cleanup_pending"}
-            ):
-                rows = journal(dirfd)
-                if rows and status.get("id") == rows[-1]["id"]:
-                    set_status(dirfd, rows[-1], "ok")
+            rotate_when_idle(dirfd, remote)
             return
         # Persist the exact ID and byte identity before any remote operation.
         write_json(dirfd, "delivery-intent.json", record)
     else:
         valid_record(record)
-    set_status(dirfd, record, "running")
+        cleanup_retry = confirmed_cleanup_pending(dirfd, record)
+    if not cleanup_retry:
+        set_status(dirfd, record, "running")
     stream = None
     inspection_failed = False
     confirmed = False
@@ -562,9 +582,11 @@ def deliver_once(dirfd, remote):
             replacement = pending_record(dirfd)
             if replacement is not None and replacement != record:
                 unlink_file(dirfd, "delivery-intent.json")
+        # A failed connection during cleanup leaves the exact earlier
+        # confirmation intact. The retry still reports the transport error.
         if confirmed:
             set_status(dirfd, record, "ok", rotation_note or "cleanup_pending")
-        else:
+        elif not (cleanup_retry and inspection_failed and error.code == "ssh_unknown"):
             set_status(dirfd, record, "unknown" if error.unknown else "failed", error.code)
         if error is exc:
             raise

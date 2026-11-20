@@ -894,6 +894,55 @@ def test_cleanup_failure_preserves_confirmed_status_and_retries_without_upload(s
     assert remote.finals[record["id"]] == b"synthetic"
 
 
+@pytest.mark.parametrize(
+    ("observation", "failure"),
+    [("offline", "ssh_unknown"), ("no_receipt", "ssh_unknown"), ("conflict", "remote_conflict")],
+)
+def test_cleanup_retry_keeps_exact_confirmation_only_when_remote_is_unreachable(
+    store, monkeypatch, observation, failure
+):
+    root, fd = store
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+
+    def unavailable_cleanup(*args):
+        raise OSError("synthetic cleanup stopped before unlink")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, "cleanup_pending", unavailable_cleanup)
+        with pytest.raises(delivery.DeliveryError, match="local_io"):
+            delivery.deliver_once(fd, remote)
+    prior = delivery.read_json(fd, "delivery-status.json")
+    assert (prior["status"], prior["error_code"]) == ("ok", "cleanup_pending")
+    assert delivery.journal(fd) == [record]
+
+    if observation == "no_receipt":
+        delivery.write_json(fd, "delivered.json", [])
+    remote.busy = observation != "conflict"
+    remote.bad_inspection = record["id"] if observation == "conflict" else None
+    with pytest.raises(delivery.DeliveryError, match=failure):
+        delivery.deliver_once(fd, remote)
+
+    observed = delivery.read_json(fd, "delivery-status.json")
+    if observation == "offline":
+        assert observed == prior
+    else:
+        assert (observed["status"], observed["error_code"]) == ("unknown", failure)
+    assert delivery.read_json(fd, "delivery-intent.json") == delivery.read_json(fd, "pending.json") == record
+    assert (root / record["file"]).read_bytes() == b"synthetic"
+    assert remote.deletes == []
+
+    remote.busy = False
+    remote.bad_inspection = None
+    delivery.deliver_once(fd, remote)
+
+    assert delivery.journal(fd) == [record]
+    assert delivery.read_json(fd, "delivery-status.json")["error_code"] is None
+    assert delivery.read_json(fd, "delivery-intent.json") is None
+    assert not (root / record["file"]).exists()
+    assert remote.writes == remote.moves == [record["id"]]
+
+
 @pytest.mark.skipif(not shutil.which("pwsh"), reason="PowerShell parser not installed")
 def test_powershell_inspection_and_delete_on_artificial_files(tmp_path):
     part = tmp_path / "искусственный файл.part"
