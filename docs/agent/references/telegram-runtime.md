@@ -150,7 +150,8 @@ Root-only Bridge `job_status` возвращает `status.job_latency`. В ре
 | `owner-target`, `notify-owner` | Точная привязка владельца, dry-run/apply и проверка уведомления. Один ключ на инцидент и один на восстановление; при отключённом транспорте намерение сохраняется. |
 | `send-owner-notification`, `owner-notification-readback`, `owner-notification-idempotency-readback` | Raw owner-контракт и точная сверка; обычно используй notify-owner. |
 | `download`, `discard-download` | Приватные временные медиа; обязательная очистка и её проверка. |
-| `monitor-mark`, `code-login` | Legacy disposition / интерактивная авторизация; не заменяют завершение durable задания. |
+| `monitor-mark` | Подтвердить обработку точного уведомления `bot_pending` без ответа по [B1](../modules/B1.md). Клиентское задание завершается по [B4](../modules/B4.md). |
+| `code-login` | Интерактивная авторизация Telegram. |
 
 Wake CLI: `daemon`, `status`, `pause`, `resume`, `setup`, `select-worker`, `probe`. Для удержанных заданий используй [порядок ручной сверки и восстановления в Bridge](#ручная-сверка-и-восстановление). `pause` останавливает исполнение, сохраняя реестр и паузу при перезапуске; `resume` не снимает неопределённые исходы. `select-worker` — отдельно порученное переключение root с ожидаемой конфигурацией и закреплёнными физическим корнем инструкций/REVISION; старый чат и история сохраняются. Setup/probe не применяются как ежедневный readiness-тест.
 
