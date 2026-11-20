@@ -1532,6 +1532,74 @@ def test_capacity_keeps_checkpoint_before_missing_message(tmp_path):
     monitor.inbox.close()
 
 
+@pytest.mark.parametrize("existing_marker", [False, True])
+def test_capacity_keeps_exact_gap_for_nonconsecutive_messages(tmp_path, monkeypatch, existing_marker):
+    _config, monitor = _runtime(tmp_path, max_events=1)
+    monitor.transport_ready = True
+    now = datetime.now(UTC)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    monitor.inbox.duty_set(True, at=(now - timedelta(minutes=10)).isoformat())
+    prefix = _message(100, at=now - timedelta(minutes=45))
+    missing = _message(105, at=now - timedelta(minutes=40))
+    next_missing = _message(110, at=now - timedelta(minutes=35))
+    prefix_ref = monitor.record(prefix, source_kind="bot")
+
+    class BotClient(Client):
+        async def iter_dialogs(self, **options):
+            async for dialog in super().iter_dialogs(**options):
+                dialog.entity.bot = True
+                yield dialog
+
+    client = BotClient([prefix, missing])
+
+    async def scenario():
+        if existing_marker:
+            with monkeypatch.context() as budget:
+                budget.setattr(bridge, "MAX_RECONCILE_MESSAGES", 1)
+                await bridge._reconcile_incoming_history(client, monitor)
+            marker = monitor.inbox.gaps()[0]
+            assert (marker["message_id"], marker["reason_code"]) == (101, "history_reconciliation_incomplete")
+            monitor.reconcile_requested.clear()
+
+        await bridge._reconcile_incoming_history(client, monitor)
+        gap = monitor.inbox.gaps()[0]
+        assert (gap["message_id"], gap["reason_code"]) == (missing.id, "capacity")
+        assert monitor.inbox.checkpoint(42) == prefix.id
+        assert not monitor.reconcile_requested.is_set()
+
+        client.messages.clear()
+        monitor.mark_no_reply_needed(prefix_ref)
+        assert monitor.reconcile_requested.is_set()
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.intake_reconciliation() == "in_progress"
+        assert monitor.inbox.health()["intake"] == {"state": "held", "error_code": "inbound_monitor_full"}
+        assert any(window["closed_at"] for window in monitor.inbox.recovery_windows())
+        assert monitor.inbox.gaps() == [gap]
+
+        client.messages.update({missing.id: missing, next_missing.id: next_missing})
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.inbox.checkpoint(42) == missing.id
+        next_gap = monitor.inbox.gaps()[0]
+        assert (next_gap["message_id"], next_gap["reason_code"]) == (next_missing.id, "capacity")
+        missing_ref = next(row["event_id"] for row in monitor.events() if row["state"] == "bot_pending")
+        monitor.mark_no_reply_needed(missing_ref)
+        assert monitor.reconcile_requested.is_set()
+        monitor.reconcile_requested.clear()
+        await bridge._reconcile_incoming_history(client, monitor)
+        assert monitor.intake_reconciliation() == "complete"
+        assert monitor.inbox.checkpoint(42) == next_missing.id
+        assert monitor.inbox.gaps() == []
+        assert all(window["closed_at"] is None for window in monitor.inbox.recovery_windows())
+        assert client.sent == 0
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
 def test_bot_dispositions_resume_capacity_recovery_once(tmp_path, monkeypatch):
     config, monitor = _runtime(tmp_path, max_events=2)
     monitor.transport_ready = True

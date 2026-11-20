@@ -6548,7 +6548,8 @@ async def _reconcile_peer_history(
     if complete:
         if committed:
             monitor.inbox.clear_gap(peer_id=peer_id, through_message_id=committed)
-    else:
+    elif not capacity_blocked:
+        # record() already persisted the exact rejected message on capacity.
         monitor.inbox.mark_gap(
             peer_id=peer_id,
             message_id=committed + 1,

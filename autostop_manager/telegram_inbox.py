@@ -27,6 +27,7 @@ SUPPORTED_INBOX_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 WORKER_PROTOCOL_VERSION = 3
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
+_ADMISSION_GAP_REASONS = ("capacity", "inbound_capture_failed")
 
 EVENT_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,39})")
 JOB_PATTERN = re.compile(r"job-[a-f0-9]{32}")
@@ -2638,11 +2639,25 @@ class TelegramInbox:
             self._db.execute("DELETE FROM reconciliation_cursor")
 
     def _gap(self, peer_id: int, message_id: int, at: str, reason_code: str) -> None:
+        # Prefer exact admission failures over continuation and review markers.
+        # Retain the earliest missing message until its locator or checkpoint is durable.
         self._db.execute(
             "INSERT INTO gaps VALUES (?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET "
             "message_id=excluded.message_id,received_at=excluded.received_at,reason_code=excluded.reason_code "
-            "WHERE excluded.message_id<gaps.message_id",
-            (peer_id, message_id, at, reason_code),
+            "WHERE (excluded.reason_code NOT IN (?,?), excluded.message_id) "
+            "< (gaps.reason_code NOT IN (?,?), gaps.message_id) "
+            "OR (excluded.reason_code IN (?,?) AND excluded.message_id>gaps.message_id "
+            "AND (EXISTS (SELECT 1 FROM events WHERE peer_id=gaps.peer_id AND message_id=gaps.message_id) "
+            "OR EXISTS (SELECT 1 FROM checkpoints WHERE peer_id=gaps.peer_id AND message_id>=gaps.message_id)))",
+            (
+                peer_id,
+                message_id,
+                at,
+                reason_code,
+                *_ADMISSION_GAP_REASONS,
+                *_ADMISSION_GAP_REASONS,
+                *_ADMISSION_GAP_REASONS,
+            ),
         )
 
     def mark_gap(self, *, peer_id: int, message_id: int, received_at: str, reason_code: str) -> None:
@@ -2660,13 +2675,14 @@ class TelegramInbox:
         """Find a known missed event in an open or unrecovered duty window."""
         row = self._db.execute(
             "SELECT g.reason_code FROM gaps g LEFT JOIN checkpoints c USING(peer_id) "
-            "WHERE g.reason_code IN ('capacity','inbound_capture_failed') "
+            "WHERE g.reason_code IN (?,?) "
             "AND (c.message_id IS NULL OR c.message_id<g.message_id) "
             "AND EXISTS (SELECT 1 FROM duty_windows w WHERE (w.closed_at IS NULL OR w.recovered_at IS NULL) "
             "AND (w.closed_at IS NULL OR w.closed_at>g.received_at) "
             "AND (w.opened_at<=g.received_at OR (g.reason_code='capacity' "
             "AND substr(w.opened_at,1,19)=substr(g.received_at,1,19)))) "
-            "ORDER BY g.received_at,g.peer_id LIMIT 1"
+            "ORDER BY g.received_at,g.peer_id LIMIT 1",
+            _ADMISSION_GAP_REASONS,
         ).fetchone()
         return None if row is None else str(row[0])
 
