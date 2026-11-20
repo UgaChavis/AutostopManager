@@ -30,7 +30,7 @@ from autostop_manager.instruction_bundle import (
     load_instruction_bundle,
     worker_config_overrides,
 )
-from autostop_manager.mcp_contract import manager_session_schema_evidence
+from autostop_manager.mcp_contract import _canonical_json, manager_session_schema_evidence
 from autostop_manager.telegram_bridge import INBOUND_EVENT_ID_PATTERN
 from autostop_manager.telegram_timings import StageTimings as _StageTimings
 
@@ -609,7 +609,8 @@ class AppServer:
     ) -> dict[str, Any]:
         """Read this thread's MCP schema; no reload, turn or private data output."""
         schemas: dict[str, Any] = {}
-        connected, tools_error = False, False
+        connected: bool | None = None
+        tools_error = False
         cursor: str | None = None
         seen: set[str] = set()
         for _ in range(20):
@@ -628,13 +629,16 @@ class AppServer:
             for row in page["data"]:
                 if not isinstance(row, dict) or row.get("name") != server_name:
                     continue
-                connected = row.get("runtimeStatus") == "connected"
+                connected = connected is not False and row.get("runtimeStatus") == "connected"
                 tools_error = tools_error or bool(row.get("toolsError"))
                 tools = row.get("tools")
                 if isinstance(tools, dict):
                     for tool in tools.values():
                         if isinstance(tool, dict) and isinstance(tool.get("name"), str):
-                            schemas[tool["name"]] = tool.get("inputSchema")
+                            name, schema = tool["name"], tool.get("inputSchema")
+                            if name in schemas and _canonical_json(schemas[name]) != _canonical_json(schema):
+                                tools_error = True
+                            schemas[name] = schema
             cursor = page.get("nextCursor")
             if cursor is None:
                 break
@@ -647,7 +651,7 @@ class AppServer:
         return manager_session_schema_evidence(
             expected_schemas,
             schemas,
-            connected=connected,
+            connected=connected is True,
             tools_error=tools_error,
             declarations=declarations,
         )

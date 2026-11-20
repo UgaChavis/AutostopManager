@@ -152,15 +152,17 @@ def test_concurrent_same_tool_calls_have_unique_correlated_ids(monkeypatch):
         assert paired[-1]["network_calls"] == 2 and paired[-1]["attempt_count"] == 3
 
 
-def test_thread_schema_status_paginates_without_reload_or_private_output():
+@pytest.mark.parametrize("paginated", [False, True])
+def test_thread_schema_status_paginates_without_reload_or_private_output(paginated):
     app = AppServer(WakeConfig("private-thread"))
     expected = {"first": {"type": "object"}, "second": {"type": "object"}}
+    names_by_page = [("first",), ("second",)] if paginated else [("first", "second")]
     requests = []
 
     async def request(method, params):
         requests.append((method, params))
         index = len(requests) - 1
-        name = ("first", "second")[index]
+        names = names_by_page[index]
         return {
             "data": [
                 {
@@ -168,18 +170,65 @@ def test_thread_schema_status_paginates_without_reload_or_private_output():
                     "runtimeStatus": "connected",
                     "toolsError": None,
                     "httpOrigin": "PRIVATE_ORIGIN",
-                    "tools": {name: {"name": name, "inputSchema": expected[name]}},
+                    "tools": {name: {"name": name, "inputSchema": expected[name]} for name in names},
                 }
             ],
-            "nextCursor": "private-cursor" if index == 0 else None,
+            "nextCursor": "private-cursor" if paginated and index == 0 else None,
         }
 
     app.request = request
     report = asyncio.run(app.manager_mcp_schema_status(expected, declarations=expected))
     assert report["ok"] and report["app_tool_count"] == 2
-    assert len(requests) == 2 and all(method == "mcpServerStatus/list" for method, _ in requests)
-    assert requests[1][1]["cursor"] == "private-cursor"
+    assert len(requests) == len(names_by_page) and all(method == "mcpServerStatus/list" for method, _ in requests)
+    assert [params["cursor"] for _, params in requests] == ([None, "private-cursor"] if paginated else [None])
     assert all(
         params["serverName"] == "autostopmanager" and params["threadId"] == "private-thread" for _, params in requests
     )
     assert "private" not in json.dumps(report) and "PRIVATE" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    ("runtime_status", "default", "verified"),
+    [
+        pytest.param("connected", False, True, id="identical-overlap"),
+        pytest.param("failed", False, False, id="failed-connection"),
+        pytest.param(None, False, False, id="unknown-connection"),
+        pytest.param("connected", 0, False, id="conflicting-json-schema"),
+    ],
+)
+def test_thread_schema_status_checks_all_matching_observations(reverse, runtime_status, default, verified):
+    app = AppServer(WakeConfig("synthetic-thread"))
+    expected = {
+        "first": {"type": "object", "properties": {"fixture": {"default": False}}},
+        "second": {"type": "object"},
+    }
+    repeated = {"first": {"properties": {"fixture": {"default": default}}, "type": "object"}}
+    rows = [(runtime_status, repeated), ("connected", expected)]
+    if reverse:
+        rows.reverse()
+    requests = []
+
+    async def request(method, params):
+        assert method == "mcpServerStatus/list"
+        requests.append(params["cursor"])
+        index = len(requests) - 1
+        status, schemas = rows[index]
+        return {
+            "data": [
+                {
+                    "name": "autostopmanager",
+                    "runtimeStatus": status,
+                    "toolsError": None,
+                    "tools": {name: {"name": name, "inputSchema": schema} for name, schema in schemas.items()},
+                }
+            ],
+            "nextCursor": "synthetic-next" if index == 0 else None,
+        }
+
+    app.request = request
+    result = asyncio.run(app.manager_mcp_schema_status(expected, declarations=expected))
+    assert requests == [None, "synthetic-next"]
+    assert result["app_tool_count"] == 2
+    assert result["ok"] is result["app_schema_matches"] is verified
+    assert result["diagnostic"] == ("schema_verified" if verified else "app_schema_stale_or_unavailable")
