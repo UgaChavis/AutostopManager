@@ -118,21 +118,22 @@ def test_status_reads_bounded_ordered_jobs_in_one_query(tmp_path: Path, monkeypa
             if include_archived or archived is None:
                 expected.append(job_id)
     statements = []
-    connect = AutomationStore.connect
+    connect = AutomationStore._connect_readonly
 
     @contextmanager
     def traced_connect(self):
         with connect(self) as connection:
+            assert connection is not None
             connection.set_trace_callback(statements.append)
             yield connection
 
-    monkeypatch.setattr(AutomationStore, "connect", traced_connect)
+    monkeypatch.setattr(AutomationStore, "_connect_readonly", traced_connect)
 
     result = store.status(include_archived=include_archived)
 
     assert [job["job_id"] for job in result["jobs"]] == expected[: automation_registry.MAX_JOBS]
     assert len([statement for statement in statements if "FROM manager_automations" in statement]) == 1
-    assert "BEGIN IMMEDIATE" in statements  # Schema validation/migrations remain active.
+    assert all(not statement.startswith(("BEGIN IMMEDIATE", "INSERT", "UPDATE", "CREATE")) for statement in statements)
 
 
 @pytest.mark.parametrize("exact", [False, True])

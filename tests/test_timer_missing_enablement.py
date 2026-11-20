@@ -37,7 +37,8 @@ def test_missing_unit_file_state_does_not_report_off_timer_in_sync(tmp_path, mon
         lambda *_: {"dependencies": {"instruction_navigation": "ready"}, "outbox": {"blocked_count": 0}},
     )
     ready = service._readiness_from_status(
-        {"readiness": {"ready": True}, "system_timers": [row], "jobs": [], "global_hold": {}}
+        {"readiness": {"ready": True}, "system_timers": [row], "jobs": [], "global_hold": {}},
+        {},
     )
     assert ready["ready"] is False
     assert ready["checks"]["system_timer_reconciliation"] == "degraded"

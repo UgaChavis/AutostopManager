@@ -417,6 +417,33 @@ SCHEMA_STATEMENTS = (
     """,
 )
 
+_SCHEMA_OBJECTS = frozenset(statement.split("IF NOT EXISTS ", 1)[1].split()[0] for statement in SCHEMA_STATEMENTS)
+_SCHEMA_UPGRADE_COLUMNS = {
+    "manager_automations": {
+        "schedule_timezone": (
+            "TEXT NOT NULL DEFAULT 'Asia/Krasnoyarsk'",
+            "UPDATE manager_automations SET schedule_timezone = timezone",
+        ),
+    },
+    "manager_automation_runtime": {
+        "incident_id": ("TEXT", None),
+        "incident_code": ("TEXT", None),
+        "applied_revision": ("INTEGER NOT NULL DEFAULT 1", None),
+        "applied_at": (
+            "TEXT",
+            "UPDATE manager_automation_runtime SET applied_at = updated_at WHERE applied_at IS NULL",
+        ),
+    },
+    "manager_automation_runs": {"claimed_revision": ("INTEGER", None)},
+    "manager_automation_controller_runtime": {
+        "hold_enabled": ("INTEGER NOT NULL DEFAULT 0", None),
+        "hold_reason": ("TEXT", None),
+        "hold_owner_hash": ("TEXT", None),
+        "hold_attempt_hash": ("TEXT", None),
+        "hold_revision": ("INTEGER NOT NULL DEFAULT 0", None),
+    },
+}
+
 
 _JOB_STATUS_SELECT = """
     SELECT a.*, r.actual_state, r.next_run_at, r.last_run_at,
@@ -435,13 +462,18 @@ class AutomationStore:
     def path(self) -> Path:
         return self.db_path or get_automation_db_path()
 
-    @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        path = self.path
+    @staticmethod
+    def _validate_storage(path: Path, *, create_parent: bool = False) -> bool:
         if not path.is_absolute() or ".." in path.parts:
             raise AutomationError("automation_db_path_invalid")
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        parent_info = path.parent.lstat()
+        if create_parent:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            parent_info = path.parent.lstat()
+        except FileNotFoundError:
+            if create_parent:
+                raise
+            return False
         if (
             not stat.S_ISDIR(parent_info.st_mode)
             or stat.S_ISLNK(parent_info.st_mode)
@@ -452,11 +484,15 @@ class AutomationStore:
         try:
             path_info = path.lstat()
         except FileNotFoundError:
-            path_info = None
-        if path_info is not None and (
-            not stat.S_ISREG(path_info.st_mode) or stat.S_ISLNK(path_info.st_mode) or path_info.st_uid != os.geteuid()
-        ):
+            return False
+        if not stat.S_ISREG(path_info.st_mode) or stat.S_ISLNK(path_info.st_mode) or path_info.st_uid != os.geteuid():
             raise AutomationError("automation_db_file_invalid")
+        return True
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        path = self.path
+        self._validate_storage(path, create_parent=True)
         connection = sqlite3.connect(path, timeout=5)
         try:
             os.chmod(path, 0o600, follow_symlinks=False)
@@ -472,6 +508,75 @@ class AutomationStore:
         finally:
             connection.close()
 
+    @contextmanager
+    def _connect_readonly(self) -> Iterator[sqlite3.Connection | None]:
+        path = self.path
+        if not self._validate_storage(path):
+            yield None
+            return
+        connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN")
+            yield connection
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
+        return {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+    @staticmethod
+    def _schema_is_current(connection: sqlite3.Connection) -> bool:
+        from .role_coordination import SCHEMA_VERSION as ROLE_SCHEMA_VERSION
+
+        objects = {
+            row["name"] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('table', 'index')")
+        }
+        if "manager_automation_schema" not in objects:
+            return False
+        version = connection.execute(
+            "SELECT version FROM manager_automation_schema WHERE component = 'automation_center'"
+        ).fetchone()
+        if version is not None:
+            if type(version[0]) is not int:
+                raise AutomationError("automation_schema_invalid")
+            if version[0] > AUTOMATION_SCHEMA_VERSION:
+                raise AutomationError("automation_schema_newer_than_runtime")
+        if "role_registry_schema" not in objects:
+            return False
+        role_version = connection.execute("SELECT version FROM role_registry_schema WHERE singleton=1").fetchone()
+        if role_version is not None and (type(role_version[0]) is not int or role_version[0] > ROLE_SCHEMA_VERSION):
+            raise AutomationError("role_schema_unsupported")
+        if (
+            version is None
+            or version[0] != AUTOMATION_SCHEMA_VERSION
+            or role_version is None
+            or role_version[0] != ROLE_SCHEMA_VERSION
+        ):
+            return False
+        return (
+            _SCHEMA_OBJECTS <= objects
+            and all(
+                columns.keys() <= AutomationStore._column_names(connection, table)
+                for table, columns in _SCHEMA_UPGRADE_COLUMNS.items()
+            )
+            and connection.execute("SELECT 1 FROM manager_automation_controller_runtime WHERE singleton=1").fetchone()
+            is not None
+        )
+
+    @contextmanager
+    def _status_connection(self) -> Iterator[sqlite3.Connection]:
+        # Keep repair outside the read transaction and retry with a fresh snapshot.
+        for repair in (True, False):
+            with self._connect_readonly() as connection:
+                if connection is not None and self._schema_is_current(connection):
+                    yield connection
+                    return
+            if repair:
+                self.initialize()
+        raise AutomationError("automation_schema_incomplete")
+
     def initialize(self) -> None:
         now = isoformat(utc_now())
         with self.connect() as connection:
@@ -484,50 +589,13 @@ class AutomationStore:
                 raise AutomationError("automation_schema_newer_than_runtime")
             for statement in SCHEMA_STATEMENTS[1:]:
                 connection.execute(statement)
-            automation_columns = {
-                str(item["name"]) for item in connection.execute("PRAGMA table_info(manager_automations)")
-            }
-            if "schedule_timezone" not in automation_columns:
-                connection.execute(
-                    "ALTER TABLE manager_automations "
-                    "ADD COLUMN schedule_timezone TEXT NOT NULL DEFAULT 'Asia/Krasnoyarsk'"
-                )
-                connection.execute("UPDATE manager_automations SET schedule_timezone = timezone")
-            runtime_columns = {
-                str(item["name"]) for item in connection.execute("PRAGMA table_info(manager_automation_runtime)")
-            }
-            for column in ("incident_id", "incident_code"):
-                if column not in runtime_columns:
-                    connection.execute(f"ALTER TABLE manager_automation_runtime ADD COLUMN {column} TEXT")
-            if "applied_revision" not in runtime_columns:
-                connection.execute(
-                    "ALTER TABLE manager_automation_runtime ADD COLUMN applied_revision INTEGER NOT NULL DEFAULT 1"
-                )
-            if "applied_at" not in runtime_columns:
-                connection.execute("ALTER TABLE manager_automation_runtime ADD COLUMN applied_at TEXT")
-                connection.execute(
-                    "UPDATE manager_automation_runtime SET applied_at = updated_at WHERE applied_at IS NULL"
-                )
-            run_columns = {
-                str(item["name"]) for item in connection.execute("PRAGMA table_info(manager_automation_runs)")
-            }
-            if "claimed_revision" not in run_columns:
-                connection.execute("ALTER TABLE manager_automation_runs ADD COLUMN claimed_revision INTEGER")
-            controller_columns = {
-                str(item["name"])
-                for item in connection.execute("PRAGMA table_info(manager_automation_controller_runtime)")
-            }
-            for column, definition in {
-                "hold_enabled": "INTEGER NOT NULL DEFAULT 0",
-                "hold_reason": "TEXT",
-                "hold_owner_hash": "TEXT",
-                "hold_attempt_hash": "TEXT",
-                "hold_revision": "INTEGER NOT NULL DEFAULT 0",
-            }.items():
-                if column not in controller_columns:
-                    connection.execute(
-                        f"ALTER TABLE manager_automation_controller_runtime ADD COLUMN {column} {definition}"
-                    )
+            for table, columns in _SCHEMA_UPGRADE_COLUMNS.items():
+                existing = self._column_names(connection, table)
+                for column, (definition, backfill) in columns.items():
+                    if column not in existing:
+                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                        if backfill is not None:
+                            connection.execute(backfill)
             connection.execute(
                 """
                 INSERT INTO manager_automation_schema(component, version, upgraded_at)
@@ -1198,10 +1266,17 @@ class AutomationStore:
             )
             return {"applied": True, "job": self._job_status(connection, str(row["job_id"]))}
 
-    def status(self, *, job_id: str | None = None, include_archived: bool = False) -> dict[str, Any]:
-        self.initialize()
-        now = utc_now()
-        with self.connect() as connection:
+    def status(
+        self,
+        *,
+        job_id: str | None = None,
+        include_archived: bool = False,
+        include_execution_state: bool = False,
+        include_roles: bool = False,
+    ) -> dict[str, Any]:
+        detail: dict[str, Any] = {}
+        with self._status_connection() as connection:
+            now = utc_now()
             if job_id:
                 jobs = [self._job_status(connection, job_id)]
             else:
@@ -1224,6 +1299,13 @@ class AutomationStore:
                     "SELECT * FROM manager_automation_system_timers ORDER BY timer_id"
                 ).fetchall()
             ]
+            if include_execution_state:
+                scoped_job_id = str(jobs[0]["job_id"]) if len(jobs) == 1 else None
+                detail["execution_state"] = self._technical_execution_state(connection, job_id=scoped_job_id)
+            if include_roles:
+                from .role_coordination import ROLES, RoleStore
+
+                detail["roles"] = [RoleStore._state(connection, name) for name in ROLES]
         heartbeat_at = parse_time(controller["heartbeat_at"] if controller else None)
         controller_state = str(controller["state"] if controller else "stopped")
         if controller_state == "active" and (heartbeat_at is None or now - heartbeat_at > timedelta(seconds=30)):
@@ -1249,6 +1331,7 @@ class AutomationStore:
             "system_timers": timers,
             "readiness": readiness,
             "templates": [template.public() for template in AUTOMATION_TEMPLATES.values()],
+            **detail,
         }
 
     @staticmethod
@@ -1273,54 +1356,49 @@ class AutomationStore:
     def technical_execution_state(self, *, job_id: str | None = None) -> dict[str, Any]:
         """Return compact technical metadata without cursor values or payloads."""
 
-        self.initialize()
-        with self.connect() as connection:
-            parameters: tuple[Any, ...] = ()
-            cursor_filter = ""
-            outbox_filter = ""
-            runs_filter = ""
+        with self._status_connection() as connection:
             if job_id is not None:
                 self._require_job(connection, job_id, include_archived=True)
-                cursor_filter = "WHERE job_id = ?"
-                outbox_filter = "WHERE job_id = ?"
-                runs_filter = "WHERE job_id = ?"
-                parameters = (job_id,)
-            cursor_rows = connection.execute(
-                f"""
-                SELECT job_id, cursor_name, revision,
-                       CASE WHEN cursor_value IS NULL THEN 0 ELSE 1 END AS present
-                FROM manager_automation_cursors {cursor_filter}
-                ORDER BY job_id, cursor_name LIMIT 512
-                """,
+            return self._technical_execution_state(connection, job_id=job_id)
+
+    @staticmethod
+    def _technical_execution_state(connection: sqlite3.Connection, *, job_id: str | None) -> dict[str, Any]:
+        parameters = (job_id,) if job_id is not None else ()
+        job_filter = "WHERE job_id = ?" if job_id is not None else ""
+        cursor_rows = connection.execute(
+            f"""
+            SELECT job_id, cursor_name, revision,
+                   CASE WHEN cursor_value IS NULL THEN 0 ELSE 1 END AS present
+            FROM manager_automation_cursors {job_filter}
+            ORDER BY job_id, cursor_name LIMIT 512
+            """,
+            parameters,
+        ).fetchall()
+        outbox_rows = connection.execute(
+            f"""
+            SELECT status, COUNT(*) AS item_count
+            FROM manager_automation_outbox {job_filter}
+            GROUP BY status ORDER BY status
+            """,
+            parameters,
+        ).fetchall()
+        run_rows = connection.execute(
+            f"""
+            SELECT status, COUNT(*) AS item_count
+            FROM manager_automation_runs {job_filter}
+            GROUP BY status ORDER BY status
+            """,
+            parameters,
+        ).fetchall()
+        blocked_clause = "status = 'sending' AND lease_until IS NULL"
+        if job_id is not None:
+            blocked_clause += " AND job_id = ?"
+        blocked_count = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM manager_automation_outbox WHERE {blocked_clause}",
                 parameters,
-            ).fetchall()
-            outbox_rows = connection.execute(
-                f"""
-                SELECT status, COUNT(*) AS item_count
-                FROM manager_automation_outbox {outbox_filter}
-                GROUP BY status ORDER BY status
-                """,
-                parameters,
-            ).fetchall()
-            run_rows = connection.execute(
-                f"""
-                SELECT status, COUNT(*) AS item_count
-                FROM manager_automation_runs {runs_filter}
-                GROUP BY status ORDER BY status
-                """,
-                parameters,
-            ).fetchall()
-            blocked_clause = "status = 'sending' AND lease_until IS NULL"
-            blocked_parameters: tuple[Any, ...] = ()
-            if job_id is not None:
-                blocked_clause += " AND job_id = ?"
-                blocked_parameters = (job_id,)
-            blocked_count = int(
-                connection.execute(
-                    f"SELECT COUNT(*) FROM manager_automation_outbox WHERE {blocked_clause}",
-                    blocked_parameters,
-                ).fetchone()[0]
-            )
+            ).fetchone()[0]
+        )
         outbox_by_status = {str(row["status"]): int(row["item_count"]) for row in outbox_rows}
         runs_by_status = {str(row["status"]): int(row["item_count"]) for row in run_rows}
         return {

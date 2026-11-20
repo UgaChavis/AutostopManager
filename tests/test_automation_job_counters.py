@@ -84,11 +84,12 @@ def append_history(store, start, stop):
 def measure_packet(store, service, operation, monkeypatch):
     steps = dict.fromkeys(TABLES, 0)
     queries = {}
-    original_connect = AutomationStore.connect
+    original_connect = AutomationStore._connect_readonly
 
     @contextmanager
     def measured_connect(target):
         with original_connect(target) as connection:
+            assert connection is not None
             current = [None]
 
             def trace(statement):
@@ -110,7 +111,7 @@ def measure_packet(store, service, operation, monkeypatch):
             yield connection
 
     with monkeypatch.context() as patch:
-        patch.setattr(AutomationStore, "connect", measured_connect)
+        patch.setattr(AutomationStore, "_connect_readonly", measured_connect)
         response = service.handle(
             {
                 "protocol": AUTOMATION_CONTROL_PROTOCOL,

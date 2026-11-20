@@ -46,7 +46,8 @@ def test_timer_status_checks_enablement_separately_from_running_state(
         lambda *_: {"dependencies": {"instruction_navigation": "ready"}, "outbox": {"blocked_count": 0}},
     )
     readiness = service._readiness_from_status(
-        {"readiness": {"ready": True}, "system_timers": [row], "jobs": [], "global_hold": {}}
+        {"readiness": {"ready": True}, "system_timers": [row], "jobs": [], "global_hold": {}},
+        {},
     )
     assert readiness["ready"] is (expected == "in_sync")
     if expected == "drift":

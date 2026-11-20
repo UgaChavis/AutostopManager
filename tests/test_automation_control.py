@@ -325,7 +325,6 @@ def test_release_readiness_tracks_the_canonical_m2_runbook(monkeypatch, tmp_path
 def instruction_readiness_service() -> AutomationControlService:
     # Exercise packet assembly without a registry, timer controller or service.
     service = object.__new__(AutomationControlService)
-    service.store = SimpleNamespace(technical_execution_state=lambda **_kwargs: {})
     service.readiness_provider = None
     return service
 
@@ -367,10 +366,10 @@ def test_missing_active_card_keeps_unavailable_hash_and_degrades_readiness(monke
     monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
     service = instruction_readiness_service()
     data = {"readiness": {"ready": True, "checks": {"registry": "ready"}}}
-    assert service._readiness_from_status(data)["ready"] is True
+    assert service._readiness_from_status(data, {})["ready"] is True
     path.unlink()
 
-    result = service._readiness_from_status(data)
+    result = service._readiness_from_status(data, {})
     hashes = {item["path_label"]: item["sha256"] for item in result["execution_packet"]["instruction_hashes"]}
 
     assert hashes[card] == "unavailable"
@@ -397,7 +396,7 @@ def test_instruction_errors_degrade_only_instruction_readiness(monkeypatch, tmp_
         (tmp_path / "AGENTS.md").write_text(f"[Target]({target})\n")
     service = instruction_readiness_service()
 
-    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}}, {})
 
     assert result["ready"] is False
     assert result["checks"] == {"registry": "ready", "instruction_navigation": "degraded"}
@@ -412,7 +411,7 @@ def test_instruction_readiness_rejects_invalid_encoding_in_text_leaves(monkeypat
     (tmp_path / leaf).write_bytes(b"\xff")
     service = instruction_readiness_service()
 
-    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}}, {})
 
     assert result["ready"] is False
     assert result["checks"] == {"registry": "ready", "instruction_navigation": "degraded"}
@@ -426,11 +425,9 @@ def test_readiness_provider_failure_preserves_fresh_local_packet(monkeypatch, tm
     instruction_project(tmp_path)
     monkeypatch.setattr(automation_control, "PROJECT_ROOT", tmp_path)
     service = instruction_readiness_service()
-    technical = iter([{"runs": {"total_count": 1}}, {"runs": {"total_count": 2}}])
-    service.store = SimpleNamespace(technical_execution_state=lambda **_kwargs: next(technical))
     service.readiness_provider = lambda: {"ready": True, "checks": {"external_probe": "ready"}}
     baseline = {"readiness": {"ready": True, "checks": {"registry": "ready"}}}
-    before = service._readiness_from_status({**baseline, "generated_at": "before"})
+    before = service._readiness_from_status({**baseline, "generated_at": "before"}, {"runs": {"total_count": 1}})
     assert before["ready"]
     (tmp_path / "AGENTS.md").write_text("# Fresh instructions\n")
 
@@ -438,7 +435,7 @@ def test_readiness_provider_failure_preserves_fresh_local_packet(monkeypatch, tm
         raise failure("PRIVATE-PROVIDER-DETAIL")
 
     service.readiness_provider = failed
-    after = service._readiness_from_status({**baseline, "generated_at": "after"})
+    after = service._readiness_from_status({**baseline, "generated_at": "after"}, {"runs": {"total_count": 2}})
 
     assert after["ready"] is False
     assert after["checks"] == {
@@ -475,7 +472,7 @@ def test_malformed_readiness_provider_preserves_status_and_fails_closed(monkeypa
     service = instruction_readiness_service()
     service.readiness_provider = lambda: provided
 
-    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}})
+    result = service._readiness_from_status({"readiness": {"ready": True, "checks": {"registry": "ready"}}}, {})
 
     assert result["ready"] is False
     assert result["checks"]["registry"] == "ready"
@@ -505,18 +502,14 @@ def test_failed_readiness_provider_rejects_enable_with_existing_error_and_preser
     assert unchanged["desired_state"] == "off" and unchanged["revision"] == job["revision"]
 
 
-def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_path):
+def test_readiness_reports_reconciliation_and_blocked_delivery(tmp_path):
     store = AutomationStore(tmp_path / "manager.sqlite3")
     store.initialize()
-    monkeypatch.setattr(
-        AutomationStore,
-        "technical_execution_state",
-        lambda _self, **_kwargs: {
-            "cursors": [],
-            "runs": {"by_status": {}, "total_count": 0},
-            "outbox": {"by_status": {"blocked": 1}, "total_count": 1, "blocked_count": 1},
-        },
-    )
+    execution_state = {
+        "cursors": [],
+        "runs": {"by_status": {}, "total_count": 0},
+        "outbox": {"by_status": {"blocked": 1}, "total_count": 1, "blocked_count": 1},
+    }
     service = AutomationControlService(
         store,
         readiness_provider=lambda: {"ready": False, "checks": {"external_probe": "unavailable"}},
@@ -547,7 +540,7 @@ def test_readiness_reports_reconciliation_and_blocked_delivery(monkeypatch, tmp_
         },
     ]
 
-    readiness = service._readiness_from_status(data)
+    readiness = service._readiness_from_status(data, execution_state)
 
     assert readiness["ready"] is False
     assert readiness["checks"] == {

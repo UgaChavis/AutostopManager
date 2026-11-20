@@ -190,7 +190,9 @@ class AutomationControlService:
             )
         return timers
 
-    def _execution_packet(self, data: Mapping[str, Any], checks: Mapping[str, Any]) -> dict[str, Any]:
+    def _execution_packet(
+        self, data: Mapping[str, Any], checks: Mapping[str, Any], execution_state: Mapping[str, Any]
+    ) -> dict[str, Any]:
         identity = get_automation_runtime_identity()
         inventory = instruction_inventory_snapshot(PROJECT_ROOT, required_paths=(path for _, path in INSTRUCTION_FILES))
         hashes = self._instruction_hashes(inventory)
@@ -235,7 +237,6 @@ class AutomationControlService:
             for timer in data.get("system_timers", [])
             if isinstance(timer, Mapping)
         ]
-        technical = self.store.technical_execution_state(job_id=(str(jobs[0]["job_id"]) if len(jobs) == 1 else None))
         return {
             "format": "manager_automation_execution_packet_v1",
             "generated_at": data.get("generated_at"),
@@ -252,7 +253,7 @@ class AutomationControlService:
             },
             "jobs": jobs,
             "system_timers": timers,
-            **technical,
+            **execution_state,
         }
 
     def _provided_readiness(self) -> Mapping[str, Any]:
@@ -272,7 +273,7 @@ class AutomationControlService:
             pass
         return {"ready": False, "checks": {"readiness_provider": "unavailable"}}
 
-    def _readiness_from_status(self, data: Mapping[str, Any]) -> dict[str, Any]:
+    def _readiness_from_status(self, data: Mapping[str, Any], execution_state: Mapping[str, Any]) -> dict[str, Any]:
         baseline = data.get("readiness", {})
         baseline = baseline if isinstance(baseline, Mapping) else {}
         provided = self._provided_readiness()
@@ -281,7 +282,7 @@ class AutomationControlService:
         if self.readiness_provider is not None:
             ready = ready and bool(provided.get("ready"))
         ready = ready and not bool(dict(data.get("global_hold", {})).get("enabled"))
-        packet = self._execution_packet(data, checks)
+        packet = self._execution_packet(data, checks, execution_state)
         checks["instruction_navigation"] = packet["dependencies"]["instruction_navigation"]
         ready = ready and checks["instruction_navigation"] == "ready"
         if any(isinstance(job, Mapping) and job.get("reconcile_state") != "in_sync" for job in data.get("jobs", [])):
@@ -306,18 +307,20 @@ class AutomationControlService:
         }
 
     def _readiness(self, *, job_id: str | None = None) -> dict[str, Any]:
-        data = self.store.status(job_id=job_id)
+        data = self.store.status(job_id=job_id, include_execution_state=True)
         data["system_timers"] = self._timer_statuses(data["system_timers"])
-        return self._readiness_from_status(data)
+        return self._readiness_from_status(data, data.pop("execution_state"))
 
     def _status(self, *, job_id: str | None, include_archived: bool, can_manage: bool) -> dict[str, Any]:
-        from .role_coordination import RoleStore
-
-        data = self.store.status(job_id=job_id, include_archived=include_archived)
+        data = self.store.status(
+            job_id=job_id,
+            include_archived=include_archived,
+            include_execution_state=True,
+            include_roles=True,
+        )
         data["system_timers"] = self._timer_statuses(data["system_timers"])
         data["can_manage"] = can_manage
-        data["readiness"] = self._readiness_from_status(data)
-        data["roles"] = RoleStore(self.store.path).read()["roles"]
+        data["readiness"] = self._readiness_from_status(data, data.pop("execution_state"))
         return data
 
     def _preview(self, payload: Mapping[str, Any]) -> dict[str, Any]:
