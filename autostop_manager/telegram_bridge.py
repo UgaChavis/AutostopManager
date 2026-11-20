@@ -5781,6 +5781,8 @@ async def _serve_client_request(
             raw = await reader.readline()
         if not raw or len(raw) > MAX_REQUEST_BYTES:
             raise BridgeError("request_size_invalid")
+        if not raw.endswith(b"\n"):
+            raise BridgeError("request_invalid")
         request = json.loads(raw)
         if not isinstance(request, dict):
             raise BridgeError("request_invalid")

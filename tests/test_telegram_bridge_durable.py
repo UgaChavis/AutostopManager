@@ -2293,6 +2293,46 @@ def test_execution_pause_rpc_uses_separate_revision_after_new_intake(tmp_path):
     monitor.inbox.close()
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="production bridge control is root-only")
+def test_execution_control_requires_a_complete_request_frame(tmp_path):
+    async def scenario():
+        config, monitor = _runtime(tmp_path)
+        path = str(tmp_path / "b.sock")
+        before = monitor.inbox.status()
+        request = bridge._canonical_json(
+            {"operation": "job_execution_set", "paused": True, "expected_revision": before["execution_revision"]}
+        )
+
+        async def serve(reader, writer):
+            await bridge._serve_client_request(object(), config, reader, writer, inbound_monitor=monitor)
+
+        async def exchange(delimiter):
+            reader, writer = await asyncio.open_unix_connection(path)
+            try:
+                writer.write(request + delimiter)
+                await writer.drain()
+                writer.write_eof()
+                return json.loads(await asyncio.wait_for(reader.readline(), 1))
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        try:
+            async with await asyncio.start_unix_server(serve, path=path):
+                assert await exchange(b"") == {"ok": False, "error": "request_invalid"}
+                assert monitor.inbox.status() == before
+
+                complete = await exchange(b"\n")
+                assert complete["ok"] is True
+                assert complete["status"]["execution_paused"] is True
+                assert complete["status"]["execution_revision"] == before["execution_revision"] + 1
+                assert monitor.inbox.status()["execution_revision"] == complete["status"]["execution_revision"]
+        finally:
+            monitor.inbox.close()
+
+    asyncio.run(scenario())
+
+
 def test_root_gate_rejects_nonroot_peer_credentials():
     class Connection:
         def getsockopt(self, *_args):
