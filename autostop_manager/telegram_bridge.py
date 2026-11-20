@@ -6389,7 +6389,8 @@ async def _reconciliation_state_fence(client: Any) -> tuple[int, int, int]:
     return cast(tuple[int, int, int], values)
 
 
-async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) -> dict[str, Any]:
+async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) -> dict[str, Any] | None:
+    """Resolve the saved offset, or return None if its exact anchor is unavailable."""
     cursor = monitor.inbox.reconciliation_cursor()
     if cursor is None:
         return {}
@@ -6400,10 +6401,10 @@ async def _reconcile_dialog_offset(client: Any, monitor: DurableInboundMonitor) 
         or int(getattr(source, "chat_id", 0) or 0) != cursor["peer_id"]
         or not bool(getattr(source, "is_private", False))
     ):
-        raise BridgeError("reconciliation_cursor_unavailable")
+        return None
     input_peer = await source.get_input_chat()
     if input_peer is None:
-        raise BridgeError("reconciliation_cursor_unavailable")
+        return None
     return {
         "offset_peer": input_peer,
         "offset_id": cursor["message_id"],
@@ -6488,6 +6489,39 @@ async def _reconcile_peer_history(
     return consumed, complete, capacity_blocked
 
 
+def _hold_invalid_reconciliation_transport(monitor: DurableInboundMonitor, generation: int) -> bool:
+    hook_current = monitor.reconciliation_transport_hook_current()
+    if hook_current and monitor.reconciliation_transport_generation == generation:
+        return False
+    monitor.inbox.clear_reconciliation_cursor()
+    monitor.reconciliation_fence = None
+    monitor.reconciliation_fence_transport_generation = None
+    reason = "history_reconciliation_changed" if hook_current else "history_reconciliation_unverified"
+    monitor.inbox.set_health(component="intake", state="held", error_code=reason)
+    monitor.changed()
+    return True
+
+
+def _restart_changed_reconciliation(monitor: DurableInboundMonitor) -> None:
+    """Drop only the dialog offset and retry from already committed peer checkpoints."""
+    monitor.inbox.clear_reconciliation_cursor()
+    monitor.reconciliation_fence = None
+    monitor.reconciliation_fence_transport_generation = None
+    monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
+    if monitor.reconciliation_restarts == 0:
+        monitor.reconciliation_restarts = 1
+        monitor.reconcile_requested.set()
+    elif monitor.reconciliation_external_pending and monitor.capture_enabled:
+        # A real callback buffered during the sweep grants a fresh bounded
+        # cycle. It does not renew the separate transport retry budget.
+        monitor.reconciliation_external_pending = False
+        monitor.reconciliation_restarts = 0
+        monitor.reconcile_requested.set()
+    else:
+        monitor.reconciliation_stopped = True
+    monitor.changed()
+
+
 async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonitor) -> None:  # noqa: C901 - explicit recovery fences
     """Bounded, resumable replay from persisted enabled-duty intervals."""
     signal_revision = monitor.reconciliation_signal_revision
@@ -6526,6 +6560,10 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
     # so its ambiguous refs can be held, rather than silently excluding a chat.
     first_start = min(datetime.fromisoformat(window["opened_at"]) for window in windows).replace(microsecond=0)
     offset = await _reconcile_dialog_offset(client, monitor)
+    if offset is None:
+        if not _hold_invalid_reconciliation_transport(monitor, transport_generation):
+            _restart_changed_reconciliation(monitor)
+        return
     prior_cursor = monitor.inbox.reconciliation_cursor()
     last_cursor = prior_cursor
     total_messages = 0
@@ -6561,20 +6599,7 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
                 break
         last_cursor = {"peer_id": peer_id, "message_id": latest_id, "received_at": latest_date.isoformat()}
     final_fence = await _reconciliation_state_fence(client) if complete else None
-    if (
-        monitor.reconciliation_transport_generation != transport_generation
-        or not monitor.reconciliation_transport_hook_current()
-    ):
-        monitor.inbox.clear_reconciliation_cursor()
-        monitor.reconciliation_fence = None
-        monitor.reconciliation_fence_transport_generation = None
-        reason = (
-            "history_reconciliation_changed"
-            if monitor.reconciliation_transport_hook_current()
-            else "history_reconciliation_unverified"
-        )
-        monitor.inbox.set_health(component="intake", state="held", error_code=reason)
-        monitor.changed()
+    if _hold_invalid_reconciliation_transport(monitor, transport_generation):
         return
     if complete:
         if final_fence != monitor.reconciliation_fence:
@@ -6582,23 +6607,7 @@ async def _reconcile_incoming_history(client: Any, monitor: DurableInboundMonito
             # move an unvisited dialog above our cursor, including before its
             # event callback arrives. One full rescan is finite; a second
             # unstable sweep waits for a new external recovery signal.
-            monitor.inbox.clear_reconciliation_cursor()
-            monitor.reconciliation_fence = None
-            monitor.reconciliation_fence_transport_generation = None
-            monitor.inbox.set_health(component="intake", state="held", error_code="history_reconciliation_changed")
-            if monitor.reconciliation_restarts == 0:
-                monitor.reconciliation_restarts = 1
-                monitor.reconcile_requested.set()
-            elif monitor.reconciliation_external_pending and monitor.capture_enabled:
-                # A real callback, coalesced while the fence was in flight,
-                # supplies one new bounded cycle. Never replenish transport
-                # retries here or spin without another external callback.
-                monitor.reconciliation_external_pending = False
-                monitor.reconciliation_restarts = 0
-                monitor.reconcile_requested.set()
-            else:
-                monitor.reconciliation_stopped = True
-            monitor.changed()
+            _restart_changed_reconciliation(monitor)
             return
         if any(window["closed_at"] is not None for window in windows) and not (
             monitor.reconciliation_transport_hook_current()

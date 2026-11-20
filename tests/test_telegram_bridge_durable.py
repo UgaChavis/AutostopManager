@@ -1490,6 +1490,76 @@ def test_dialogue_cursor_resumes_past_bounded_page(tmp_path, monkeypatch):
     monitor.inbox.close()
 
 
+@pytest.mark.parametrize("disappearances", [1, 2])
+def test_disappearing_dialogue_cursor_restarts_once_then_waits_for_private_update(
+    tmp_path, monkeypatch, disappearances
+):
+    config, monitor = _runtime(tmp_path)
+    monitor.transport_ready = True
+    now = datetime.now(UTC)
+    monitor.inbox.duty_set(False, at=(now - timedelta(minutes=30)).isoformat())
+    monitor.inbox.duty_set(True, at=(now - timedelta(minutes=10)).isoformat())
+    deleted = []
+
+    class DisappearingAnchorClient(Client):
+        async def get_messages(self, entity, *, ids=None, **options):
+            if entity is None and type(ids) is int and len(deleted) < disappearances:
+                deleted.append(ids)
+                del self.messages[ids]
+                self.update_revision += 1
+                assert monitor.inbox.duty_windows()[0]["recovered_at"] is None
+                return None
+            return await super().get_messages(entity, ids=ids, **options)
+
+    client = DisappearingAnchorClient(
+        [_message(100 + offset, peer=42 + offset, at=now - timedelta(minutes=45)) for offset in range(4)]
+    )
+
+    async def no_notifications(*_args):
+        return None
+
+    monkeypatch.setattr(bridge, "MAX_RECONCILE_DIALOGS", 2)
+    monkeypatch.setattr(bridge, "_deliver_incident_notifications", no_notifications)
+
+    async def scenario():
+        monitor.request_reconciliation()
+        monitor.reconciliation_transport_retries = 1
+        task = asyncio.create_task(bridge._reconcile_incoming_loop(client, config, monitor))
+        try:
+            await asyncio.sleep(0)
+            assert deleted == [101, 102][:disappearances]
+            assert monitor.reconciliation_transport_retries == 1
+            assert monitor.inbox.reconciliation_cursor() is None
+            assert monitor.inbox.checkpoint(42) == 100 and monitor.inbox.checkpoint(43) == 101
+            if disappearances == 2:
+                assert monitor.intake_reconciliation() == "held"
+                assert monitor.inbox.health()["intake"]["error_code"] == "history_reconciliation_changed"
+                assert monitor.reconciliation_stopped and not monitor.reconcile_requested.is_set()
+                assert monitor.inbox.checkpoint(44) == 102 and monitor.inbox.checkpoint(45) == 0
+                assert monitor.inbox.duty_windows()[0]["recovered_at"] is None
+                monitor.note_reconciliation_update(_message(104, peer=45))
+                await asyncio.sleep(0)
+            assert monitor.intake_reconciliation() == "complete"
+            assert not monitor.reconciliation_stopped and not monitor.reconcile_requested.is_set()
+            assert monitor.inbox.checkpoint(45) == 103
+            assert monitor.inbox.duty_windows()[0]["recovered_at"] is not None
+            assert [monitor.resolve(event["event_id"]).message_id for event in monitor.inbox.events()] == [
+                100,
+                101,
+                102,
+                103,
+            ]
+            assert client.sent == 0
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        monitor.inbox.close()
+
+
 def _moving_history_runtime(tmp_path):
     config, monitor = _runtime(tmp_path)
     now = datetime.now(UTC).replace(microsecond=0)
