@@ -21,11 +21,13 @@ import subprocess
 import tarfile
 import tempfile
 from datetime import datetime, UTC
+from typing import BinaryIO
 
 from cryptography.fernet import Fernet
 
 EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
-REQUIRED = frozenset({"state.json", "settings.json", "users.json", "mcp-oauth-state.json", "change_feed.sqlite3"})
+CRM_JSON_FILES = ("state.json", "settings.json", "users.json")
+REQUIRED = frozenset((*CRM_JSON_FILES, "mcp-oauth-state.json", "change_feed.sqlite3"))
 RUNTIME_ENV_KEYS = frozenset(
     {
         "MINIMAL_KANBAN_API_BEARER_TOKEN",
@@ -62,6 +64,19 @@ def validate_runtime_config(value):
     if any(not isinstance(v, str) or "\0" in v or len(v) > 16384 for v in value["environment"].values()):
         raise ValueError("invalid saved runtime value")
     return value
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("unsupported JSON constant")
+
+
+def validate_crm_json(stream: BinaryIO) -> None:
+    try:
+        value = json.loads(stream.read().decode("utf-8"), parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError):
+        raise ValueError("invalid CRM data JSON") from None
+    if not isinstance(value, dict):
+        raise ValueError("invalid CRM data JSON")
 
 
 def runtime_config_from_environment(values):
@@ -234,7 +249,7 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
         raise ValueError("invalid image identity")
     runtime = json.dumps(validate_runtime_config(runtime_config), separators=(",", ":")).encode("utf-8")
     root = root.resolve(strict=True)
-    if not root.is_dir() or not REQUIRED.issubset({p.name for p in root.iterdir()}):
+    if not root.is_dir():
         raise ValueError("CRM data incomplete")
     parent = output.parent.resolve(strict=True)
     pst = parent.stat()
@@ -246,12 +261,16 @@ def create_snapshot(root: Path, output: Path, revision: str, key: bytes, image: 
     root_metadata = root.lstat()
     entries = _walk(root)
     paths = {p for p, _, directory in entries if not directory}
+    if not {root / name for name in REQUIRED}.issubset(paths):
+        raise ValueError("CRM data incomplete")
     sqlite_paths = {root / "change_feed.sqlite3"}
     found_feed = False
     for path, metadata, is_dir in entries:
         if not is_dir and path.relative_to(root).parts[0] not in {"attachments", "shared-files"}:
             with _file(path, metadata) as file:
-                if file.read(16) == b"SQLite format 3\x00":
+                if path.parent == root and path.name in CRM_JSON_FILES:
+                    validate_crm_json(file)
+                elif file.read(16) == b"SQLite format 3\x00":
                     if path not in sqlite_paths:
                         raise ValueError("unknown SQLite source requires review")
                     found_feed = True

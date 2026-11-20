@@ -178,6 +178,46 @@ class CrmSnapshotTest(unittest.TestCase):
             snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
         self.assertFalse(path.exists())
 
+    def test_snapshot_does_not_publish_invalid_crm_json(self):
+        path = self.stage / "snapshot.tar.gz"
+        for name, payload in (
+            ("state.json", "[]"),
+            ("settings.json", '{"synthetic": NaN}'),
+            ("users.json", "null"),
+        ):
+            with self.subTest(name=name):
+                source = self.source / name
+                original = source.read_bytes()
+                source.write_text(payload, encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(ValueError, "CRM data JSON"):
+                        snapshot.create_snapshot(
+                            self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime
+                        )
+                    self.assertFalse(path.exists())
+                finally:
+                    source.write_bytes(original)
+                    path.unlink(missing_ok=True)
+
+    def test_restore_rejects_unusable_json_from_an_older_snapshotter(self):
+        path = self.stage / "snapshot.tar.gz"
+        (self.source / "state.json").write_text("[]", encoding="utf-8")
+        with mock.patch.object(snapshot, "validate_crm_json", create=True):
+            snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        destination = self.base / "restore"
+        destination.mkdir(mode=0o700)
+        with self.assertRaisesRegex(ValueError, "CRM data JSON"):
+            restore.check_archive(path, destination)
+
+    def test_snapshot_requires_a_file_for_crm_settings(self):
+        path = self.stage / "snapshot.tar.gz"
+        settings = self.source / "settings.json"
+        settings.unlink()
+        settings.mkdir()
+        with self.assertRaisesRegex(ValueError, "CRM data incomplete"):
+            snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(path.exists())
+
     def test_key_read_only_from_exact_stopped_container(self):
         ident = "b" * 64
         item = {

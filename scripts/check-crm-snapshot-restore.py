@@ -20,12 +20,11 @@ import tarfile
 from cryptography.fernet import Fernet
 
 
-def _runtime_config(path):
+def _snapshot_module():
     spec = importlib.util.spec_from_file_location("crm_snapshot_runtime", Path(__file__).with_name("crm-snapshot.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    with path.open("rb") as stream:
-        return module.validate_runtime_config(json.load(stream))
+    return module
 
 
 def _record(hasher, info, digest=""):
@@ -108,25 +107,19 @@ def check_archive(archive_path: Path, destination: Path):
         or manifest.get("tree_sha256") != digest.hexdigest()
     ):
         raise ValueError("archive integrity mismatch")
-    if not {
-        "crm",
-        "crm/state.json",
-        "crm/settings.json",
-        "crm/users.json",
-        "crm/mcp-oauth-state.json",
-        "crm/change_feed.sqlite3",
-        "oauth-state.key",
-    }.issubset(seen):
+    snapshot = _snapshot_module()
+    if not {"crm", "oauth-state.key", *(f"crm/{name}" for name in snapshot.REQUIRED)}.issubset(seen):
         raise ValueError("archive incomplete")
     if manifest["schema"] == 2:
         if "runtime-config.json" not in seen:
             raise ValueError("runtime configuration missing")
-        _runtime_config(root / "runtime-config.json")
+        with (root / "runtime-config.json").open("rb") as stream:
+            snapshot.validate_runtime_config(json.load(stream))
     elif "runtime-config.json" in seen:
         raise ValueError("runtime configuration requires archive schema 2")
-    for name in ("state.json", "settings.json", "users.json"):
+    for name in snapshot.CRM_JSON_FILES:
         with (root / "crm" / name).open("rb") as file:
-            json.load(file)
+            snapshot.validate_crm_json(file)
     key = (root / "oauth-state.key").read_bytes()
     state = (root / "crm" / "mcp-oauth-state.json").read_bytes()
     if not isinstance(json.loads(Fernet(key).decrypt(state)), dict):
