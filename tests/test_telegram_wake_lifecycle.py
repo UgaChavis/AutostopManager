@@ -7,7 +7,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from websockets.asyncio.server import unix_serve
@@ -82,6 +82,41 @@ def test_bridge_request_normalizes_transport_and_protocol_failures(tmp_path, pay
         async with response_server(tmp_path / "bridge.sock", payload) as jobs:
             with pytest.raises(error_type, match=f"^{code}$"):
                 await jobs.request("job_status")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("line", "attempts", "error"),
+    [(b"{", 2, None), (b"{\n", 1, "wake_job_subscription_invalid")],
+    ids=["interrupted_line", "invalid_complete_line"],
+)
+def test_subscription_retries_an_interrupted_line_but_rejects_a_complete_invalid_line(
+    tmp_path, monkeypatch, line, attempts, error
+):
+    async def scenario():
+        jobs = wake.BridgeJobs(os.geteuid(), tmp_path / "unused.sock")
+        reader = asyncio.StreamReader()
+        reader.feed_data(line)
+        reader.feed_eof()
+        writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+
+        async def connect():
+            if jobs.changed.is_set():
+                jobs.stopping = True
+                raise OSError("End of the in-memory retry check")
+            return reader, writer, 1
+
+        open_stream = AsyncMock(side_effect=connect)
+        read_snapshot = AsyncMock()
+        monkeypatch.setattr(jobs, "_connect", open_stream)
+        monkeypatch.setattr(jobs, "_snapshot", read_snapshot)
+        monkeypatch.setattr(wake, "RECONNECT_DELAYS", (0,))
+        await jobs.subscribe()
+
+        assert open_stream.await_count == attempts
+        assert not jobs.connected and jobs.last_error == error
+        read_snapshot.assert_not_awaited()
 
     asyncio.run(scenario())
 

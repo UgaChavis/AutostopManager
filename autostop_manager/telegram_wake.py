@@ -1594,7 +1594,7 @@ class BridgeJobs:
                 first = True
                 while not self.stopping:
                     raw = await asyncio.wait_for(reader.readline(), BRIDGE_STALE_SECONDS)
-                    if not raw:
+                    if not raw.endswith(b"\n"):
                         raise TransportLost("wake_bridge_disconnected")
                     response = json.loads(raw)
                     generation = response.get("generation") if isinstance(response, dict) else None
