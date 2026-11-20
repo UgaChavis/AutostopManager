@@ -318,7 +318,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 | `scripts/work-telegram-python.sh` | `bridge`, `wake`, `personal` возвращают Python соответствующей службы из effective systemd ExecStart. `bridge --run <revision> -- <command>` запускает рабочий Bridge из физического snapshot после сверки его ревизии. |
 | `scripts/export-work-telegram-inbox.py` | Экспортирует точные legacy-ссылки в новый root-private файл до согласованного переключения; без копирования переписки или replay. |
 | `scripts/run-work-telegram-media.sh` | Приватный временный файл: `transcribe --file EXACT_FILE [--language ru] [--delete-after]`, `preview --file EXACT_FILE [--delete-after]` или `self-check`; `--language` доступен только `transcribe`. |
-| `scripts/run-work-telegram-monitor-voice.sh` | Текущий event: `telegram_monitor_voice --event-id ... [--language ru]`, затем очистка. |
+| `scripts/run-work-telegram-monitor-voice.sh` | Для точного рабочего события передай `--event-id EVENT_ID [--language ru]`. После обработки проверь `cleanup_verified=true`. |
 | `scripts/import_offline_parts_catalogs.py` | `--verify-only` read-only; иначе импорт `--archive ZIP --cache-root PATH`. |
 | `scripts/ocr_offline_parts_catalogs.py` | `--verify-only` read-only; иначе OCR `--cache-root PATH`. |
 | `scripts/sync_offline_parts_catalog_release.py` | `--verify-only` read-only; иначе pinned download/import/OCR до maintenance. |
