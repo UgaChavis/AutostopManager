@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import hashlib
 import os
@@ -321,12 +322,15 @@ def test_managed_and_locked_timers_use_same_cas_control_contract(tmp_path: Path)
 @pytest.mark.parametrize(
     "failure_phase,expected_error",
     [
+        ("published_fsync", "system_timer_apply_failed"),
         ("daemon_reload", "system_timer_apply_failed"),
         ("restart", "system_timer_apply_failed"),
         ("readback", "system_timer_readback_failed"),
     ],
 )
-def test_schedule_apply_failures_restore_exact_prior_absence(tmp_path: Path, failure_phase: str, expected_error: str):
+def test_schedule_apply_failures_restore_exact_prior_absence(
+    tmp_path: Path, failure_phase: str, expected_error: str, monkeypatch
+):
     policies = {
         "example": SystemTimerPolicy(
             timer_id="example",
@@ -375,13 +379,62 @@ def test_schedule_apply_failures_restore_exact_prior_absence(tmp_path: Path, fai
         dropin_root=tmp_path,
         store=AutomationStore(tmp_path / "registry.sqlite3"),
     )
+    if failure_phase == "published_fsync":
+        fsync_directory = controller._fsync_directory
+
+        def fail_new_dropin_sync(path):
+            if target.exists():
+                raise OSError(errno.EIO, "synthetic directory sync failure after replacement")
+            fsync_directory(path)
+
+        monkeypatch.setattr(controller, "_fsync_directory", fail_new_dropin_sync)
 
     with pytest.raises(AutomationError, match=expected_error):
         controller.set_schedule("example", every_minutes=20)
 
     assert not target.exists()
-    assert runner.reloads == 2
+    assert runner.reloads == (1 if failure_phase == "published_fsync" else 2)
     assert runner.restarts >= 1
+
+
+@pytest.mark.parametrize("existing_dropin", [False, True])
+def test_schedule_staging_write_failure_avoids_compensation_when_unchanged(
+    tmp_path: Path, existing_dropin: bool, monkeypatch
+):
+    calls = []
+    write_calls = []
+
+    def runner(command):
+        calls.append(command[1])
+        if command[1] == "show":
+            return fake_systemctl(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def fail_write(descriptor, content):
+        write_calls.append(len(content))
+        raise OSError(errno.ENOSPC, "synthetic stage write failure before replacement")
+
+    policy = SystemTimerPolicy("example", "autostop-example.timer", "Example", "managed")
+    controller = SystemTimerController(policies={"example": policy}, runner=runner, dropin_root=tmp_path)
+    target = tmp_path / "autostop-example.timer.d" / "50-autostop-automation.conf"
+    previous = controller.render_interval_dropin("example", every_minutes=15).encode()
+    expected_sha256 = None
+    if existing_dropin:
+        target.parent.mkdir()
+        target.write_bytes(previous)
+        expected_sha256 = hashlib.sha256(previous).hexdigest()
+    monkeypatch.setattr(controller, "_write_all", fail_write)
+
+    with pytest.raises(AutomationError, match=r"^system_timer_apply_failed$"):
+        controller.set_schedule("example", every_minutes=20, expected_dropin_sha256=expected_sha256)
+
+    assert calls == ["show"]
+    assert len(write_calls) == 1
+    if existing_dropin:
+        assert target.read_bytes() == previous
+    else:
+        assert not target.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
 
 
 def test_enable_readback_failure_restores_previous_enabled_and_active_state(tmp_path: Path):

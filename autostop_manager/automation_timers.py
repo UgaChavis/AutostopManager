@@ -10,6 +10,7 @@ import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -559,6 +560,7 @@ class SystemTimerController:
             raise AutomationError("system_timer_inspection_failed")
         snapshot = self._capture_dropin(policy)
         original_error: AutomationError | OSError | None = None
+        staged = None
         try:
             staged = self.stage_interval_dropin(
                 timer_id,
@@ -582,24 +584,30 @@ class SystemTimerController:
             }:
                 raise
             original_error = exc
-        try:
-            self._restore_dropin(snapshot)
-            self._systemctl_action("daemon-reload")
-            if before["state"]["actual_state"] == "active":
-                self._systemctl_action("restart", policy.unit_name)
-            restored = self.inspect(timer_id)
-            restored_snapshot = self._capture_dropin(policy)
-            if (
-                not restored["inspection_ok"]
-                or restored["state"]["period_minutes"] != before["state"]["period_minutes"]
-                or restored["state"]["desired_state"] != before["state"]["desired_state"]
-                or restored["state"]["actual_state"] != before["state"]["actual_state"]
-                or bool(restored_snapshot["present"]) != bool(snapshot["present"])
-                or restored_snapshot.get("sha256") != snapshot.get("sha256")
-            ):
-                raise AutomationError("system_timer_rollback_failed")
-        except (AutomationError, OSError) as exc:
-            raise AutomationError("system_timer_rollback_failed") from exc
+        needs_rollback = True
+        if staged is None:
+            # No systemctl apply command ran. A failed stage may still have installed a file.
+            with suppress(AutomationError, OSError):
+                needs_rollback = self._capture_dropin(policy) != snapshot
+        if needs_rollback:
+            try:
+                self._restore_dropin(snapshot)
+                self._systemctl_action("daemon-reload")
+                if before["state"]["actual_state"] == "active":
+                    self._systemctl_action("restart", policy.unit_name)
+                restored = self.inspect(timer_id)
+                restored_snapshot = self._capture_dropin(policy)
+                if (
+                    not restored["inspection_ok"]
+                    or restored["state"]["period_minutes"] != before["state"]["period_minutes"]
+                    or restored["state"]["desired_state"] != before["state"]["desired_state"]
+                    or restored["state"]["actual_state"] != before["state"]["actual_state"]
+                    or bool(restored_snapshot["present"]) != bool(snapshot["present"])
+                    or restored_snapshot.get("sha256") != snapshot.get("sha256")
+                ):
+                    raise AutomationError("system_timer_rollback_failed")
+            except (AutomationError, OSError) as exc:
+                raise AutomationError("system_timer_rollback_failed") from exc
         if isinstance(original_error, AutomationError):
             raise original_error
         raise AutomationError("system_timer_apply_failed") from original_error
