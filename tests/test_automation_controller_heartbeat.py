@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -298,14 +298,46 @@ def test_periodic_heartbeat_preserves_reconciliation_error_until_retry(monkeypat
     asyncio.run(scenario())
 
 
-def test_inactive_controller_still_becomes_stale_after_thirty_seconds(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "elapsed,expected_state", [(-600, "stale"), (-1, "stale"), (0, "active"), (30, "active"), (31, "stale")]
+)
+def test_controller_readiness_requires_a_current_heartbeat(monkeypatch, tmp_path, elapsed, expected_state):
     clock = Clock()
     monkeypatch.setattr(automation_registry, "utc_now", lambda: clock.value)
     store = AutomationStore(tmp_path / "registry.sqlite3")
     store.initialize()
     store.controller_heartbeat(owner="inactive-synthetic-controller")
     assert store.status()["controller"]["state"] == "active"
-    clock.advance(31)
+    clock.advance(elapsed)
     status = store.status()
-    assert status["controller"]["state"] == "stale"
-    assert status["readiness"]["ready"] is False
+    assert status["controller"]["state"] == expected_state
+    assert status["controller"]["heartbeat_at"] == isoformat(START)
+    assert status["readiness"]["ready"] is (expected_state == "active")
+
+    store.controller_heartbeat(owner="active-synthetic-controller")
+    fresh = store.status()
+    assert fresh["controller"]["heartbeat_at"] == isoformat(clock.value)
+    assert fresh["readiness"]["ready"] is True
+
+
+def test_controller_status_compares_clock_after_reading_the_snapshot(monkeypatch, tmp_path):
+    clock = Clock()
+    monkeypatch.setattr(automation_registry, "utc_now", lambda: clock.value)
+
+    class ReadTakingOneSecond(AutomationStore):
+        @contextmanager
+        def _status_connection(self):
+            with super()._status_connection() as connection:
+                yield connection
+            clock.advance(1)
+
+    store = ReadTakingOneSecond(tmp_path / "registry.sqlite3")
+    store.initialize()
+    clock.advance(1)
+    store.controller_heartbeat(owner="synthetic-controller")
+    clock.advance(-1)
+
+    status = store.status()
+
+    assert status["generated_at"] == status["controller"]["heartbeat_at"] == isoformat(clock.value)
+    assert status["readiness"]["ready"] is True

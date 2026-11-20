@@ -1276,7 +1276,6 @@ class AutomationStore:
     ) -> dict[str, Any]:
         detail: dict[str, Any] = {}
         with self._status_connection() as connection:
-            now = utc_now()
             if job_id:
                 jobs = [self._job_status(connection, job_id)]
             else:
@@ -1306,9 +1305,13 @@ class AutomationStore:
                 from .role_coordination import ROLES, RoleStore
 
                 detail["roles"] = [RoleStore._state(connection, name) for name in ROLES]
+        # A fresh heartbeat can become visible as the read snapshot begins.
+        now = utc_now()
         heartbeat_at = parse_time(controller["heartbeat_at"] if controller else None)
         controller_state = str(controller["state"] if controller else "stopped")
-        if controller_state == "active" and (heartbeat_at is None or now - heartbeat_at > timedelta(seconds=30)):
+        if controller_state == "active" and (
+            heartbeat_at is None or not timedelta(0) <= now - heartbeat_at <= timedelta(seconds=30)
+        ):
             controller_state = "stale"
         readiness = self.readiness_from_jobs(jobs, controller_state=controller_state)
         return {
