@@ -1100,9 +1100,9 @@ def test_work_telegram_duty_waits_for_readiness_or_disables_on_failure(tmp_path,
 
 
 def test_telegram_admin_scripts_require_an_explicit_account_selector() -> None:
-    for script_name in (
-        "deploy_telegram_bridge.sh",
-        "install-telegram-bridge.sh",
+    for script_name, account_usage in (
+        ("deploy_telegram_bridge.sh", ("--account personal [revision]", "--account work --no-start [revision]")),
+        ("install-telegram-bridge.sh", ("--account personal|work",)),
     ):
         completed = subprocess.run(
             ["bash", str(ROOT / "scripts" / script_name)],
@@ -1112,7 +1112,8 @@ def test_telegram_admin_scripts_require_an_explicit_account_selector() -> None:
         )
 
         assert completed.returncode == 2
-        assert "--account personal|work" in completed.stderr
+        for usage in account_usage:
+            assert usage in completed.stderr
 
 
 def test_work_model_provisioner_is_syntax_valid_and_scoped() -> None:

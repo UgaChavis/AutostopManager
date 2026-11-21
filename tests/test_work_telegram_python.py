@@ -23,6 +23,7 @@ def runtime(tmp_path):
     release = releases / "revision"
     scripts = release / "scripts"
     scripts.mkdir(parents=True)
+    (tmp_path / "lock").touch(mode=0o600)  # Normally provisioned by systemd-tmpfiles.
     current = releases / "current"
     current.symlink_to(release)
     python = tmp_path / "active-venv/bin/python"
