@@ -225,6 +225,71 @@ def test_pending_sources_are_read_before_searching_every_query(monkeypatch):
     assert j1.research_status(job_id)["status"] == "completed"
 
 
+def test_public_fragment_citations_require_a_body_match_and_keep_snippets_bounded(monkeypatch):
+    url = "https://example.org/P0910.pdf"
+    body = "Guide to synthetic diagnostics.\f" + "x" * 1800 + " Sensor fault is caused by connector wear.\f"
+    monkeypatch.setattr(
+        j1,
+        "fetch_document",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "kind": "pdf",
+            "url": url,
+            "title": "P0910.pdf",
+            "text": body,
+            "extraction_method": "pdf_text",
+            "fragments": j1_fetch._pdf_fragments(body),
+        },
+    )
+    job = j1.research_sources(objective="Check service bulletin", source_urls=[url], idempotency_key="pdf-source-1")
+    j1.run_worker(once=True)
+    title_hit = j1.research_results(job["job_id"], "P0910")["results"][0]
+    assert title_hit["excerpt"] == "P0910.pdf" and title_hit["url"] == url
+    assert "page" not in title_hit and "source_url" not in title_hit
+    body_hit = j1.research_results(job["job_id"], "sensor")["results"][0]
+    assert body_hit["source_url"] == url + "#page=2"
+    assert "[Sensor]" in body_hit["excerpt"] and len(body_hit["excerpt"]) <= j1_fetch.MAX_SEARCH_SNIPPET_CHARS
+
+
+def test_similar_supplied_bulletins_keep_distinct_part_numbers_and_cited_excerpts(monkeypatch):
+    urls = ["https://example.org/revision-a", "https://example.org/revision-b"]
+
+    def fetch(url, **_kwargs):
+        part = "AX242" if url == urls[0] else "AX243"
+        content = (
+            "<h1>Service manual</h1>"
+            + "Standard revision instructions. " * 120
+            + f'<h2 id="failure">Failure analysis</h2><p>Noise is caused by wear in component {part}.</p>'
+        ).encode()
+        return j1_fetch._extract_static_content("text/html", content, url, {}) | {"url": url}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    job = j1.research_sources(objective="Compare part revisions", source_urls=urls, idempotency_key="parts-revisions")
+    j1.run_worker(once=True)
+    for url, part in zip(urls, ["AX242", "AX243"], strict=True):
+        hit = j1.research_results(job["job_id"], part)["results"][0]
+        assert hit["source_url"] == url + "#failure"
+    report = j1.research_report(job["job_id"])["report"]
+    assert {cause["source_url"] for cause in report["alternative_causes"]} == {url + "#failure" for url in urls}
+
+
+def test_report_counts_the_whole_corpus_beyond_its_twenty_source_examples(monkeypatch):
+    urls = [f"https://example.com/parts/{n}" for n in range(20)]
+    last = "https://example.org/parts/more"
+    job = j1.research_sources(objective="Read public catalogues", source_urls=urls, idempotency_key="parts-corpus")
+    assert j1.research_sources(job_id=job["job_id"], source_urls=[last])["added"] == 1
+    monkeypatch.setattr(
+        j1, "fetch_document", lambda url, **_: {"ok": True, "url": url, "kind": "text", "text": "Description " + url}
+    )
+    j1.run_worker(once=True)
+    report = j1.research_report(job["job_id"])["report"]
+    assert len(report["sources"]) == 20
+    confidence = report["evidence_confidence"]
+    assert confidence["retrieved_sources"] == sum(confidence["source_tiers"].values()) == 21
+    assert confidence["independent_domains"] == 2
+    assert "source_list_truncated" in {item["code"] for item in report["limitations"]}
+
+
 def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
     compact = "WBA" + "0" * 14  # synthetic VIN-shaped input
     separated = "WBA " + "0" * 6 + " " + "0" * 8
@@ -1618,7 +1683,7 @@ def test_j1003_completion_preserves_concurrent_control(j1003_offline, monkeypatc
     assert final["pages_fetched"] == 1
 
 
-def _j1003_report_fixture(urls, *, canonical_urls=None, cohort=False):
+def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
     context = {"make": "Lexus", "model": "RX200T", "engine": "8AR-FTS", "system": "fuel injection"}
     created = j1.start_research("Investigate public technical evidence", automotive_context=context)
     assert created["ok"], created
@@ -1627,7 +1692,7 @@ def _j1003_report_fixture(urls, *, canonical_urls=None, cohort=False):
             canonical = canonical_urls[index] if canonical_urls else j1._canonical_url(url)
             classification = j1.classify_source(canonical, title="Service manual", kind="pdf")
             body = "Lexus RX200T 8AR-FTS fuel injection public technical reference " + str(index)
-            if cohort:
+            if url in cohort_urls:
                 body += ". The study found fuel injection leakage in 12 of 100 vehicles."
             connection.execute(
                 "INSERT INTO documents(id,job_id,url,canonical_url,title,kind,status,body,source_class,source_basis,"
@@ -1679,7 +1744,7 @@ def test_j1003_report_does_not_promote_unknown_manual_provenance(j1003_offline):
         "https://another-upload.example/b-service-manual.pdf",
     ]
     assert all(j1.classify_source(url, title="Service manual", kind="pdf").source_tier == "B" for url in urls)
-    report = _j1003_report_fixture(urls, cohort=True)
+    report = _j1003_report_fixture(urls, cohort_urls=urls)
     assert report["evidence_confidence"]["level"] == "low"
     assert report["frequency"]["status"] == "not_measured"
     assert {source["source_tier"] for source in report["sources"]} == {"D"}
@@ -1690,9 +1755,19 @@ def test_j1003_report_does_not_promote_unknown_manual_provenance(j1003_offline):
 
 
 def test_j1003_report_preserves_checked_manufacturer_evidence(j1003_offline):
-    report = _j1003_report_fixture(["https://www.denso.com/a.pdf", "https://bosch.com/b.pdf"], cohort=True)
+    urls = ["https://www.denso.com/a.pdf", "https://bosch.com/b.pdf"]
+    report = _j1003_report_fixture(urls, cohort_urls=urls)
     assert report["evidence_confidence"]["independent_domains"] == 2
     assert report["evidence_confidence"]["level"] == "high"
     assert report["frequency"]["status"] == "measured_in_source"
     assert {source["source_tier"] for source in report["sources"]} == {"B"}
     assert all(source["source_basis"].startswith("registry:technical:") for source in report["sources"])
+
+
+def test_report_finds_qualified_measurements_beyond_the_displayed_sources(j1003_offline):
+    urls = [f"https://static.nhtsa.gov/bulletin-{index:02}.pdf" for index in range(21)]
+    last = urls[-1]
+    report = _j1003_report_fixture(urls, cohort_urls=[last])
+    assert last not in {source["url"] for source in report["sources"]}
+    assert report["frequency"]["status"] == "measured_in_source"
+    assert report["frequency"]["measurements"][0]["source_url"] == last

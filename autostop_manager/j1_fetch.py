@@ -24,12 +24,24 @@ import resource
 import signal
 import socket
 import ssl
+import string
 import subprocess
 import tempfile
 import threading
 import time
 from typing import Any
-from urllib.parse import parse_qs, parse_qsl, quote_plus, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import (
+    SplitResult,
+    parse_qs,
+    parse_qsl,
+    quote,
+    quote_plus,
+    unquote,
+    urlencode,
+    urljoin,
+    urlsplit,
+    urlunsplit,
+)
 from urllib.robotparser import RobotFileParser
 
 from .j1_sources import classify_source, discovery_domain
@@ -58,8 +70,10 @@ _VIN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
 )
+_PDF_BREAK = re.compile(r"[ \t\r\n]*\f[ \t\r\n\f]*")
 _PDF_VIN = re.compile(
-    r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\\f-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
+    rf"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9](?:[ ._/\\-]|{_PDF_BREAK.pattern})?){{16}}"
+    r"[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
 )
 # Trailing dots may be punctuation; a continuing domain label must match in full.
@@ -201,7 +215,7 @@ def redact_sensitive(
         return "[redacted]" + "\f" * breaks
 
     def replace_vin(match: re.Match[str]) -> str:
-        candidate = match[0].replace("\f", " ") if preserve_page_breaks else match[0]
+        candidate = _PDF_BREAK.sub(" ", match[0]) if preserve_page_breaks else match[0]
         if _looks_like_vin(candidate) and _is_full_url_vin(candidate):
             return replacement(match)
         return match[0]
@@ -214,24 +228,28 @@ def redact_sensitive(
 
 
 def public_url(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw or len(raw) > 2048:
+    raw = str(value or "")
+    if len(raw) > 2048:
+        return ""
+    raw = raw.strip()
+    if not raw or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in raw):
         return ""
     try:
         raw.encode("utf-8")  # Literal surrogates are invalid URL text, unlike escaped octets.
         parsed = urlsplit(raw)
-        host = parsed.hostname
+        host = (parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
         port = parsed.port
     except ValueError:
         return ""
     if (
         parsed.scheme not in {"http", "https"}
         or not host
+        or not re.fullmatch(r"[a-z0-9_.:-]+", host)
         or parsed.username is not None
         or parsed.password is not None
         or port not in {None, 80, 443}
-        or host.casefold() in {"localhost", "localhost.localdomain"}
-        or host.casefold().endswith((".localhost", ".local", ".internal", ".onion"))
+        or host in {"localhost", "localhost.localdomain"}
+        or host.endswith((".localhost", ".local", ".internal", ".onion"))
     ):
         return ""
     # User input is deliberately checked as prose by ``contains_sensitive``.
@@ -242,11 +260,19 @@ def public_url(value: str) -> str:
         _url_component_contains_sensitive(component) for component in (parsed.path, parsed.query, parsed.fragment)
     ):
         return ""
+    if "+" in parsed.query and _url_component_contains_sensitive(parsed.query.replace("+", " ")):
+        return ""
     try:
-        if not ipaddress.ip_address(host).is_global:
-            return ""
+        address = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        # The resolver also accepts legacy IPv4 spellings, including single
+        # integers and abbreviated dotted addresses. Classify them before IO.
+        try:
+            address = ipaddress.IPv4Address(socket.inet_aton(host))
+        except OSError:
+            address = None
+    if address is not None and (not address.is_global or address.is_multicast):
+        return ""
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
 
 
@@ -260,7 +286,9 @@ def _public_address(host: str, port: int) -> str:
     """Reject an entire DNS answer if *any* address is non-public."""
 
     addresses = {str(row[4][0]) for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
-    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+    if not addresses or any(
+        not address.is_global or address.is_multicast for address in map(ipaddress.ip_address, addresses)
+    ):
         raise ValueError("unsafe_dns_answer")
     return sorted(addresses)[0]
 
@@ -388,6 +416,18 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
             raise
 
 
+def quote_http_target(target: str) -> str:
+    """Encode internationalized text without rewriting delimiters or existing escapes."""
+    return quote(target, safe=string.punctuation)
+
+
+def _request_target(parsed: SplitResult) -> str:
+    target = parsed.path or "/"
+    if parsed.query:
+        target += "?" + parsed.query
+    return quote_http_target(target)
+
+
 def _request_public(
     url: str,
     *,
@@ -415,12 +455,9 @@ def _request_public(
         connection.response_class = _deadline_response_class(deadline)
         response: http.client.HTTPResponse | None = None
         try:
-            target = parsed.path or "/"
-            if parsed.query:
-                target += "?" + parsed.query
             connection.request(
                 "GET",
-                target,
+                _request_target(parsed),
                 headers={
                     "User-Agent": USER_AGENT,
                     "Accept": "text/html,application/pdf,text/plain",
@@ -514,6 +551,8 @@ class _PageText(HTMLParser):
         self.title_parts: list[str] = []
         self.links: list[str] = []
         self.headings: list[tuple[int, int, str]] = []
+        self.heading_overflow = False
+        self.document_ids: Counter[str] = Counter()
         self._heading: tuple[str, int, str] | None = None
         self._hidden = 0
         self._title = False
@@ -522,6 +561,15 @@ class _PageText(HTMLParser):
         self._xhtml = xhtml
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Fragment navigation resolves ids across the document, including
+        # headings' non-heading siblings, but not nodes inside a template.
+        anchor = ""
+        if attrs and not self._templates:
+            anchor = next((value or "" for name, value in attrs if name == "id"), "")
+            if 0 < len(anchor) <= 200:
+                self.document_ids[anchor] += 1
+            else:
+                anchor = ""
         if tag == "template":
             # Recognized declarative shadow roots keep their existing extraction;
             # ordinary templates remain inert, including nested shadow markup.
@@ -538,11 +586,12 @@ class _PageText(HTMLParser):
             self._title = True
         if tag in _HEADING_TAGS and not self._hidden and not self._title:
             self.finish_heading()
-            anchor = dict(attrs).get("id") or ""
-            if len(anchor) > 200 or _url_component_contains_sensitive(anchor):
-                anchor = ""
-            if len(self.headings) < MAX_PUBLIC_FRAGMENTS - 1:
+            if len(self.headings) < MAX_PUBLIC_FRAGMENTS:
+                if anchor and _url_component_contains_sensitive(anchor):
+                    anchor = ""
                 self._heading = (tag, len(self.parts), anchor)
+            else:
+                self.heading_overflow = True
         if tag == "a":
             href = dict(attrs).get("href")
             if href and len(self.links) < 100:
@@ -568,8 +617,10 @@ class _PageText(HTMLParser):
             self._hidden -= 1
         if tag == "title":
             self._title = False
-        if self._heading is not None and tag == self._heading[0] and not self._hidden:
-            self.finish_heading()
+        if tag in _HEADING_TAGS and not self._hidden:
+            if self._heading is not None and tag == self._heading[0]:
+                self.finish_heading()
+            self.parts.append(" ")
 
     def handle_data(self, data: str) -> None:
         if self._inert_templates:
@@ -614,7 +665,11 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
             )
         )
     sections = [(body, heading, anchor) for body, heading, anchor in sections if body]
-    anchor_counts = Counter(anchor for _, _, anchor in sections if anchor)
+    if sections and (parser.heading_overflow or len(sections) > MAX_PUBLIC_FRAGMENTS):
+        # Keep the remaining text searchable without attributing later
+        # sections to the last heading that fit in the index.
+        last = min(len(sections), MAX_PUBLIC_FRAGMENTS) - 1
+        sections[last:] = [("\n".join(body for body, _, _ in sections[last:]), "", "")]
     text = redact_sensitive("\n".join(body for body, _, _ in sections))
     fragments: list[dict[str, Any]] = []
     offset = 0
@@ -627,12 +682,13 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
             # A sensitive sequence can span a heading boundary. Keep the
             # jointly redacted text and omit fragment offsets in that case.
             return title, text, []
+        label = redact_sensitive(heading, limit=min(200, len(fragment)))
         fragments.append(
             {
                 "page": number,
                 "fragment_kind": "html_section",
-                "section": redact_sensitive(heading, limit=200),
-                "anchor": anchor if anchor_counts[anchor] == 1 else "",
+                "section": label if fragment.startswith(label) else "",
+                "anchor": anchor if parser.document_ids[anchor] == 1 else "",
                 "start": offset,
                 "end": end,
             }
@@ -715,14 +771,19 @@ def _extract_pdf(body: bytes) -> dict[str, Any]:
 
 
 def _extract_static_content(content_type: str, body: bytes, final_url: str, headers: dict[str, str]) -> dict[str, Any]:
-    if "pdf" in content_type or urlsplit(final_url).path.casefold().endswith(".pdf") or body.startswith(b"%PDF-"):
+    path = urlsplit(final_url).path
+    if (
+        "pdf" in content_type
+        or body.startswith(b"%PDF-")
+        or ("html" not in content_type and path.lower().endswith(".pdf"))
+    ):
         extracted = _extract_pdf(body)
         if extracted.get("ok") is not True:
             return extracted
         return {
             "ok": True,
             "kind": "pdf",
-            "title": final_url.rsplit("/", 1)[-1][:200],
+            "title": path.rsplit("/", 1)[-1][:200],
             "text": extracted["text"],
             "extraction_method": extracted["extraction_method"],
             "fragments": _pdf_fragments(extracted["text"]) if extracted["extraction_method"] == "pdf_text" else [],

@@ -74,6 +74,7 @@ def exchange(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., dict[str
                     if not part:
                         return
                     request += part
+                state["request_line"] = request.split(b"\r\n", 1)[0]
                 for data, delay in segments:
                     if delay:
                         time.sleep(delay)
@@ -284,6 +285,14 @@ def test_http_deadline_preserves_framing_and_closes_response(exchange, payload: 
     result = j1_fetch._request_public("http://example.org/report", max_bytes=100, timeout=0.5)
     assert result[0] == 200 and result[2] == expected
     assert state["response"].isclosed()
+
+
+def test_public_http_encodes_unicode_without_changing_query_or_existing_escapes(exchange) -> None:
+    state = exchange([(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)])
+    url = "http://example.org/узел%2F42?q=ё+part%2B&slot=1&slot=2#note"
+    status, _, _, final_url = j1_fetch._request_public(url, max_bytes=100)
+    assert status == 200 and final_url == url.split("#")[0]
+    assert state["request_line"] == b"GET /%D1%83%D0%B7%D0%B5%D0%BB%2F42?q=%D1%91+part%2B&slot=1&slot=2 HTTP/1.1"
 
 
 def test_http_response_is_closed_when_body_is_not_read(exchange) -> None:

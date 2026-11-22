@@ -389,6 +389,7 @@ def _preserve_original_json_inputs(server: Any) -> None:
     fields: dict[str, frozenset[str] | None] = {
         "avito_search_listings": None,
         "avito_read_listing": None,
+        "j1_research_sources": None,
         "j1_research_vin": None,
         "j1_research_record_facts": None,
         "j1_research_document": None,
@@ -1454,7 +1455,8 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_sources",
         description=(
             "Queue public source URLs found by Codex web search for a bounded J1 research job. "
-            "Start with objective and a fresh opaque idempotency_key, or append using only job_id. "
+            "Start with objective and an opaque idempotency_key, or append to a known job_id. "
+            "If the start response is lost, replay its exact request and key to recover the retained job_id. "
             "Pass up to 20 public URLs per call. Exclude VIN, contacts and secrets. "
             "The worker reads supplied pages without issuing searches. Use j1_research_results and "
             "j1_research_document for partial results and cited passages."

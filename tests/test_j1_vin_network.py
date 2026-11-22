@@ -103,6 +103,15 @@ def test_scope_validates_selected_engines_and_accepts_empty_selection() -> None:
     assert result["errors"] == [{"provider": "policy", "error": "no_selected_engines"}]
 
 
+def test_scoped_http_encodes_unicode_and_preserves_escaped_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_transport(monkeypatch, [Response()])
+    url = f"https://example.org/узел%20A/{VIN}?q=ё+part%2B"
+    response = network.request_vin(url, scope(), max_bytes=100)
+    assert response[0] == 200 and response[3] == url
+    assert calls[0]["target"] == f"/%D1%83%D0%B7%D0%B5%D0%BB%20A/{VIN}?q=%D1%91+part%2B"
+    assert not network.safe_url(url.replace("%20", " "), scope())
+
+
 def test_exact_target_exception_does_not_change_generic_guards() -> None:
     authorized = scope()
     assert network.safe_query('"' + VIN + '" official manual', authorized)

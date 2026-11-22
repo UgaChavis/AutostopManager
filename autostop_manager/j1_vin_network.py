@@ -146,7 +146,7 @@ def safe_url(url: str, scope: VinScope) -> str:
     if not _active(scope) or not isinstance(url, str):
         return ""
     raw = url.strip()
-    if not raw or len(raw) > 2048 or any(ord(char) < 32 for char in raw) or "\\" in raw:
+    if not raw or len(raw) > 2048 or any(char.isspace() or ord(char) < 32 for char in raw) or "\\" in raw:
         return ""
     try:
         parsed = urlsplit(raw)
@@ -175,7 +175,8 @@ def safe_url(url: str, scope: VinScope) -> str:
         masked_url = urlunsplit(
             (parsed.scheme, parsed.netloc, _mask_target(path, scope), _mask_target(query, scope), fragment)
         )
-        if not j1_fetch.public_url(masked_url) or _is_api_url(raw):
+        # Escaped spaces have been decoded for the scoped checks above.
+        if not j1_fetch.public_url(masked_url.replace(" ", "%20")) or _is_api_url(raw):
             return ""
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
     except (ValueError, UnicodeError):
@@ -359,10 +360,9 @@ def _request_scoped(
         watchdog.start()
         try:
             _remaining(scope, deadline)
-            target = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
             connection.request(
                 "GET",
-                target,
+                j1_fetch._request_target(parsed),
                 headers={
                     "User-Agent": j1_fetch.USER_AGENT,
                     "Accept": "text/html,application/pdf,text/plain",

@@ -297,6 +297,11 @@ def test_native_j1_sources_reuses_job_and_accepts_follow_up(tmp_path, monkeypatc
     }
 
     async def run():
+        invalid = await tool.run({**create, "job_id": "null"})
+        assert invalid["error"]["code"] == "job_id_invalid"
+        with pytest.raises(ToolError):
+            await tool.run({**create, "source_urls": json.dumps(create["source_urls"])})
+        assert not (tmp_path / "public").exists()
         first = await tool.run(create)
         assert first["ok"] and first["added"] == 1
         replay = await tool.run(create)

@@ -1,12 +1,14 @@
 """Offline checks for the supplied-URL research queue."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 from uuid import UUID
 
 import pytest
 
-from autostop_manager import j1_research as j1
+from autostop_manager import j1_fetch, j1_research as j1
 from autostop_manager import j1_vin_store
 
 
@@ -33,6 +35,60 @@ def test_unsafe_input_does_not_initialize_the_cache():
         "code": "idempotency_key_invalid"
     }
     assert not j1._db_path().parent.exists()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://localhost./manual",
+        "https://vehicle.internal./manual",
+        "http://127.1/manual",
+        "https://invalid%20authority.example.org/manual",
+        "https://example.org/path with spaces",
+        "https://example.org/manual" + " " * 2048,
+        "https://example.org/?vehicle=WBA00000+000000000",
+    ],
+)
+def test_supplied_urls_check_the_public_identity_before_storage(url):
+    result = j1.research_sources(objective="Public sources", source_urls=[url], idempotency_key="request-1")
+    assert result["error"]["code"] == "source_urls_invalid_or_sensitive"
+    assert not j1._db_path().parent.exists()
+
+
+def test_source_objective_is_safe_after_whitespace_normalization():
+    result = j1.research_sources(
+        objective="Compare WBA00000  000000000",
+        source_urls=["https://example.org/manual"],
+        idempotency_key="request-1",
+    )
+    assert result["error"]["code"] == "objective_invalid_or_sensitive"
+    assert not j1._db_path().parent.exists()
+
+
+def test_supplied_sources_only_allow_unicast_addresses(monkeypatch):
+    address = "224.0.0.1"
+    response = j1.research_sources(
+        objective="Public sources", source_urls=[f"http://{address}/manual"], idempotency_key="request-1"
+    )
+    assert response["error"]["code"] == "source_urls_invalid_or_sensitive"
+    monkeypatch.setattr(
+        j1_fetch.socket, "getaddrinfo", lambda *_args, **_kwargs: [(None, None, None, "", (address, 80))]
+    )
+    with pytest.raises(ValueError, match="unsafe_dns_answer"):
+        j1_fetch._public_address("example.org", 80)
+
+
+def test_expired_job_advertises_no_follow_up_budget_before_pruning():
+    job_id = j1.research_sources(
+        objective="Public sources", source_urls=["https://example.org/manual"], idempotency_key="request-1"
+    )["job_id"]
+    with j1._db() as conn:
+        expired = (datetime.now(UTC) - timedelta(days=j1.RETENTION_DAYS + 1)).isoformat(timespec="seconds")
+        conn.execute("UPDATE jobs SET created_at=? WHERE id=?", (expired, job_id))
+        conn.commit()
+    status = j1.research_status(job_id)
+    assert status["pages_pending"] == 1 and status["pages_remaining"] == 0
+    assert j1.research_sources(job_id=job_id, source_urls=["https://example.org/new"])["error"]["code"] == "job_expired"
 
 
 @pytest.mark.parametrize("existing_cache", [False, True])
@@ -145,6 +201,50 @@ def test_supplied_order_controls_browser_budget(monkeypatch):
     assert fetched == [(first, True), (second, False)]
 
 
+def test_international_source_aliases_share_one_slot_and_preserve_the_submitted_receipt():
+    iri = "https://пример.рф:80/сборка/%2F?q=РФ&version=%C0"
+    host = "пример.рф".encode("idna").decode()
+    uri = f"https://{host}:80/{quote('сборка')}/%2F?q={quote('РФ')}&version=%C0"
+    aliases = [iri, uri.replace(quote("сборка"), quote("сборка").lower()), uri]
+    request = {"objective": "Public sources", "idempotency_key": "request-1", "source_urls": aliases}
+    receipt = j1.research_sources(**request)
+    assert receipt["ok"] and receipt["added"] == receipt["sources_total"] == 1
+    assert j1.research_sources(**request)["replayed"]
+    assert j1.research_sources(**(request | {"source_urls": [uri]}))["error"]["code"] == "idempotency_conflict"
+
+    job_id = receipt["job_id"]
+    distinct = [uri.replace("/%2F?", "//?"), uri.replace("%C0", "%C1")]
+    addition = j1.research_sources(job_id=job_id, source_urls=[uri, *distinct])
+    assert addition["added"] == 2 and addition["sources_total"] == 3
+    with j1._db(readonly=True) as conn:
+        row = conn.execute(
+            "SELECT url,canonical_url FROM documents WHERE job_id=? ORDER BY rowid", (job_id,)
+        ).fetchone()
+        assert tuple(row) == (iri, uri)
+
+
+def test_appending_to_retained_job_recognizes_both_international_redirect_keys():
+    source = "https://пример.рф/узел"
+    final = "https://другой.рф/текст"
+    job_id = j1.research_sources(objective="Public sources", idempotency_key="request-1", source_urls=[source])[
+        "job_id"
+    ]
+    with j1._db() as conn:
+        # The previous writer stored unquoted paths and Unicode DNS names after a redirect.
+        conn.execute(
+            "UPDATE documents SET requested_canonical_url=?,canonical_url=?,url=?,status='fetched' WHERE job_id=?",
+            (source, final, final, job_id),
+        )
+        conn.execute("UPDATE jobs SET status='completed' WHERE id=?", (job_id,))
+        conn.commit()
+    wire_urls = [
+        f"https://{host.encode('idna').decode()}/{quote(path)}"
+        for host, path in (("пример.рф", "узел"), ("другой.рф", "текст"))
+    ]
+    addition = j1.research_sources(job_id=job_id, source_urls=wire_urls)
+    assert addition["added"] == 0 and addition["sources_total"] == 1 and addition["status"] == "completed"
+
+
 def test_supplied_sources_do_not_extend_the_legacy_query_queue():
     legacy = j1.start_research("Public sources", ["synthetic query"])
     result = j1.research_sources(job_id=legacy["job_id"], source_urls=["https://example.org/manual"])
@@ -153,3 +253,73 @@ def test_supplied_sources_do_not_extend_the_legacy_query_queue():
     status = j1.research_status(legacy["job_id"])
     assert status["query_plan"] == [{"query": "synthetic query", "intent": "manual"}]
     assert "acquisition_mode" not in status and "acquisition_mode" not in j1.research_report(legacy["job_id"])
+
+
+@pytest.mark.parametrize("read", ["research_status", "research_report"])
+def test_snapshot_does_not_mix_completed_job_with_concurrent_followup(monkeypatch, read):
+    job_id = j1.research_sources(
+        objective="Public sources", source_urls=["https://example.org/first"], idempotency_key="request-1"
+    )["job_id"]
+    original_db = j1._db
+    with original_db() as conn:
+        conn.execute("UPDATE documents SET status='fetched',body='Original source' WHERE job_id=?", (job_id,))
+        conn.execute("UPDATE jobs SET status='completed' WHERE id=?", (job_id,))
+        conn.commit()
+
+    updates = []
+
+    def followup(sql):
+        if updates or "from documents" not in sql.lower():
+            return
+        updates.append(None)
+        updates[0] = j1.research_sources(job_id=job_id, source_urls=["https://example.org/second"])
+        with original_db() as writer:
+            writer.execute("UPDATE documents SET status='failed' WHERE job_id=? AND status='pending'", (job_id,))
+            writer.commit()
+
+    @contextmanager
+    def interleaved_db(**kwargs):
+        with original_db(**kwargs) as conn:
+            conn.set_trace_callback(followup)
+            yield conn
+
+    monkeypatch.setattr(j1, "_db", interleaved_db)
+    result = getattr(j1, read)(job_id)
+    assert updates and updates[0]["added"] == 1
+    assert result["status"] == "completed"
+    if read == "research_status":
+        assert result["pages_total"] == 1
+    else:
+        assert result["report"]["unavailable"] == []
+    assert j1.research_status(job_id)["pages_total"] == 2
+
+
+def test_capacity_prune_preserves_reopened_job_and_its_searchable_evidence(monkeypatch):
+    jobs = []
+    for n in range(2):
+        job_id = j1.research_sources(
+            objective="Public sources", source_urls=[f"https://example.org/doc{n}"], idempotency_key=f"request-{n}"
+        )["job_id"]
+        with j1._db() as conn:
+            created_at = (datetime.now(UTC) - timedelta(hours=2 - n)).isoformat(timespec="seconds")
+            conn.execute("UPDATE jobs SET status='completed', created_at=? WHERE id=?", (created_at, job_id))
+            conn.execute("UPDATE documents SET status='fetched',body='Actuator' WHERE job_id=?", (job_id,))
+            conn.execute(
+                "INSERT INTO documents_fts(job_id,document_id,title,body) SELECT job_id,id,title,body "
+                "FROM documents WHERE job_id=?",
+                (job_id,),
+            )
+            conn.commit()
+        jobs.append(job_id)
+
+    def compact(conn):
+        if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jobs[0],)).fetchone() is None:
+            followup = j1.research_sources(job_id=jobs[1], source_urls=["https://example.org/new"])
+            assert followup["ok"] and followup["status"] == "queued"
+
+    monkeypatch.setattr(j1, "_compact_cache", compact)
+    monkeypatch.setattr(j1, "_cache_size", lambda: j1.MAX_CORPUS_BYTES + 1)
+    with j1._db() as conn:
+        j1._prune(conn)
+    assert j1.research_status(jobs[1])["status"] == "queued"
+    assert j1.research_results(jobs[1], "Actuator")["total"] == 1

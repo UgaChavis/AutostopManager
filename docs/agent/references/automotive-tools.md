@@ -62,7 +62,7 @@ Hash — SHA256 canonical JSON excluding source_revision/content_hash (ensure_as
 В bundle входят тексты/хеши, registry, native_schemas, origins и migration map.
 
 CRM committed pin: src/minimal_kanban/web_app_assets/source/automotive_tool_catalog.json.
-Добавить export после публикации Manager; объём проверок и выпуск определяются поручением и [deployment](m2-server-update.md).
+Для перехода с прежней карты при обновлении CRM pin перенеси связи узла E15 на J1 и проверь синхронизацию инструкций графа с новым набором модулей. Поле `migration.old_to_new` описывает исходную историческую карту E1–E11. Порядок выпуска — [deployment](m2-server-update.md).
 Открытие окна не обращается к providers и не читает Manager checkout.
 Coordinated deploy сравнивает installed Manager REVISION и CRM pin/hash.
 Порядок schema→Manager producer→CRM pinned consumer; Store API не меняется.

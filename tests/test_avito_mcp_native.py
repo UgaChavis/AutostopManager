@@ -177,6 +177,7 @@ def test_original_json_preparser_is_scoped_to_strict_tools_and_preserves_other_t
     protected = {
         "avito_search_listings",
         "avito_read_listing",
+        "j1_research_sources",
         "j1_research_vin",
         "j1_research_record_facts",
         "j1_research_document",

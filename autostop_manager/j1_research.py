@@ -28,11 +28,13 @@ from uuid import uuid4
 from .j1_fetch import (
     MAX_PUBLIC_FRAGMENTS,
     MAX_PUBLIC_PDF_TEXT_CHARS,
+    MAX_SEARCH_SNIPPET_CHARS,
     contains_sensitive,
     contains_unsafe_url,
     fetch_document,
     parse_searxng_endpoint,
     public_url,
+    quote_http_target,
     redact_sensitive,
     search_public,
 )
@@ -51,6 +53,7 @@ MAX_CORPUS_BYTES = 250 * 1024 * 1024
 RETENTION_DAYS = 7
 _IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 _SOURCE_START_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$")
+_PERCENT_OCTET = re.compile(r"%[0-9a-fA-F]{2}")
 _URL_TOKEN = re.compile(r"(?i)(?<!\w)[a-z][a-z0-9+.-]*://[^\s<>]+")
 _WORD = re.compile(r"[^\W_]{3,}", flags=re.UNICODE)
 _STOP = False
@@ -141,6 +144,10 @@ def _utcnow() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _retention_cutoff(now: datetime) -> str:
+    return (now - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+
+
 def _cache_dir() -> Path:
     reject_obsolete_runtime_config()
 
@@ -194,7 +201,7 @@ def _db(*, readonly: bool = False) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def _canonical_url(value: str) -> str:
+def _canonical_url(value: str, *, supplied: bool = False) -> str:
     """Return a stable public-document key without changing meaningful parameters."""
 
     try:
@@ -207,7 +214,15 @@ def _canonical_url(value: str) -> str:
         return ""
     if parsed.scheme not in {"http", "https"} or not host:
         return ""
+    path = parsed.path or "/"
     hostname = host.casefold().rstrip(".")
+    if supplied:
+        try:
+            hostname = host.encode("idna").decode("ascii").lower().rstrip(".")
+        except UnicodeError:
+            return ""
+        # Preserve the actual path bytes, including encoded reserved characters.
+        path = _PERCENT_OCTET.sub(lambda match: match[0].upper(), quote_http_target(path))
     netloc = f"[{hostname}]" if ":" in hostname else hostname
     if port is not None and not (
         (parsed.scheme == "http" and port == 80) or (parsed.scheme == "https" and port == 443)
@@ -227,7 +242,7 @@ def _canonical_url(value: str) -> str:
         (
             parsed.scheme.casefold(),
             netloc,
-            parsed.path or "/",
+            path,
             urlencode(kept, doseq=True, errors="surrogateescape"),
             "",
         )
@@ -392,6 +407,26 @@ def _migrate_queries(conn: sqlite3.Connection) -> None:
     _add_missing_columns(conn, "queries", {"intent": "TEXT NOT NULL DEFAULT 'manual'"})
 
 
+_INDEX_DUPLICATE_TITLES = """
+    INSERT INTO documents_fts(job_id,document_id,title,body)
+    SELECT d.job_id,d.id,d.title,'' FROM documents AS d
+    JOIN documents AS p ON p.id=d.duplicate_of AND p.job_id=d.job_id
+    WHERE d.status='duplicate' AND d.duplicate_kind='exact' AND d.title<>'' AND d.title<>p.title
+"""
+
+
+def _migrate_duplicate_titles(conn: sqlite3.Connection) -> None:
+    """Index retained exact copies' alternative titles once, with no repeated bodies."""
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
+        return
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
+            return
+    conn.execute(_INDEX_DUPLICATE_TITLES)
+    conn.execute("PRAGMA user_version=1")
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -448,6 +483,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_jobs(conn)
     _migrate_queries(conn)
     _migrate_documents(conn)
+    _migrate_duplicate_titles(conn)
 
 
 def _valid_id(value: str) -> bool:
@@ -473,6 +509,15 @@ def _input_is_safe(value: str) -> bool:
     raw = str(value or "").strip()
     if not raw:
         return False
+    try:
+        raw.encode("utf-8")
+    except UnicodeError:
+        return False
+    normalized = " ".join(raw.split())
+    return _safe_public_input(raw) and (normalized == raw or _safe_public_input(normalized))
+
+
+def _safe_public_input(raw: str) -> bool:
     if public_url(raw):
         return True
     matches = list(_URL_TOKEN.finditer(raw))
@@ -700,7 +745,7 @@ def _validated_source_urls(source_urls: list[str]) -> dict[str, str] | None:
     urls: dict[str, str] = {}
     for value in source_urls:
         url = public_url(value) if isinstance(value, str) else ""
-        canonical_url = _canonical_url(url)
+        canonical_url = _canonical_url(url, supplied=True)
         if not canonical_url:
             return None
         urls.setdefault(canonical_url, url)
@@ -813,7 +858,8 @@ def _add_supplied_sources(
     ).fetchall()
     # Fetch can replace the current URL after a redirect. Both identities stay
     # useful across later batches while the original still consumes one slot.
-    known = {key for row in existing for key in row}
+    # Retained supplied jobs may have stored these keys in their original IRI spelling.
+    known = {_canonical_url(key, supplied=True) for row in existing for key in row}
     additions = {key: url for key, url in urls.items() if key not in known}
     max_pages = job["max_pages"]
     total = len(existing) + len(additions)
@@ -856,17 +902,13 @@ def research_sources(
             or contains_sensitive(idempotency_key)
         ):
             return _error("idempotency_key_invalid")
-        try:
-            objective.encode("utf-8")
-        except UnicodeError:
-            return _error("objective_invalid_or_sensitive")
         clean_objective = _clean_input(objective, limit=2000)
         key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
         body = json.dumps([objective, source_urls], ensure_ascii=True, separators=(",", ":"))
         request_hash = hashlib.sha256(body.encode()).hexdigest()
 
     now = datetime.now(UTC)
-    cutoff = (now - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+    cutoff = _retention_cutoff(now)
     timestamp = now.isoformat(timespec="seconds")
     try:
         with _db() as conn:
@@ -1004,7 +1046,8 @@ def research_status(job_id: str) -> dict[str, Any]:
     if not _valid_id(job_id):
         return _error("job_id_invalid")
     try:
-        with _db() as conn:
+        with _db() as conn, conn:
+            conn.execute("BEGIN")
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row is None:
                 return _error("job_not_found", job_id=job_id)
@@ -1100,7 +1143,9 @@ def research_status(job_id: str) -> dict[str, Any]:
             }
             if sources_only:
                 active = row["status"] in {"queued", "running"}
-                extendable = active or row["status"] == "completed"
+                extendable = (active or row["status"] == "completed") and row["created_at"] >= _retention_cutoff(
+                    datetime.now(UTC)
+                )
                 result.update(
                     acquisition_mode=SOURCES_ONLY_MODE,
                     queries_remaining=0,
@@ -1131,6 +1176,16 @@ def _duplicate_metadata(row: sqlite3.Row) -> tuple[str | None, dict[str, Any] | 
 
 def _result_item(row: sqlite3.Row) -> dict[str, Any]:
     duplicate_of, duplicate = _duplicate_metadata(row)
+    excerpt = row["excerpt"]
+    if row["body_match"] is not None:
+        if not row["body_match"]:
+            excerpt = row["title"]
+        else:
+            # FTS limits tokens, so one unbroken token can fill an entire page.
+            if len(excerpt) > MAX_SEARCH_SNIPPET_CHARS:
+                start = max(0, excerpt.find("\x02") - MAX_SEARCH_SNIPPET_CHARS // 3)
+                excerpt = excerpt[start : start + MAX_SEARCH_SNIPPET_CHARS]
+            excerpt = excerpt.replace("\x02", "[").replace("\x03", "]")
     result = {
         "document_id": row["id"],
         "url": row["url"],
@@ -1150,11 +1205,11 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
         "error": row["error"] or None,
         "duplicate_of": duplicate_of,
         "duplicate": duplicate,
-        "excerpt": row["excerpt"],
+        "excerpt": excerpt,
         "discovered_at": row["created_at"],
         "retrieved_at": row["retrieved_at"] or None,
     }
-    if row["page"] is not None:
+    if row["page"] is not None and row["body_match"]:
         result.update(
             page=row["page"],
             fragment_kind=row["fragment_kind"],
@@ -1199,15 +1254,19 @@ def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int =
                     []
                     if cursor >= total
                     else conn.execute(
-                        f"""SELECT {fields}, snippet(documents_fts,3,'[',']','…',24) AS excerpt,
+                        f"""SELECT {fields}, snippet(documents_fts,3,char(2),char(3),'…',24) AS excerpt,
+                              CASE WHEN documents_fts.title='' THEN 1 ELSE EXISTS (
+                                  SELECT 1 FROM documents_fts AS hit
+                                  WHERE hit.rowid=documents_fts.rowid AND hit.body MATCH ?
+                              ) END AS body_match,
                               f.page,f.fragment_kind,f.section,f.source_url
                        FROM documents_fts JOIN documents AS d ON d.id=documents_fts.document_id
                        LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        LEFT JOIN document_fragments AS f ON f.fts_rowid=documents_fts.rowid AND f.document_id=d.id
                        WHERE documents_fts.job_id=? AND documents_fts MATCH ?
                        ORDER BY bm25(documents_fts),d.id,f.page LIMIT ? OFFSET ?""",
-                        (job_id, expression, limit, cursor),
-                    ).fetchall()
+                        (expression, job_id, expression, limit, cursor),
+                    )
                 )
             else:
                 total = conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
@@ -1215,11 +1274,11 @@ def research_results(job_id: str, query: str = "", cursor: int = 0, limit: int =
                     []
                     if cursor >= total
                     else conn.execute(
-                        f"""SELECT {fields}, substr(d.body,1,300) AS excerpt, NULL AS page
+                        f"""SELECT {fields}, substr(d.body,1,300) AS excerpt, NULL AS page, NULL AS body_match
                        FROM documents AS d LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        WHERE d.job_id=? ORDER BY d.created_at,d.id LIMIT ? OFFSET ?""",
                         (job_id, limit, cursor),
-                    ).fetchall()
+                    )
                 )
             items = [_result_item(row) for row in rows]
             return {
@@ -1441,26 +1500,32 @@ def _report_excerpt(value: str) -> str:
     return _clean_input(redact_sensitive(value, limit=320), limit=280)
 
 
-def _source_sentences(body: str) -> Iterator[str]:
-    for sentence in re.split(r"(?<=[.!?])\s+|[\r\n]+", body):
-        compact = _report_excerpt(sentence)
-        if len(compact) >= 24:
-            yield compact
+def _source_sentences(conn: sqlite3.Connection, source: dict[str, Any]) -> Iterator[tuple[str, str]]:
+    document_id = source["document_id"]
+    body = conn.execute("SELECT body FROM documents WHERE id=?", (document_id,)).fetchone()[0]
+    fragments = conn.execute(
+        "SELECT start,end,source_url FROM document_fragments WHERE document_id=? ORDER BY page", (document_id,)
+    ).fetchall()
+    for start, end, url in fragments or [(0, len(body), source["url"])]:
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n\f]+", body[start:end]):
+            compact = _report_excerpt(sentence)
+            if len(compact) >= 24:
+                yield compact, url
 
 
-def _alternative_cause_mentions(rows: list[sqlite3.Row], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _alternative_cause_mentions(conn: sqlite3.Connection, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return cited source mentions only; no automatic diagnosis is inferred."""
 
     found: list[dict[str, Any]] = []
-    for row, source in zip(rows, sources, strict=True):
-        for sentence in _source_sentences(str(row["body"] or "")):
+    for source in sources:
+        for sentence, url in _source_sentences(conn, source):
             if not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
                 continue
             found.append(
                 {
                     "status": "unverified_source_mention",
                     "source_document_id": source["document_id"],
-                    "source_url": source["url"],
+                    "source_url": url,
                     "source_tier": source["source_tier"],
                     "applicability": source["applicability"],
                     "confidence": source["confidence"],
@@ -1474,7 +1539,7 @@ def _alternative_cause_mentions(rows: list[sqlite3.Row], sources: list[dict[str,
 
 
 def _frequency_measurements(
-    rows: list[sqlite3.Row], sources: list[dict[str, Any]], context: dict[str, str]
+    conn: sqlite3.Connection, sources: list[dict[str, Any]], context: dict[str, str]
 ) -> list[dict[str, Any]]:
     """Expose a cohort only when its sentence names this investigated defect.
 
@@ -1492,10 +1557,10 @@ def _frequency_measurements(
     ]
     if not subject_terms:
         return measurements
-    for row, source in zip(rows, sources, strict=True):
+    for source in sources:
         if source["source_tier"] not in {"A", "B"} or source["applicability"] not in {"exact", "analog"}:
             continue
-        for sentence in _source_sentences(str(row["body"] or "")):
+        for sentence, url in _source_sentences(conn, source):
             match = _FREQUENCY_COUNT.search(sentence) or _FREQUENCY_PERCENT.search(sentence)
             if match is None:
                 continue
@@ -1508,7 +1573,7 @@ def _frequency_measurements(
                 {
                     "status": "reported_source_measurement",
                     "source_document_id": source["document_id"],
-                    "source_url": source["url"],
+                    "source_url": url,
                     "source_tier": source["source_tier"],
                     "applicability": source["applicability"],
                     "measurement": match.group(0),
@@ -1586,7 +1651,8 @@ def research_report(job_id: str) -> dict[str, Any]:
     if not _valid_id(job_id):
         return _report_error("job_id_invalid")
     try:
-        with _db() as conn:
+        with _db() as conn, conn:
+            conn.execute("BEGIN")
             job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
             if job is None:
                 return _report_error("job_not_found", job_id=job_id)
@@ -1594,16 +1660,18 @@ def research_report(job_id: str) -> dict[str, Any]:
             sources_only = job["acquisition_mode"] == SOURCES_ONLY_MODE
             search_failures = [] if sources_only else _search_failures(conn, job_id)
             rows = conn.execute(
-                """SELECT id,url,canonical_url,title,body,source_class,source_basis,source_tier,
+                """SELECT id,url,canonical_url,title,CASE WHEN ? THEN body ELSE '' END AS body,
+                          source_class,source_basis,source_tier,
                           search_snippet,search_rank,retrieved_at
                    FROM documents WHERE job_id=? AND status='fetched'""",
-                (job_id,),
-            ).fetchall()
-            pairs = [(row, _report_source_item(row, context)) for row in rows]
-            pairs.sort(key=lambda pair: _report_source_sort_key(pair[1]))
-            pairs = pairs[:20]
-            report_rows = [pair[0] for pair in pairs]
-            sources = [pair[1] for pair in pairs]
+                (bool(context), job_id),
+            )
+            # Rank lightweight metadata. Read a body for excerpt extraction only
+            # while examining that source, even for a full 300-document job.
+            all_sources = sorted((_report_source_item(row, context) for row in rows), key=_report_source_sort_key)
+            sources = all_sources[:20]
+            alternative_causes = _alternative_cause_mentions(conn, sources)
+            frequency_measurements = _frequency_measurements(conn, all_sources, context)
             duplicates = [
                 {
                     "document_id": row["id"],
@@ -1631,14 +1699,13 @@ def research_report(job_id: str) -> dict[str, Any]:
                 }
                 for row in conn.execute(
                     """SELECT id,url,title,error,source_class,source_tier FROM documents
-                       WHERE job_id=? AND status='failed' ORDER BY created_at,id LIMIT 20""",
+                       WHERE job_id=? AND status='failed' ORDER BY created_at,id""",
                     (job_id,),
                 )
             ]
     except (OSError, sqlite3.Error):
         return _report_error("j1_store_unavailable", job_id=job_id)
 
-    frequency_measurements = _frequency_measurements(report_rows, sources, context)
     confirmed = [
         {**source, "evidence_kind": "strong_context_source"}
         for source in sources
@@ -1651,7 +1718,8 @@ def research_report(job_id: str) -> dict[str, Any]:
         if source["document_id"] not in confirmed_ids
     ][:10]
     tier_counts = {
-        tier: sum(1 for source in sources if source["source_tier"] == tier) for tier in ("A", "B", "C", "D", "unrated")
+        tier: sum(1 for source in all_sources if source["source_tier"] == tier)
+        for tier in ("A", "B", "C", "D", "unrated")
     }
     frequency: dict[str, Any]
     if frequency_measurements:
@@ -1667,11 +1735,13 @@ def research_report(job_id: str) -> dict[str, Any]:
         }
     limitations = _report_limitations(
         status=str(job["status"]),
-        sources=sources,
+        sources=all_sources,
         unavailable=unavailable,
         search_failures=search_failures,
         frequency_measurements=frequency_measurements,
     )
+    if len(all_sources) > len(sources):
+        limitations.append({"code": "source_list_truncated", "detail": "report_examples_cover_first_20_ranked_sources"})
     result = {
         "ok": True,
         "schema": REPORT_SCHEMA,
@@ -1681,18 +1751,18 @@ def research_report(job_id: str) -> dict[str, Any]:
         "automotive_context": context or None,
         "report": {
             "evidence_confidence": {
-                "level": _overall_confidence(sources),
-                "retrieved_sources": len(sources),
-                "independent_domains": _source_domains(sources),
+                "level": _overall_confidence(all_sources),
+                "retrieved_sources": len(all_sources),
+                "independent_domains": _source_domains(all_sources),
                 "source_tiers": tier_counts,
             },
             "frequency": frequency,
             "confirmed": confirmed,
             "hypotheses": hypotheses,
-            "alternative_causes": _alternative_cause_mentions(report_rows, sources),
+            "alternative_causes": alternative_causes,
             "sources": sources,
             "duplicates": duplicates,
-            "unavailable": unavailable,
+            "unavailable": unavailable[:20],
             "search_failures": search_failures,
             "limitations": limitations,
             "read_only": True,
@@ -1804,8 +1874,17 @@ def _compact_cache(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
+def _evict_terminal_job(conn: sqlite3.Connection, job_id: str) -> bool:
+    # A follow-up can reopen a candidate after the initial scan. The guarded
+    # delete takes the write lock before touching its searchable evidence.
+    removed = conn.execute("DELETE FROM jobs WHERE id=? AND status NOT IN ('queued','running')", (job_id,)).rowcount
+    if removed:
+        conn.execute("DELETE FROM documents_fts WHERE job_id=?", (job_id,))
+    return bool(removed)
+
+
 def _prune(conn: sqlite3.Connection) -> None:
-    cutoff = (datetime.now(UTC) - timedelta(days=RETENTION_DAYS)).isoformat(timespec="seconds")
+    cutoff = _retention_cutoff(datetime.now(UTC))
     expired = [
         row[0]
         for row in conn.execute(
@@ -1813,8 +1892,7 @@ def _prune(conn: sqlite3.Connection) -> None:
         )
     ]
     for job_id in expired:
-        conn.execute("DELETE FROM documents_fts WHERE job_id=?", (job_id,))
-        conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        _evict_terminal_job(conn, job_id)
     conn.commit()
     if expired:
         _compact_cache(conn)
@@ -1844,9 +1922,10 @@ def _prune(conn: sqlite3.Connection) -> None:
         )
     ]
     for job_id in old:
-        conn.execute("DELETE FROM documents_fts WHERE job_id=?", (job_id,))
-        conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        removed = _evict_terminal_job(conn, job_id)
         conn.commit()
+        if not removed:
+            continue
         _compact_cache(conn)
         if _cache_size() <= MAX_CORPUS_BYTES:
             break
@@ -2015,8 +2094,8 @@ def _index_document(
     body: str,
     fragments: list[tuple[int, str, str, str, int, int]],
 ) -> None:
-    conn.execute("DELETE FROM document_fragments WHERE document_id=?", (document_id,))
-    conn.execute("DELETE FROM documents_fts WHERE document_id=?", (document_id,))
+    # Only pending documents are claimed. Their first index and fetched status
+    # commit together, so a restarted worker cannot inherit a partial index.
     insert_text = "INSERT INTO documents_fts(job_id,document_id,title,body) VALUES(?,?,?,?)"
     if not fragments:
         conn.execute(insert_text, (job_id, document_id, title, body))
@@ -2108,7 +2187,9 @@ def _work_public_job(job_id: str) -> None:
                         preserve_page_breaks=is_pdf_text,
                     )
                     fetched_url = public_url(fetch_result.get("url", "")) or url
-                    canonical_url = _canonical_url(fetched_url) or _canonical_url(url)
+                    canonical_url = _canonical_url(fetched_url, supplied=sources_only) or _canonical_url(
+                        url, supplied=sources_only
+                    )
                     # A redirect may resolve to a URL already queued by search.
                     # Keep this row's original source link in that rare case; the
                     # canonical URL still links content-level duplicates below.
@@ -2121,7 +2202,10 @@ def _work_public_job(job_id: str) -> None:
                     language = _detect_language(title, body)
                     extraction_method = _extraction_method(fetch_result)
                     digest = hashlib.sha256(body.encode()).hexdigest()
-                    similarity_hash = _simhash(body)
+                    # A one-character revision of a part number or DTC can be the
+                    # whole reason to read a second source or a particular page.
+                    preserve_variants = sources_only or bool(fetch_result.get("fragments"))
+                    similarity_hash = "" if preserve_variants else _simhash(body)
                     duplicate = _find_duplicate(conn, job_id=job_id, digest=digest, similarity_hash=similarity_hash)
                     retrieved_at = _utcnow()
                     if duplicate is not None:
@@ -2151,6 +2235,7 @@ def _work_public_job(job_id: str) -> None:
                                 doc_id,
                             ),
                         )
+                        conn.execute(_INDEX_DUPLICATE_TITLES + " AND d.id=?", (doc_id,))
                     else:
                         # FTS repeats the text; reserve enough room only for a
                         # genuinely new document. Duplicate links use no corpus
