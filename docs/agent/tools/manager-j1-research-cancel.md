@@ -1,6 +1,6 @@
 # manager.j1_research_cancel — Отменить собственный J1 job
 
-Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Основной модуль: [J1](../modules/J1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_write.
 

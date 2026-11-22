@@ -80,6 +80,12 @@ EFFECTFUL_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
         "idempotentHint": False,
         "openWorldHint": False,
     },
+    "j1_research_sources": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
     "j1_research_start": {
         "readOnlyHint": False,
         "destructiveHint": False,

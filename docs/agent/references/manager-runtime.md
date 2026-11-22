@@ -6,7 +6,7 @@
 
 Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateless Streamable HTTP. `build_server()` регистрирует инструменты и до открытия порта проверяет имена/fingerprint. CRM Gateway — отдельный MCP; его инструменты не входят в Manager manifest. Актуальная input schema берётся из всех страниц живого `tools/list`, а source fingerprint — из manifest; при изменении сигнатуры обновляй оба вместе с кодом.
 
-Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `manager_automations`, `manager_automation_control`, `j1_research_start`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_status`, `j1_research_results`, `j1_research_document`, `j1_research_report`, `j1_research_add_queries`, `j1_research_cancel`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
+Проверка цепи: active revision → initialize/ping → paginated tools/list → schema/annotations → безопасный bounded вызов → downstream. HTTP 200, количество tools или зелёный CI по отдельности не доказывают цепь. `mcp-probe` сверяет `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` для `manager_automations`, `manager_automation_control`, `j1_research_start`, `j1_research_sources`, `j1_research_vin`, `j1_research_record_facts`, `j1_research_status`, `j1_research_results`, `j1_research_document`, `j1_research_report`, `j1_research_add_queries`, `j1_research_cancel`, `store_digest`, `store_management_action`, `store_quote_conductor`; fingerprint учитывает только input schemas.
 
 Для проверки только metadata используй `mcp-probe --metadata-only` или `metadata_only=True` в sync/async API probe. Режим выполняет initialize/ping и полный paginated tools/list с той же проверкой schemas/annotations, без project tools/call и DELETE при закрытии SDK transport. Успех помечен `mode="metadata_only"`, checks содержит только `native_ping` и `tools_list`; это доступность и соответствие metadata, не функциональная приёмка. Обычный режим по умолчанию сохранён.
 
@@ -30,7 +30,7 @@ Native MCP работает на loopback `http://127.0.0.1:41931/mcp`, stateles
 
 Для content-free проверки существующего work Telegram чата используй `WakeConfig.load()` и `AppServer` из active bridge release. Root-only `wake.json` даёт thread ID; его не выводи. `AppServer.manager_mcp_schema_status(expected_schemas, declarations=...)` использует `threadId`, `serverName="autostopmanager"`, `detail="toolsAndAuthOnly"` и все страницы `cursor=nextCursor`. Передай input schemas из endpoint и отдельно реально доступные клиенту declarations; без последних результат явно `model_declarations_unverified`. `runtimeStatus="connected"` и `toolsError=null` могут сопровождать cached catalog, поэтому сами по себе обновление не доказывают. При `model_declarations_stale` не подгоняй аргументы под старую схему. Для уже разрешённого bounded вызова доступен существующий App Server `mcpServer/tool/call` с `threadId`, `server`, `tool`, `arguments`, либо обычный MCP SDK через актуальный endpoint; это обход cached declaration, а не доказательство её обновления. Схему локального App Server уточняй через `codex app-server generate-json-schema --out <temporary-dir> --experimental`. Не перезапускай daemon ради schema mismatch.
 
-Каждый выполненный Manager MCP tool, включая отдельные E15 search/excerpt/browser calls, получает `tool_execution`: случайный технический `call_id`, `started_at`, `ended_at`, `wall_ms`, отдельные backend/processing elapsed и известные network/attempt counts. Неизвестные backend значения — `null`, существующий `execution` сохраняется; технический outcome ограничен `ok/error/unknown`, доменный outcome остаётся в исходном ответе. Безопасные `mcp_tool_start`/`mcp_tool_end` JSON events пишутся только в stderr/journal, без аргументов, URL, клиентских идентификаторов, хешей, provider payload и текста исключений. Это время внутри инструмента; полный ход Codex измеряется по внешним `task_started` → `task_complete` (или явно указанным user-message → final границам), включая чтение инструкций и финальный ответ.
+Каждый выполненный Manager MCP tool, включая отдельные вызовы J1 search/excerpt/browser, получает `tool_execution`: случайный технический `call_id`, `started_at`, `ended_at`, `wall_ms`, отдельные backend/processing elapsed и известные network/attempt counts. Неизвестные backend значения — `null`, существующий `execution` сохраняется; технический outcome ограничен `ok/error/unknown`, доменный outcome остаётся в исходном ответе. Безопасные `mcp_tool_start`/`mcp_tool_end` JSON events пишутся только в stderr/journal, без аргументов, URL, клиентских идентификаторов, хешей, provider payload и текста исключений. Это время внутри инструмента; полный ход Codex измеряется по внешним `task_started` → `task_complete` (или явно указанным user-message → final границам), включая чтение инструкций и финальный ответ.
 
 ## Ограничения выполнения
 
@@ -41,10 +41,10 @@ research tools имеют readOnly=false/destructive=true/idempotent=false: VIN 
 expiry cleanup, lost-state stub updates и failed-worker reconciliation, также перед отказом
 отключённых VIN-записей. Status/results/report могут создать/мигрировать обычную SQLite, но не
 получают новые страницы. VIN/add_queries имеют openWorld=true, остальные VIN-aware tools — false.
-Общий J1/E15 VIN не принимает; general start сохраняет прежние annotations.
-`j1_research_document` добавляет `page`/`ocr`; у обычной job прежние defaults сохраняются,
-а активные page/OCR отклоняются. OCR ставится в дедуплицированную worker-очередь и меняет временные
-revision/draft без новой сети. Domain receipts/CAS и selected-page dedup сохраняются, но не
+Обычный режим J1 использует обезличенные данные; general start сохраняет прежние annotations.
+`j1_research_document(page=N)` читает страницу PDF или раздел HTML из сохранённого публичного материала.
+Без `page` доступен прежний плоский текст. `ocr=true` доступен для выбранной страницы VIN-документа,
+ставит её в дедуплицированную worker-очередь и меняет временные revision/draft без новой сети. Domain receipts/CAS и selected-page dedup сохраняются, но не
 делают lifecycle housekeeping идемпотентным; start key после expiry может создать новую job.
 Источник данных не может менять job scope или получателей.
 
@@ -106,7 +106,7 @@ owner API и quote conductor могут менять Store или Manager state;
 `collect_work_price_evidence`, `estimate_repair_work_cost` и `verify_oem_candidates_web`
 используют отдельный общий веб-пул: два workers, два ожидающих вызова и максимум
 90 секунд ожидания. Отказ admission/worker сохраняет семейство ответа инструмента:
-у E15 — web-формат `schema/capability/read_only` и
+у публичных читателей J1 — web-формат `schema/capability/read_only` и
 `error={code,retryable}`; `retryable=false`, исходные непроверенные аргументы не
 возвращаются. Код причины — `provider_busy`, `provider_wait_timeout`,
 `provider_executor_unavailable` или `provider_execution_failed`.
@@ -269,7 +269,7 @@ CLI не создаёт старый E4 cache и не предоставляет
 - `elcats_catalog_query` — independent E4 operation на готовом профиле: default-disabled, page_budget=12/max24 и общий deadline45s. Robots/redirect/images входят в тот же бюджет; per-brand matrix и partial OCR evidence — [Elcats](elcats.md). Provider status показывает локальные возможности без probe; рабочая навигация и подтверждение номера различаются.
 - Служебные VIN/каталожные методы: `benchmark_vin_parts_lookup` проверяет пачку идентификаторов, по умолчанию может читать vPIC; PartsAPI live-вызовы включаются отдельными флагами, отчёт скрывает исходные идентификаторы. `recommend_automotive_sources` выбирает технические источники без копирования лицензированных материалов; `lookup_public_automotive_evidence` читает публичные model-level recalls/TSB и маршруты по жидкостям, не подтверждает VIN-кампании или применимость. Сценарий — [E1](../modules/E1.md), контракты — текущие schemas и [mcp_tools.py](../../../autostop_manager/mcp_tools.py).
 - `search_partsapi_category_index`, `explain_partsapi_category_for_intent`, `validate_partsapi_category_index` читают/проверяют исторический category fixture; не выбирай эти категории для текущего 43-методного контракта. [PartsAPI](partsapi.md).
-- `j1_research_start/add_queries/cancel` меняют временную job/cache. Публичную сеть затем читает отдельный worker исследования. Работай с точным job ID; чужие jobs не подходят для smoke. Статус/материалы/отчёт читаются порциями. [web-research.md](web-research.md).
+- `j1_research_start/sources/add_queries/cancel` меняют временную job/cache. Публичную сеть затем читает отдельный worker исследования. Работай с точным job ID; чужие jobs не подходят для smoke. Статус/материалы/отчёт читаются порциями. [web-research.md](web-research.md).
 - `assess_part_market` и `assess_avito_price_sample` оценивают переданную выборку, не собирают предложения и не публикуют цену клиенту. [part-market.md](part-market.md), [market-listings.md](market-listings.md).
 - `parts_store_cards` читает или меняет только колонку `parts_store`; `create/append_note` требуют guarded write и Gateway readback. [crm-mail.md](crm-mail.md).
 

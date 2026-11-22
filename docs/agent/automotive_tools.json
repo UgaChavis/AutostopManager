@@ -227,18 +227,19 @@
       "reference": "docs/agent/references/automotive-sources.md"
     },
     {
-      "element_id": "E15",
+      "element_id": "J1",
       "module_key": "public_research",
-      "title": "Публичный поиск и исследования",
-      "purpose": "Поиск, чтение публичных страниц и bounded J1 jobs",
-      "parent": "E1",
-      "instruction_ref": "docs/agent/modules/E15.md",
+      "title": "Интернет-исследования",
+      "purpose": "Публичный поиск, проверка источников и исследовательские задания",
+      "parent": null,
+      "instruction_ref": "docs/agent/modules/J1.md",
       "evidence_rules": [
-        "Не отправляй частные VIN/контакты/CRM/Telegram/секреты в публичный поиск.",
+        "В публичный поиск передавай только обезличенные условия; полный VIN допускается в отдельном режиме J1.",
+        "Поисковая выдача помогает найти источник, а вывод опирается на прочитанную страницу или документ.",
         "Ручной цвет сообщает ввод в работу, а пригодность ответа проверяется отдельно."
       ],
       "input_notes": [
-        "Public query/URL; J1 start/add/cancel имеют job side effects и бюджет."
+        "Обезличенный вопрос и публичные URL; временное задание имеет общий бюджет."
       ],
       "reference": "docs/agent/references/web-research.md"
     }
@@ -3493,7 +3494,7 @@
     },
     {
       "tool_id": "manager.search_web_multi",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Публичный поиск",
@@ -3541,7 +3542,7 @@
     },
     {
       "tool_id": "manager.fetch_page_excerpt",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Ограниченный текст публичной страницы",
@@ -3569,7 +3570,7 @@
         "Safe HTTP/transport causes and upstream retryable=false are preserved; unknown legacy cause remains unknown. 404 does not start PDF/browser fallback."
       ],
       "limitations": [
-        "Reads one bounded public page through installed CRM WebResearchGatewayV1 (E15); max_chars is bounded at 8000.",
+        "Reads one bounded public page through installed CRM WebResearchGatewayV1 (J1); max_chars is bounded at 8000.",
         "No login/captcha bypass; access_flags/requires_human report blocked content. A public page is evidence, not automatic fitment or repair authorization."
       ],
       "example": {
@@ -3587,7 +3588,7 @@
     },
     {
       "tool_id": "manager.fetch_page_browser",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Изолированное чтение страницы браузером",
@@ -3632,7 +3633,7 @@
     },
     {
       "tool_id": "manager.j1_research_start",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Начать bounded исследование J1",
@@ -3682,7 +3683,58 @@
       }
     },
     {
-      "primary_module": "E15",
+      "tool_id": "manager.j1_research_sources",
+      "primary_module": "J1",
+      "also_used_in": [],
+      "classification": "active",
+      "title": "Поставить публичные источники в очередь J1",
+      "purpose": "Создать задание J1 по найденным ссылкам или добавить ссылки в своё задание того же типа",
+      "provider_id": "public_web",
+      "primary_data_source": "public URLs selected by the current agent; primary URL lineage must be preserved",
+      "execution_kind": "job_write",
+      "implementation_state": "implemented",
+      "instruction_ref": "docs/agent/tools/manager-j1-research-sources.md",
+      "input_fields": [
+        "source_urls",
+        "objective",
+        "job_id",
+        "idempotency_key"
+      ],
+      "defaults": {
+        "objective": null,
+        "job_id": null,
+        "idempotency_key": null
+      },
+      "outputs": [
+        "Поля задания J1 `ok`, `schema`, `job_id`, `status`, `acquisition_mode`, `added`, `sources_total`, `max_pages`, `replayed`"
+      ],
+      "errors": [
+        "Ошибки входа, бюджета, режима и состояния возвращаются в `error.code`. Код отказа исполнителя `j1_sources_executor_unavailable`"
+      ],
+      "limitations": [
+        "На первом вызове передай objective и idempotency_key. Для добавления ссылок передай job_id того же задания и source_urls.",
+        "До 20 публичных HTTP(S) URL за вызов и до 300 разных URL на задание. VIN, контакты и секреты запрещены. Повторы определяются по canonical URL.",
+        "Вызов ставит URL в локальную очередь. Исполнитель J1 читает ссылки по действующим правилам доступа. Результаты и документы доступны через существующие вызовы.",
+        "При неизвестном исходе сначала проверь состояние своего задания. Для повтора старта сохраняй исходное тело и ключ."
+      ],
+      "example": {
+        "source_urls": [
+          "https://example.com/manual.pdf"
+        ],
+        "objective": "Проверить описание детали",
+        "idempotency_key": "PUBLIC_DEMO_0001"
+      },
+      "invalid_example": {
+        "source_urls": null
+      },
+      "reference": "docs/agent/references/web-research.md",
+      "invocation": {
+        "transport": "manager_mcp",
+        "tool_name": "j1_research_sources"
+      }
+    },
+    {
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "provider_id": "public_web",
@@ -3729,7 +3781,7 @@
       }
     },
     {
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "provider_id": "public_web",
@@ -3788,7 +3840,7 @@
     },
     {
       "tool_id": "manager.j1_research_status",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Статус собственного J1 job",
@@ -3805,6 +3857,7 @@
       "outputs": [
         "Legacy flat schema=autostop.j1.research.v1: ok/job_id/status/objective/created_at/updated_at/max_pages/profile/automotive_context/query_plan.",
         "pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.",
+        "Статус задания по ссылкам включает `acquisition_mode=sources_only`, `queries_remaining=0`, `pages_remaining` и `pages_pending`. План, предложения запросов и ошибки поисковых провайдеров пусты",
         "VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis."
       ],
       "errors": [
@@ -3833,7 +3886,7 @@
     },
     {
       "tool_id": "manager.j1_research_results",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Результаты собственного J1 job",
@@ -3855,7 +3908,8 @@
         "limit": 20
       },
       "outputs": [
-        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[].",
+        "Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[]. Результаты по фрагментам содержат page/fragment_kind/section/source_url.",
+        "Пустой `query` перечисляет документы. При непустом запросе `total` считает совпавшие строки, один `document_id` может встречаться у нескольких фрагментов",
         "VIN jobs: schema=autostop.j1.vin_research.v1; bounded local corpus search results and cursor; quotes/URLs are redacted while document lineage and revision remain available."
       ],
       "errors": [
@@ -3885,7 +3939,7 @@
     },
     {
       "tool_id": "manager.j1_research_document",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Документ собственного J1 job",
@@ -3912,16 +3966,16 @@
       "outputs": [
         "Legacy flat schema=autostop.j1.research.v1: ok/job_id/document_id/url/canonical_url/title/kind/source/source_class/source_basis/source_tier.",
         "search_snippet/search_rank/search_engines/language/extraction_method/duplicate_of/duplicate/discovered_at/retrieved_at/text/offset/total_chars/next_offset.",
-        "VIN jobs expose versioned document/page text, server-derived match_evidence_id and bounded OCR queue state."
+        "Публичный page возвращает один фрагмент с page/fragment_kind/section/source_url и previous_page/next_page. Для неполной страницы PDF возвращается fragment_truncated=true. VIN jobs expose versioned document/page text, server-derived match_evidence_id and bounded OCR queue state."
       ],
       "errors": [
         "ok=false/error.code: identifier_invalid/pagination_invalid/document_not_found/j1_store_unavailable.",
-        "VIN page/OCR: unsupported for general jobs; scope, expiry, page and cached-document failures remain explicit."
+        "Публичный `document_page_unavailable` означает, что запрошенный фрагмент не сохранён. VIN-режим возвращает ошибки области, срока действия, страницы и OCR"
       ],
       "limitations": [
         "job_id/document_id refer to one returned J1 job; synthetic examples demonstrate shape only.",
         "General J1 remains de-identified; the separate VIN job permits only its original scoped VIN. Source URL lineage stays attached.",
-        "Default document reads saved text; page/ocr options are VIN-only. OCR queues a deduplicated selected cached PDF page without network and changes document/analysis revision.",
+        "Без page читается сохранённый плоский текст. Публичный page выбирает страницу PDF или раздел HTML, offset относится к выбранному фрагменту. OCR ставит выбранную cached PDF-страницу в очередь только в VIN-режиме, без новой сети, с изменением revision.",
         "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=false. Selected-page OCR is deduplicated, but lifecycle housekeeping can write again. No factory truth follows from a literal VIN match.",
         "VIN PDFs: explicit registry A/B sources up to 24 MiB, others up to 8 млн байт. Returned VIN-bearing source URLs are masked; raw originals stay only in private tmpfs for provenance.",
         "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes."
@@ -3943,7 +3997,7 @@
     },
     {
       "tool_id": "manager.j1_research_report",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Evidence ledger собственного J1 job",
@@ -3960,6 +4014,7 @@
       "outputs": [
         "Legacy flat schema=autostop.j1.report.v1: ok/job_id/status/profile/automotive_context/report.",
         "report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written.",
+        "Отчёт задания по ссылкам добавляет `acquisition_mode=sources_only`. `search_failures` пуст",
         "VIN jobs: schema=autostop.j1.vin_report.v1; collection_status/analysis_status/revision/finalized_revision/claims/conflicts/unknown_fields/sources/budget/stop_reason."
       ],
       "errors": [
@@ -3988,7 +4043,7 @@
     },
     {
       "tool_id": "manager.j1_research_add_queries",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Добавить запросы в текущий бюджет J1",
@@ -4015,6 +4070,7 @@
         "job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.",
         "General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.",
         "Writes additional de-identified queries to the local job; the worker may then acquire new public pages.",
+        "Для задания `sources_only` используй `j1_research_sources` с новыми ссылками. Запросы отклоняются с `queries_not_allowed_for_sources_only`.",
         "VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN.",
         "Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.",
         "Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent."
@@ -4037,7 +4093,7 @@
     },
     {
       "tool_id": "manager.j1_research_cancel",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [],
       "classification": "active",
       "title": "Отменить собственный J1 job",
@@ -4128,7 +4184,7 @@
     },
     {
       "tool_id": "manager.recommend_automotive_sources",
-      "primary_module": "E15",
+      "primary_module": "J1",
       "also_used_in": [
         "E14"
       ],
@@ -6615,7 +6671,7 @@
       "tool_id": "elcats.resolve_vehicle",
       "primary_module": "E4",
       "also_used_in": [
-        "E15"
+        "J1"
       ],
       "classification": "active",
       "title": "Elcats: модификация из готового профиля",
@@ -7006,7 +7062,7 @@
       "primary_module": "E4",
       "also_used_in": [
         "E6",
-        "E15"
+        "J1"
       ],
       "classification": "active",
       "title": "Elcats: кандидаты по названию детали",
@@ -7497,6 +7553,14 @@
       "reference": "docs/agent/references/manager-runtime.md"
     },
     {
+      "tool_name": "j1_research_sources",
+      "classification": "active",
+      "tool_ids": [
+        "manager.j1_research_sources"
+      ],
+      "reference": "docs/agent/references/web-research.md"
+    },
+    {
       "tool_name": "j1_research_start",
       "classification": "active",
       "tool_ids": [
@@ -7830,7 +7894,7 @@
       "E5": "E4",
       "E6": "E6",
       "E7": "E6",
-      "E8": "E15",
+      "E8": "J1",
       "E9": "E11",
       "E10": "E10",
       "E11": "E10"

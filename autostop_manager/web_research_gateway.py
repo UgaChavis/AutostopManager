@@ -1,4 +1,4 @@
-"""Read-only Manager E15 adapter for the shared legacy CRM E8 Web Research Gateway contract.
+"""Read-only Manager J1 adapter for the shared legacy CRM E8 Web Research Gateway contract.
 
 A composed, authenticated CRM client can be installed without changing the
 public Manager MCP schema.  Until then the explicit local DuckDuckGo adapter

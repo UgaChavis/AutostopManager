@@ -154,9 +154,9 @@ def test_metadata_only_lists_all_pages_without_tool_calls(peer):
     assert report["mode"] == "metadata_only"
     assert set(report["checks"]) == {"native_ping", "tools_list"}
     expected_names = {tool.name for tool in peer.tools}
-    assert {"manager_roles", "manager_role_action"} <= expected_names
+    assert {"manager_roles", "manager_role_action", "j1_research_sources"} <= expected_names
     assert report["checks"]["tools_list"]["tool_count"] == len(expected_names)
-    assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 14
+    assert report["checks"]["tools_list"]["effectful_annotations_checked"] == 15
     assert report["checks"]["tools_list"]["annotation_mismatch_tools"] == []
     assert set(peer.schemas_checked[0]) == expected_names
     expected_pages = (len(expected_names) + 22) // 23

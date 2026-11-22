@@ -1,6 +1,6 @@
 # manager.j1_research_report — Evidence ledger собственного J1 job
 
-Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Основной модуль: [J1](../modules/J1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
@@ -20,7 +20,7 @@ Defaults: `{}`.
 {"job_id":null}
 ```
 
-Выход: Legacy flat schema=autostop.j1.report.v1: ok/job_id/status/profile/automotive_context/report.; report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written.; VIN jobs: schema=autostop.j1.vin_report.v1; collection_status/analysis_status/revision/finalized_revision/claims/conflicts/unknown_fields/sources/budget/stop_reason..
+Выход: Legacy flat schema=autostop.j1.report.v1: ok/job_id/status/profile/automotive_context/report.; report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written.; Отчёт задания по ссылкам добавляет `acquisition_mode=sources_only`. `search_failures` пуст; VIN jobs: schema=autostop.j1.vin_report.v1; collection_status/analysis_status/revision/finalized_revision/claims/conflicts/unknown_fields/sources/budget/stop_reason..
 Ошибки и неполнота: ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable, using report schema; unavailable/duplicate documents remain report limitations.; VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network..
 
 - job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.

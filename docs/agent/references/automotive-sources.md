@@ -1,7 +1,7 @@
 # Технические автомобильные источники
 
 [E14](../modules/E14.md) получает существующие NHTSA recalls/TSB metadata и Mercedes/ZF research routes.
-[E15](../modules/E15.md) ищет и читает публичные материалы с URL/time/primary lineage.
+[J1](../modules/J1.md) ищет и читает публичные материалы с URL/time/primary lineage.
 recommend_automotive_sources — локальный реестр маршрутов, не API/лицензия/подключение базы.
 Маршруты и условия доступа — [каталог автомобильных источников](../automotive_sources/automotive_repair_sources_catalog.json);
 открытые recalls/TSB/VIN endpoints — [реестр endpoints](../automotive_sources/open_dataset_endpoints.json).

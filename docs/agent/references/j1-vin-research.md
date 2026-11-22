@@ -1,6 +1,6 @@
 # J1: самостоятельное исследование VIN
 
-Входы: [J1](../modules/J1.md), [E15](../modules/E15.md), [D1](../modules/D1.md).
+Входы: [J1](../modules/J1.md), [D1](../modules/D1.md).
 Source: [j1_vin_research.py](../../../autostop_manager/j1_vin_research.py),
 [j1_vin_store.py](../../../autostop_manager/j1_vin_store.py),
 [j1_research.py](../../../autostop_manager/j1_research.py),
@@ -126,7 +126,7 @@ destructive=true, idempotent=false, openWorld=false из-за lifecycle housekee
 VIN-записях. Status/results/report не запускают новую сеть; start key и fact receipts дедуплицируют
 свои live domain operations, но не lifecycle housekeeping. После expiry старый start key может
 создать новую job. Смещения и цитаты относятся к версии документа.
-Для обычного J1 `page` и `ocr` допустимы лишь в прежних no-op defaults: `page=null`, `ocr=false`.
+Для обычного J1 `page` выбирает страницу PDF или раздел HTML. `ocr=true` доступен в VIN-режиме.
 Ограничение размера/страниц/OCR сохраняется в причинах частичного результата.
 Ответ чтения документа связывает текст, номер версии, страницы и доказательство совпадения
 в одном снимке; завершившийся после чтения OCR требует нового чтения перед записью фактов.

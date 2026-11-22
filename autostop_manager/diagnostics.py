@@ -55,7 +55,6 @@ MODULE_PARENTS: dict[str, str | None] = {
     "E12": "E1",
     "E13": "E1",
     "E14": "E1",
-    "E15": "E1",
     "F1": None,
     "F2": None,
     "F3": "F2",

@@ -7,6 +7,7 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from contextvars import ContextVar
 import html
@@ -20,6 +21,7 @@ import os
 import pwd
 import re
 import resource
+import signal
 import socket
 import ssl
 import subprocess
@@ -37,6 +39,11 @@ USER_AGENT = "AutoStop-J1/1.0 (+public research; respects robots.txt)"
 MAX_HTML_BYTES = 2_000_000
 MAX_PDF_BYTES = 8_000_000
 MAX_TEXT_CHARS = 50_000
+MAX_PUBLIC_PDF_TEXT_CHARS = 250_000
+MAX_PUBLIC_FRAGMENTS = 1_000
+_MAX_PDF_TEXT_BYTES = 1_000_000
+_PDF_TEXT_PAGES = 300
+_HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 MAX_SEARCH_RESULTS = 20
 MAX_SEARCH_RESULTS_PER_DOMAIN = 3
 MAX_SEARCH_SNIPPET_CHARS = 600
@@ -49,6 +56,10 @@ MAX_DOCUMENT_RETRIES = 1
 _RETRY_DELAY_SECONDS = 0.25
 _VIN = re.compile(
     r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
+    re.I,
+)
+_PDF_VIN = re.compile(
+    r"(?<![A-HJ-NPR-Z0-9])(?:[A-HJ-NPR-Z0-9][ ._/\\\f-]?){16}[A-HJ-NPR-Z0-9](?![A-HJ-NPR-Z0-9])",
     re.I,
 )
 # Trailing dots may be punctuation; a continuing domain label must match in full.
@@ -176,17 +187,29 @@ def _hostname_contains_sensitive(host: str) -> bool:
     return any(_VIN_TOKEN.fullmatch(label) and _is_full_url_vin(label) for label in host.casefold().split("."))
 
 
-def redact_sensitive(value: str, *, limit: int = MAX_TEXT_CHARS, include_vin: bool = True) -> str:
+def redact_sensitive(
+    value: str,
+    *,
+    limit: int = MAX_TEXT_CHARS,
+    include_vin: bool = True,
+    preserve_page_breaks: bool = False,
+) -> str:
     text = str(value or "")[: max(0, limit * 2)]
+
+    def replacement(match: re.Match[str]) -> str:
+        breaks = match[0].count("\f") if preserve_page_breaks else 0
+        return "[redacted]" + "\f" * breaks
+
+    def replace_vin(match: re.Match[str]) -> str:
+        candidate = match[0].replace("\f", " ") if preserve_page_breaks else match[0]
+        if _looks_like_vin(candidate) and _is_full_url_vin(candidate):
+            return replacement(match)
+        return match[0]
+
     if include_vin:
-        text = _VIN.sub(
-            lambda match: (
-                "[redacted]" if _looks_like_vin(match.group()) and _is_full_url_vin(match.group()) else match.group()
-            ),
-            text,
-        )
+        text = (_PDF_VIN if preserve_page_breaks else _VIN).sub(replace_vin, text)
     for pattern in (_EMAIL, _PHONE, _SECRET, _JWT, _API_SECRET):
-        text = pattern.sub("[redacted]", text)
+        text = pattern.sub(replacement if preserve_page_breaks else "[redacted]", text)
     return text[:limit]
 
 
@@ -490,6 +513,8 @@ class _PageText(HTMLParser):
         self.parts: list[str] = []
         self.title_parts: list[str] = []
         self.links: list[str] = []
+        self.headings: list[tuple[int, int, str]] = []
+        self._heading: tuple[str, int, str] | None = None
         self._hidden = 0
         self._title = False
         self._templates: list[bool] = []
@@ -511,11 +536,18 @@ class _PageText(HTMLParser):
             self._hidden += 1
         if tag == "title":
             self._title = True
+        if tag in _HEADING_TAGS and not self._hidden and not self._title:
+            self.finish_heading()
+            anchor = dict(attrs).get("id") or ""
+            if len(anchor) > 200 or _url_component_contains_sensitive(anchor):
+                anchor = ""
+            if len(self.headings) < MAX_PUBLIC_FRAGMENTS - 1:
+                self._heading = (tag, len(self.parts), anchor)
         if tag == "a":
             href = dict(attrs).get("href")
             if href and len(self.links) < 100:
                 self.links.append(href)
-        if tag in {"p", "br", "div", "li", "tr", "h1", "h2", "h3"}:
+        if tag in {"p", "br", "div", "li", "tr"} or tag in _HEADING_TAGS:
             self.parts.append("\n")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -536,6 +568,8 @@ class _PageText(HTMLParser):
             self._hidden -= 1
         if tag == "title":
             self._title = False
+        if self._heading is not None and tag == self._heading[0] and not self._hidden:
+            self.finish_heading()
 
     def handle_data(self, data: str) -> None:
         if self._inert_templates:
@@ -545,16 +579,71 @@ class _PageText(HTMLParser):
         if not self._hidden:
             self.parts.append(data)
 
+    def finish_heading(self) -> None:
+        if self._heading is not None:
+            _, start, anchor = self._heading
+            self.headings.append((start, len(self.parts), anchor))
+            self._heading = None
 
-def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
+
+def _normalize_html_text(parts: list[str]) -> str:
+    text = re.sub(r"[ \t]+", " ", "".join(parts))
+    return re.sub(r"\n[\s\n]*\n", "\n", text).strip()
+
+
+def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list[dict[str, Any]]]:
     decoded = decode_http_text(body, headers.get("content-type", ""))
     media_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     parser = _PageText(xhtml=media_type == "application/xhtml+xml")
     parser.feed(decoded)
+    parser.close()
+    parser.finish_heading()
     title = " ".join(" ".join(parser.title_parts).split())[:200]
-    text = re.sub(r"[ \t]+", " ", "".join(parser.parts))
-    text = re.sub(r"\n[\s\n]*\n", "\n", text).strip()
-    return title, redact_sensitive(text)
+    if not parser.headings:
+        return title, redact_sensitive(_normalize_html_text(parser.parts)), []
+
+    first, *_ = parser.headings[0]
+    sections = [(_normalize_html_text(parser.parts[:first]), "", "")]
+    for index, (start, heading_end, anchor) in enumerate(parser.headings):
+        end = parser.headings[index + 1][0] if index + 1 < len(parser.headings) else len(parser.parts)
+        sections.append(
+            (
+                _normalize_html_text(parser.parts[start:end]),
+                _normalize_html_text(parser.parts[start:heading_end]),
+                anchor,
+            )
+        )
+    sections = [(body, heading, anchor) for body, heading, anchor in sections if body]
+    anchor_counts = Counter(anchor for _, _, anchor in sections if anchor)
+    text = redact_sensitive("\n".join(body for body, _, _ in sections))
+    fragments: list[dict[str, Any]] = []
+    offset = 0
+    for number, (section_text, heading, anchor) in enumerate(sections, 1):
+        fragment = redact_sensitive(section_text, limit=len(text) - offset)
+        end = offset + len(fragment)
+        if not fragment:
+            break
+        if text[offset:end] != fragment:
+            # A sensitive sequence can span a heading boundary. Keep the
+            # jointly redacted text and omit fragment offsets in that case.
+            return title, text, []
+        fragments.append(
+            {
+                "page": number,
+                "fragment_kind": "html_section",
+                "section": redact_sensitive(heading, limit=200),
+                "anchor": anchor if anchor_counts[anchor] == 1 else "",
+                "start": offset,
+                "end": end,
+            }
+        )
+        offset = end + 1
+    return title, text, fragments
+
+
+def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
+    title, text, _ = _html_document(body, headers)
+    return title, text
 
 
 def _pdf_to_text(body: bytes) -> str:
@@ -562,7 +651,7 @@ def _pdf_to_text(body: bytes) -> str:
         resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
         resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
         resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (_MAX_PDF_TEXT_BYTES, _MAX_PDF_TEXT_BYTES))
         if os.geteuid() == 0:
             nobody = pwd.getpwnam("nobody")
             os.setgroups([])
@@ -572,7 +661,7 @@ def _pdf_to_text(body: bytes) -> str:
     try:
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(
-                ["/usr/bin/pdftotext", "-f", "1", "-l", "100", "-layout", "-", "-"],
+                ["/usr/bin/pdftotext", "-f", "1", "-l", str(_PDF_TEXT_PAGES), "-layout", "-", "-"],
                 stdin=subprocess.PIPE,
                 stdout=output,
                 stderr=subprocess.DEVNULL,
@@ -584,18 +673,32 @@ def _pdf_to_text(body: bytes) -> str:
                 process.kill()
                 process.communicate()
                 return ""
-            if process.returncode != 0:
+            if process.returncode not in {0, -signal.SIGXFSZ}:
                 return ""
             output.seek(0)
-            extracted = output.read(MAX_TEXT_CHARS * 4)
+            extracted = output.read(_MAX_PDF_TEXT_BYTES)
     except (OSError, subprocess.SubprocessError, KeyError):
         return ""
-    return redact_sensitive(extracted.decode("utf-8", "replace"))
+    return redact_sensitive(
+        extracted.decode("utf-8", "replace"), limit=MAX_PUBLIC_PDF_TEXT_CHARS, preserve_page_breaks=True
+    )
+
+
+def _pdf_fragments(text: str) -> list[dict[str, Any]]:
+    fragments = []
+    offset = 0
+    for number, body in enumerate(text.split("\f", _PDF_TEXT_PAGES), 1):
+        start = offset + len(body) - len(body.lstrip())
+        end = offset + len(body.rstrip())
+        if start < end:
+            fragments.append({"page": number, "fragment_kind": "pdf_page", "start": start, "end": end})
+        offset += len(body) + 1
+    return fragments
 
 
 def _extract_pdf(body: bytes) -> dict[str, Any]:
     text = _pdf_to_text(body)
-    if text:
+    if text.strip():
         return {"ok": True, "text": text, "extraction_method": "pdf_text"}
     # Kept lazy to avoid a module cycle: the OCR helper redacts with this
     # module's DLP function, but static fetch still works without its runtime.
@@ -612,7 +715,7 @@ def _extract_pdf(body: bytes) -> dict[str, Any]:
 
 
 def _extract_static_content(content_type: str, body: bytes, final_url: str, headers: dict[str, str]) -> dict[str, Any]:
-    if "pdf" in content_type or final_url.casefold().endswith(".pdf"):
+    if "pdf" in content_type or urlsplit(final_url).path.casefold().endswith(".pdf") or body.startswith(b"%PDF-"):
         extracted = _extract_pdf(body)
         if extracted.get("ok") is not True:
             return extracted
@@ -622,17 +725,26 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
             "title": final_url.rsplit("/", 1)[-1][:200],
             "text": extracted["text"],
             "extraction_method": extracted["extraction_method"],
+            "fragments": _pdf_fragments(extracted["text"]) if extracted["extraction_method"] == "pdf_text" else [],
         }
     if "html" in content_type or "text/plain" in content_type:
         if len(body) > MAX_HTML_BYTES:
             return {"ok": False, "error": "document_too_large"}
         if "html" in content_type:
-            title, text = _html_to_text(body, headers)
+            title, text, fragments = _html_document(body, headers)
             kind, method = "html", "html_text"
         else:
             title, kind, method = "", "text", "plain_text"
             text = redact_sensitive(decode_http_text(body, headers.get("content-type", "")))
-        return {"ok": True, "kind": kind, "title": title, "text": text, "extraction_method": method}
+            fragments = []
+        return {
+            "ok": True,
+            "kind": kind,
+            "title": title,
+            "text": text,
+            "extraction_method": method,
+            "fragments": fragments,
+        }
     return {"ok": False, "error": "unsupported_media"}
 
 
@@ -772,6 +884,7 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
                 "browser_attempted": bool(fallback.get("browser_attempted")),
             }
         extracted.update(fallback)
+        extracted["fragments"] = []
         final_url = fallback["url"]
     text = extracted["text"]
     if any(
@@ -784,15 +897,18 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
             "extraction_method": extracted["extraction_method"],
             "browser_attempted": bool(extracted.get("browser_attempted")),
         }
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "url": final_url,
         "title": redact_sensitive(extracted["title"], limit=200),
-        "text": text[:MAX_TEXT_CHARS],
+        "text": text,
         "kind": extracted["kind"],
         "extraction_method": extracted["extraction_method"],
         "browser_attempted": bool(extracted.get("browser_attempted")),
     }
+    if extracted.get("fragments"):
+        result["fragments"] = extracted["fragments"]
+    return result
 
 
 def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:

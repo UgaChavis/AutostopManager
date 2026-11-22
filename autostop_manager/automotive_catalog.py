@@ -19,6 +19,7 @@ from .markdown_links import visible_markdown_links, visible_markdown_table_row_l
 
 REGISTRY_VERSION = "autostop.automotive-tools.v1"
 BUNDLE_VERSION = "autostop.automotive-tools.bundle.v1"
+AUTOMOTIVE_MODULE_PARENTS = {"E1": None, **{f"E{i}": "E1" for i in range(2, 15)}, "J1": None}
 
 
 def content_hash(payload: dict[str, Any]) -> str:
@@ -202,9 +203,9 @@ def validate_registry(
     schema = json.loads((root / "docs/agent/automotive_tools.schema.json").read_text())
     Draft202012Validator(schema).validate(registry)
     modules = {m["element_id"]: m for m in registry["modules"]}
-    if len(modules) != 15 or set(modules) != {f"E{i}" for i in range(1, 16)}:
+    if len(modules) != len(registry["modules"]) or modules.keys() != AUTOMOTIVE_MODULE_PARENTS.keys():
         raise ValueError("module_map_incomplete")
-    if len({m["module_key"] for m in modules.values()}) != 15:
+    if len({m["module_key"] for m in modules.values()}) != len(modules):
         raise ValueError("duplicate_module_key")
     providers = _provider_registry(root, registry["providers"])
     tools = {t["tool_id"]: t for t in registry["tools"]}
@@ -213,7 +214,7 @@ def validate_registry(
     for module in modules.values():
         read_document(root, module["instruction_ref"])
         read_document(root, module["reference"])
-        if module["element_id"] != "E1" and module["parent"] != "E1":
+        if module["parent"] != AUTOMOTIVE_MODULE_PARENTS[module["element_id"]]:
             raise ValueError("invalid_module_parent")
     covered_methods: dict[str, str] = {}
     native_ids: dict[str, list[str]] = {}

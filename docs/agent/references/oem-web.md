@@ -2,10 +2,10 @@
 
 Сценарий: [E6](../modules/E6.md). `verify_oem_candidates_web` принимает найденные кандидаты и профиль детали: make/model/year/engine, ось, сторону, позицию. VIN-поля нет; VIN-подобный текст с `/`, `_`, `.`, `-` удаляется из запросов, VIN вместо номера отклоняется.
 
-По умолчанию `live_search=false`, внешних вызовов нет. При включении `WebResearchGatewayV1` выполняет `research_part_public_evidence`. Gateway использует канонические источники PartSouq, Amayama, Emex, Exist и отдельные `elcats_catalog`, `japancats_catalog`, `exist_ssangyong_catalog`; один gateway request ограничен двумя короткими выдержками. Общая карта публичного поиска — [E15](../modules/E15.md). E6 проверяет source ID/type/domain по локальному набору. Без authenticated gateway client применяется явно отмеченный ограниченный DuckDuckGo fallback.
+По умолчанию `live_search=false`, внешних вызовов нет. При включении `WebResearchGatewayV1` выполняет `research_part_public_evidence`. Gateway использует канонические источники PartSouq, Amayama, Emex, Exist и отдельные `elcats_catalog`, `japancats_catalog`, `exist_ssangyong_catalog`; один gateway request ограничен двумя короткими выдержками. Общая карта публичного поиска — [J1](../modules/J1.md). E6 проверяет source ID/type/domain по локальному набору. Без authenticated gateway client применяется явно отмеченный ограниченный DuckDuckGo fallback.
 
 Elcats/Japancats доступны как публичные ссылки/snippets; зафиксированный robots запрет
-не разрешает читать body через [E15](../modules/E15.md), generic excerpt/browser или J1. Отказ
+не разрешает читать body через публичные читатели [J1](../modules/J1.md). Отказ
 `robots_disallowed` не запускает fallback на другой reader того же источника.
 Ssangyong сохраняет отдельный provider и ограничения извлечения номерных изображений.
 Матрица доступа и OEM-кандидатов — [Elcats](elcats.md).

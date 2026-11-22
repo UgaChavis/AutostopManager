@@ -1,6 +1,6 @@
 # manager.j1_research_results — Результаты собственного J1 job
 
-Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Основной модуль: [J1](../modules/J1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
@@ -20,7 +20,7 @@ Defaults: `{"cursor":0,"limit":20,"query":""}`.
 {"job_id":null}
 ```
 
-Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[].; VIN jobs: schema=autostop.j1.vin_research.v1; bounded local corpus search results and cursor; quotes/URLs are redacted while document lineage and revision remain available..
+Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/query/total/cursor/next_cursor/results[]. Результаты по фрагментам содержат page/fragment_kind/section/source_url.; Пустой `query` перечисляет документы. При непустом запросе `total` считает совпавшие строки, один `document_id` может встречаться у нескольких фрагментов; VIN jobs: schema=autostop.j1.vin_research.v1; bounded local corpus search results and cursor; quotes/URLs are redacted while document lineage and revision remain available..
 Ошибки и неполнота: ok=false/error.code: job_id_invalid/pagination_invalid/query_invalid_or_sensitive/job_not_found/j1_store_unavailable.; VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network..
 
 - job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.

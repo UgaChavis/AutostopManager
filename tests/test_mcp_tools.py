@@ -284,6 +284,29 @@ def test_native_e8_tools_forward_public_research_without_writes(tmp_path, monkey
         assert annotations.openWorldHint is True
 
 
+def test_native_j1_sources_reuses_job_and_accepts_follow_up(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOSTOP_J1_CACHE_DIR", str(tmp_path / "public"))
+    server = FastMCP("supplied-public-sources")
+    register_manager_tools(server, StoreState(tmp_path / "state.sqlite3"), include_tools={"j1_research_sources"})
+    tool = server._tool_manager.get_tool("j1_research_sources")
+    assert tool.is_async
+    create = {
+        "objective": "Compare two seat heater variants",
+        "source_urls": ["https://example.org/catalog/heated-seat"],
+        "idempotency_key": "synthetic-batch-1",
+    }
+
+    async def run():
+        first = await tool.run(create)
+        assert first["ok"] and first["added"] == 1
+        replay = await tool.run(create)
+        assert replay["job_id"] == first["job_id"] and replay["added"] == 0
+        extended = await tool.run({"job_id": first["job_id"], "source_urls": ["https://example.org/options"]})
+        assert extended["ok"] and extended["sources_total"] == 2
+
+    asyncio.run(run())
+
+
 def test_native_j1_tools_forward_job_operations(tmp_path, monkeypatch):
     names = (
         "j1_research_start",
@@ -516,6 +539,7 @@ def test_effectful_manager_tools_advertise_their_actual_effects(tmp_path):
     register_manager_tools(server, StoreState(tmp_path / "memory.sqlite3"))
 
     expected = {
+        "j1_research_sources": (False, False, True),
         "j1_research_start": (False, False, True),
         "j1_research_document": (True, False, False),
         "j1_research_vin": (True, False, True),

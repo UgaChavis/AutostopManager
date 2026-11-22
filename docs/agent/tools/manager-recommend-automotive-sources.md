@@ -1,6 +1,6 @@
 # manager.recommend_automotive_sources — Маршруты исследования и покрытия источников
 
-Основной модуль: [E15](../modules/E15.md); другие модули: [E14](../modules/E14.md).
+Основной модуль: [J1](../modules/J1.md); другие модули: [E14](../modules/E14.md).
 Классификация: active. Состояние реализации: implemented.
 Источник: manager; первичная база: AutoStop versioned rules or explicit supplied inputs. Исполнение: local_read.
 

@@ -1,7 +1,7 @@
 # Единый автомобильный каталог
 
 Registry: [automotive_tools.json](../automotive_tools.json); [JSON Schema](../automotive_tools.schema.json).
-Модули имеют устойчивый module_key, инструменты — tool_id. E-code отображает задачу.
+Модули имеют устойчивый `module_key`, инструменты — `tool_id`. E1 связывает автомобильные модули E2–E14. Самостоятельный J1 объединяет публичный поиск и исследование.
 Markdown является текстом правил; inputSchema авторитетна в code/MCP.
 Карточки генерирует scripts/generate-automotive-instructions.py; --check проверяет отсутствие drift.
 Ссылки и классификация карточек берутся из registry; модульные Markdown поддерживаются отдельно и проверяются по его названиям, reference и таблицам операций.

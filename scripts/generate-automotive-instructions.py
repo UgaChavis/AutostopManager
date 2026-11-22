@@ -21,7 +21,7 @@ def compact(value: Any) -> str:
 
 
 def module_link(code: str) -> str:
-    if re.fullmatch(r"E(?:[1-9]|1[0-5])", code):
+    if re.fullmatch(r"E(?:[1-9]|1[0-4])|J1", code):
         return f"[{code}](../modules/{code}.md)"
     return code
 

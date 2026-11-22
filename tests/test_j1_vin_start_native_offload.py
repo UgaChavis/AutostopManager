@@ -467,7 +467,7 @@ def test_finite_failure_codes_without_routing_or_input_echo(
     assert result["stage"] == ("worker_wait" if started else "admission") and "A" * 17 not in repr(result)
 
 
-def test_all_native_metadata_and_old_eight_J1_sets_are_unchanged(monkeypatch, inert_registration):
+def test_native_metadata_and_separate_vin_start_pool(monkeypatch, inert_registration):
     monkeypatch.setattr(mcp_tools, "instrument_manager_tools", lambda server: None)
     server = _native(monkeypatch, inert_registration, NAME, lambda **kwargs: {"ok": True}, all_tools=True)
     tools = server._tool_manager._tools
@@ -496,7 +496,9 @@ def test_all_native_metadata_and_old_eight_J1_sets_are_unchanged(monkeypatch, in
     assert not getattr(executor, POOL_NAMES[NAME])._pool._threads
     assert executor.BLOCKING_J1_VIN_START_TOOLS == {NAME}
     existing = executor.BLOCKING_READ_TOOLS | executor.BLOCKING_WEB_TOOLS | executor.BLOCKING_CONTROL_TOOLS
-    for suffix in ("STATUS", "REPORT", "RESULTS", "DOCUMENT", "ADD_QUERIES", "CANCEL", "START", "RECORD_FACTS"):
+    assert executor.BLOCKING_J1_START_TOOLS == {"j1_research_start", "j1_research_sources"}
+    existing |= executor.BLOCKING_J1_START_TOOLS
+    for suffix in ("STATUS", "REPORT", "RESULTS", "DOCUMENT", "ADD_QUERIES", "CANCEL", "RECORD_FACTS"):
         group = getattr(executor, "BLOCKING_J1_" + suffix + "_TOOLS")
         assert group == {"j1_research_" + suffix.lower()}
         existing |= group

@@ -60,7 +60,7 @@ BLOCKING_J1_ADD_QUERIES_TOOLS = frozenset({"j1_research_add_queries"})
 _J1_ADD_QUERIES_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 BLOCKING_J1_CANCEL_TOOLS = frozenset({"j1_research_cancel"})
 _J1_CANCEL_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
-BLOCKING_J1_START_TOOLS = frozenset({"j1_research_start"})
+BLOCKING_J1_START_TOOLS = frozenset({"j1_research_start", "j1_research_sources"})
 _J1_START_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
 BLOCKING_J1_RECORD_FACTS_TOOLS = frozenset({"j1_research_record_facts"})
 _J1_RECORD_FACTS_EXECUTOR = BoundedListingExecutor(max_workers=1, max_waiting_calls=1, timeout_seconds=30)
@@ -153,7 +153,7 @@ def _execution_failure(tool_name: str, error: ListingExecutionError) -> dict[str
             if tool_name in BLOCKING_J1_START_TOOLS
             else "autostop.j1.vin_research.v1",
             "error": {
-                "code": "j1_start_executor_unavailable"
+                "code": f"{tool_name.replace('j1_research_', 'j1_')}_executor_unavailable"
                 if tool_name in BLOCKING_J1_START_TOOLS
                 else "j1_record_facts_executor_unavailable",
                 "reason": reason,

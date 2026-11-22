@@ -1,6 +1,6 @@
 # manager.j1_research_add_queries — Добавить запросы в текущий бюджет J1
 
-Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Основной модуль: [J1](../modules/J1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: job_write.
 
@@ -26,6 +26,7 @@ Defaults: `{}`.
 - job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.
 - General J1 remains de-identified and rejects full VIN; separate VIN jobs permit only their original exact scoped VIN before expiry. Contacts, secrets and foreign VIN remain rejected; source URL lineage stays attached.
 - Writes additional de-identified queries to the local job; the worker may then acquire new public pages.
+- Для задания `sources_only` используй `j1_research_sources` с новыми ссылками. Запросы отклоняются с `queries_not_allowed_for_sources_only`.
 - VIN refinements may use only the original VIN, must not reset the 12-query/300-active-second budget and invalidate finalized analysis. No automatic decoder API or alternate VIN.
 - Opening local state may initialize/migrate SQLite. VIN paths may delete expired private jobs, mark lost-state queue pointers failed and reconcile stopped-worker queries/documents/OCR before domain checks, including when VIN writes are disabled. This housekeeping performs no network or business writes.
 - Whole-tool annotations: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true. Scoped domain deduplication/CAS/receipts do not make lifecycle housekeeping idempotent.

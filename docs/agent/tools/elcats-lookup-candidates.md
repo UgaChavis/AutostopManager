@@ -2,7 +2,7 @@
 
 Ограниченно найти схемы и строки для названия детали; сохранить альтернативы и недостающие условия.
 
-Основной модуль: [E4](../modules/E4.md); другие модули: [E6](../modules/E6.md), [E15](../modules/E15.md).
+Основной модуль: [E4](../modules/E4.md); другие модули: [E6](../modules/E6.md), [J1](../modules/J1.md).
 Классификация: active. Состояние реализации: implemented.
 Источник: elcats_catalog; первичная база: Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API. Исполнение: network_read.
 

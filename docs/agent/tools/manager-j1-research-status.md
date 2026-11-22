@@ -1,6 +1,6 @@
 # manager.j1_research_status — Статус собственного J1 job
 
-Основной модуль: [E15](../modules/E15.md); другие модули: нет.
+Основной модуль: [J1](../modules/J1.md); другие модули: нет.
 Классификация: active. Состояние реализации: implemented.
 Источник: public_web; первичная база: primary URL lineage must be preserved. Исполнение: composed.
 
@@ -20,7 +20,7 @@ Defaults: `{}`.
 {"job_id":null}
 ```
 
-Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/status/objective/created_at/updated_at/max_pages/profile/automotive_context/query_plan.; pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.; VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis..
+Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/status/objective/created_at/updated_at/max_pages/profile/automotive_context/query_plan.; pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.; Статус задания по ссылкам включает `acquisition_mode=sources_only`, `queries_remaining=0`, `pages_remaining` и `pages_pending`. План, предложения запросов и ошибки поисковых провайдеров пусты; VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis..
 Ошибки и неполнота: ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable; worker errors remain in job status/error.; VIN jobs additionally return explicit error.code for scope, expiry, private runtime and lost ephemeral state; rejected input starts no network..
 
 - job_id/document_id are 32 lowercase hexadecimal characters returned by J1; synthetic example IDs demonstrate shape and do not assert existing records.

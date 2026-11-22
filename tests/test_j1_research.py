@@ -201,6 +201,30 @@ def test_worker_failure_closes_claimed_phase_without_losing_completed_evidence(m
     assert fetch_calls == ([source] if phase == "query" else [source, source + "-next"])
 
 
+def test_pending_sources_are_read_before_searching_every_query(monkeypatch):
+    first_url = "https://example.org/workshop"
+    job_id = j1.start_research("Synthetic research", ["service bulletin", "related models"])["job_id"]
+    events = []
+
+    def search(query, **_kwargs):
+        events.append(query)
+        if query == "related models":
+            partial = j1.research_results(job_id, "actuator")["results"]
+            assert [item["url"] for item in partial] == [first_url]
+            return [], "synthetic"
+        return [{"url": first_url}], "synthetic"
+
+    def fetch(url, **_kwargs):
+        events.append(url)
+        return {"ok": True, "url": url, "kind": "text", "text": "Inspect the actuator."}
+
+    monkeypatch.setattr(j1, "search_public", search)
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    j1.run_worker(once=True)
+    assert events == ["service bulletin", first_url, "related models"]
+    assert j1.research_status(job_id)["status"] == "completed"
+
+
 def test_private_input_rejected_before_cache_write(tmp_path: Path) -> None:
     compact = "WBA" + "0" * 14  # synthetic VIN-shaped input
     separated = "WBA " + "0" * 6 + " " + "0" * 8

@@ -87,7 +87,11 @@ def test_actual_registration_matches_independent_ast_and_all_provider_methods(ca
     report = validate_registry(ROOT, registry, schemas, PARTSAPI_OPERATIONS)
     assert report["ok"] and report["partsapi_methods"] == 43
     assert {row["tool_name"] for row in registry["native_inventory"]} == names
-    assert {module["element_id"] for module in registry["modules"]} == {f"E{i}" for i in range(1, 16)}
+    assert {module["element_id"] for module in registry["modules"]} == {"J1", *(f"E{i}" for i in range(1, 15))}
+    public_research = next(module for module in registry["modules"] if module["module_key"] == "public_research")
+    assert public_research["element_id"] == "J1"
+    assert public_research["parent"] is None
+    assert registry["migration"]["old_to_new"]["E8"] == "J1"
 
 
 @pytest.mark.parametrize("fault", ["provider_reference", "provider_identity", "native_classification"])
@@ -172,6 +176,10 @@ def test_bundle_is_self_contained_hashes_content_separately_and_keeps_shared_ids
     modules = {m["element_id"]: m for m in bundle["modules"]}
     assert "partsapi.getArticleCriteria" in modules["E6"]["tool_ids"]
     assert "partsapi.getArticleCriteria" in modules["E4"]["tool_ids"]
+    assert {"manager.j1_research_sources", "manager.search_web_multi", "elcats.resolve_vehicle"} <= set(
+        modules["J1"]["tool_ids"]
+    )
+    assert "elcats.resolve_vehicle" in modules["E4"]["tool_ids"]
     assert sum(t["tool_id"] == "partsapi.getArticleCriteria" for t in bundle["tools"]) == 1
     assert all(m["instruction_text"] and m["instruction_hash"] for m in bundle["modules"])
     assert "tool_statuses" not in bundle

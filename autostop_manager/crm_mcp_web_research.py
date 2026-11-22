@@ -1,4 +1,4 @@
-"""Safe synchronous legacy CRM E8 calls for Manager E15 through the local CRM MCP raw-capability route.
+"""Safe synchronous legacy CRM E8 calls for Manager J1 through the local CRM MCP raw-capability route.
 
 The Manager process owns the optional endpoint and bearer in its own runtime
 environment.  This module never reads CRM configuration files, never follows

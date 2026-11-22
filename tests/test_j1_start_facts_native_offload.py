@@ -607,7 +607,7 @@ def test_all_native_schemas_annotations_signatures_and_old_six_J1_sets_unchanged
         )
         assert annotations.openWorldHint is (name == START)
         assert tools[name].is_async and not getattr(executor, POOL_NAMES[name])._pool._threads
-    assert executor.BLOCKING_J1_START_TOOLS == {START}
+    assert executor.BLOCKING_J1_START_TOOLS == {START, "j1_research_sources"}
     assert executor.BLOCKING_J1_RECORD_FACTS_TOOLS == {FACTS}
     for suffix in ("STATUS", "REPORT", "RESULTS", "DOCUMENT", "ADD_QUERIES", "CANCEL"):
         assert getattr(executor, "BLOCKING_J1_" + suffix + "_TOOLS") == {"j1_research_" + suffix.lower()}

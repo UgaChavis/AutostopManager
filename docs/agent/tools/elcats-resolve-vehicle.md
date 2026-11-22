@@ -2,7 +2,7 @@
 
 Сопоставить известный профиль с опубликованной маркой и модификациями без повторного decode.
 
-Основной модуль: [E4](../modules/E4.md); другие модули: [E15](../modules/E15.md).
+Основной модуль: [E4](../modules/E4.md); другие модули: [J1](../modules/J1.md).
 Классификация: active. Состояние реализации: implemented.
 Источник: elcats_catalog; первичная база: Public HTML catalog; actual Elcats/Japancats/Exist Ssangyong provider and per-route access policy remain explicit; not an official API. Исполнение: network_read.
 

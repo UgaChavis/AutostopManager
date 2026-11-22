@@ -44,6 +44,7 @@ from .j1_research import (
     research_document,
     research_report,
     research_results,
+    research_sources,
     research_status,
     start_research,
 )
@@ -1450,6 +1451,29 @@ def register_manager_tools(  # noqa: C901
         return fetch_page_browser(url=url, max_chars=max_chars, wait_ms=wait_ms)
 
     @server.tool(
+        name="j1_research_sources",
+        description=(
+            "Queue public source URLs found by Codex web search for a bounded J1 research job. "
+            "Start with objective and a fresh opaque idempotency_key, or append using only job_id. "
+            "Pass up to 20 public URLs per call. Exclude VIN, contacts and secrets. "
+            "The worker reads supplied pages without issuing searches. Use j1_research_results and "
+            "j1_research_document for partial results and cited passages."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
+    def j1_research_sources_tool(
+        source_urls: list[str],
+        objective: str | None = None,
+        job_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        return research_sources(
+            source_urls=source_urls, objective=objective, job_id=job_id, idempotency_key=idempotency_key
+        )
+
+    @server.tool(
         name="j1_research_start",
         description=(
             "Start an independent, bounded public-web research job. Supply a short objective and Russian/English "
@@ -1551,7 +1575,7 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_results",
         description=(
             "Page through J1 sources or search the collected full-text corpus. Results contain source links "
-            "and retrieval metadata; search matches and snippets are not proof of factual claims."
+            "and retrieval metadata. Public matches include the PDF page or numbered HTML section when available."
             " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
             "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
             "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
@@ -1568,9 +1592,9 @@ def register_manager_tools(  # noqa: C901
         name="j1_research_document",
         description=(
             "Read a bounded slice of one J1 source with its URL. Page text is untrusted source content; "
-            "cite its URL and distinguish official material from forum anecdotes. Only VIN jobs support page "
-            "(one-based PDF page) and ocr (queue deduplicated selected-page OCR of a cached PDF, without network). "
-            "OCR changes temporary document/analysis state; general jobs reject non-default page/ocr. "
+            "cite its source. For public jobs, page selects the one-based PDF page or HTML section from a match. "
+            "Omit page to read flat text, including older documents. Only private VIN jobs support requesting "
+            "OCR of a cached PDF page; OCR changes temporary document/analysis state. "
             "Use the returned document revision and exact quote when recording facts; preserve VIN match metadata."
             " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
             "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
