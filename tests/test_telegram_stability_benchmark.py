@@ -6,14 +6,14 @@ from pathlib import Path
 import tempfile
 
 import pytest
-from telegram_stability_benchmark import database, paired_text_latency, pipeline
+from telegram_stability_benchmark import database, paired_text_latency, run_pipeline
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="native bridge credential checks require root")
 def test_benchmark_observes_independent_client_results_and_settled_cleanup():
     with tempfile.TemporaryDirectory(prefix="mng-bench-test-") as temporary:
         root = Path(temporary)
-        result = asyncio.run(pipeline(root / "pipeline", clients=2, messages=2, actor_lanes=2))
+        result = run_pipeline(root / "pipeline", clients=2, messages=2, actor_lanes=2)
         assert result["covered_events"] == 4
         assert result["verified_sends"] == 4
         assert result["leaked_tasks"] == 0

@@ -179,6 +179,32 @@ def test_html_bulletin_served_at_pdf_address_keeps_html_sections(monkeypatch):
     assert hit["fragment_kind"] == "html_section" and hit["source_url"] == url + "#repair"
 
 
+def test_html_title_is_document_metadata_and_table_cells_remain_searchable(monkeypatch):
+    url = "https://example.org/torques"
+    html = b"""
+        <title>AX741 service bulletin</title><h2 id="front">Front axle</h2>
+        <p>Published tightening specifications for the front axle assembly.</p>
+        <table><tr><th>Fastener</th><th>Torque</th></tr><tr><td>BR218</td><td>125 Nm</td></tr></table>
+    """
+    job = _collect(monkeypatch, {url: ("text/html", html)})
+    title = j1.research_results(job, query="AX741")["results"][0]
+    assert "page" not in title and title["url"] == url
+    fastener = j1.research_results(job, query="BR218")["results"][0]
+    assert fastener["page"] == 1 and fastener["source_url"] == url + "#front"
+    fragment = j1.research_document(job, fastener["document_id"], page=1)
+    assert "BR218 125 Nm" in fragment["text"] and "AX741" not in fragment["text"]
+
+
+def test_pdf_with_encoded_international_filename_is_searchable_by_its_title(monkeypatch):
+    document = "https://example.org/%D0%A3%D0%B7%D0%B5%D0%BB.pdf"
+    monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _: "Published service procedure. " * 4 + "\f")
+    job = _collect(monkeypatch, {document: ("application/pdf", b"%PDF-test")})
+    result = j1.research_results(job, query="Узел")
+    assert result["total"] == 1
+    hit = result["results"][0]
+    assert hit["title"] == "Узел.pdf" and hit["url"] == document and "page" not in hit
+
+
 @pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
 def test_pdf_search_keeps_physical_page_number_across_a_blank_page(monkeypatch):
     url = "https://example.org/repair.pdf?download=1"

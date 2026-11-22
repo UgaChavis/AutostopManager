@@ -549,6 +549,7 @@ class _PageText(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.title_parts: list[str] = []
+        self.title_offsets: list[int] = []
         self.links: list[str] = []
         self.headings: list[tuple[int, int, str]] = []
         self.heading_overflow = False
@@ -598,6 +599,8 @@ class _PageText(HTMLParser):
                 self.links.append(href)
         if tag in {"p", "br", "div", "li", "tr"} or tag in _HEADING_TAGS:
             self.parts.append("\n")
+        elif tag in {"td", "th"}:
+            self.parts.append(" ")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "template" and not self._xhtml:
@@ -627,6 +630,8 @@ class _PageText(HTMLParser):
             return
         if self._title:
             self.title_parts.append(data)
+            if not self._hidden:
+                self.title_offsets.append(len(self.parts))
         if not self._hidden:
             self.parts.append(data)
 
@@ -653,6 +658,10 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
     if not parser.headings:
         return title, redact_sensitive(_normalize_html_text(parser.parts)), []
 
+    # Flat extraction historically includes the title. For section citations
+    # it is document metadata and must not create a searchable first section.
+    for position in parser.title_offsets:
+        parser.parts[position] = ""
     first, *_ = parser.headings[0]
     sections = [(_normalize_html_text(parser.parts[:first]), "", "")]
     for index, (start, heading_end, anchor) in enumerate(parser.headings):
@@ -780,10 +789,12 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
         extracted = _extract_pdf(body)
         if extracted.get("ok") is not True:
             return extracted
+        filename = path.rsplit("/", 1)[-1]
+        decoded_name = unquote(filename, errors="surrogateescape")
         return {
             "ok": True,
             "kind": "pdf",
-            "title": path.rsplit("/", 1)[-1][:200],
+            "title": (decoded_name if decoded_name.isprintable() else filename)[:200],
             "text": extracted["text"],
             "extraction_method": extracted["extraction_method"],
             "fragments": _pdf_fragments(extracted["text"]) if extracted["extraction_method"] == "pdf_text" else [],

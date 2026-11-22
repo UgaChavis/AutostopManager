@@ -335,6 +335,7 @@ class AppServerDriver:
     def status(self):
         app = self.app
         return {
+            "ok": True,
             "enabled": self.enabled and not app.blocked,
             "ready": self.enabled and app.connected and app.recovery_state == "ready",
             **{

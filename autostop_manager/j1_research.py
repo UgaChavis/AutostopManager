@@ -1866,12 +1866,15 @@ def _cache_size() -> int:
     return sum(part.stat().st_size for part in (path, Path(str(path) + "-wal")) if part.exists())
 
 
-def _compact_cache(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+def _compact_cache(conn: sqlite3.Connection) -> bool:
+    # A read snapshot can pin old WAL frames. Vacuum would append another copy
+    # of the database while the reader still prevents us from reclaiming space.
+    if conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+        return False
     conn.execute("VACUUM")
     # VACUUM itself writes the compacted database into the WAL. Reconcile it
     # before the physical DB+WAL capacity check, while this connection is open.
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
 
 
 def _evict_terminal_job(conn: sqlite3.Connection, job_id: str) -> bool:
@@ -1894,15 +1897,12 @@ def _prune(conn: sqlite3.Connection) -> None:
     for job_id in expired:
         _evict_terminal_job(conn, job_id)
     conn.commit()
-    if expired:
-        _compact_cache(conn)
-    if _cache_size() <= MAX_CORPUS_BYTES:
+    if not expired and _cache_size() <= MAX_CORPUS_BYTES:
         return
     # Reclaim unused pages and the WAL before evicting retained jobs. In
     # particular, a private VIN job has only a tiny routing stub in this DB;
     # deleting it cannot be the way to reclaim an unrelated SQLite freelist.
-    _compact_cache(conn)
-    if _cache_size() <= MAX_CORPUS_BYTES:
+    if not _compact_cache(conn) or _cache_size() <= MAX_CORPUS_BYTES:
         return
 
     from .j1_vin_store import PROFILE as vin_profile, RETENTION_SECONDS as vin_retention_seconds
@@ -1926,8 +1926,7 @@ def _prune(conn: sqlite3.Connection) -> None:
         conn.commit()
         if not removed:
             continue
-        _compact_cache(conn)
-        if _cache_size() <= MAX_CORPUS_BYTES:
+        if not _compact_cache(conn) or _cache_size() <= MAX_CORPUS_BYTES:
             break
 
 
@@ -2018,12 +2017,11 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
             canonical_url = _canonical_url(url)
             if not url or not canonical_url:
                 continue
-            # Preserve the original result URL for traceability while
-            # avoiding a second fetch of its tracking-only variant.
+            # A previous query may already have read this URL and followed a redirect.
             if conn.execute(
                 """SELECT 1 FROM documents WHERE job_id=?
-                   AND (canonical_url=? OR (canonical_url='' AND url=?)) LIMIT 1""",
-                (job_id, canonical_url, url),
+                   AND (canonical_url=? OR requested_canonical_url=? OR (canonical_url='' AND url=?)) LIMIT 1""",
+                (job_id, canonical_url, canonical_url, url),
             ).fetchone():
                 continue
             (
@@ -2144,7 +2142,12 @@ def _work_public_job(job_id: str) -> None:
                     "SELECT COUNT(*) FROM documents WHERE job_id=? AND (browser_attempted=1 OR extraction_method='browser_dom')",
                     (job_id,),
                 ).fetchone()[0]
-                conn.execute("UPDATE documents SET status='running' WHERE id=?", (pending_doc["id"],))
+                # Retain the discovery key before a redirect replaces both url and canonical_url.
+                conn.execute(
+                    """UPDATE documents SET status='running',
+                       requested_canonical_url=COALESCE(NULLIF(requested_canonical_url,''),?) WHERE id=?""",
+                    (_canonical_url(pending_doc["url"], supplied=sources_only), pending_doc["id"]),
+                )
                 conn.commit()
                 doc_id, url = pending_doc["id"], pending_doc["url"]
                 allow_browser = browser_attempts < MAX_BROWSER_PAGES

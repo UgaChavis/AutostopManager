@@ -249,7 +249,6 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
     root.mkdir()
     samples, accepted, claimed, seen, tasks = defaultdict(list), {}, {}, set(), set()
     baseline_tasks = set(asyncio.all_tasks())
-    before = resources()
     started = time.monotonic()
     peak_pending, peak_tasks, maximum_lag, covered = 0, 0, 0.0, 0
     stop = asyncio.Event()
@@ -389,8 +388,6 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
     tasks_settled = time.monotonic()
     gc.collect()
     gc_finished = time.monotonic()
-    after = resources()
-    assert after["fds"] <= before["fds"] and after["threads"] == before["threads"]
     elapsed = time.monotonic() - started
     return {
         "clients": clients,
@@ -412,8 +409,6 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
         "events_per_second": clients * messages / elapsed,
         "stages": {name: distribution(values) for name, values in samples.items()},
         "stage_timings": timing_snapshot,
-        "before": before,
-        "after": after,
         "peak_pending": peak_pending,
         "peak_tasks": peak_tasks,
         "event_loop_lag_max_seconds": maximum_lag,
@@ -421,6 +416,15 @@ async def pipeline(root, clients, messages, actor_lanes):  # noqa: C901 - one me
         "verified_sends": len(seen) * 2,
         "covered_events": clients * messages,
     }
+
+
+def run_pipeline(root, clients, messages, actor_lanes):
+    # asyncio.run owns the loop and joins its default executor after the last task.
+    before = resources()
+    result = asyncio.run(pipeline(root, clients, messages, actor_lanes))
+    after = resources()
+    assert after["fds"] <= before["fds"] and after["threads"] == before["threads"], (before, after)
+    return {**result, "before": before, "after": after}
 
 
 def database(root, retained):
@@ -540,7 +544,7 @@ def main():
                 continue
             group = {"pipeline": [], "database": []}
             for clients in args.clients:
-                value = asyncio.run(pipeline(root / f"p{repetition}-{clients}", clients, 10, 8))
+                value = run_pipeline(root / f"p{repetition}-{clients}", clients, 10, 8)
                 group["pipeline"].append(value)
                 print(
                     json.dumps(

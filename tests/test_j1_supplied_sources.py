@@ -316,6 +316,7 @@ def test_capacity_prune_preserves_reopened_job_and_its_searchable_evidence(monke
         if conn.execute("SELECT 1 FROM jobs WHERE id=?", (jobs[0],)).fetchone() is None:
             followup = j1.research_sources(job_id=jobs[1], source_urls=["https://example.org/new"])
             assert followup["ok"] and followup["status"] == "queued"
+        return True
 
     monkeypatch.setattr(j1, "_compact_cache", compact)
     monkeypatch.setattr(j1, "_cache_size", lambda: j1.MAX_CORPUS_BYTES + 1)
