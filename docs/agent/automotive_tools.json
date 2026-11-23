@@ -3863,7 +3863,7 @@
         "pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.",
         "Статус задания по ссылкам включает `acquisition_mode=sources_only`, `queries_remaining=0`, `pages_remaining` и `pages_pending`. План, предложения запросов и ошибки поисковых провайдеров пусты",
         "VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis.",
-        "queries_skipped учитывает поиски, пропущенные из-за лимита документов. mixed_pdf_ocr_pages_attempted и mixed_pdf_ocr_pages_remaining показывают бюджет OCR смешанных PDF"
+        "queries_skipped учитывает поиски, пропущенные из-за лимита документов. queries_partial учитывает прерванные поиски с сохранённой частью результатов. mixed_pdf_ocr_pages_attempted и mixed_pdf_ocr_pages_remaining показывают бюджет OCR смешанных PDF"
       ],
       "errors": [
         "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable; worker errors remain in job status/error.",

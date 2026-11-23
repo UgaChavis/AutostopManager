@@ -34,6 +34,7 @@ from .j1_fetch import (
     MAX_SEARCH_RESULTS,
     MAX_SEARCH_SNIPPET_CHARS,
     MIXED_OCR_PAGES_PER_DOCUMENT,
+    complete_pdf_fragment_end,
     contains_sensitive,
     contains_unsafe_url,
     fetch_document,
@@ -67,6 +68,7 @@ _WORD = re.compile(r"[^\W_]{3,}", flags=re.UNICODE)
 _STOP = False
 _WORKER_FAILED = "worker_failed"
 _PAGE_BUDGET_REACHED = "page_budget_reached"
+_SEARCH_INTERRUPTED = "search_interrupted"
 
 # The automotive profile remains a small extension of the generic public-web
 # corpus.  It is deliberately bounded more tightly because its automatic plan
@@ -525,6 +527,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     )
     _migrate_duplicate_titles(conn)
     j1_identifiers.init_schema(conn)
+    _add_missing_columns(conn, "identifier_queries", {"matcher_version": "INTEGER NOT NULL DEFAULT 0"})
 
 
 def _valid_id(value: str) -> bool:
@@ -613,6 +616,8 @@ def _validated_automotive_context(value: object) -> tuple[dict[str, str] | None,
             continue
         if not isinstance(raw, str):
             return None, "automotive_context_invalid"
+        if not raw.strip():
+            continue
         if not _input_is_safe(raw):
             return None, "automotive_context_invalid_or_sensitive"
         if key == "production_date":
@@ -625,11 +630,10 @@ def _validated_automotive_context(value: object) -> tuple[dict[str, str] | None,
                 return None, "automotive_context_invalid"
             continue
         cleaned = _clean_input(raw, limit=_AUTOMOTIVE_CONTEXT_LIMITS[key])
-        if not cleaned:
-            continue
         if not _input_is_safe(cleaned):
             return None, "automotive_context_invalid_or_sensitive"
         if key == "dtc":
+            cleaned = re.sub(r"\s*([-‐‑‒–—−])\s*", r"\1", cleaned)
             codes = [j1_identifiers.normalize(item, "dtc") for item in re.split(r"[,;/\s]+", cleaned) if item]
             if not codes or len(codes) > 8 or any(code is None for code in codes):
                 return None, "automotive_context_invalid"
@@ -1079,7 +1083,8 @@ def _provider_coverage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, 
         """SELECT COALESCE(NULLIF(provider,''),'unreported') AS provider,
                   COUNT(*) AS queries,
                   SUM(status='done') AS done,
-                  SUM(status='failed') AS failed
+                  SUM(status='failed') AS failed,
+                  SUM(status='partial') AS partial
            FROM queries WHERE job_id=? AND status<>'skipped' GROUP BY provider
            ORDER BY queries DESC, provider""",
         (job_id,),
@@ -1090,6 +1095,7 @@ def _provider_coverage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, 
             "queries": row["queries"],
             "done": row["done"] or 0,
             "failed": row["failed"] or 0,
+            **({"partial": row["partial"]} if row["partial"] else {}),
         }
         for row in rows
     ]
@@ -1104,8 +1110,9 @@ def _search_failures(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         {"reason": row["error"], "count": row["count"]}
         for row in conn.execute(
             """SELECT error,COUNT(*) AS count FROM queries
-               WHERE job_id=? AND status='failed' GROUP BY error ORDER BY count DESC, error LIMIT 5""",
-            (job_id,),
+               WHERE job_id=? AND (status='failed' OR (status='partial' AND error<>?))
+               GROUP BY error ORDER BY count DESC, error LIMIT 5""",
+            (job_id, _SEARCH_INTERRUPTED),
         )
     ]
 
@@ -1153,8 +1160,8 @@ def research_status(job_id: str) -> dict[str, Any]:
                 query_plan = []
             else:
                 queries = conn.execute(
-                    """SELECT COUNT(*) AS total, SUM(status='done') AS done,
-                              SUM(status='failed') AS failed, SUM(status='skipped') AS skipped
+                    """SELECT COUNT(*) AS total, SUM(status='done') AS done, SUM(status='failed') AS failed,
+                              SUM(status='skipped') AS skipped, SUM(status='partial') AS partial
                        FROM queries WHERE job_id=?""",
                     (job_id,),
                 ).fetchone()
@@ -1242,7 +1249,7 @@ def research_status(job_id: str) -> dict[str, Any]:
                     pages_pending=counts["total"] - result["pages_fetched"] - result["pages_failed"] if active else 0,
                 )
             else:
-                result["queries_skipped"] = queries["skipped"] or 0
+                result.update(queries_skipped=queries["skipped"] or 0, queries_partial=queries["partial"] or 0)
             return result
     except (OSError, sqlite3.Error):
         return _error("j1_store_unavailable", job_id=job_id)
@@ -1355,13 +1362,14 @@ def research_results(
                        d.created_at,d.retrieved_at,d.pdf_limitations,primary_doc.url AS duplicate_url"""
     try:
         with _db() as conn, conn:
-            conn.execute("BEGIN IMMEDIATE" if exact_code is not None else "BEGIN")
+            conn.execute("BEGIN")
             if not conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
                 return _error("job_not_found", job_id=job_id)
+            document_count = None
             if exact_code is not None:
-                j1_identifiers.index_query(conn, job_id, query_mode, exact_code)
+                match_table, document_count = j1_identifiers.query_table(conn, job_id, query_mode, exact_code)
                 total = conn.execute(
-                    "SELECT COUNT(*) FROM identifier_matches WHERE job_id=? AND mode=?", (job_id, query_mode)
+                    f"SELECT COUNT(*) FROM {match_table} WHERE job_id=? AND mode=?", (job_id, query_mode)
                 ).fetchone()[0]
                 rows = (
                     []
@@ -1374,7 +1382,7 @@ def research_results(
                                    - max(coalesce(f.start,0),i.start-80)) AS excerpt,
                                f.page,f.fragment_kind,f.section,f.source_url,
                                f.extraction_method AS fragment_extraction_method,f.truncated AS fragment_truncated
-                            FROM identifier_matches i JOIN documents d ON d.id=i.document_id
+                            FROM {match_table} i JOIN documents d ON d.id=i.document_id
                             LEFT JOIN documents primary_doc ON primary_doc.id=d.duplicate_of
                             LEFT JOIN document_fragments f ON f.document_id=i.document_id AND f.page=i.page
                             WHERE i.job_id=? AND i.mode=?
@@ -1419,6 +1427,9 @@ def research_results(
                     )
                 )
             items = [_result_item(row) for row in rows]
+            if exact_code is not None and document_count is not None:
+                conn.commit()
+                j1_identifiers.cache_query(conn, job_id, query_mode, exact_code, document_count)
             return {
                 "ok": True,
                 "schema": SCHEMA,
@@ -1589,12 +1600,14 @@ def _evidence_confidence(tier: str, applicability: str) -> str:
     return "insufficient"
 
 
-def _report_source_item(conn: sqlite3.Connection, row: sqlite3.Row, context: dict[str, str]) -> dict[str, Any]:
+def _report_source_item(
+    conn: sqlite3.Connection, row: sqlite3.Row, context: dict[str, str]
+) -> tuple[dict[str, Any], frozenset[int] | None]:
     tier, tier_basis = _report_source_tier(
         str(row["source_tier"] or ""), row["source_class"], str(row["source_basis"] or "")
     )
     applicability = assess_applicability(context, _source_passages(conn, row["id"], row["url"], row["body"]))
-    return {
+    source = {
         "document_id": row["id"],
         "url": row["url"],
         "canonical_url": row["canonical_url"] or row["url"],
@@ -1616,6 +1629,7 @@ def _report_source_item(conn: sqlite3.Connection, row: sqlite3.Row, context: dic
         "retrieved_at": row["retrieved_at"] or None,
         **({"pdf_limitations": json.loads(row["pdf_limitations"])} if row["pdf_limitations"] else {}),
     }
+    return source, applicability.summary_passages
 
 
 def _report_source_sort_key(item: dict[str, Any]) -> tuple[int, int, str]:
@@ -1634,38 +1648,58 @@ def _report_excerpt(value: str) -> str:
 
 def _source_passages(conn: sqlite3.Connection, document_id: str, url: str, body: str) -> Iterator[Passage]:
     fragments = conn.execute(
-        "SELECT start,end,source_url,page FROM document_fragments WHERE document_id=? ORDER BY page", (document_id,)
+        """SELECT start,end,source_url,page,fragment_kind,section
+           FROM document_fragments WHERE document_id=? ORDER BY page""",
+        (document_id,),
     ).fetchall()
-    for start, end, source_url, page in fragments or [(0, len(body), url, None)]:
-        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n\f]+", body[start:end]):
+    flat_kind = ""
+    if not fragments and len(body) in {MAX_DOCUMENT_CHARS, MAX_PUBLIC_PDF_TEXT_CHARS}:
+        document = conn.execute("SELECT kind FROM documents WHERE id=?", (document_id,)).fetchone()
+        flat_kind = document["kind"] if document else ""
+    for start, end, source_url, page, fragment_kind, heading in fragments or [(0, len(body), url, None, flat_kind, "")]:
+        if fragment_kind in {"pdf_page", "pdf"}:
+            end = complete_pdf_fragment_end(body, start, end)
+        fragment = body[start:end]
+        if heading and fragment.startswith(heading):
+            rest = fragment[len(heading) :]
+            if not rest or rest.startswith("\n") or (len(heading) < 200 and rest[0].isspace()):
+                yield Passage(heading, page, source_url, is_heading=True)
+                fragment = rest
+        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n\f]+", fragment):
             if text := sentence.strip():
                 yield Passage(text, page, source_url)
 
 
-def _source_sentences(conn: sqlite3.Connection, source: dict[str, Any]) -> Iterator[tuple[str, str]]:
+def _source_sentences(
+    conn: sqlite3.Connection, source: dict[str, Any], relevant: frozenset[int] | None
+) -> Iterator[tuple[Passage, str]]:
     document_id = source["document_id"]
     body = conn.execute("SELECT body FROM documents WHERE id=?", (document_id,)).fetchone()[0]
-    for passage in _source_passages(conn, document_id, source["url"], body):
+    for index, passage in enumerate(_source_passages(conn, document_id, source["url"], body)):
+        if relevant is not None and index not in relevant:
+            continue
         compact = _report_excerpt(passage.text)
         if len(compact) >= 24:
-            yield compact, passage.source_url
+            yield passage, compact
 
 
-def _alternative_cause_mentions(conn: sqlite3.Connection, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _alternative_cause_mentions(
+    conn: sqlite3.Connection, sources: list[dict[str, Any]], relevant: dict[str, frozenset[int]]
+) -> list[dict[str, Any]]:
     """Return cited source mentions only; no automatic diagnosis is inferred."""
 
     found: list[dict[str, Any]] = []
     for source in sources:
         if source["applicability"] in {"excluded", "conflict"}:
             continue
-        for sentence, url in _source_sentences(conn, source):
+        for passage, sentence in _source_sentences(conn, source, relevant.get(source["document_id"])):
             if not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
                 continue
             found.append(
                 {
                     "status": "unverified_source_mention",
                     "source_document_id": source["document_id"],
-                    "source_url": url,
+                    "source_url": passage.source_url,
                     "source_tier": source["source_tier"],
                     "applicability": source["applicability"],
                     "confidence": source["confidence"],
@@ -1678,8 +1712,22 @@ def _alternative_cause_mentions(conn: sqlite3.Connection, sources: list[dict[str
     return found
 
 
+def _cited_identifier(patterns: list[j1_identifiers.IdentifierPattern], passage: Passage, excerpt: str) -> bool:
+    # Match the full stored text first. Checking only the compact prefix can
+    # turn an identifier clipped before its suffix into an exact match.
+    for pattern in patterns:
+        if match := pattern.search(passage.text):
+            prefix = _clean_input(passage.text[: match.end()], limit=match.end())
+            if excerpt.startswith(prefix):
+                return True
+    return False
+
+
 def _frequency_measurements(
-    conn: sqlite3.Connection, sources: list[dict[str, Any]], context: dict[str, str]
+    conn: sqlite3.Connection,
+    sources: list[dict[str, Any]],
+    context: dict[str, str],
+    relevant: dict[str, frozenset[int]],
 ) -> list[dict[str, Any]]:
     """Expose a cohort only when its sentence names this investigated defect.
 
@@ -1690,30 +1738,38 @@ def _frequency_measurements(
     """
 
     measurements: list[dict[str, Any]] = []
-    subject_terms = [
-        value.casefold()
-        for key in ("system", "symptom", "dtc", "part_number")
-        if len(value := context.get(key, "").strip()) >= 3
+    mode: j1_identifiers.QueryMode = "dtc" if context.get("dtc") else "part_number"
+    identifiers = context.get(mode, "")
+    patterns = [
+        j1_identifiers.match_pattern(code, mode)
+        for value in (identifiers.split(",") if mode == "dtc" else [identifiers])
+        if (code := j1_identifiers.normalize(value, mode)) is not None
     ]
-    if not subject_terms:
+    subject_terms = [
+        value.casefold() for key in ("system", "symptom") if len(value := context.get(key, "").strip()) >= 3
+    ]
+    if not patterns and (identifiers or not subject_terms):
         return measurements
     for source in sources:
         if source["source_tier"] not in {"A", "B"} or source["applicability"] not in {"exact", "analog"}:
             continue
-        for sentence, url in _source_sentences(conn, source):
+        for passage, sentence in _source_sentences(conn, source, relevant.get(source["document_id"])):
             match = _FREQUENCY_COUNT.search(sentence) or _FREQUENCY_PERCENT.search(sentence)
             if match is None:
                 continue
             normalized = sentence.casefold()
-            if not any(term in normalized for term in subject_terms) or not any(
-                marker in normalized for marker in _FREQUENCY_DEFECT_MARKERS
-            ):
+            mentions_subject = (
+                _cited_identifier(patterns, passage, sentence)
+                if patterns
+                else any(term in normalized for term in subject_terms)
+            )
+            if not mentions_subject or not any(marker in normalized for marker in _FREQUENCY_DEFECT_MARKERS):
                 continue
             measurements.append(
                 {
                     "status": "reported_source_measurement",
                     "source_document_id": source["document_id"],
-                    "source_url": url,
+                    "source_url": passage.source_url,
                     "source_tier": source["source_tier"],
                     "applicability": source["applicability"],
                     "measurement": match.group(0),
@@ -1824,12 +1880,15 @@ def research_report(job_id: str) -> dict[str, Any]:
             context = _stored_automotive_context(job["automotive_context"])
             sources_only = job["acquisition_mode"] == SOURCES_ONLY_MODE
             search_failures = [] if sources_only else _search_failures(conn, job_id)
-            queries_skipped = (
-                0
+            query_outcomes = (
+                {}
                 if sources_only
-                else conn.execute(
-                    "SELECT COUNT(*) FROM queries WHERE job_id=? AND status='skipped'", (job_id,)
-                ).fetchone()[0]
+                else dict(
+                    conn.execute(
+                        "SELECT status,COUNT(*) FROM queries WHERE job_id=? AND status IN ('skipped','partial') GROUP BY status",
+                        (job_id,),
+                    ).fetchall()
+                )
             )
             rows = conn.execute(
                 """SELECT id,url,canonical_url,title,CASE WHEN ? THEN body ELSE '' END AS body,
@@ -1840,11 +1899,18 @@ def research_report(job_id: str) -> dict[str, Any]:
             )
             # Rank lightweight metadata. Read a body for excerpt extraction only
             # while examining that source, even for a full 300-document job.
-            all_sources = sorted((_report_source_item(conn, row, context) for row in rows), key=_report_source_sort_key)
+            all_sources = []
+            relevant: dict[str, frozenset[int]] = {}
+            for row in rows:
+                source, source_passages = _report_source_item(conn, row, context)
+                all_sources.append(source)
+                if source_passages is not None:
+                    relevant[source["document_id"]] = source_passages
+            all_sources.sort(key=_report_source_sort_key)
             confidence_sources = _confidence_sources(all_sources)
             sources = _report_source_examples(all_sources, confidence_sources)
-            alternative_causes = _alternative_cause_mentions(conn, sources)
-            frequency_measurements = _frequency_measurements(conn, all_sources, context)
+            alternative_causes = _alternative_cause_mentions(conn, sources, relevant)
+            frequency_measurements = _frequency_measurements(conn, all_sources, context, relevant)
             duplicates = [
                 {
                     "document_id": row["id"],
@@ -1915,8 +1981,10 @@ def research_report(job_id: str) -> dict[str, Any]:
     )
     if len(all_sources) > len(sources):
         limitations.append({"code": "source_list_truncated", "detail": "report_examples_cover_first_20_ranked_sources"})
-    if queries_skipped:
+    if query_outcomes.get("skipped"):
         limitations.append({"code": _PAGE_BUDGET_REACHED, "detail": "search_queries_skipped"})
+    if query_outcomes.get("partial"):
+        limitations.append({"code": "search_incomplete", "detail": "interrupted_search_returned_partial_results"})
     result = {
         "ok": True,
         "schema": REPORT_SCHEMA,
@@ -2192,14 +2260,27 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
         if not _lock_running_job(conn, job_id):
             return False
         _stage_query_candidates(conn, query_id, results)
-        primary_admitted = conn.execute("SELECT primary_admitted FROM queries WHERE id=?", (query_id,)).fetchone()[0]
+        query_state = conn.execute(
+            "SELECT primary_admitted,provider,error FROM queries WHERE id=?", (query_id,)
+        ).fetchone()
         if (
-            not primary_admitted
+            not query_state["primary_admitted"]
             and _document_count(conn, job_id) < max_pages
             and _enqueue_query_candidate(conn, job_id, query_id) is not None
         ):
             conn.execute("UPDATE queries SET primary_admitted=1 WHERE id=?", (query_id,))
-        if provider != "search_interrupted":
+        if provider == _SEARCH_INTERRUPTED:
+            if results:
+                source = next(
+                    (row["source"] for row in results if row.get("source") in ("searxng", "duckduckgo", "direct_url")),
+                    query_state["provider"],
+                )
+                conn.execute(
+                    "UPDATE queries SET provider=?,error=? WHERE id=?", (source, _SEARCH_INTERRUPTED, query_id)
+                )
+        elif not results and (query_state["error"] == _SEARCH_INTERRUPTED or query_state["primary_admitted"]):
+            conn.execute("UPDATE queries SET status='partial',error=? WHERE id=?", (provider[:80], query_id))
+        else:
             conn.execute(
                 "UPDATE queries SET status=?,provider=?,error=? WHERE id=?",
                 ("done" if results else "failed", provider[:40], "" if results else provider[:80], query_id),
@@ -2397,6 +2478,11 @@ def _work_public_job(job_id: str) -> None:
                     "SELECT id,query FROM queries WHERE job_id=? AND status='pending' ORDER BY id LIMIT 1", (job_id,)
                 ).fetchone()
             elif not sources_only:
+                conn.execute(
+                    """UPDATE queries SET status='partial',error=?
+                       WHERE job_id=? AND status='pending' AND (error=? OR primary_admitted=1)""",
+                    (_SEARCH_INTERRUPTED, job_id, _SEARCH_INTERRUPTED),
+                )
                 conn.execute(
                     "UPDATE queries SET status='skipped',error=? WHERE job_id=? AND status='pending'",
                     (_PAGE_BUDGET_REACHED, job_id),

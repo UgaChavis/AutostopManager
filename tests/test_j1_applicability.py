@@ -328,3 +328,189 @@ def test_source_context_invalid_and_legacy_receipt_hash_unchanged(tmp_path: Path
     with j1._db(readonly=True) as conn:
         assert conn.execute("SELECT request_hash FROM supplied_source_starts").fetchone()[0] == legacy_hash
     assert j1.research_sources(**arguments, automotive_context=None)["job_id"] == created["job_id"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "sentences", "classification"),
+    [
+        (
+            {},
+            [SCOPE, "DTC P1A28", "P1A28 means a damper valve fault.", "Model year 2020", SUBJECT],
+            "analog",
+        ),
+        (
+            {},
+            [
+                SCOPE.replace("2021", "2020").replace("MX204", "MX208"),
+                "DTC P1A27 is not covered in this section.",
+                "P1A27 is not supported.",
+                SCOPE,
+                SUBJECT,
+            ],
+            "exact",
+        ),
+        (
+            {},
+            [SCOPE, "This bulletin excludes model years 2020–2022 Ficta Norvale vehicles with engine MX204.", SUBJECT],
+            "conflict",
+        ),
+        (
+            {},
+            [
+                "Бюллетень применяется для автомобилей Ficta Norvale, модельный год 2021, "
+                "двигатель MX204, дата выпуска после 01.03.2021.",
+                "P1A27 означает ошибку датчика положения.",
+            ],
+            "analog",
+        ),
+        (
+            {"production_date": "2021-03-02"},
+            [
+                "Бюллетень применяется для автомобилей Ficta Norvale, модельный год 2021, "
+                "двигатель MX204, дата выпуска после 01.03.2021.",
+                "P1A27 означает ошибку датчика положения.",
+            ],
+            "exact",
+        ),
+        ({}, [SCOPE.removesuffix(".") + ", production date after 1 March 2021.", SUBJECT], "analog"),
+        ({}, [SCOPE.removesuffix(".") + " only for vehicles without DTC P1A27."], "excluded"),
+        ({}, [SCOPE.removesuffix(".") + " only for vehicles without P1A27."], "excluded"),
+        ({}, [SCOPE.removesuffix(".") + " only for the European market.", SUBJECT], "analog"),
+        (
+            {"part_number": "AX-240-MP", "position": "front left"},
+            [
+                SCOPE.removesuffix(".") + " for the front left assembly.",
+                "Part number AX-240-MP is used exclusively in the rear right position.",
+            ],
+            "analog",
+        ),
+        (
+            {"part_number": "AX-240-MP", "position": "front left"},
+            [
+                SCOPE.removesuffix(".") + " for the front left assembly.",
+                "This bulletin excludes the rear right assembly for model year 2021 Ficta Norvale.",
+                "Part number AX-240-MP identifies the front left component.",
+            ],
+            "exact",
+        ),
+        (
+            {"part_number": "AX-240-MP"},
+            [
+                SCOPE.removesuffix(".") + " with part number AX-241-MP only.",
+                "Part number AX-240-MP belongs to the predecessor assembly.",
+            ],
+            "analog",
+        ),
+        (
+            {"part_number": "AX-240-MP"},
+            [
+                SCOPE.removesuffix(".") + " with part number AX 241 MP only.",
+                "Part number AX-240-MP belongs to the predecessor assembly.",
+            ],
+            "analog",
+        ),
+        (
+            {},
+            [
+                SCOPE,
+                SUBJECT,
+                "Do not use this procedure on vehicles with engine MX204, "
+                + "because this harness requires the separate prior inspection defined by the workshop manual " * 6
+                + "under procedure A.",
+            ],
+            "conflict",
+        ),
+    ],
+)
+def test_applicability_checks_structural_and_extended_restrictions(overrides, sentences, classification):
+    context = CONTEXT.copy()
+    if "part_number" in overrides:
+        del context["dtc"]
+    passages = [Passage(sentence, 1, URL) for sentence in sentences]
+    result = assess_applicability(context | overrides, passages)
+    assert result.label == classification
+    for evidence in result.evidence:
+        assert len(evidence["quote"]) <= 400
+        assert any(evidence["quote"] in sentence for sentence in sentences)
+
+
+@pytest.mark.parametrize("missing", ["year", "engine"])
+def test_exclusive_scope_does_not_assume_an_unspecified_vehicle_field(missing):
+    context = {**CONTEXT, "part_number": "AX-240-MP"}
+    del context["dtc"]
+    del context[missing]
+    text = SCOPE.removesuffix(".") + " only."
+    passages = [Passage(text, 1, URL), Passage("Part number AX-240-MP is shown in this bulletin.", 1, URL)]
+    assert assess_applicability(context, passages).label == "analog"
+
+
+def _report_from_html(monkeypatch, html: str) -> dict:
+    def fetch(url, **_kwargs):
+        return j1_fetch._extract_static_content("text/html", html.encode(), url, {}) | {"url": url}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    started = j1.research_sources(
+        objective="Check a synthetic vehicle and code",
+        source_urls=[URL],
+        idempotency_key="scoped-html-test",
+        automotive_context=CONTEXT,
+    )
+    assert started["ok"], started
+    j1.run_worker(once=True)
+    response = j1.research_report(started["job_id"])
+    assert response["ok"], response
+    return response["report"]
+
+
+def test_html_year_heading_is_a_scope_boundary(monkeypatch):
+    html = (
+        f'<h2 id="current">Model year 2021</h2><p>{SCOPE}</p><p>P1A28 means a damper valve fault.</p>'
+        f'<h2 id="old">Model year 2020</h2><p>{SUBJECT}</p>'
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "analog"
+    assert not report["confirmed"]
+
+
+def test_report_keeps_cause_and_frequency_in_the_cited_scope(monkeypatch):
+    previous_scope = SCOPE.replace("2021", "2020")
+    html = (
+        f'<h2 id="old">Model year 2020</h2><p>{previous_scope}</p>'
+        "<p>P1A27 sensor failure occurred in 12 of 100 vehicles.</p>"
+        "<p>The older fault may be caused by a failed electronic control unit.</p>"
+        f'<h2 id="current">Model year 2021</h2><p>{SCOPE}</p><p>{SUBJECT}</p>'
+        "<p>The current fault may be caused by a loose connector terminal.</p>"
+        "<p>The study found P1A27-01 sensor failure in 22 of 100 vehicles.</p>"
+        "<p>The study found P1A27 sensor failure in 32 of 100 vehicles.</p>"
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "exact"
+    assert {cause["source_url"] for cause in report["alternative_causes"]} == {URL + "#current"}
+    assert [item["measurement"] for item in report["frequency"]["measurements"]] == ["32 of 100 vehicles"]
+    assert report["frequency"]["measurements"][0]["source_url"] == URL + "#current"
+
+
+def test_frequency_excerpt_must_include_the_complete_measured_identifier(monkeypatch):
+    beginning = "The study found sensor failure in 12 of 100 vehicles, with reference to "
+    padding = "technical checks " * 13
+    near_limit = (beginning + padding)[:274].rstrip() + " "
+    html = (
+        f'<h2 id="current">Model year 2021</h2><p>{SCOPE}</p><p>{SUBJECT}</p>'
+        f"<p>{beginning}{padding * 2}for DTC P1A27.</p>"
+        f"<p>{near_limit}P1A27-01 and only later P1A27.</p>"
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "exact"
+    assert report["frequency"]["status"] == "not_measured"
+
+
+def test_report_skips_neighboring_subcode_section_within_vehicle_scope(monkeypatch):
+    html = (
+        f'<h2 id="scope">Model year 2021</h2><p>{SCOPE}</p>'
+        '<h3 id="suffix">DTC P1A27-01</h3><p>This fault may be caused by a damaged electronics unit.</p>'
+        '<h3 id="base">DTC P1A27</h3>'
+        f"<p>{SUBJECT}</p><p>The current fault may be caused by a loose connector terminal.</p>"
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "exact"
+    assert {cause["source_url"] for cause in report["alternative_causes"]} == {URL + "#base"}

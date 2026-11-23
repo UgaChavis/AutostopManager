@@ -117,6 +117,11 @@ def test_resumed_partial_query_keeps_other_queries_share_of_budget(monkeypatch):
     _work(job_id)
     assert j1.research_status(job_id)["status"] == "queued"
     assert j1.research_status(job_id)["pages_total"] == 1
+    with j1._db() as connection:
+        recorded = connection.execute(
+            "SELECT provider,error FROM queries WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchone()
+    assert tuple(recorded) == ("searxng", "search_interrupted")
 
     monkeypatch.setattr(j1, "_STOP", False)
     _work(job_id)
@@ -127,7 +132,75 @@ def test_resumed_partial_query_keeps_other_queries_share_of_budget(monkeypatch):
         ("search", "second query"),
         ("fetch", "B1"),
     ]
-    assert j1.research_status(job_id)["queries_done"] == 2
+    status = j1.research_status(job_id)
+    assert (status["queries_done"], status["queries_partial"]) == (2, 0)
+    assert status["coverage"]["search_providers"] == [{"provider": "searxng", "queries": 2, "done": 2, "failed": 0}]
+    with j1._db() as connection:
+        recorded = connection.execute(
+            "SELECT provider,error FROM queries WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchone()
+    assert tuple(recorded) == ("searxng", "")
+
+
+@pytest.mark.parametrize("untouched", [False, True])
+def test_interrupted_search_at_capacity_counts_its_partial_result(monkeypatch, untouched):
+    calls = _research_inputs(monkeypatch)
+    search = j1.search_public
+
+    def interrupted_search(query, **kwargs):
+        results, _ = search(query, **kwargs)
+        j1._STOP = True
+        return results, "search_interrupted"
+
+    monkeypatch.setattr(j1, "search_public", interrupted_search)
+    queries = ["first query", "second query"] if untouched else ["first query"]
+    job_id = j1.start_research("Synthetic repair evidence", queries, 1)["job_id"]
+    _work(job_id)
+    monkeypatch.setattr(j1, "_STOP", False)
+    _work(job_id)
+
+    assert calls == [("search", "first query"), ("fetch", "A1")]
+    status = j1.research_status(job_id)
+    assert status["schema"] == j1.SCHEMA
+    assert (status["status"], status["pages_fetched"]) == ("completed", 1)
+    assert (status["queries_done"], status["queries_failed"], status["queries_partial"], status["queries_skipped"]) == (
+        0,
+        0,
+        1,
+        int(untouched),
+    )
+    assert status["search_failures"] == []
+    assert status["coverage"]["search_providers"] == [
+        {"provider": "searxng", "queries": 1, "done": 0, "failed": 0, "partial": 1},
+    ]
+    limitations = {item["code"] for item in j1.research_report(job_id)["report"]["limitations"]}
+    assert "search_incomplete" in limitations
+    assert ("page_budget_reached" in limitations) == untouched
+
+
+def test_interrupted_search_retains_provider_and_discloses_failed_retry(monkeypatch):
+    calls = _research_inputs(monkeypatch)
+    search = j1.search_public
+
+    def search_with_failed_retry(query, **kwargs):
+        if calls:
+            return [], "search_timeout"
+        results, _ = search(query, **kwargs)
+        j1._STOP = True
+        return results, "search_interrupted"
+
+    monkeypatch.setattr(j1, "search_public", search_with_failed_retry)
+    job_id = j1.start_research("Synthetic repair evidence", ["first query"], 2)["job_id"]
+    _work(job_id)
+    monkeypatch.setattr(j1, "_STOP", False)
+    _work(job_id)
+
+    status = j1.research_status(job_id)
+    assert (status["pages_fetched"], status["queries_partial"], status["queries_failed"]) == (2, 1, 0)
+    assert status["search_failures"] == [{"reason": "search_timeout", "count": 1}]
+    assert status["coverage"]["search_providers"] == [
+        {"provider": "searxng", "queries": 1, "done": 0, "failed": 0, "partial": 1},
+    ]
 
 
 def test_automotive_first_pass_keeps_room_for_followups():
@@ -143,6 +216,37 @@ def test_automotive_first_pass_keeps_room_for_followups():
     assert all("D-424242" in item["query"] and "Alpha" in item["query"] for item in plan[2:])
     assert j1.research_add_queries(job_id, [f"source gap {number}" for number in range(7)])["queries_total"] == 12
     assert j1.research_add_queries(job_id, ["more evidence"])["error"]["code"] == "query_limit_reached"
+
+
+@pytest.mark.parametrize("sources_only", [False, True])
+def test_blank_optional_automotive_fields_are_treated_as_absent(sources_only):
+    base = {"make": "Astra Demo", "model": "Alpha", "part_number": "D-424242"}
+    context = {**base, "engine": "", "symptom": " \t ", "dtc": "", "market": "\n"}
+    if sources_only:
+        created = j1.research_sources(
+            objective="Synthetic part fitment",
+            idempotency_key="synthetic-optional-context",
+            source_urls=["https://example.org/catalog"],
+            automotive_context=context,
+        )
+    else:
+        created = j1.start_research("Synthetic part fitment", automotive_context=context)
+    assert created["ok"], created
+    status = j1.research_status(created["job_id"])
+    assert status["automotive_context"] == base
+    assert ("queries_partial" in status) is not sources_only
+
+
+@pytest.mark.parametrize("separator", ["-", "‐", "‑", "‒", "–", "—", "−"])
+def test_automotive_dtc_list_normalizes_spacing_around_subcodes(separator):
+    created = j1.start_research(
+        "Synthetic repair evidence",
+        automotive_context={"make": "Astra Demo", "model": "Alpha", "dtc": f"P0304 {separator} 01, U0100-02 / B1234"},
+    )
+    assert created["ok"], created
+    status = j1.research_status(created["job_id"])
+    assert status["automotive_context"]["dtc"] == "P0304-01, U0100-02, B1234"
+    assert all("P0304-01, U0100-02, B1234" in item["query"] for item in status["query_plan"])
 
 
 def test_query_schema_migrates_previous_cache_and_keeps_pending_jobs(monkeypatch):

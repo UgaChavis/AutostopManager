@@ -133,6 +133,40 @@ def test_html_citations_resolve_to_the_intended_element(monkeypatch):
         assert f"[{term}]" in hit["excerpt"]
 
 
+def test_report_keeps_period_in_qualified_html_scope_heading(monkeypatch):
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/scoped-manual.html"
+    heading = "Bulletin No. 2 — Model year 2020"
+    html = (
+        '<h2 id="current">Bulletin No. 1 — Model year 2021</h2>'
+        "<p>Workshop manual applies to Ficta Norvale model year 2021, engine MX204.</p>"
+        "<p>P1A28 means a damper fault.</p>"
+        f'<h2 id="previous">{heading}</h2><p>P1A27 means a connector fault.</p>'
+    ).encode()
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: (200, {"content-type": "text/html; charset=utf-8"}, html, url),
+    )
+    job = j1.research_sources(
+        objective="Check a synthetic bulletin",
+        source_urls=[url],
+        idempotency_key="scope-heading-test",
+        automotive_context={"make": "Ficta", "model": "Norvale", "year": 2021, "engine": "MX204", "dtc": "P1A27"},
+    )["job_id"]
+    with j1._db() as conn:
+        assert j1._claim_job(conn) == job
+    j1._work_job(job)
+    with j1._db() as conn:
+        document = conn.execute("SELECT id,body FROM documents WHERE job_id=?", (job,)).fetchone()
+        passages = list(j1._source_passages(conn, document["id"], url, document["body"]))
+    assert [(passage.text, passage.page, passage.source_url) for passage in passages if passage.is_heading][-1] == (
+        heading,
+        2,
+        url + "#previous",
+    )
+    assert not j1.research_report(job)["report"]["confirmed"]
+
+
 @pytest.mark.parametrize("preamble", [b"", b"<p>General service notes</p>"])
 def test_html_overflow_keeps_tail_searchable_without_a_false_citation(monkeypatch, preamble):
     monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_FRAGMENTS", 3)
@@ -426,6 +460,76 @@ def test_capped_mixed_pdf_ocr_cannot_invent_base_dtc_in_search_or_report(monkeyp
     if complete:
         hit = j1.research_results(job, query="mounting clip")["results"][0]
         assert hit["page"] == 2 and hit["fragment_truncated"] is True
+
+
+def _collect_automotive_pdf(monkeypatch, body):
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/repair-manual.pdf"
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: (200, {"content-type": "application/pdf"}, body, url),
+    )
+    monkeypatch.setattr(j1, "search_public", lambda *_args, **_kwargs: ([{"url": url}], "fixture"))
+    job = j1.start_research(
+        objective="Inspect synthetic workshop instructions",
+        automotive_context={"make": "Ficta", "model": "Norvale", "year": 2021, "engine": "MX204", "dtc": "P1A27"},
+    )["job_id"]
+    with j1._db() as conn:
+        assert j1._claim_job(conn) == job
+    j1._work_job(job)
+    return job, url
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+@pytest.mark.parametrize("legacy", [False, True])
+def test_native_pdf_clip_is_not_exact_dtc_evidence(monkeypatch, legacy):
+    pdf = _pdf("Workshop manual applies to Ficta Norvale model year 2021, engine MX204.", "P1A27-00")
+    full_text = j1_fetch._pdf_to_text(pdf)
+    monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_PDF_TEXT_CHARS", full_text.index("P1A27") + len("P1A27"))
+    job, url = _collect_automotive_pdf(monkeypatch, pdf)
+    document_id = j1.research_results(job)["results"][0]["document_id"]
+    if legacy:
+        with j1._db() as conn, conn:
+            conn.execute("UPDATE document_fragments SET truncated=0 WHERE document_id=?", (document_id,))
+    page = j1.research_document(job, document_id, page=2)
+    assert page["text"] == "P1A27" and page["fragment_truncated"] is True
+    assert page["source_url"] == f"{url}#page=2"
+    if not legacy:
+        assert j1.research_results(job, query="P1A27")["results"][0]["fragment_truncated"] is True
+    assert j1.research_results(job, query="P1A27", query_mode="dtc")["total"] == 0
+    assert not j1.research_report(job)["report"]["confirmed"]
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+def test_mixed_pdf_redaction_expansion_does_not_clip_native_tail(monkeypatch):
+    pdf = _pdf("Workshop manual applies to Ficta Norvale model year 2021, engine MX204.", "", "P1A27-00")
+    full_text = j1_fetch._pdf_to_text(pdf)
+    contact = "a@b.co"
+    assert len(j1_fetch.redact_sensitive(contact)) > len(contact)
+    monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_PDF_TEXT_CHARS", len(full_text) + len(contact))
+    monkeypatch.setattr(j1_ocr, "extract_mixed_pdf_page", lambda _body, _page: (contact, None))
+    job, url = _collect_automotive_pdf(monkeypatch, pdf)
+    document_id = j1.research_results(job)["results"][0]["document_id"]
+    page = j1.research_document(job, document_id, page=3)
+    assert page["text"] == "P1A27-00" and page["source_url"] == f"{url}#page=3"
+    assert page["pdf_limitations"] == ["ocr_text_limit"] and "fragment_truncated" not in page
+    skipped = j1.research_document(job, document_id, page=2)
+    assert skipped["fragment_truncated"] is True and not skipped["text"]
+    assert j1.research_results(job, query="P1A27", query_mode="dtc")["total"] == 0
+    assert j1.research_results(job, query="P1A27-00", query_mode="dtc")["results"][0]["page"] == 3
+    assert not j1.research_report(job)["report"]["confirmed"]
+
+
+def test_capped_flat_pdf_ocr_tail_is_not_used_as_exact_evidence(monkeypatch):
+    head = "Workshop manual applies to Ficta Norvale model year 2021, engine MX204.\n"
+    tail = "\nP1A27"
+    capped = head + "i" * (j1.MAX_DOCUMENT_CHARS - len(head) - len(tail)) + tail
+    monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: "")
+    monkeypatch.setattr(j1_ocr, "extract_scanned_pdf", lambda *_args, **_kwargs: {"ok": True, "text": capped})
+    job, _url = _collect_automotive_pdf(monkeypatch, b"%PDF-synthetic")
+    assert j1.research_results(job)["results"][0]["extraction_method"] == "pdf_ocr"
+    assert j1.research_results(job, query="P1A27", query_mode="dtc")["total"] == 0
+    assert not j1.research_report(job)["report"]["confirmed"]
 
 
 def test_mixed_pdf_worker_charges_failed_attempts_and_keeps_digital_pages(monkeypatch):

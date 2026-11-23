@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+
 import pytest
 
-from autostop_manager import j1_fetch, j1_research as j1, j1_vin_store
+from autostop_manager import j1_fetch, j1_identifiers, j1_research as j1, j1_vin_store
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +78,113 @@ def test_spaced_hyphenated_part_matches_only_whole_identifier(monkeypatch):
         assert result["total"] == 1 and result["results"][0]["match_kind"] == "body"
     for query in ("AX240", "240MP", "BX150", "150RT"):
         assert j1.research_results(job, query, query_mode="part_number")["total"] == 0
+
+
+def test_space_delimited_parts_match_only_complete_number(monkeypatch):
+    url = "https://example.org/parts"
+    _install_sources(
+        monkeypatch,
+        {
+            url: (
+                "text/html",
+                "<p>Part number: AX 240 MP.</p><p>Article: 18 450 621.</p>"
+                "<p>Part number: BZ320 RS.</p><p>Part number: DJ--19.</p><p>Use WY500 with care.</p>",
+            )
+        },
+    )
+    job = j1.research_sources(
+        source_urls=[url], objective="Synthetic catalog test", idempotency_key="space-delimited-parts"
+    )["job_id"]
+    j1.run_worker(once=True)
+
+    for query in ("AX240MP", "18450621", "BZ320RS", "DJ19", "WY500"):
+        result = j1.research_results(job, query, query_mode="part_number")
+        assert result["total"] == 1 and result["results"][0]["match_kind"] == "body"
+    for query in ("AX", "240", "MP", "AX240", "240MP", "450", "18450", "450621", "BZ320", "RS", "DJ", "19"):
+        assert j1.research_results(job, query, query_mode="part_number")["total"] == 0
+
+
+def test_retained_offsets_from_older_matcher_are_rebuilt(monkeypatch):
+    url = "https://example.org/retained-catalog"
+    _install_sources(monkeypatch, {url: ("text/plain", "Part number: AX - 240 - MP.")})
+    job = j1.research_sources(
+        source_urls=[url], objective="Synthetic catalog test", idempotency_key="retained-offsets"
+    )["job_id"]
+    j1.run_worker(once=True)
+    with j1._db() as conn, conn:
+        document_id = conn.execute("SELECT id FROM documents WHERE job_id=?", (job,)).fetchone()[0]
+        conn.execute("ALTER TABLE identifier_queries DROP COLUMN matcher_version")
+        conn.execute("INSERT INTO identifier_queries VALUES(?,?,?,?)", (job, "part_number", "240MP", 1))
+        conn.execute("INSERT INTO identifier_matches VALUES(?,?,?,?,?,?)", (job, "part_number", document_id, 0, 0, 18))
+
+    for _ in range(2):
+        assert j1.research_results(job, "240MP", query_mode="part_number")["total"] == 0
+    assert j1.research_results(job, "AX240MP", query_mode="part_number")["total"] == 1
+
+
+def test_cold_exact_scan_does_not_block_worker_or_publish_stale_offsets(monkeypatch):
+    first, second = "https://example.org/first", "https://example.org/second"
+    _install_sources(
+        monkeypatch,
+        {
+            first: ("text/plain", "Workshop guide P1A27."),
+            second: ("text/plain", "Second guide with a different procedure for P1A27."),
+        },
+    )
+    job = j1.research_sources(source_urls=[first], objective="Synthetic diagnostic test", idempotency_key="exact-scan")[
+        "job_id"
+    ]
+    j1.run_worker(once=True)
+    scanned = Event()
+    release_scan = Event()
+    original_positions = j1_identifiers._positions
+
+    def paused_positions(*args):
+        scanned.set()
+        assert release_scan.wait(timeout=10)
+        yield from original_positions(*args)
+
+    def append_source():
+        assert j1.research_sources(job_id=job, source_urls=[second])["ok"]
+        with j1._db() as conn:
+            assert j1._claim_job(conn) == job
+        j1._work_job(job)
+
+    monkeypatch.setattr(j1_identifiers, "_positions", paused_positions)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reading = pool.submit(j1.research_results, job, "P1A27", query_mode="dtc")
+        try:
+            assert scanned.wait(timeout=5)
+            pool.submit(append_source).result(timeout=3)
+        finally:
+            release_scan.set()
+        old_snapshot = reading.result(timeout=5)
+
+    assert [item["url"] for item in old_snapshot["results"]] == [first]
+    with j1._db() as conn:
+        assert not conn.execute("SELECT 1 FROM identifier_queries WHERE job_id=?", (job,)).fetchone()
+    refreshed = j1.research_results(job, "P1A27", query_mode="dtc")
+    assert {item["url"] for item in refreshed["results"]} == {first, second}
+    with j1._db() as conn:
+        assert conn.execute("SELECT document_count FROM identifier_queries WHERE job_id=?", (job,)).fetchone()[0] == 2
+
+
+def test_cache_write_failure_keeps_exact_snapshot_result(monkeypatch):
+    url = "https://example.org/cache-fault"
+    _install_sources(monkeypatch, {url: ("text/plain", "Workshop guide P1A27.")})
+    job = j1.research_sources(
+        source_urls=[url], objective="Synthetic diagnostic test", idempotency_key="exact-cache-fault"
+    )["job_id"]
+    j1.run_worker(once=True)
+    with j1._db() as conn:
+        conn.execute(
+            """CREATE TRIGGER fail_offset_cache BEFORE INSERT ON identifier_matches
+               BEGIN SELECT RAISE(ABORT, 'simulated cache failure'); END"""
+        )
+    result = j1.research_results(job, "P1A27", query_mode="dtc")
+    assert result["ok"] and [item["url"] for item in result["results"]] == [url]
+    with j1._db() as conn:
+        assert not conn.execute("SELECT 1 FROM identifier_queries WHERE job_id=?", (job,)).fetchone()
 
 
 def test_exact_dtc_baseline_and_suffixes_keep_automotive_document_variants(monkeypatch):

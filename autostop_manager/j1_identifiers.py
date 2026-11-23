@@ -5,10 +5,16 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Iterator
+from contextlib import suppress
 from typing import Literal, NamedTuple
 
-QueryMode = Literal["lexical", "dtc", "part_number"]
+from .j1_fetch import MAX_PUBLIC_PDF_TEXT_CHARS, MAX_TEXT_CHARS, complete_pdf_fragment_end
 
+QueryMode = Literal["lexical", "dtc", "part_number"]
+_MatchTable = Literal["identifier_matches", "identifier_scan"]
+
+# Retained offsets depend on the matcher and on which fragments are safe.
+_MATCHER_VERSION = 1
 _HORIZONTAL_SPACE = " \t\u00a0\u202f"
 _DASH_CHARS = "-‐‑‒–—−"
 _HYPHENS = "-‐‑"
@@ -17,6 +23,39 @@ _SPACE = re.escape(_HORIZONTAL_SPACE)
 _SEPARATORS = f"[{_SPACE}{_DASHES}]"
 _PART_NUMBER = re.compile(rf"[a-zA-Z0-9]+(?:{_SEPARATORS}+[a-zA-Z0-9]+)*")
 _DTC = re.compile(r"[PBCU][0-3A-F][0-9A-F]{3}(?:-[0-9A-F]{2})?")
+_PROSE_WORDS = frozenset(
+    {
+        "and",
+        "are",
+        "for",
+        "fits",
+        "from",
+        "in",
+        "is",
+        "kit",
+        "new",
+        "no",
+        "not",
+        "of",
+        "oe",
+        "oem",
+        "old",
+        "only",
+        "or",
+        "part",
+        "pn",
+        "qty",
+        "ref",
+        "see",
+        "sku",
+        "the",
+        "to",
+        "use",
+        "via",
+        "was",
+        "with",
+    }
+)
 
 
 def normalize(query: str, mode: QueryMode) -> str | None:
@@ -31,7 +70,11 @@ def normalize(query: str, mode: QueryMode) -> str | None:
     return code if 2 <= len(code) <= 64 else None
 
 
-def _connected_part(text: str, boundary: int, direction: int) -> bool:
+def _ascii_alnum(text: str, position: int) -> bool:
+    return 0 <= position < len(text) and text[position].isascii() and text[position].isalnum()
+
+
+def _dash_connected(text: str, boundary: int, direction: int) -> bool:
     position = boundary
     while 0 <= position < len(text) and text[position] in _HORIZONTAL_SPACE:
         position += direction
@@ -39,12 +82,50 @@ def _connected_part(text: str, boundary: int, direction: int) -> bool:
         return False
     dash = position
     position += direction
-    while 0 <= position < len(text) and text[position] in _HORIZONTAL_SPACE:
+    while 0 <= position < len(text) and text[position] in _HORIZONTAL_SPACE + _HYPHENS:
         position += direction
     # A typographic dash surrounded by spaces also separates ordinary prose.
     if text[dash] not in _HYPHENS and boundary != dash and abs(position - dash) > 1:
         return False
-    return 0 <= position < len(text) and text[position].isascii() and text[position].isalnum()
+    return _ascii_alnum(text, position)
+
+
+def _word_at(text: str, position: int) -> str:
+    start, end = position, position + 1
+    while _ascii_alnum(text, start - 1):
+        start -= 1
+    while _ascii_alnum(text, end):
+        end += 1
+    return text[start:end]
+
+
+def _short_code_word(word: str, max_uppercase: int) -> bool:
+    return len(word) <= (max_uppercase if word.isupper() else 2) and word.casefold() not in _PROSE_WORDS
+
+
+def _space_connected(text: str, boundary: int, direction: int) -> bool:
+    if not 0 <= boundary < len(text) or text[boundary] not in _HORIZONTAL_SPACE:
+        return False
+    neighbor = boundary
+    while 0 <= neighbor < len(text) and text[neighbor] in _HORIZONTAL_SPACE:
+        neighbor += direction
+    if not _ascii_alnum(text, neighbor):
+        return False
+    left = _word_at(text, boundary - direction)
+    right = _word_at(text, neighbor)
+    # A numeric component can connect to digits, a short catalog component,
+    # or a mixed letter/digit component. Two complete mixed identifiers only
+    # separated by whitespace may be separate part numbers.
+    if left.isdigit() or right.isdigit():
+        other = right if left.isdigit() else left
+        return not other.isalpha() or _short_code_word(other, 4)
+    if left.isalpha() != right.isalpha():
+        return _short_code_word(left if left.isalpha() else right, 3)
+    return False
+
+
+def _connected_part(text: str, boundary: int, direction: int) -> bool:
+    return _dash_connected(text, boundary, direction) or _space_connected(text, boundary, direction)
 
 
 class _PartPattern(NamedTuple):
@@ -66,8 +147,7 @@ def match_pattern(code: str, mode: QueryMode) -> IdentifierPattern:
         body = code.replace("-", rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*")
         continuation = rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*(?ai:[A-F0-9]{{2}})(?!\w)"
         return re.compile(rf"(?<!\w)(?<!\w[{_DASHES}])(?ai:{body})(?!\w|{continuation})")
-    # Horizontal separators can be internal to an article. Check both ends
-    # of each candidate against the surrounding dash-connected components.
+    # Check both ends against the components of a separated catalog number.
     body = f"{_SEPARATORS}*".join(code)
     return _PartPattern(re.compile(rf"(?<!\w)(?ai:{body})(?!\w)"))
 
@@ -77,6 +157,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS identifier_queries (
            job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
            mode TEXT NOT NULL, code TEXT NOT NULL, document_count INTEGER NOT NULL,
+           matcher_version INTEGER NOT NULL DEFAULT 0,
            PRIMARY KEY(job_id, mode)
         ) WITHOUT ROWID"""
     )
@@ -98,14 +179,16 @@ def _positions(
     body = document["body"]
     fragments = (
         conn.execute(
-            "SELECT page,start,end FROM document_fragments WHERE document_id=? ORDER BY page",
+            "SELECT page,start,end,fragment_kind FROM document_fragments WHERE document_id=? ORDER BY page",
             (document["id"],),
         ).fetchall()
         if body
         else []
     )
     found = False
-    for page, start, end in fragments or [(0, 0, len(body))]:
+    for page, start, end, kind in fragments or [(0, 0, len(body), document["kind"])]:
+        if kind == "pdf_page" or (kind == "pdf" and end in {MAX_TEXT_CHARS, MAX_PUBLIC_PDF_TEXT_CHARS}):
+            end = complete_pdf_fragment_end(body, start, end)
         # Search a slice so a section boundary is an actual word boundary.
         match = pattern.search(body[start:end])
         if match:
@@ -115,30 +198,28 @@ def _positions(
         yield 0, 1, 0
 
 
-def index_query(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: str) -> None:
-    """Materialize the last exact lookup per mode, storing offsets and no text.
-
-    A corpus only appends completed documents until its entire job is evicted.
-    A new completion invalidates the cached lookup. Retained jobs use the same
-    paths and do not have to fetch their documents again.
-    """
-    count = conn.execute(
+def _document_count(conn: sqlite3.Connection, job_id: str) -> int:
+    return conn.execute(
         "SELECT COUNT(*) FROM documents WHERE job_id=? AND status IN ('fetched','duplicate')", (job_id,)
     ).fetchone()[0]
-    cached = conn.execute(
-        "SELECT code,document_count FROM identifier_queries WHERE job_id=? AND mode=?", (job_id, mode)
-    ).fetchone()
-    if cached is not None and (cached["code"], cached["document_count"]) == (code, count):
-        return
 
-    conn.execute("DELETE FROM identifier_queries WHERE job_id=? AND mode=?", (job_id, mode))
-    conn.execute(
-        "INSERT INTO identifier_queries(job_id,mode,code,document_count) VALUES(?,?,?,?)",
-        (job_id, mode, code, count),
-    )
+
+def _cached(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: str, count: int) -> bool:
+    cached = conn.execute(
+        "SELECT code,document_count,matcher_version FROM identifier_queries WHERE job_id=? AND mode=?", (job_id, mode)
+    ).fetchone()
+    return cached is not None and tuple(cached) == (code, count, _MATCHER_VERSION)
+
+
+def query_table(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: str) -> tuple[_MatchTable, int | None]:
+    """Read cached offsets or scan this snapshot into a connection-local table."""
+    count = _document_count(conn, job_id)
+    if _cached(conn, job_id, mode, code, count):
+        return "identifier_matches", None
+    conn.execute("CREATE TEMP TABLE identifier_scan AS SELECT * FROM identifier_matches WHERE 0")
     pattern = match_pattern(code, mode)
     documents = conn.execute(
-        """SELECT d.id,d.title,d.body FROM documents d
+        """SELECT d.id,d.title,d.kind,d.body FROM documents d
            LEFT JOIN documents p ON p.id=d.duplicate_of
            WHERE d.job_id=? AND (
                d.status='fetched' OR (d.status='duplicate' AND d.duplicate_kind='exact' AND d.title<>p.title)
@@ -146,10 +227,35 @@ def index_query(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: st
         (job_id,),
     )
     conn.executemany(
-        "INSERT INTO identifier_matches(job_id,mode,document_id,page,title_only,start) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO identifier_scan(job_id,mode,document_id,page,title_only,start) VALUES(?,?,?,?,?,?)",
         (
             (job_id, mode, document["id"], page, title_only, offset)
             for document in documents
             for page, title_only, offset in _positions(conn, document, pattern)
         ),
     )
+    return "identifier_scan", count
+
+
+def cache_query(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: str, count: int) -> None:
+    """Publish offsets after reading the response, if the corpus still matches."""
+    # No result depends on publishing a cache entry. Let a competing writer
+    # proceed and keep the reader's snapshot even if the cache cannot be saved.
+    with suppress(OSError, sqlite3.Error):
+        conn.execute("PRAGMA busy_timeout=0")
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+                return
+            # Completed documents only append until this whole job is evicted.
+            if _document_count(conn, job_id) != count or _cached(conn, job_id, mode, code, count):
+                return
+            conn.execute("DELETE FROM identifier_queries WHERE job_id=? AND mode=?", (job_id, mode))
+            conn.execute(
+                "INSERT INTO identifier_queries(job_id,mode,code,document_count,matcher_version) VALUES(?,?,?,?,?)",
+                (job_id, mode, code, count, _MATCHER_VERSION),
+            )
+            conn.execute(
+                """INSERT INTO identifier_matches(job_id,mode,document_id,page,title_only,start)
+                   SELECT job_id,mode,document_id,page,title_only,start FROM identifier_scan"""
+            )

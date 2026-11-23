@@ -754,6 +754,13 @@ def _pdf_to_text(body: bytes) -> str:
     )
 
 
+def complete_pdf_fragment_end(body: str, start: int, end: int) -> int:
+    """Exclude the unfinished tail of a PDF page when using it as evidence."""
+    if start == end or body[end - 1] in "\f\n" or body.find("\f", end) != -1 or body.find("\n", end) != -1:
+        return end
+    return max(start, body.rfind("\n", start, end))
+
+
 def _pdf_fragments(
     text: str, ocr_pages: frozenset[int] = frozenset(), truncated_pages: frozenset[int] = frozenset()
 ) -> list[dict[str, Any]]:
@@ -762,7 +769,7 @@ def _pdf_fragments(
     for number, body in enumerate(text.split("\f", _PDF_TEXT_PAGES), 1):
         start = offset + len(body) - len(body.lstrip())
         end = offset + len(body.rstrip())
-        truncated = number in truncated_pages
+        truncated = number in truncated_pages or (start < end and offset + len(body) == len(text))
         if start < end or truncated:
             fragments.append(
                 {
@@ -800,10 +807,11 @@ def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | 
         limitations.add("pdf_text_partial")
     if len(missing) > MIXED_OCR_PAGES_PER_DOCUMENT:
         limitations.add("ocr_document_budget")
-    remaining_chars = MAX_PUBLIC_PDF_TEXT_CHARS - len(text)
+    merged_text = text
     ocr_pages: set[int] = set()
     truncated_pages: set[int] = set()
     for index in missing[:MIXED_OCR_PAGES_PER_DOCUMENT]:
+        remaining_chars = MAX_PUBLIC_PDF_TEXT_CHARS - len(merged_text)
         if remaining_chars <= 0:
             limitations.add("ocr_text_limit")
             break
@@ -821,13 +829,23 @@ def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | 
             truncated_pages.add(index + 1)
             prefix = page_text[:remaining_chars]
             page_text = prefix.rstrip() if page_text[remaining_chars] == "\n" else complete_ocr_lines(prefix)
-        if page_text:
-            pages[index] = page_text
-            remaining_chars -= len(page_text)
-            ocr_pages.add(index + 1)
+        if not page_text:
+            continue
+        native_page = pages[index]
+        pages[index] = page_text
+        # Redaction may expand a short match. Check the whole redacted candidate
+        # above the storage cap so a mask cannot displace trailing native text.
+        candidate = redact_sensitive("\f".join(pages), limit=MAX_PUBLIC_PDF_TEXT_CHARS * 2, preserve_page_breaks=True)
+        if len(candidate) > MAX_PUBLIC_PDF_TEXT_CHARS:
+            pages[index] = native_page
+            limitations.add("ocr_text_limit")
+            truncated_pages.add(index + 1)
+            continue
+        merged_text = candidate
+        ocr_pages.add(index + 1)
     return {
         "ok": True,
-        "text": redact_sensitive("\f".join(pages), limit=MAX_PUBLIC_PDF_TEXT_CHARS, preserve_page_breaks=True),
+        "text": merged_text,
         "extraction_method": "pdf_mixed" if ocr_pages else "pdf_text",
         "ocr_pages": frozenset(ocr_pages | truncated_pages),
         "truncated_pages": frozenset(truncated_pages),

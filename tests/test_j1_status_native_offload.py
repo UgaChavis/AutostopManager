@@ -24,7 +24,15 @@ VIN = "autostop.j1.vin_research.v1"
 FIRST, SECOND, THIRD = "0" * 32, "1" * 32, "2" * 32
 DEFAULT_POOL = getattr(executor, "_J1_STATUS_EXECUTOR", None)
 PAYLOADS = [
-    {"ok": True, "schema": GENERAL, "job_id": FIRST, "status": "running", "pages_fetched": 1},
+    {
+        "ok": True,
+        "schema": GENERAL,
+        "job_id": FIRST,
+        "status": "completed",
+        "pages_fetched": 1,
+        "queries_partial": 1,
+        "coverage": {"search_providers": [{"provider": "searxng", "queries": 1, "done": 0, "failed": 0, "partial": 1}]},
+    },
     {"ok": True, "schema": VIN, "job_id": FIRST, "collection_status": "completed", "analysis_status": "awaiting_agent"},
     {"ok": False, "schema": GENERAL, "error": {"code": "job_not_found"}},
     {"ok": False, "schema": VIN, "error": {"code": "vin_job_expired"}},
