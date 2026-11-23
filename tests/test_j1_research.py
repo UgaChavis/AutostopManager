@@ -333,14 +333,14 @@ def test_automotive_profile_builds_balanced_bounded_plan() -> None:
     assert created["ok"] is True
     assert created["profile"] == j1.AUTOMOTIVE_PROFILE
     assert created["max_pages"] == j1.AUTOMOTIVE_MAX_PAGES
-    assert created["query_count"] == j1.AUTOMOTIVE_MAX_QUERIES
+    assert created["query_count"] == 4
     status = j1.research_status(created["job_id"])
     assert status["profile"] == j1.AUTOMOTIVE_PROFILE
     intents = {item["intent"] for item in status["query_plan"]}
-    assert {"official_bulletin_en", "technical_diagnosis_en", "catalog_fitment_en", "owner_experience_en"}.issubset(
-        intents
-    )
+    assert intents == {"official_bulletin_en", "technical_diagnosis_en", "technical_diagnosis_ru", "catalog_fitment_en"}
     assert status["query_suggestions"] == []
+    followup = [f"public follow-up question {number}" for number in range(8)]
+    assert j1.research_add_queries(created["job_id"], followup)["queries_total"] == j1.AUTOMOTIVE_MAX_QUERIES
     assert (
         j1.research_add_queries(created["job_id"], ["one more public query"])["error"]["code"] == "query_limit_reached"
     )
@@ -1381,11 +1381,19 @@ def test_stage1_exact_duplicate_links_to_first_fetched_source(monkeypatch: pytes
 
 def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPatch) -> None:
     urls = [f"https://example.org/dynamic/{index}" for index in range(j1.MAX_BROWSER_PAGES + 1)]
+    batch_size = j1_fetch.MAX_SEARCH_RESULTS
+    batches = {
+        f"public dynamic material {start}": urls[start : start + batch_size]
+        for start in range(0, len(urls), batch_size)
+    }
     attempts: list[bool] = []
     monkeypatch.setattr(
         j1,
         "search_public",
-        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+        lambda query, **_kwargs: (
+            [{"url": url, "title": url, "source": "searxng"} for url in batches[query]],
+            "searxng",
+        ),
     )
 
     def dynamic_fetch(_url: str, *, allow_browser: bool) -> dict[str, object]:
@@ -1397,7 +1405,7 @@ def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPa
         }
 
     monkeypatch.setattr(j1, "fetch_document", dynamic_fetch)
-    job_id = j1.start_research("Public dynamic material", ["public dynamic material"], max_pages=len(urls))["job_id"]
+    job_id = j1.start_research("Public dynamic material", list(batches), max_pages=len(urls))["job_id"]
     j1.run_worker(once=True)
     status = j1.research_status(job_id)
     assert attempts == [True] * j1.MAX_BROWSER_PAGES + [False]

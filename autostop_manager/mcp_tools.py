@@ -38,6 +38,7 @@ from .config import (
 )
 from .crm_parts_store import parts_store_cards
 from .drom_listings import drom_get_parts_search, drom_start_parts_search
+from .j1_identifiers import QueryMode
 from .j1_research import (
     research_add_queries,
     research_cancel,
@@ -1456,6 +1457,7 @@ def register_manager_tools(  # noqa: C901
         description=(
             "Queue public source URLs found by Codex web search for a bounded J1 research job. "
             "Start with objective and an opaque idempotency_key, or append to a known job_id. "
+            "Optional de-identified automotive_context is fixed at start for assessing source applicability. "
             "If the start response is lost, replay its exact request and key to recover the retained job_id. "
             "Pass up to 20 public URLs per call. Exclude VIN, contacts and secrets. "
             "The worker reads supplied pages without issuing searches. Use j1_research_results and "
@@ -1470,7 +1472,16 @@ def register_manager_tools(  # noqa: C901
         objective: str | None = None,
         job_id: str | None = None,
         idempotency_key: str | None = None,
+        automotive_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if automotive_context is not None:
+            return research_sources(
+                source_urls=source_urls,
+                objective=objective,
+                job_id=job_id,
+                idempotency_key=idempotency_key,
+                automotive_context=automotive_context,
+            )
         return research_sources(
             source_urls=source_urls, objective=objective, job_id=job_id, idempotency_key=idempotency_key
         )
@@ -1578,6 +1589,7 @@ def register_manager_tools(  # noqa: C901
         description=(
             "Page through J1 sources or search the collected full-text corpus. Results contain source links "
             "and retrieval metadata. Public matches include the PDF page or numbered HTML section when available."
+            " Set query_mode to dtc or part_number for exact public identifier lookup; lexical is the default."
             " Opening local state may initialize or migrate SQLite. VIN paths may delete expired private jobs, "
             "mark lost-state queue pointers failed and reconcile stopped-worker state before domain checks, "
             "including when VIN writes are disabled. Lifecycle housekeeping is not idempotent; "
@@ -1587,8 +1599,12 @@ def register_manager_tools(  # noqa: C901
             readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
         ),
     )
-    def j1_research_results_tool(job_id: str, query: str = "", cursor: int = 0, limit: int = 20) -> dict[str, Any]:
-        return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit)
+    def j1_research_results_tool(
+        job_id: str, query: str = "", cursor: int = 0, limit: int = 20, query_mode: QueryMode = "lexical"
+    ) -> dict[str, Any]:
+        if query_mode == "lexical":
+            return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit)
+        return research_results(job_id=job_id, query=query, cursor=cursor, limit=limit, query_mode=query_mode)
 
     @server.tool(
         name="j1_research_document",

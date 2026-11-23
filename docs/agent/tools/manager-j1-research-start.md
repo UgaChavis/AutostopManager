@@ -25,5 +25,6 @@ Defaults: `{"automotive_context":null,"max_pages":300,"profile":"general","queri
 
 - Writes a durable local public-research job; a background worker later searches/fetches public pages.
 - queued is not completed evidence. Supply nonempty queries or a valid automotive profile/context; starting a second active job is refused.
+- Автомобильный профиль добавляет до четырёх начальных запросов. Уточнения расходуют общий лимит в 12 запросов.
 
 Подробный контракт: [справочник](../references/web-research.md).
