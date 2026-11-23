@@ -20,7 +20,7 @@ Defaults: `{"max_chars":8000,"ocr":false,"offset":0,"page":null}`.
 {"document_id":"DEMO","job_id":null}
 ```
 
-Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/document_id/url/canonical_url/title/kind/source/source_class/source_basis/source_tier.; search_snippet/search_rank/search_engines/language/extraction_method/duplicate_of/duplicate/discovered_at/retrieved_at/text/offset/total_chars/next_offset.; Публичный page возвращает один фрагмент с page/fragment_kind/section/source_url и previous_page/next_page. Для неполной страницы PDF возвращается fragment_truncated=true. VIN jobs expose versioned document/page text, server-derived match_evidence_id and bounded OCR queue state..
+Выход: Legacy flat schema=autostop.j1.research.v1: ok/job_id/document_id/url/canonical_url/title/kind/source/source_class/source_basis/source_tier.; search_snippet/search_rank/search_engines/language/extraction_method/duplicate_of/duplicate/discovered_at/retrieved_at/text/offset/total_chars/next_offset.; Публичный page возвращает один фрагмент с page/fragment_kind/section/source_url и previous_page/next_page. Для неполной страницы PDF возвращается fragment_truncated=true. VIN jobs expose versioned document/page text, server-derived match_evidence_id and bounded OCR queue state.; Смешанный публичный PDF сохраняет fragment_extraction_method для страницы и pdf_limitations при неполном извлечении.
 Ошибки и неполнота: ok=false/error.code: identifier_invalid/pagination_invalid/document_not_found/j1_store_unavailable.; Публичный `document_page_unavailable` означает, что запрошенный фрагмент не сохранён. VIN-режим возвращает ошибки области, срока действия, страницы и OCR.
 
 - job_id/document_id refer to one returned J1 job; synthetic examples demonstrate shape only.

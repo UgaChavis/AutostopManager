@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from .j1_fetch import MAX_TEXT_CHARS, redact_sensitive
+from .j1_vin_documents import _parser_workspace, _run_parser
 from .numeric import bounded_int as _bounded_int
 
 
@@ -29,6 +30,8 @@ MAX_TIMEOUT_SECONDS = 30
 MAX_IMAGE_BYTES = 30_000_000
 MAX_IMAGE_FILE_BYTES = MAX_IMAGE_BYTES // MAX_PAGES
 OCR_LANGUAGES = "rus+eng"
+MIXED_PAGE_TIMEOUT_SECONDS = 6
+MIXED_PAGE_TEXT_BYTES = 64_000
 
 
 def _restrict_child() -> None:
@@ -103,6 +106,59 @@ def _prepare_workdir(path: Path, source: Path) -> None:
 
 def _failure(code: str, *, retryable: bool) -> dict[str, Any]:
     return {"ok": False, "error": code, "retryable": retryable, "extraction_method": "pdf_ocr"}
+
+
+def extract_mixed_pdf_page(body: bytes, page: int) -> tuple[str, str | None]:
+    """Read one physical page from the already downloaded public PDF."""
+    deadline = time.monotonic() + MIXED_PAGE_TIMEOUT_SECONDS
+    if not _ocr_languages_available():
+        return "", "ocr_unavailable"
+    try:
+        with tempfile.TemporaryDirectory(prefix="j1-public-pdf-") as workspace:
+            with _parser_workspace(Path(workspace)) as (directory, descriptor):
+                render_status, image = _run_parser(
+                    [
+                        "/usr/bin/pdftoppm",
+                        "-f",
+                        str(page),
+                        "-l",
+                        str(page),
+                        "-singlefile",
+                        "-r",
+                        "200",
+                        "-jpeg",
+                        "-jpegopt",
+                        "quality=85",
+                        "-",
+                    ],
+                    directory,
+                    descriptor,
+                    payload=body,
+                    timeout=deadline - time.monotonic(),
+                    output_limit=MAX_IMAGE_FILE_BYTES,
+                )
+                if render_status == "timeout":
+                    return "", "ocr_timeout"
+                if render_status != "ok" or not image.startswith(b"\xff\xd8"):
+                    return "", "ocr_render_failed"
+                status, output = _run_parser(
+                    ["/usr/bin/tesseract", "stdin", "stdout", "-l", OCR_LANGUAGES, "--psm", "3"],
+                    directory,
+                    descriptor,
+                    payload=image,
+                    timeout=deadline - time.monotonic(),
+                    output_limit=MIXED_PAGE_TEXT_BYTES,
+                )
+    except (OSError, ValueError):
+        return "", "ocr_unavailable"
+    if status == "timeout":
+        return "", "ocr_timeout"
+    if status not in {"ok", "output_limit"}:
+        return "", "ocr_extract_failed"
+    text = output.decode("utf-8", "replace").replace("\f", "\n").strip()
+    if not text:
+        return "", "ocr_empty"
+    return text, "ocr_text_limit" if status == "output_limit" else None
 
 
 def extract_scanned_pdf(

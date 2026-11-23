@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 import fcntl
+from functools import partial
 import hashlib
 import json
 import os
@@ -31,9 +32,11 @@ from .j1_fetch import (
     MAX_PUBLIC_PDF_TEXT_CHARS,
     MAX_SEARCH_RESULTS,
     MAX_SEARCH_SNIPPET_CHARS,
+    MIXED_OCR_PAGES_PER_DOCUMENT,
     contains_sensitive,
     contains_unsafe_url,
     fetch_document,
+    mixed_ocr_budget,
     parse_searxng_endpoint,
     public_url,
     quote_http_target,
@@ -51,6 +54,7 @@ MAX_PAGES = 300
 SOURCE_URL_BATCH_LIMIT = 20
 SOURCES_ONLY_MODE = "sources_only"
 MAX_BROWSER_PAGES = 20
+MAX_MIXED_OCR_PAGES_PER_JOB = 8
 MAX_DOCUMENT_CHARS = 50_000
 MAX_CORPUS_BYTES = 250 * 1024 * 1024
 RETENTION_DAYS = 7
@@ -372,6 +376,8 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
         "language": "TEXT NOT NULL DEFAULT 'unknown'",
         "extraction_method": "TEXT NOT NULL DEFAULT ''",
         "browser_attempted": "INTEGER NOT NULL DEFAULT 0",
+        "mixed_ocr_pages_used": "INTEGER NOT NULL DEFAULT 0",
+        "pdf_limitations": "TEXT NOT NULL DEFAULT ''",
         "source_class": "TEXT NOT NULL DEFAULT 'unknown'",
         "source_basis": "TEXT NOT NULL DEFAULT ''",
         # Discovery fields survive an unavailable page so a report can state
@@ -404,6 +410,7 @@ def _migrate_jobs(conn: sqlite3.Connection) -> None:
         "profile": "TEXT NOT NULL DEFAULT 'general'",
         "automotive_context": "TEXT NOT NULL DEFAULT ''",
         "acquisition_mode": "TEXT NOT NULL DEFAULT 'queries'",
+        "mixed_ocr_pages_used": "INTEGER NOT NULL DEFAULT 0",
     }
     _add_missing_columns(conn, "jobs", required)
 
@@ -446,7 +453,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY, objective TEXT NOT NULL, max_pages INTEGER NOT NULL,
             status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
             error TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT 'general',
-            automotive_context TEXT NOT NULL DEFAULT '', acquisition_mode TEXT NOT NULL DEFAULT 'queries'
+            automotive_context TEXT NOT NULL DEFAULT '', acquisition_mode TEXT NOT NULL DEFAULT 'queries',
+            mixed_ocr_pages_used INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
         CREATE TABLE IF NOT EXISTS supplied_source_starts (
@@ -479,6 +487,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             body TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '', content_simhash TEXT NOT NULL DEFAULT '',
             language TEXT NOT NULL DEFAULT 'unknown', extraction_method TEXT NOT NULL DEFAULT '',
             browser_attempted INTEGER NOT NULL DEFAULT 0,
+            mixed_ocr_pages_used INTEGER NOT NULL DEFAULT 0,
+            pdf_limitations TEXT NOT NULL DEFAULT '',
             source_class TEXT NOT NULL DEFAULT 'unknown', source_basis TEXT NOT NULL DEFAULT '',
             source_tier TEXT NOT NULL DEFAULT 'unclassified', search_snippet TEXT NOT NULL DEFAULT '',
             search_rank INTEGER NOT NULL DEFAULT 0, search_engines TEXT NOT NULL DEFAULT '',
@@ -497,6 +507,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             fts_rowid INTEGER PRIMARY KEY, document_id TEXT NOT NULL, page INTEGER NOT NULL,
             fragment_kind TEXT NOT NULL, section TEXT NOT NULL, source_url TEXT NOT NULL,
             start INTEGER NOT NULL, end INTEGER NOT NULL,
+            extraction_method TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
             UNIQUE(document_id, page)
         );
@@ -505,6 +516,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_jobs(conn)
     _migrate_queries(conn)
     _migrate_documents(conn)
+    _add_missing_columns(conn, "document_fragments", {"extraction_method": "TEXT NOT NULL DEFAULT ''"})
     _migrate_duplicate_titles(conn)
     j1_identifiers.init_schema(conn)
 
@@ -1174,6 +1186,8 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "pages_duplicates": counts["duplicates"] or 0,
                 "browser_pages_attempted": browser_attempts,
                 "browser_pages_remaining": max(0, MAX_BROWSER_PAGES - browser_attempts),
+                "mixed_pdf_ocr_pages_attempted": row["mixed_ocr_pages_used"],
+                "mixed_pdf_ocr_pages_remaining": MAX_MIXED_OCR_PAGES_PER_JOB - row["mixed_ocr_pages_used"],
                 "queries_total": queries["total"],
                 "queries_done": queries["done"] or 0,
                 "queries_failed": queries["failed"] or 0,
@@ -1280,6 +1294,10 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
             section=row["section"] or None,
             source_url=row["source_url"],
         )
+        if row["fragment_kind"] == "pdf_page":
+            result["fragment_extraction_method"] = row["fragment_extraction_method"] or "pdf_text"
+    if row["pdf_limitations"]:
+        result["pdf_limitations"] = json.loads(row["pdf_limitations"])
     if row["match_kind"] is not None:
         result["match_kind"] = row["match_kind"]
     return result
@@ -1319,7 +1337,7 @@ def research_results(
     fields = """d.id,d.url,d.canonical_url,d.title,d.source,d.source_class,d.source_basis,d.source_tier,
                        d.search_snippet,d.search_rank,d.search_engines,d.language,
                        d.kind,d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
-                       d.created_at,d.retrieved_at,primary_doc.url AS duplicate_url"""
+                       d.created_at,d.retrieved_at,d.pdf_limitations,primary_doc.url AS duplicate_url"""
     try:
         with _db() as conn, conn:
             conn.execute("BEGIN IMMEDIATE" if exact_code is not None else "BEGIN")
@@ -1339,7 +1357,8 @@ def research_results(
                                substr(d.body, max(coalesce(f.start,0),i.start-80)+1,
                                    min(coalesce(f.end,length(d.body)),i.start+280)
                                    - max(coalesce(f.start,0),i.start-80)) AS excerpt,
-                               f.page,f.fragment_kind,f.section,f.source_url
+                               f.page,f.fragment_kind,f.section,f.source_url,
+                               f.extraction_method AS fragment_extraction_method
                             FROM identifier_matches i JOIN documents d ON d.id=i.document_id
                             LEFT JOIN documents primary_doc ON primary_doc.id=d.duplicate_of
                             LEFT JOIN document_fragments f ON f.document_id=i.document_id AND f.page=i.page
@@ -1361,7 +1380,8 @@ def research_results(
                                   SELECT 1 FROM documents_fts AS hit
                                   WHERE hit.rowid=documents_fts.rowid AND hit.body MATCH ?
                               ) END AS body_match,
-                              f.page,f.fragment_kind,f.section,f.source_url
+                              f.page,f.fragment_kind,f.section,f.source_url,
+                              f.extraction_method AS fragment_extraction_method
                        FROM documents_fts JOIN documents AS d ON d.id=documents_fts.document_id
                        LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        LEFT JOIN document_fragments AS f ON f.fts_rowid=documents_fts.rowid AND f.document_id=d.id
@@ -1430,7 +1450,7 @@ def research_document(
                 """SELECT d.url,d.canonical_url,d.title,d.kind,d.body,d.source,d.source_class,d.source_basis,d.source_tier,
                           d.search_snippet,d.search_rank,d.search_engines,d.language,
                           d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
-                          d.created_at,d.retrieved_at,primary_doc.url AS duplicate_url
+                          d.created_at,d.retrieved_at,d.pdf_limitations,primary_doc.url AS duplicate_url
                    FROM documents AS d LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                    WHERE d.job_id=? AND d.id=?""",
                 (job_id, document_id),
@@ -1452,6 +1472,8 @@ def research_document(
                 return result
             body = row["body"]
             paging = {}
+            if row["pdf_limitations"]:
+                paging["pdf_limitations"] = json.loads(row["pdf_limitations"])
             if page is not None:
                 fragment = conn.execute(
                     """SELECT f.*,
@@ -1464,18 +1486,22 @@ def research_document(
                 ).fetchone()
                 if fragment is None:
                     result = _error("document_page_unavailable", job_id=job_id)
-                    result.update(document_id=document_id, page=page)
+                    result.update(document_id=document_id, page=page, **paging)
                     return result
-                paging = {
-                    "page": page,
-                    "fragment_kind": fragment["fragment_kind"],
-                    "section": fragment["section"] or None,
-                    "source_url": fragment["source_url"],
-                    "previous_page": fragment["previous_page"],
-                    "next_page": fragment["next_page"],
-                }
-                if fragment["fragment_kind"] == "pdf_page" and body.find("\f", fragment["end"]) == -1:
-                    paging["fragment_truncated"] = True
+                paging.update(
+                    {
+                        "page": page,
+                        "fragment_kind": fragment["fragment_kind"],
+                        "section": fragment["section"] or None,
+                        "source_url": fragment["source_url"],
+                        "previous_page": fragment["previous_page"],
+                        "next_page": fragment["next_page"],
+                    }
+                )
+                if fragment["fragment_kind"] == "pdf_page":
+                    paging["fragment_extraction_method"] = fragment["extraction_method"] or "pdf_text"
+                    if body.find("\f", fragment["end"]) == -1:
+                        paging["fragment_truncated"] = True
                 body = body[fragment["start"] : fragment["end"]]
             end = min(offset + max_chars, len(body))
             return {
@@ -1573,6 +1599,7 @@ def _report_source_item(conn: sqlite3.Connection, row: sqlite3.Row, context: dic
         ),
         "confidence": _evidence_confidence(tier, applicability.label),
         "retrieved_at": row["retrieved_at"] or None,
+        **({"pdf_limitations": json.loads(row["pdf_limitations"])} if row["pdf_limitations"] else {}),
     }
 
 
@@ -1767,7 +1794,7 @@ def research_report(job_id: str) -> dict[str, Any]:
             rows = conn.execute(
                 """SELECT id,url,canonical_url,title,CASE WHEN ? THEN body ELSE '' END AS body,
                           source_class,source_basis,source_tier,
-                          search_snippet,search_rank,retrieved_at
+                          search_snippet,search_rank,retrieved_at,pdf_limitations
                    FROM documents WHERE job_id=? AND status='fetched'""",
                 (bool(context), job_id),
             )
@@ -2227,7 +2254,10 @@ def _enqueue_query_candidate(
     return {"id": document_id, "url": candidate["url"]}
 
 
-def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> list[tuple[int, str, str, str, int, int]]:
+_DocumentFragment = tuple[int, str, str, str, int, int, str]
+
+
+def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> list[_DocumentFragment]:
     raw_fragments = fetch_result.get("fragments")
     if not isinstance(raw_fragments, list) or fetch_result.get("text") != body:
         return []
@@ -2241,7 +2271,10 @@ def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> li
         section = redact_sensitive(item.get("section", ""), limit=200)
         anchor = f"page={page}" if fragment_kind == "pdf_page" else quote(item.get("anchor", ""), safe="")
         source_url = f"{url}#{anchor}" if anchor else url
-        fragments.append((page, fragment_kind, section, source_url if public_url(source_url) else url, start, end))
+        method = "pdf_ocr" if item.get("extraction_method") == "pdf_ocr" else ""
+        fragments.append(
+            (page, fragment_kind, section, source_url if public_url(source_url) else url, start, end, method)
+        )
         last_page, last_end = page, end
     return fragments
 
@@ -2252,7 +2285,7 @@ def _index_document(
     document_id: str,
     title: str,
     body: str,
-    fragments: list[tuple[int, str, str, str, int, int]],
+    fragments: list[_DocumentFragment],
 ) -> None:
     # Only pending documents are claimed. Their first index and fetched status
     # commit together, so a restarted worker cannot inherit a partial index.
@@ -2260,13 +2293,35 @@ def _index_document(
     if not fragments:
         conn.execute(insert_text, (job_id, document_id, title, body))
         return
-    for index, (page, kind, section, source_url, start, end) in enumerate(fragments):
+    for index, (page, kind, section, source_url, start, end, method) in enumerate(fragments):
         cursor = conn.execute(insert_text, (job_id, document_id, title if index == 0 else "", body[start:end]))
         conn.execute(
-            """INSERT INTO document_fragments(fts_rowid,document_id,page,fragment_kind,section,source_url,start,end)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (cursor.lastrowid, document_id, page, kind, section, source_url, start, end),
+            """INSERT INTO document_fragments(
+                   fts_rowid,document_id,page,fragment_kind,section,source_url,start,end,extraction_method
+               ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (cursor.lastrowid, document_id, page, kind, section, source_url, start, end, method),
         )
+
+
+def _reserve_mixed_ocr_page(job_id: str, document_id: str) -> str | None:
+    try:
+        with _db() as conn, conn:
+            if _STOP or not _lock_running_job(conn, job_id):
+                return "ocr_interrupted"
+            used = conn.execute("SELECT mixed_ocr_pages_used FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+            if used >= MAX_MIXED_OCR_PAGES_PER_JOB:
+                return "ocr_job_budget"
+            reserved = conn.execute(
+                """UPDATE documents SET mixed_ocr_pages_used=mixed_ocr_pages_used+1
+                   WHERE id=? AND job_id=? AND status='running' AND mixed_ocr_pages_used<?""",
+                (document_id, job_id, MIXED_OCR_PAGES_PER_DOCUMENT),
+            ).rowcount
+            if not reserved:
+                return "ocr_document_budget"
+            conn.execute("UPDATE jobs SET mixed_ocr_pages_used=mixed_ocr_pages_used+1 WHERE id=?", (job_id,))
+    except (OSError, sqlite3.Error):
+        return "ocr_budget_unavailable"
+    return None
 
 
 def _work_public_job(job_id: str) -> None:
@@ -2340,7 +2395,8 @@ def _work_public_job(job_id: str) -> None:
                 return
         else:
             try:
-                fetch_result = fetch_document(url, allow_browser=allow_browser)
+                with mixed_ocr_budget(partial(_reserve_mixed_ocr_page, job_id, doc_id)):
+                    fetch_result = fetch_document(url, allow_browser=allow_browser)
             except Exception:  # noqa: BLE001 - one malformed page must not fail the corpus.
                 fetch_result = {"ok": False, "error": "fetch_failed"}
             with _db() as conn:
@@ -2359,7 +2415,9 @@ def _work_public_job(job_id: str) -> None:
                 if fetch_result.get("ok") is True:
                     title = redact_sensitive(fetch_result.get("title", ""), limit=200)
                     kind = _clean_input(str(fetch_result.get("kind") or ""), limit=40)
-                    is_pdf_text = kind == "pdf" and fetch_result.get("extraction_method") == "pdf_text"
+                    is_pdf_text = kind == "pdf" and fetch_result.get("extraction_method") in {"pdf_text", "pdf_mixed"}
+                    limitations = fetch_result.get("pdf_limitations")
+                    pdf_limitations = json.dumps(limitations) if limitations else ""
                     body = redact_sensitive(
                         fetch_result.get("text", ""),
                         limit=MAX_PUBLIC_PDF_TEXT_CHARS if is_pdf_text else MAX_DOCUMENT_CHARS,
@@ -2394,7 +2452,7 @@ def _work_public_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='duplicate',url=?,canonical_url=?,title=?,kind=?,body='',
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
-                               source_tier=?,
+                               source_tier=?,pdf_limitations=?,
                                duplicate_of=?,duplicate_kind=?,duplicate_score=?,error=?,retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -2408,6 +2466,7 @@ def _work_public_job(job_id: str) -> None:
                                 source_class,
                                 source_basis,
                                 source_tier,
+                                pdf_limitations,
                                 primary["id"],
                                 duplicate_kind,
                                 duplicate_score,
@@ -2424,7 +2483,7 @@ def _work_public_job(job_id: str) -> None:
                         fragments = _document_fragments(fetch_result, body, fetched_url)
                         expected_bytes = len(body.encode("utf-8")) * 3 + sum(
                             256 + len(section.encode("utf-8")) + len(source_url.encode("utf-8"))
-                            for _, _, section, source_url, _, _ in fragments
+                            for _, _, section, source_url, _, _, _ in fragments
                         )
                         if _cache_size() + expected_bytes > MAX_CORPUS_BYTES:
                             _prune(conn)
@@ -2443,7 +2502,7 @@ def _work_public_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='fetched',url=?,canonical_url=?,title=?,kind=?,body=?,
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
-                               source_tier=?,
+                               source_tier=?,pdf_limitations=?,
                                duplicate_of='',duplicate_kind='',duplicate_score=0,error='',retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -2458,6 +2517,7 @@ def _work_public_job(job_id: str) -> None:
                                 source_class,
                                 source_basis,
                                 source_tier,
+                                pdf_limitations,
                                 retrieved_at,
                                 doc_id,
                             ),

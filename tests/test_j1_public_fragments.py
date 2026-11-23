@@ -297,3 +297,105 @@ def test_pdf_redaction_retains_breaks_and_blank_text_still_uses_ocr(monkeypatch)
     monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: "\n\f\n\f")
     monkeypatch.setattr(j1_ocr, "extract_scanned_pdf", lambda *_args, **_kwargs: {"ok": True, "text": "Scanned text"})
     assert j1_fetch._extract_pdf(b"%PDF")["extraction_method"] == "pdf_ocr"
+
+
+def test_worker_ocr_indexes_only_empty_pdf_page_and_redacts_across_pages(monkeypatch):
+    url = "https://example.org/mixed.pdf"
+    pdf = b"%PDF-synthetic"
+    native = "Document card.\f \n\f6W000001\nFinal appendix.\f"
+    monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: native)
+    calls = []
+
+    def recognize(body, page):
+        calls.append((body, page))
+        return "Connector CX-402A.\nWVWZZZ1KZ", None
+
+    monkeypatch.setattr(j1_ocr, "extract_mixed_pdf_page", recognize)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: (200, {"content-type": "application/pdf"}, pdf, url),
+    )
+    assert j1_fetch.fetch_document(url)["error"] == "empty_or_dynamic"
+    assert not calls
+
+    job = _collect(monkeypatch, {url: ("application/pdf", pdf)})
+    assert calls == [(pdf, 2)]
+    hit = j1.research_results(job, query="CX-402A")["results"][0]
+    assert hit["page"] == 2 and hit["source_url"] == f"{url}#page=2"
+    assert hit["extraction_method"] == "pdf_mixed"
+    assert hit["fragment_extraction_method"] == "pdf_ocr"
+    assert hit["pdf_limitations"] == ["short_pdf_text"]
+    doc_id = hit["document_id"]
+    original = j1.research_document(job, doc_id, page=1)
+    assert original["fragment_extraction_method"] == "pdf_text" and original["text"] == "Document card."
+    scanned = j1.research_document(job, doc_id, page=2)
+    assert scanned["fragment_extraction_method"] == "pdf_ocr" and "Connector CX-402A." in scanned["text"]
+    assert scanned["next_page"] == 3 and "fragment_truncated" not in scanned
+    report = j1.research_report(job)["report"]["sources"][0]
+    assert report["pdf_limitations"] == ["short_pdf_text"]
+    with j1._db(readonly=True) as conn:
+        saved = "\n".join(conn.iterdump())
+    assert "WVWZZZ1KZ" not in saved and "6W000001" not in saved
+
+
+def test_mixed_pdf_worker_charges_failed_attempts_and_keeps_digital_pages(monkeypatch):
+    sources = {}
+    attempts = []
+    for number in range(4):
+        body = f"%PDF-synthetic-{number}".encode()
+        sources[f"https://example.org/ocr-{number}.pdf"] = "application/pdf", body
+
+    def recognize(body, page):
+        attempts.append((body, page))
+        return "", "ocr_timeout"
+
+    monkeypatch.setattr(j1_ocr, "extract_mixed_pdf_page", recognize)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_pdf_to_text",
+        lambda body: f"{body.decode()} digital opening.\f\f\f\f\fDigital final page.\f",
+    )
+    job = _collect(monkeypatch, sources)
+    assert [page for _, page in attempts] == [2, 3, 4, 2, 3, 4, 2, 3]
+    status = j1.research_status(job)
+    assert status["mixed_pdf_ocr_pages_attempted"] == 8 and status["mixed_pdf_ocr_pages_remaining"] == 0
+    documents = {row["url"]: row for row in j1.research_results(job)["results"]}
+    assert documents["https://example.org/ocr-0.pdf"]["pdf_limitations"] == [
+        "ocr_document_budget",
+        "ocr_timeout",
+        "short_pdf_text",
+    ]
+    assert documents["https://example.org/ocr-3.pdf"]["pdf_limitations"] == [
+        "ocr_document_budget",
+        "ocr_job_budget",
+        "short_pdf_text",
+    ]
+    hits = j1.research_results(job, query="Digital final page")["results"]
+    assert sum(hit.get("page") == 6 for hit in hits) == 4
+
+
+def test_mixed_pdf_reservations_survive_requeue_and_respect_cancellation(monkeypatch):
+    receipt = j1.research_sources(
+        objective="Inspect a synthetic workshop manual",
+        source_urls=["https://example.org/recovery.pdf"],
+        idempotency_key="mixed-ocr-recovery-test",
+    )
+    job = receipt["job_id"]
+    with j1._db() as conn, conn:
+        assert j1._claim_job(conn) == job
+        document_id = conn.execute("SELECT id FROM documents WHERE job_id=?", (job,)).fetchone()[0]
+        conn.execute("UPDATE documents SET status='running' WHERE id=?", (document_id,))
+    assert j1._reserve_mixed_ocr_page(job, document_id) is None
+    with j1._db() as conn, conn:
+        conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job,))
+        conn.execute("UPDATE documents SET status='pending' WHERE id=?", (document_id,))
+    with j1._db() as conn, conn:
+        assert j1._claim_job(conn) == job
+        conn.execute("UPDATE documents SET status='running' WHERE id=?", (document_id,))
+    assert j1._reserve_mixed_ocr_page(job, document_id) is None
+    assert j1._reserve_mixed_ocr_page(job, document_id) is None
+    assert j1._reserve_mixed_ocr_page(job, document_id) == "ocr_document_budget"
+    assert j1.research_cancel(job)["ok"]
+    assert j1._reserve_mixed_ocr_page(job, document_id) == "ocr_interrupted"
+    assert j1.research_status(job)["mixed_pdf_ocr_pages_attempted"] == 3

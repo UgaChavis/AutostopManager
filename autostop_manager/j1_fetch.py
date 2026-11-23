@@ -8,7 +8,8 @@ resolved and checked again; proxies, cookies and authenticated pages are not use
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 import html
 from html.parser import HTMLParser
@@ -55,6 +56,10 @@ MAX_PUBLIC_PDF_TEXT_CHARS = 250_000
 MAX_PUBLIC_FRAGMENTS = 1_000
 _MAX_PDF_TEXT_BYTES = 1_000_000
 _PDF_TEXT_PAGES = 300
+MIXED_OCR_PAGES_PER_DOCUMENT = 3
+_MIXED_OCR_RESERVATION: ContextVar[Callable[[], str | None] | None] = ContextVar(
+    "j1_mixed_ocr_reservation", default=None
+)
 _HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 MAX_SEARCH_RESULTS = 20
 MAX_SEARCH_RESULTS_PER_DOMAIN = 3
@@ -749,21 +754,82 @@ def _pdf_to_text(body: bytes) -> str:
     )
 
 
-def _pdf_fragments(text: str) -> list[dict[str, Any]]:
+def _pdf_fragments(text: str, ocr_pages: frozenset[int] = frozenset()) -> list[dict[str, Any]]:
     fragments = []
     offset = 0
     for number, body in enumerate(text.split("\f", _PDF_TEXT_PAGES), 1):
         start = offset + len(body) - len(body.lstrip())
         end = offset + len(body.rstrip())
         if start < end:
-            fragments.append({"page": number, "fragment_kind": "pdf_page", "start": start, "end": end})
+            fragments.append(
+                {
+                    "page": number,
+                    "fragment_kind": "pdf_page",
+                    "start": start,
+                    "end": end,
+                    "extraction_method": "pdf_ocr" if number in ocr_pages else "pdf_text",
+                }
+            )
         offset += len(body) + 1
     return fragments
+
+
+@contextmanager
+def mixed_ocr_budget(reserve_page: Callable[[], str | None]) -> Iterator[None]:
+    """Enable selected-page OCR only while the public worker reads a document."""
+    token = _MIXED_OCR_RESERVATION.set(reserve_page)
+    try:
+        yield
+    finally:
+        _MIXED_OCR_RESERVATION.reset(token)
+
+
+def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | None]) -> dict[str, Any]:
+    from .j1_ocr import extract_mixed_pdf_page
+
+    pages = text.split("\f", _PDF_TEXT_PAGES)
+    # The trailing chunk may be a truncated page. A form feed proves the
+    # preceding chunk represents the entire physical page.
+    missing = [index for index, page in enumerate(pages[:-1]) if not page.strip()]
+    limitations = set()
+    if pages[-1].strip():
+        limitations.add("pdf_text_partial")
+    if len(missing) > MIXED_OCR_PAGES_PER_DOCUMENT:
+        limitations.add("ocr_document_budget")
+    remaining_chars = MAX_PUBLIC_PDF_TEXT_CHARS - len(text)
+    ocr_pages = set()
+    for index in missing[:MIXED_OCR_PAGES_PER_DOCUMENT]:
+        if remaining_chars <= 0:
+            limitations.add("ocr_text_limit")
+            break
+        refusal = reserve_page()
+        if refusal:
+            limitations.add(refusal)
+            break
+        page_text, problem = extract_mixed_pdf_page(body, index + 1)
+        if problem:
+            limitations.add(problem)
+        if page_text:
+            if len(page_text) > remaining_chars:
+                limitations.add("ocr_text_limit")
+            pages[index] = page_text[:remaining_chars]
+            remaining_chars -= len(pages[index])
+            ocr_pages.add(index + 1)
+    return {
+        "ok": True,
+        "text": redact_sensitive("\f".join(pages), limit=MAX_PUBLIC_PDF_TEXT_CHARS, preserve_page_breaks=True),
+        "extraction_method": "pdf_mixed" if ocr_pages else "pdf_text",
+        "ocr_pages": frozenset(ocr_pages),
+        "pdf_limitations": sorted(limitations),
+    }
 
 
 def _extract_pdf(body: bytes) -> dict[str, Any]:
     text = _pdf_to_text(body)
     if text.strip():
+        reserve_page = _MIXED_OCR_RESERVATION.get()
+        if reserve_page is not None:
+            return _extract_mixed_pdf(body, text, reserve_page)
         return {"ok": True, "text": text, "extraction_method": "pdf_text"}
     # Kept lazy to avoid a module cycle: the OCR helper redacts with this
     # module's DLP function, but static fetch still works without its runtime.
@@ -791,13 +857,17 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
             return extracted
         filename = path.rsplit("/", 1)[-1]
         decoded_name = unquote(filename, errors="surrogateescape")
+        method = extracted["extraction_method"]
         return {
             "ok": True,
             "kind": "pdf",
             "title": (decoded_name if decoded_name.isprintable() else filename)[:200],
             "text": extracted["text"],
-            "extraction_method": extracted["extraction_method"],
-            "fragments": _pdf_fragments(extracted["text"]) if extracted["extraction_method"] == "pdf_text" else [],
+            "extraction_method": method,
+            "fragments": _pdf_fragments(extracted["text"], extracted.get("ocr_pages", frozenset()))
+            if method in {"pdf_text", "pdf_mixed"}
+            else [],
+            "pdf_limitations": extracted.get("pdf_limitations", []),
         }
     if "html" in content_type or "text/plain" in content_type:
         if len(body) > MAX_HTML_BYTES:
@@ -942,7 +1012,12 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
     extracted = _extract_static_content(headers.get("content-type", "").casefold(), body, final_url, headers)
     if extracted.get("ok") is not True:
         return extracted
-    if len(extracted["text"]) < 80:
+    short_pdf = (
+        _MIXED_OCR_RESERVATION.get() is not None and extracted["kind"] == "pdf" and bool(extracted.get("fragments"))
+    )
+    if len(extracted["text"]) < 80 and short_pdf:
+        extracted["pdf_limitations"] = sorted({*extracted.get("pdf_limitations", []), "short_pdf_text"})
+    elif len(extracted["text"]) < 80:
         if extracted["kind"] != "html":
             return {"ok": False, "error": "empty_or_dynamic", "extraction_method": extracted["extraction_method"]}
         fallback = _browser_fallback(final_url, extracted["title"], allow_browser=allow_browser)
@@ -980,6 +1055,8 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
     }
     if extracted.get("fragments"):
         result["fragments"] = extracted["fragments"]
+    if extracted.get("pdf_limitations"):
+        result["pdf_limitations"] = extracted["pdf_limitations"]
     return result
 
 
