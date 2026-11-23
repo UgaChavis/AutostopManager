@@ -107,6 +107,7 @@ _CAUSE_MARKERS = (
     "из-за",
     "вследствие",
 )
+_MAX_CAUSE_MENTIONS = 3
 _FREQUENCY_COUNT = re.compile(
     r"\b(?P<n>\d{1,6})\s*(?:out\s+of|of|/|из)\s*(?P<d>\d{1,6})\s+"
     r"(?P<unit>vehicles?|cars?|units?|cases?|автомобил\w*|машин\w*|случа\w*)\b",
@@ -1673,6 +1674,28 @@ def _report_excerpt(value: str) -> str:
     return _clean_input(redact_sensitive(value, limit=320), limit=280)
 
 
+_REPORT_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|[\r\n\f]+")
+_PDF_SCOPE_WRAP = re.compile(
+    r"^(?P<indent> *)(?:this|the) (?:service |workshop )?(?:bulletin|manual|procedure|document) "
+    r"(?:applies to|is applicable to|covers) "
+    r"(?:(?! {2}|\bengines?\b)[^\r\n\f\t|.;:]){1,400}\bvehicles? *\r?\n"
+    r"(?P=indent)with (?:the )?engine (?:code )?(?=[A-Z0-9‐‑–—-]*[0-9])[A-Z0-9‐‑–—-]+\. *\r?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _report_passage_texts(fragment: str, *, pdf_page: bool) -> Iterator[str]:
+    # Repair only a recognizable grammatical wrap with the same alignment.
+    # Retain the PDF's exact characters, including the physical line break.
+    start = 0
+    if pdf_page:
+        for scope in _PDF_SCOPE_WRAP.finditer(fragment):
+            yield from _REPORT_SENTENCE_BOUNDARY.split(fragment[start : scope.start()])
+            yield scope[0]
+            start = scope.end()
+    yield from _REPORT_SENTENCE_BOUNDARY.split(fragment[start:])
+
+
 def _source_passages(conn: sqlite3.Connection, document_id: str, url: str, body: str) -> Iterator[Passage]:
     rows = conn.execute(
         """SELECT f.start,f.end,f.source_url,f.page,f.fragment_kind,f.section,d.kind,d.body_truncated
@@ -1694,7 +1717,7 @@ def _source_passages(conn: sqlite3.Connection, document_id: str, url: str, body:
             if not rest or rest.startswith("\n") or (len(heading) < 200 and rest[0].isspace()):
                 yield Passage(heading, page, source_url, is_heading=True)
                 fragment = rest
-        for sentence in re.split(r"(?<=[.!?])\s+|[\r\n\f]+", fragment):
+        for sentence in _report_passage_texts(fragment, pdf_page=fragment_kind == "pdf_page"):
             if text := sentence.strip():
                 yield Passage(text, page, source_url)
 
@@ -1714,29 +1737,38 @@ def _alternative_cause_mentions(
 ) -> list[dict[str, Any]]:
     """Return cited source mentions only; no automatic diagnosis is inferred."""
 
-    found: list[dict[str, Any]] = []
+    selected: dict[str, dict[str, Any]] = {}
+    additional: dict[str, dict[str, Any]] = {}
     for source in sources:
         if source["applicability"] in {"excluded", "conflict"}:
             continue
+        from_source = False
         for passage in _selected_passages(conn, source, relevant.get(source["document_id"])):
             sentence = _report_excerpt(passage.text)
-            if len(sentence) < 24 or not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
+            key = sentence.casefold()
+            if len(sentence) < 24 or key in selected or not any(marker in key for marker in _CAUSE_MARKERS):
                 continue
-            found.append(
-                {
-                    "status": "unverified_source_mention",
-                    "source_document_id": source["document_id"],
-                    "source_url": passage.source_url,
-                    "source_tier": source["source_tier"],
-                    "applicability": source["applicability"],
-                    "confidence": source["confidence"],
-                    "excerpt": sentence,
-                }
-            )
-            break
-        if len(found) >= 3:
-            break
-    return found
+            mention = {
+                "status": "unverified_source_mention",
+                "source_document_id": source["document_id"],
+                "source_url": passage.source_url,
+                "source_tier": source["source_tier"],
+                "applicability": source["applicability"],
+                "confidence": source["confidence"],
+                "excerpt": sentence,
+            }
+            if not from_source:
+                selected[key] = mention
+                additional.pop(key, None)
+                from_source = True
+                if len(selected) == _MAX_CAUSE_MENTIONS:
+                    return list(selected.values())
+            else:
+                additional.setdefault(key, mention)
+            # Reserve remaining slots for distinct mentions from other sources.
+            if len(additional) >= _MAX_CAUSE_MENTIONS - len(selected):
+                break
+    return [*selected.values(), *additional.values()][:_MAX_CAUSE_MENTIONS]
 
 
 def _cited_identifier(patterns: list[j1_identifiers.IdentifierPattern], text: str, excerpt: str) -> bool:
@@ -1882,6 +1914,7 @@ def _source_domains(sources: list[dict[str, Any]]) -> int:
 def _report_limitations(
     *,
     status: str,
+    has_automotive_context: bool,
     sources: list[dict[str, Any]],
     unavailable: list[dict[str, Any]],
     search_failures: list[dict[str, Any]],
@@ -1894,7 +1927,7 @@ def _report_limitations(
         limitations.append({"code": "no_retrieved_sources", "detail": "no_fetched_public_evidence"})
     if not any(source["source_tier"] == "A" for source in sources):
         limitations.append({"code": "no_official_source", "detail": "no_tier_a_source_retrieved"})
-    if sources and not any(source["applicability"] == "exact" for source in sources):
+    if has_automotive_context and sources and not any(source["applicability"] == "exact" for source in sources):
         limitations.append(
             {"code": "no_exact_context_match", "detail": "fitment_and_diagnosis_require_separate_verification"}
         )
@@ -1905,7 +1938,7 @@ def _report_limitations(
         limitations.append({"code": "qualified_source_scope_limits", "detail": "tier_a_b_exclusion_or_conflict"})
     if any(source.get("body_truncated") for source in sources):
         limitations.append({"code": "source_text_truncated", "detail": "one_or_more_public_texts_reached_the_limit"})
-    if not frequency_measurements:
+    if has_automotive_context and not frequency_measurements:
         limitations.append({"code": "frequency_not_measured", "detail": "no_qualified_population_measurement"})
     if any(failure["reason"] != _WORKER_FAILED for failure in search_failures):
         limitations.append({"code": "search_access_limited", "detail": "one_or_more_searches_returned_no_results"})
@@ -2031,6 +2064,7 @@ def research_report(job_id: str) -> dict[str, Any]:
         }
     limitations = _report_limitations(
         status=str(job["status"]),
+        has_automotive_context=bool(context),
         sources=all_sources,
         unavailable=unavailable,
         search_failures=search_failures,
@@ -2316,10 +2350,15 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
     with _db() as conn:
         if not _lock_running_job(conn, job_id):
             return False
-        _stage_query_candidates(conn, query_id, results)
         query_state = conn.execute(
             "SELECT primary_admitted,provider,error FROM queries WHERE id=?", (query_id,)
         ).fetchone()
+        refresh_ranking = (
+            provider != _SEARCH_INTERRUPTED
+            and query_state["error"] == _SEARCH_INTERRUPTED
+            and query_state["provider"] in ("", provider)
+        )
+        _stage_query_candidates(conn, query_id, results, refresh_ranking=refresh_ranking)
         if (
             not query_state["primary_admitted"]
             and _document_count(conn, job_id) < max_pages
@@ -2347,7 +2386,10 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
     return True
 
 
-def _stage_query_candidates(conn: sqlite3.Connection, query_id: int, results: list[dict[str, Any]]) -> None:
+def _stage_query_candidates(
+    conn: sqlite3.Connection, query_id: int, results: list[dict[str, Any]], *, refresh_ranking: bool
+) -> None:
+    candidates: dict[str, tuple[int, str, str, str, str, str, str, str, str, int, str, int]] = {}
     for position, row in enumerate(results[:MAX_SEARCH_RESULTS], start=1):
         url = public_url(row.get("url", ""))
         canonical_url = _canonical_url(url)
@@ -2356,26 +2398,40 @@ def _stage_query_candidates(conn: sqlite3.Connection, query_id: int, results: li
         title, source_class, source_basis, source_tier, snippet, search_rank, engines = _discovery_metadata(
             row, url, canonical_url
         )
-        conn.execute(
-            """INSERT OR IGNORE INTO query_candidates(
-                   query_id,url,canonical_url,title,source,source_class,source_basis,source_tier,
-                   search_snippet,search_rank,search_engines,rank
-               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                query_id,
-                url,
-                canonical_url,
-                title,
-                redact_sensitive(str(row.get("source") or ""), limit=40),
-                source_class,
-                source_basis,
-                source_tier,
-                snippet,
-                search_rank,
-                engines,
-                search_rank or position,
-            ),
+        rank = search_rank or position
+        if canonical_url in candidates and candidates[canonical_url][-1] <= rank:
+            continue
+        candidates[canonical_url] = (
+            query_id,
+            url,
+            canonical_url,
+            title,
+            redact_sensitive(str(row.get("source") or ""), limit=40),
+            source_class,
+            source_basis,
+            source_tier,
+            snippet,
+            search_rank,
+            engines,
+            rank,
         )
+    if refresh_ranking and candidates:
+        # A completed response can reorder an interrupted response from the
+        # same provider. Keep candidates unique to the earlier response as fallbacks.
+        complete_rank_limit = max(candidate[-1] for candidate in candidates.values())
+        conn.execute("UPDATE query_candidates SET rank=rank+? WHERE query_id=?", (complete_rank_limit, query_id))
+    conn.executemany(
+        """INSERT INTO query_candidates(
+               query_id,url,canonical_url,title,source,source_class,source_basis,source_tier,
+               search_snippet,search_rank,search_engines,rank
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(query_id,canonical_url) DO UPDATE SET
+               url=excluded.url,title=excluded.title,source=excluded.source,source_class=excluded.source_class,
+               source_basis=excluded.source_basis,source_tier=excluded.source_tier,search_snippet=excluded.search_snippet,
+               search_rank=excluded.search_rank,search_engines=excluded.search_engines,rank=excluded.rank
+           WHERE ?""",
+        ((*candidate, refresh_ranking) for candidate in candidates.values()),
+    )
     # A resumed search can have candidates from its previous partial result.
     conn.execute(
         """DELETE FROM query_candidates WHERE query_id=? AND rowid IN (

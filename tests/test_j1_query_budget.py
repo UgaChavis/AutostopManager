@@ -2,7 +2,7 @@
 
 import pytest
 
-from autostop_manager import j1_research as j1
+from autostop_manager import j1_fetch, j1_research as j1
 from autostop_manager import j1_vin_store
 
 
@@ -140,6 +140,83 @@ def test_resumed_partial_query_keeps_other_queries_share_of_budget(monkeypatch):
             "SELECT provider,error FROM queries WHERE job_id=? ORDER BY id", (job_id,)
         ).fetchone()
     assert tuple(recorded) == ("searxng", "")
+
+
+@pytest.mark.parametrize("resume", ["better_rank", "retain_earlier_only"])
+def test_worker_reconciles_resumed_search_ranking_with_the_same_page_budget(monkeypatch, resume):
+    query = "Synthetic actuator feedback P1A27 diagnosis"
+    overview = "https://www.nhtsa.gov/synthetic/overview"
+    connector = "https://example.net/synthetic/actuator"
+    inaccessible = "https://example.org/synthetic/stale"
+    overview_hit = {"url": overview, "title": f"{query} bulletin", "source": "searxng"}
+    connector_hit = {"url": connector, "title": "Actuator feedback", "source": "searxng"}
+    initial = [overview_hit, connector_hit]
+    if resume == "better_rank":
+        initial.append({"url": inaccessible, "title": "Synthetic actuator feedback P1A27", "source": "searxng"})
+    engine_calls = []
+    http_calls = []
+
+    def search_engine(engine_query, _endpoint):
+        engine, submitted_query = engine_query.split(" ", 1)
+        assert submitted_query == query
+        engine_calls.append(engine)
+        if len(engine_calls) == 1:
+            j1._STOP = True
+            return initial
+        if resume == "retain_earlier_only":
+            return [overview_hit] if engine == "!bing" else []
+        if engine == "!bing":
+            return initial
+        return [{**connector_hit, "title": f"{query} workshop repair and connector testing manual"}]
+
+    sections = {
+        overview: ("overview", "DTC P1A27 identifies intermittent feedback and this reference explains the fault."),
+        connector: (
+            "connector",
+            "DTC P1A27 can be checked by reading the connector waveform and inspecting terminals.",
+        ),
+    }
+
+    def fetch_http(url, **_kwargs):
+        http_calls.append(url)
+        headers = {"content-type": "text/html; charset=utf-8"}
+        if url == inaccessible:
+            return 403, headers, b"Forbidden", url
+        anchor, paragraph = sections[url]
+        html = f'<h2 id="{anchor}">Synthetic workshop reference</h2><p>{paragraph}</p>'.encode()
+        return 200, headers, html, url
+
+    monkeypatch.setenv("AUTOSTOP_J1_SEARXNG_URL", "http://127.0.0.1:8890")
+    monkeypatch.setattr(j1.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(j1_fetch, "_search_searxng", search_engine)
+    monkeypatch.setattr(j1_fetch, "_robots_policy", lambda _url: (True, 1.0))
+    monkeypatch.setattr(j1_fetch, "_rate_limit", lambda *_args: None)
+    monkeypatch.setattr(j1_fetch, "_request_public", fetch_http)
+    job_id = j1.start_research("Synthetic actuator evidence", [query], max_pages=2)["job_id"]
+    j1.run_worker(once=True)
+    assert j1.research_status(job_id)["status"] == "queued"
+    with j1._db() as connection:
+        rank = connection.execute("SELECT rank FROM query_candidates WHERE url=?", (connector,)).fetchone()[0]
+    assert rank == (3 if resume == "better_rank" else 2)
+
+    monkeypatch.setattr(j1, "_STOP", False)
+    j1.run_worker(once=True)
+    assert engine_calls == ["!bing", "!bing", "!yahoo"]
+    assert http_calls == [overview, connector]
+    status = j1.research_status(job_id)
+    assert (status["status"], status["pages_total"], status["pages_fetched"], status["pages_unavailable"]) == (
+        "completed",
+        2,
+        2,
+        0,
+    )
+    matches = j1.research_results(job_id, "P1A27", query_mode="dtc")
+    assert matches["total"] == 2
+    assert {item["source_url"] for item in matches["results"]} == {f"{overview}#overview", f"{connector}#connector"}
+    assert j1.research_report(job_id)["report"]["evidence_confidence"]["retrieved_sources"] == 2
+    connector_result = next(item for item in matches["results"] if item["url"] == connector)
+    assert connector_result["search_rank"] == 2
+    assert connector_result["search_engines"] == (["bing", "yahoo"] if resume == "better_rank" else ["bing"])
 
 
 @pytest.mark.parametrize("untouched", [False, True])

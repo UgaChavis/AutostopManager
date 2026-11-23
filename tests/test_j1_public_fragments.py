@@ -23,7 +23,7 @@ def isolated_corpus(monkeypatch, tmp_path):
     monkeypatch.setattr(j1, "_STOP", False)
 
 
-def _collect(monkeypatch, sources):
+def _collect(monkeypatch, sources, *, automotive_context=None):
     def request(url, **_kwargs):
         content_type, body = sources[url]
         return 200, {"content-type": content_type}, body, url
@@ -33,6 +33,7 @@ def _collect(monkeypatch, sources):
         objective="Review public automotive service instructions",
         source_urls=list(sources),
         idempotency_key="source-fragment-tests-1",
+        automotive_context=automotive_context,
     )
     assert receipt["ok"], receipt
     job_id = receipt["job_id"]
@@ -102,7 +103,8 @@ def _pdf(*page_texts: str) -> bytes:
                 f"/Contents {5 + i * 2} 0 R >>"
             ).encode()
         )
-        stream = f"BT /F1 12 Tf 50 700 Td ({page_text}) Tj ET".encode()
+        lines = " T* ".join(f"({line}) Tj" for line in page_text.split("\n"))
+        stream = f"BT /F1 12 Tf 14 TL 50 700 Td {lines} ET".encode()
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream")
     pdf = b"%PDF-1.4\n"
     offsets = []
@@ -375,6 +377,45 @@ def test_pdf_search_keeps_physical_page_number_across_a_blank_page(monkeypatch):
     assert document["text"].startswith("C120702:") and "Models covered" not in document["text"]
     blank_page = j1.research_document(job, hit["document_id"], page=2)
     assert blank_page["error"]["code"] == "document_page_unavailable"
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+@pytest.mark.parametrize("case", ["wrapped-scope", "page-break", "column", "heading", "other-engine", "blank-line"])
+def test_pdf_report_combines_prose_scope_wrap_but_not_structural_boundaries(monkeypatch, case):
+    base = "This bulletin applies to model year 2022 Arden Vale vehicles"
+    continuation = "with engine EV19."
+    subject = "DTC B2407 indicates a recirculation flap feedback error."
+    documents = {
+        "wrapped-scope": [f"{base}\n{continuation}"],
+        "page-break": [base, continuation],
+        "column": [f"{base.replace('Arden Vale', 'Arden      Vale')}\n{continuation}"],
+        "heading": [f"{base.removeprefix('This bulletin applies to ')}\n{continuation}"],
+        "other-engine": [f"{base} with engine MX28\n{continuation}"],
+        "blank-line": [f"{base}\n\n{continuation}"],
+    }
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/wrapped-scope.pdf"
+    context = {"make": "Arden", "model": "Vale", "year": 2022, "engine": "EV19", "dtc": "B2407"}
+    pages = documents[case]
+    job = _collect(monkeypatch, {url: ("application/pdf", _pdf(*pages, subject))}, automotive_context=context)
+    matches = j1.research_results(job, query="B2407", query_mode="dtc")
+    assert matches["total"] == 1 and matches["results"][0]["page"] == len(pages) + 1
+    report = j1.research_report(job)["report"]
+    assert len(report["sources"]) == 1
+    source = report["sources"][0]
+    if case != "wrapped-scope":
+        assert source["applicability"] != "exact" and not report["confirmed"]
+        return
+    assert source["applicability"] == "exact" and report["confirmed"]
+    scope, diagnostic = source["applicability_evidence"]
+    assert scope == {
+        "kind": "vehicle_scope",
+        "quote": f"{base}\n{continuation}",
+        "page": 1,
+        "source_url": url + "#page=1",
+    }
+    assert diagnostic == {"kind": "subject", "quote": subject, "page": 2, "source_url": url + "#page=2"}
+    stored = j1.research_document(job, source["document_id"], page=1)
+    assert stored["ok"] and scope["quote"] in stored["text"]
 
 
 def test_pdf_text_beyond_previous_flat_limit_is_indexed(monkeypatch):

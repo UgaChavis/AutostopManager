@@ -273,6 +273,35 @@ def test_similar_supplied_bulletins_keep_distinct_part_numbers_and_cited_excerpt
     assert {cause["source_url"] for cause in report["alternative_causes"]} == {url + "#failure" for url in urls}
 
 
+def test_general_report_keeps_distinct_cited_causes_from_the_same_source(monkeypatch):
+    guide = "https://www.hella.com/bench-guide"
+    notes = "https://engineering.example.org/bench-notes"
+    inlet = "Bench pump loss of prime was caused by an air leak at the inlet joint."
+    seal = "Intermittent loss of prime was caused by a torn inlet seal."
+    valve = "Loss of prime after storage was caused by a stuck foot valve."
+    excerpts = {guide: (inlet, seal), notes: (inlet, valve)}
+
+    def fetch(url, **_kwargs):
+        content = '<h2 id="observations">Bench observations</h2>' + "".join(f"<p>{text}</p>" for text in excerpts[url])
+        return j1_fetch._extract_static_content("text/html", content.encode(), url, {}) | {"url": url}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    job = j1.research_sources(
+        objective="Find observed causes for a bench pump losing prime",
+        source_urls=[guide, notes],
+        idempotency_key="multiple-cited-pump-causes",
+    )
+    j1.run_worker(once=True)
+    report = j1.research_report(job["job_id"])["report"]
+    assert [(cause["excerpt"], cause["source_url"]) for cause in report["alternative_causes"]] == [
+        (inlet, guide + "#observations"),
+        (valve, notes + "#observations"),
+        (seal, guide + "#observations"),
+    ]
+    assert all(cause["status"] == "unverified_source_mention" for cause in report["alternative_causes"])
+    assert not {"no_exact_context_match", "frequency_not_measured"} & {item["code"] for item in report["limitations"]}
+
+
 def test_report_counts_the_whole_corpus_beyond_its_twenty_source_examples(monkeypatch):
     urls = [f"https://example.com/parts/{n}" for n in range(20)]
     last = "https://example.org/parts/more"
