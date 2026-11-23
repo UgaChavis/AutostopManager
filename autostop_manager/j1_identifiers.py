@@ -8,13 +8,13 @@ from collections.abc import Iterator
 from contextlib import suppress
 from typing import Literal, NamedTuple
 
-from .j1_fetch import MAX_PUBLIC_PDF_TEXT_CHARS, MAX_TEXT_CHARS, complete_pdf_fragment_end
+from .j1_fetch import MAX_PUBLIC_PDF_TEXT_CHARS, MAX_TEXT_CHARS, complete_capped_text_end, complete_pdf_fragment_end
 
 QueryMode = Literal["lexical", "dtc", "part_number"]
 _MatchTable = Literal["identifier_matches", "identifier_scan"]
 
 # Retained offsets depend on the matcher and on which fragments are safe.
-_MATCHER_VERSION = 1
+_MATCHER_VERSION = 2
 _HORIZONTAL_SPACE = " \t\u00a0\u202f"
 _DASH_CHARS = "-‐‑‒–—−"
 _HYPHENS = "-‐‑"
@@ -23,10 +23,17 @@ _SPACE = re.escape(_HORIZONTAL_SPACE)
 _SEPARATORS = f"[{_SPACE}{_DASHES}]"
 _PART_NUMBER = re.compile(rf"[a-zA-Z0-9]+(?:{_SEPARATORS}+[a-zA-Z0-9]+)*")
 _DTC = re.compile(r"[PBCU][0-3A-F][0-9A-F]{3}(?:-[0-9A-F]{2})?")
+# A dash introducing an explicit population measurement is punctuation.
+_DTC_SEPARATOR = (
+    rf"(?![{_SPACE}]+[{_DASHES}][{_SPACE}]+[0-9]+(?:[{_SPACE}]*(?:%|/[{_SPACE}]*[0-9])|"
+    rf"[{_SPACE}]+(?:of|out[{_SPACE}]+of|из)[{_SPACE}]+[0-9]))[{_SPACE}]*[{_DASHES}][{_SPACE}]*"
+)
+_SPACE_LINK = re.compile(rf"([a-zA-Z0-9]+)[{_SPACE}]+(?=([a-zA-Z0-9]+))")
 _PROSE_WORDS = frozenset(
     {
         "and",
         "are",
+        "available",
         "for",
         "fits",
         "from",
@@ -46,15 +53,24 @@ _PROSE_WORDS = frozenset(
         "pn",
         "qty",
         "ref",
+        "replaced",
         "see",
         "sku",
+        "superseded",
         "the",
         "to",
         "use",
+        "used",
         "via",
         "was",
         "with",
     }
+)
+_FIELD_PROSE = "|".join(sorted(_PROSE_WORDS - {"oe", "oem", "pn", "ref", "sku"}))
+_PART_FIELD = re.compile(
+    rf"\b(?i:part[{_SPACE}]+(?:number|no\.?)|(?:OE|OEM)[{_SPACE}]+(?:number|no\.?)|артикул|номер[{_SPACE}]+детали)"
+    rf"[{_SPACE}]*[:#=][{_SPACE}]*(?P<code>[a-zA-Z0-9]+(?:{_SEPARATORS}+[a-zA-Z0-9]+)*?)"
+    rf"(?=[{_SPACE}]*(?:[.!?,;:/\r\n(\)\[\]]|$)|[{_SPACE}]+(?i:{_FIELD_PROSE})\b)"
 )
 
 
@@ -128,13 +144,33 @@ def _connected_part(text: str, boundary: int, direction: int) -> bool:
     return _dash_connected(text, boundary, direction) or _space_connected(text, boundary, direction)
 
 
+def _mixed_component(value: str) -> bool:
+    return not value.isalpha() and not value.isdigit()
+
+
 class _PartPattern(NamedTuple):
     candidates: re.Pattern[str]
 
     def search(self, text: str) -> re.Match[str] | None:
+        fields: Iterator[re.Match[str]] | None = None
+        field = None
         for match in self.candidates.finditer(text):
-            if not _connected_part(text, match.start() - 1, -1) and not _connected_part(text, match.end(), 1):
-                return match
+            if fields is None:
+                fields = _PART_FIELD.finditer(text)
+                field = next(fields, None)
+            while field is not None and field.end("code") <= match.start():
+                field = next(fields, None)
+            if field is not None and field.start("code") < match.end():
+                if match.span() == field.span("code"):
+                    return match
+                continue
+            if _connected_part(text, match.start() - 1, -1) or _connected_part(text, match.end(), 1):
+                continue
+            # Without a catalog field or a dash, two complete alphanumeric
+            # tokens can be separate stock numbers.
+            if any(_mixed_component(left) and _mixed_component(right) for left, right in _SPACE_LINK.findall(match[0])):
+                continue
+            return match
         return None
 
 
@@ -144,9 +180,10 @@ IdentifierPattern = re.Pattern[str] | _PartPattern
 def match_pattern(code: str, mode: QueryMode) -> IdentifierPattern:
     """Match a normalized identifier in the original text."""
     if mode == "dtc":
-        body = code.replace("-", rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*")
-        continuation = rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*(?ai:[A-F0-9]{{2}})(?!\w)"
-        return re.compile(rf"(?<!\w)(?<!\w[{_DASHES}])(?ai:{body})(?!\w|{continuation})")
+        base, _, subcode = code.partition("-")
+        body = f"{base}{_DTC_SEPARATOR}{subcode}" if subcode else base
+        continuation = rf"{_DTC_SEPARATOR}(?ai:[A-F0-9]{{2,}})(?!\w)"
+        return re.compile(rf"(?<!\w)(?<!\w[{_DASHES}]){body}(?!\w|{continuation})", re.I)
     # Check both ends against the components of a separated catalog number.
     body = f"{_SEPARATORS}*".join(code)
     return _PartPattern(re.compile(rf"(?<!\w)(?ai:{body})(?!\w)"))
@@ -186,16 +223,23 @@ def _positions(
         else []
     )
     found = False
+    capped_tail = len(body.rstrip()) if document["body_truncated"] or len(body) == MAX_TEXT_CHARS else None
     for page, start, end, kind in fragments or [(0, 0, len(body), document["kind"])]:
         if kind == "pdf_page" or (kind == "pdf" and end in {MAX_TEXT_CHARS, MAX_PUBLIC_PDF_TEXT_CHARS}):
             end = complete_pdf_fragment_end(body, start, end)
+        elif capped_tail is not None and end >= capped_tail:
+            end = complete_capped_text_end(body, start, end)
         # Search a slice so a section boundary is an actual word boundary.
         match = pattern.search(body[start:end])
         if match:
             found = True
             yield page, 0, start + match.start()
-    if not found and pattern.search(document["title"]):
-        yield 0, 1, 0
+    if not found:
+        title = document["title"]
+        if len(title) == 200:
+            title = title[: complete_capped_text_end(title, 0, len(title))]
+        if pattern.search(title):
+            yield 0, 1, 0
 
 
 def _document_count(conn: sqlite3.Connection, job_id: str) -> int:
@@ -219,7 +263,7 @@ def query_table(conn: sqlite3.Connection, job_id: str, mode: QueryMode, code: st
     conn.execute("CREATE TEMP TABLE identifier_scan AS SELECT * FROM identifier_matches WHERE 0")
     pattern = match_pattern(code, mode)
     documents = conn.execute(
-        """SELECT d.id,d.title,d.kind,d.body FROM documents d
+        """SELECT d.id,d.title,d.kind,d.body,d.body_truncated FROM documents d
            LEFT JOIN documents p ON p.id=d.duplicate_of
            WHERE d.job_id=? AND (
                d.status='fetched' OR (d.status='duplicate' AND d.duplicate_kind='exact' AND d.title<>p.title)

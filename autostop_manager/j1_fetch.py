@@ -232,6 +232,20 @@ def redact_sensitive(
     return text[:limit]
 
 
+def complete_capped_text_end(body: str, start: int, end: int) -> int:
+    """Use only the last observed line or sentence boundary before a text cap."""
+    boundary = start
+    for match in re.compile(r"[\r\n\f]|[.!?][ \t\u00a0\u202f]+").finditer(body, start, end):
+        boundary = match.end()
+    return boundary
+
+
+def _bounded_public_text(text: str, limit: int = MAX_TEXT_CHARS) -> tuple[str, bool]:
+    redacted = redact_sensitive(text, limit=limit + 1)
+    truncated = len(redacted) > limit or len(text) > 2 * (limit + 1)
+    return redacted[:limit], truncated
+
+
 def public_url(value: str) -> str:
     raw = str(value or "")
     if len(raw) > 2048:
@@ -652,16 +666,17 @@ def _normalize_html_text(parts: list[str]) -> str:
     return re.sub(r"\n[\s\n]*\n", "\n", text).strip()
 
 
-def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list[dict[str, Any]]]:
+def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list[dict[str, Any]], bool]:
     decoded = decode_http_text(body, headers.get("content-type", ""))
     media_type = headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     parser = _PageText(xhtml=media_type == "application/xhtml+xml")
     parser.feed(decoded)
     parser.close()
     parser.finish_heading()
-    title = " ".join(" ".join(parser.title_parts).split())[:200]
+    title = redact_sensitive(" ".join(" ".join(parser.title_parts).split()), limit=200)
     if not parser.headings:
-        return title, redact_sensitive(_normalize_html_text(parser.parts)), []
+        body_text, truncated = _bounded_public_text(_normalize_html_text(parser.parts))
+        return title, body_text, [], truncated
 
     # Flat extraction historically includes the title. For section citations
     # it is document metadata and must not create a searchable first section.
@@ -684,7 +699,7 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
         # sections to the last heading that fit in the index.
         last = min(len(sections), MAX_PUBLIC_FRAGMENTS) - 1
         sections[last:] = [("\n".join(body for body, _, _ in sections[last:]), "", "")]
-    text = redact_sensitive("\n".join(body for body, _, _ in sections))
+    text, truncated = _bounded_public_text("\n".join(body for body, _, _ in sections))
     fragments: list[dict[str, Any]] = []
     offset = 0
     for number, (section_text, heading, anchor) in enumerate(sections, 1):
@@ -695,7 +710,7 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
         if text[offset:end] != fragment:
             # A sensitive sequence can span a heading boundary. Keep the
             # jointly redacted text and omit fragment offsets in that case.
-            return title, text, []
+            return title, text, [], truncated
         label = redact_sensitive(heading, limit=min(200, len(fragment)))
         fragments.append(
             {
@@ -708,11 +723,11 @@ def _html_document(body: bytes, headers: dict[str, str]) -> tuple[str, str, list
             }
         )
         offset = end + 1
-    return title, text, fragments
+    return title, text, fragments, truncated
 
 
 def _html_to_text(body: bytes, headers: dict[str, str]) -> tuple[str, str]:
-    title, text, _ = _html_document(body, headers)
+    title, text, _, _ = _html_document(body, headers)
     return title, text
 
 
@@ -735,13 +750,15 @@ def _pdf_to_text(body: bytes) -> str:
                 stdin=subprocess.PIPE,
                 stdout=output,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
                 preexec_fn=restrict,
             )
             try:
                 process.communicate(input=body, timeout=15)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.communicate()
+                from .j1_vin_documents import _kill_parser
+
+                _kill_parser(process)
                 return ""
             if process.returncode not in {0, -signal.SIGXFSZ}:
                 return ""
@@ -803,6 +820,10 @@ def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | 
     # preceding chunk represents the entire physical page.
     missing = [index for index, page in enumerate(pages[:-1]) if not page.strip()]
     limitations = set()
+    if len(pages) > _PDF_TEXT_PAGES:
+        limitations.add("pdf_page_limit_reached")
+    if len(text) == MAX_PUBLIC_PDF_TEXT_CHARS:
+        limitations.add("pdf_text_limit_reached")
     if pages[-1].strip():
         limitations.add("pdf_text_partial")
     if len(missing) > MIXED_OCR_PAGES_PER_DOCUMENT:
@@ -913,11 +934,11 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
         if len(body) > MAX_HTML_BYTES:
             return {"ok": False, "error": "document_too_large"}
         if "html" in content_type:
-            title, text, fragments = _html_document(body, headers)
+            title, text, fragments, truncated = _html_document(body, headers)
             kind, method = "html", "html_text"
         else:
             title, kind, method = "", "text", "plain_text"
-            text = redact_sensitive(decode_http_text(body, headers.get("content-type", "")))
+            text, truncated = _bounded_public_text(decode_http_text(body, headers.get("content-type", "")))
             fragments = []
         return {
             "ok": True,
@@ -926,6 +947,7 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
             "text": text,
             "extraction_method": method,
             "fragments": fragments,
+            **({"body_truncated": True} if truncated else {}),
         }
     return {"ok": False, "error": "unsupported_media"}
 
@@ -965,7 +987,8 @@ def _browser_fallback(
         error = rendered.get("error") if isinstance(rendered, dict) else ""
         return {"ok": False, "error": str(error or "browser_render_failed")[:80], "browser_attempted": True}
     rendered_url = public_url(str(rendered.get("url") or ""))
-    rendered_text = redact_sensitive(str(rendered.get("text") or ""), limit=bounded_chars)
+    raw_text = str(rendered.get("text") or "")
+    rendered_text, truncated = _bounded_public_text(raw_text, bounded_chars)
     if not rendered_url or len(rendered_text) < 80:
         return {"ok": False, "error": "browser_response_invalid", "browser_attempted": True}
     if _is_challenge_text(rendered_text):
@@ -977,6 +1000,7 @@ def _browser_fallback(
         "text": rendered_text,
         "extraction_method": "browser_dom",
         "browser_attempted": True,
+        **({"body_truncated": True} if truncated or len(raw_text) >= bounded_chars else {}),
     }
 
 
@@ -1067,6 +1091,7 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
                 else extracted["extraction_method"],
                 "browser_attempted": bool(fallback.get("browser_attempted")),
             }
+        extracted.pop("body_truncated", None)
         extracted.update(fallback)
         extracted["fragments"] = []
         final_url = fallback["url"]
@@ -1091,6 +1116,8 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
         result["fragments"] = extracted["fragments"]
     if extracted.get("pdf_limitations"):
         result["pdf_limitations"] = extracted["pdf_limitations"]
+    if extracted.get("body_truncated"):
+        result["body_truncated"] = True
     return result
 
 

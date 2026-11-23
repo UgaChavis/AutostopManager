@@ -98,6 +98,20 @@ SOURCE_RULES: tuple[SourceRule, ...] = (
     SourceRule("zr.ru", "editorial", "D"),
 )
 
+# The discovery budget still applies to each site. The report counts these
+# registered sites as one publisher when judging independent evidence.
+_PUBLISHER_DOMAINS = {
+    "safercar.gov": "nhtsa.gov",
+    "toyota-tech.eu": "toyota.com",
+    "techinfo.toyota.com": "toyota.com",
+    "mbusa.com": "mercedes-benz.com",
+    "bmwgroup.com": "bmw.com",
+    "hondanews.com": "honda.com",
+    "hyundai.ru": "hyundai.com",
+    "denso-am.eu": "denso.com",
+    "boschaftermarket.com": "bosch.com",
+}
+
 
 def _same_or_subdomain(hostname: str, domain: str) -> bool:
     return hostname == domain or hostname.endswith("." + domain)
@@ -169,4 +183,17 @@ def discovery_domain(url: str) -> str:
     return host.removeprefix("www.")
 
 
-__all__ = ["SOURCE_RULES", "SourceClassification", "SourceRule", "classify_source", "discovery_domain"]
+def publisher_domain(url: str) -> str:
+    """Group registered sites belonging to the same evidence publisher."""
+    domain = discovery_domain(url)
+    return _PUBLISHER_DOMAINS.get(domain, domain)
+
+
+__all__ = [
+    "SOURCE_RULES",
+    "SourceClassification",
+    "SourceRule",
+    "classify_source",
+    "discovery_domain",
+    "publisher_domain",
+]

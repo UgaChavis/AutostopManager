@@ -1691,7 +1691,7 @@ def test_j1003_completion_preserves_concurrent_control(j1003_offline, monkeypatc
     assert final["pages_fetched"] == 1
 
 
-def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
+def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=(), excluded_urls=()):
     context = {"make": "Lexus", "model": "RX200T", "engine": "8AR-FTS", "system": "fuel injection"}
     created = j1.start_research("Investigate public technical evidence", automotive_context=context)
     assert created["ok"], created
@@ -1702,6 +1702,8 @@ def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
             body = "Lexus RX200T 8AR-FTS fuel injection public technical reference " + str(index)
             if url in cohort_urls:
                 body += ". The study found fuel injection leakage in 12 of 100 vehicles."
+            if url in excluded_urls:
+                body += ". This bulletin excludes Lexus RX200T vehicles."
             connection.execute(
                 "INSERT INTO documents(id,job_id,url,canonical_url,title,kind,status,body,source_class,source_basis,"
                 "source_tier,created_at,retrieved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1737,6 +1739,8 @@ def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
             ["https://redirect-one.example/a.pdf", "https://redirect-two.example/b.pdf"],
             ["https://static.nhtsa.gov/a.pdf", "https://www.nhtsa.gov/b.pdf"],
         ),
+        (["https://static.nhtsa.gov/a.pdf", "https://www.safercar.gov/b.pdf"], None),
+        (["https://techinfo.toyota.com/a.pdf", "https://www.toyota-tech.eu/b.pdf"], None),
     ],
 )
 def test_j1003_report_groups_source_authority_aliases(j1003_offline, urls, canonical_urls):
@@ -1744,6 +1748,17 @@ def test_j1003_report_groups_source_authority_aliases(j1003_offline, urls, canon
     assert report["evidence_confidence"]["independent_domains"] == 1
     assert report["evidence_confidence"]["level"] == "moderate"
     assert report["evidence_confidence"]["source_tiers"]["A"] == 2
+
+
+def test_j1003_report_keeps_qualified_exclusion_in_source_shortlist(j1003_offline):
+    urls = [f"https://static.nhtsa.gov/docs/{index:02}.pdf" for index in range(21)]
+    excluded = urls[-1]
+    report = _j1003_report_fixture(urls, excluded_urls={excluded})
+    assert len(report["sources"]) == 20
+    restriction = next(source for source in report["sources"] if source["url"] == excluded)
+    assert restriction["applicability"] in {"conflict", "excluded"}
+    assert any(item["kind"] == "exclusion" for item in restriction["applicability_evidence"])
+    assert "qualified_source_scope_limits" in {item["code"] for item in report["limitations"]}
 
 
 def test_j1003_report_does_not_promote_unknown_manual_provenance(j1003_offline):

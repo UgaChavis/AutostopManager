@@ -514,3 +514,101 @@ def test_report_skips_neighboring_subcode_section_within_vehicle_scope(monkeypat
     report = _report_from_html(monkeypatch, html)
     assert report["sources"][0]["applicability"] == "exact"
     assert {cause["source_url"] for cause in report["alternative_causes"]} == {URL + "#base"}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "paragraphs", "classification"),
+    [
+        (
+            {},
+            [
+                "This bulletin applies to model year 2021 Ficta Norvale vehicles with engine MX208 or "
+                "model year 2020 Ficta Norvale vehicles with engine MX204.",
+                SUBJECT,
+            ],
+            "analog",
+        ),
+        (
+            {"market": "Europe"},
+            [
+                "This bulletin covers European model year 2021 Ficta Norvale vehicles with engine MX208 and "
+                "North American model year 2021 Ficta Norvale vehicles with engine MX204.",
+                SUBJECT,
+            ],
+            "analog",
+        ),
+        (
+            {},
+            [
+                "This bulletin covers Ficta Norvale model years 2020–2021 with engines MX208 and MX204, respectively.",
+                SUBJECT,
+            ],
+            "analog",
+        ),
+        ({}, [SCOPE.removesuffix(".") + " only if equipped with transmission K12.", SUBJECT], "analog"),
+        ({}, [SCOPE.removesuffix(".") + " or engine MX208.", SUBJECT], "exact"),
+        (
+            {},
+            [
+                SCOPE,
+                SUBJECT,
+                "Do not use this procedure on vehicles with engine MX204 because safety recall FC-21-17 "
+                "requires a revised harness.",
+            ],
+            "conflict",
+        ),
+        (
+            {},
+            [
+                SCOPE,
+                SUBJECT,
+                "Safety recall FC-21-17 excludes model year 2021 Ficta Norvale vehicles with engine MX204.",
+            ],
+            "exact",
+        ),
+        ({}, [SCOPE, "Engine: MX208", SUBJECT], "analog"),
+        (
+            {"market": "Europe"},
+            [SCOPE.removesuffix(".") + " for the European market.", "US market", SUBJECT],
+            "analog",
+        ),
+    ],
+)
+def test_applicability_rejects_unproven_combinations_and_variant_field_headers(overrides, paragraphs, classification):
+    passages = [Passage(text, 1, URL) for text in paragraphs]
+    result = assess_applicability(CONTEXT | overrides, passages)
+    assert result.label == classification
+    if classification == "conflict":
+        assert result.evidence[-1]["kind"] == "exclusion"
+        assert result.evidence[-1]["quote"] == paragraphs[-1]
+
+
+def test_html_engine_field_heading_fences_subsequent_code_and_summary(monkeypatch):
+    html = (
+        f'<h2 id="scope">Vehicle scope</h2><p>{SCOPE}</p><p>{SUBJECT}</p>'
+        '<h3 id="other">Engine: MX208</h3><p>P1A27 means a different fault.</p>'
+        "<p>For this engine, the fault may be caused by a failed control unit.</p>"
+        "<p>The study recorded P1A27 failure in 12 of 100 vehicles.</p>"
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "exact"
+    assert not report["alternative_causes"]
+    assert report["frequency"]["status"] == "not_measured"
+    assert not any(item["source_url"].endswith("#other") for item in report["confirmed"][0]["applicability_evidence"])
+
+
+def test_report_does_not_borrow_cause_or_measurement_from_another_code_in_one_passage(monkeypatch):
+    html = (
+        f'<h2 id="scope">Vehicle scope</h2><p>{SCOPE}</p><p>{SUBJECT}</p>'
+        "<p>P1A28 may be caused by a damaged controller; P1A27 is listed separately for diagnostic comparison.</p>"
+        "<p>The study found P1A28 sensor failure in 12 of 100 vehicles; "
+        "P1A27 is listed separately for diagnostic comparison.</p>"
+        "<p>The measured study found no result for the old code; "
+        "P1A27 sensor failure occurred in 3 of 70 vehicles.</p>"
+    )
+    report = _report_from_html(monkeypatch, html)
+    assert report["sources"][0]["applicability"] == "exact"
+    assert not report["alternative_causes"]
+    measurements = report["frequency"]["measurements"]
+    assert [item["measurement"] for item in measurements] == ["3 of 70 vehicles"]
+    assert measurements[0]["excerpt"] == "P1A27 sensor failure occurred in 3 of 70 vehicles."

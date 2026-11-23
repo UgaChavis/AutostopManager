@@ -34,6 +34,9 @@ from .j1_fetch import (
     MAX_SEARCH_RESULTS,
     MAX_SEARCH_SNIPPET_CHARS,
     MIXED_OCR_PAGES_PER_DOCUMENT,
+    _bounded_public_text,
+    _pdf_fragments,
+    complete_capped_text_end,
     complete_pdf_fragment_end,
     contains_sensitive,
     contains_unsafe_url,
@@ -46,8 +49,8 @@ from .j1_fetch import (
     search_public,
 )
 from .config import reject_obsolete_runtime_config
-from .j1_applicability import Passage, assess_applicability
-from .j1_sources import classify_source, discovery_domain
+from .j1_applicability import CLAUSE_BREAK, Passage, assess_applicability
+from .j1_sources import classify_source, publisher_domain
 
 SCHEMA = "autostop.j1.research.v1"
 REPORT_SCHEMA = "autostop.j1.report.v1"
@@ -381,6 +384,7 @@ def _migrate_documents(conn: sqlite3.Connection) -> None:
         "browser_attempted": "INTEGER NOT NULL DEFAULT 0",
         "mixed_ocr_pages_used": "INTEGER NOT NULL DEFAULT 0",
         "pdf_limitations": "TEXT NOT NULL DEFAULT ''",
+        "body_truncated": "INTEGER NOT NULL DEFAULT 0",
         "source_class": "TEXT NOT NULL DEFAULT 'unknown'",
         "source_basis": "TEXT NOT NULL DEFAULT ''",
         # Discovery fields survive an unavailable page so a report can state
@@ -492,6 +496,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             browser_attempted INTEGER NOT NULL DEFAULT 0,
             mixed_ocr_pages_used INTEGER NOT NULL DEFAULT 0,
             pdf_limitations TEXT NOT NULL DEFAULT '',
+            body_truncated INTEGER NOT NULL DEFAULT 0,
             source_class TEXT NOT NULL DEFAULT 'unknown', source_basis TEXT NOT NULL DEFAULT '',
             source_tier TEXT NOT NULL DEFAULT 'unclassified', search_snippet TEXT NOT NULL DEFAULT '',
             search_rank INTEGER NOT NULL DEFAULT 0, search_engines TEXT NOT NULL DEFAULT '',
@@ -629,7 +634,11 @@ def _validated_automotive_context(value: object) -> tuple[dict[str, str] | None,
             except ValueError:
                 return None, "automotive_context_invalid"
             continue
-        cleaned = _clean_input(raw, limit=_AUTOMOTIVE_CONTEXT_LIMITS[key])
+        limit = _AUTOMOTIVE_CONTEXT_LIMITS[key]
+        # A prefix at the context limit can be another valid identifier.
+        cleaned = _clean_input(raw, limit=limit + (key in {"dtc", "part_number"}))
+        if len(cleaned) > limit:
+            return None, "automotive_context_invalid"
         if not _input_is_safe(cleaned):
             return None, "automotive_context_invalid_or_sensitive"
         if key == "dtc":
@@ -1105,6 +1114,19 @@ def _document_count(conn: sqlite3.Connection, job_id: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
 
 
+def _close_queries_at_page_limit(conn: sqlite3.Connection, job_id: str) -> int:
+    partial = conn.execute(
+        """UPDATE queries SET status='partial',error=?
+           WHERE job_id=? AND status IN ('pending','running') AND (error=? OR primary_admitted=1)""",
+        (_SEARCH_INTERRUPTED, job_id, _SEARCH_INTERRUPTED),
+    ).rowcount
+    skipped = conn.execute(
+        "UPDATE queries SET status='skipped',error=? WHERE job_id=? AND status IN ('pending','running')",
+        (_PAGE_BUDGET_REACHED, job_id),
+    ).rowcount
+    return partial + skipped
+
+
 def _search_failures(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
     return [
         {"reason": row["error"], "count": row["count"]}
@@ -1320,6 +1342,8 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
                 result["fragment_truncated"] = True
     if row["pdf_limitations"]:
         result["pdf_limitations"] = json.loads(row["pdf_limitations"])
+    if row["body_truncated"]:
+        result["body_truncated"] = True
     if row["match_kind"] is not None:
         result["match_kind"] = row["match_kind"]
     return result
@@ -1359,7 +1383,7 @@ def research_results(
     fields = """d.id,d.url,d.canonical_url,d.title,d.source,d.source_class,d.source_basis,d.source_tier,
                        d.search_snippet,d.search_rank,d.search_engines,d.language,
                        d.kind,d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
-                       d.created_at,d.retrieved_at,d.pdf_limitations,primary_doc.url AS duplicate_url"""
+                       d.created_at,d.retrieved_at,d.pdf_limitations,d.body_truncated,primary_doc.url AS duplicate_url"""
     try:
         with _db() as conn, conn:
             conn.execute("BEGIN")
@@ -1476,7 +1500,7 @@ def research_document(
                 """SELECT d.url,d.canonical_url,d.title,d.kind,d.body,d.source,d.source_class,d.source_basis,d.source_tier,
                           d.search_snippet,d.search_rank,d.search_engines,d.language,
                           d.extraction_method,d.status,d.error,d.duplicate_of,d.duplicate_kind,d.duplicate_score,
-                          d.created_at,d.retrieved_at,d.pdf_limitations,primary_doc.url AS duplicate_url
+                          d.created_at,d.retrieved_at,d.pdf_limitations,d.body_truncated,primary_doc.url AS duplicate_url
                    FROM documents AS d LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                    WHERE d.job_id=? AND d.id=?""",
                 (job_id, document_id),
@@ -1500,6 +1524,8 @@ def research_document(
             paging = {}
             if row["pdf_limitations"]:
                 paging["pdf_limitations"] = json.loads(row["pdf_limitations"])
+            if row["body_truncated"]:
+                paging["body_truncated"] = True
             if page is not None:
                 fragment = conn.execute(
                     """SELECT f.*,
@@ -1628,6 +1654,7 @@ def _report_source_item(
         "confidence": _evidence_confidence(tier, applicability.label),
         "retrieved_at": row["retrieved_at"] or None,
         **({"pdf_limitations": json.loads(row["pdf_limitations"])} if row["pdf_limitations"] else {}),
+        **({"body_truncated": True} if row["body_truncated"] else {}),
     }
     return source, applicability.summary_passages
 
@@ -1647,18 +1674,20 @@ def _report_excerpt(value: str) -> str:
 
 
 def _source_passages(conn: sqlite3.Connection, document_id: str, url: str, body: str) -> Iterator[Passage]:
-    fragments = conn.execute(
-        """SELECT start,end,source_url,page,fragment_kind,section
-           FROM document_fragments WHERE document_id=? ORDER BY page""",
+    rows = conn.execute(
+        """SELECT f.start,f.end,f.source_url,f.page,f.fragment_kind,f.section,d.kind,d.body_truncated
+           FROM documents d LEFT JOIN document_fragments f ON f.document_id=d.id
+           WHERE d.id=? ORDER BY f.page""",
         (document_id,),
     ).fetchall()
-    flat_kind = ""
-    if not fragments and len(body) in {MAX_DOCUMENT_CHARS, MAX_PUBLIC_PDF_TEXT_CHARS}:
-        document = conn.execute("SELECT kind FROM documents WHERE id=?", (document_id,)).fetchone()
-        flat_kind = document["kind"] if document else ""
-    for start, end, source_url, page, fragment_kind, heading in fragments or [(0, len(body), url, None, flat_kind, "")]:
-        if fragment_kind in {"pdf_page", "pdf"}:
+    unpadded_end = len(body.rstrip())
+    for start, end, source_url, page, fragment_kind, heading, kind, capped in rows:
+        if start is None:
+            start, end, source_url = 0, len(body), url
+        if fragment_kind == "pdf_page" or (kind == "pdf" and end in {MAX_DOCUMENT_CHARS, MAX_PUBLIC_PDF_TEXT_CHARS}):
             end = complete_pdf_fragment_end(body, start, end)
+        elif kind != "pdf" and end >= unpadded_end and (capped or len(body) == MAX_DOCUMENT_CHARS):
+            end = complete_capped_text_end(body, start, end)
         fragment = body[start:end]
         if heading and fragment.startswith(heading):
             rest = fragment[len(heading) :]
@@ -1670,17 +1699,14 @@ def _source_passages(conn: sqlite3.Connection, document_id: str, url: str, body:
                 yield Passage(text, page, source_url)
 
 
-def _source_sentences(
+def _selected_passages(
     conn: sqlite3.Connection, source: dict[str, Any], relevant: frozenset[int] | None
-) -> Iterator[tuple[Passage, str]]:
+) -> Iterator[Passage]:
     document_id = source["document_id"]
     body = conn.execute("SELECT body FROM documents WHERE id=?", (document_id,)).fetchone()[0]
     for index, passage in enumerate(_source_passages(conn, document_id, source["url"], body)):
-        if relevant is not None and index not in relevant:
-            continue
-        compact = _report_excerpt(passage.text)
-        if len(compact) >= 24:
-            yield passage, compact
+        if relevant is None or index in relevant:
+            yield passage
 
 
 def _alternative_cause_mentions(
@@ -1692,8 +1718,9 @@ def _alternative_cause_mentions(
     for source in sources:
         if source["applicability"] in {"excluded", "conflict"}:
             continue
-        for passage, sentence in _source_sentences(conn, source, relevant.get(source["document_id"])):
-            if not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
+        for passage in _selected_passages(conn, source, relevant.get(source["document_id"])):
+            sentence = _report_excerpt(passage.text)
+            if len(sentence) < 24 or not any(marker in sentence.casefold() for marker in _CAUSE_MARKERS):
                 continue
             found.append(
                 {
@@ -1712,15 +1739,36 @@ def _alternative_cause_mentions(
     return found
 
 
-def _cited_identifier(patterns: list[j1_identifiers.IdentifierPattern], passage: Passage, excerpt: str) -> bool:
+def _cited_identifier(patterns: list[j1_identifiers.IdentifierPattern], text: str, excerpt: str) -> bool:
     # Match the full stored text first. Checking only the compact prefix can
     # turn an identifier clipped before its suffix into an exact match.
     for pattern in patterns:
-        if match := pattern.search(passage.text):
-            prefix = _clean_input(passage.text[: match.end()], limit=match.end())
+        if match := pattern.search(text):
+            prefix = _clean_input(text[: match.end()], limit=match.end())
             if excerpt.startswith(prefix):
                 return True
     return False
+
+
+def _measured_excerpt(
+    passage: Passage, patterns: list[j1_identifiers.IdentifierPattern], subject_terms: list[str]
+) -> tuple[str, str] | None:
+    for clause in CLAUSE_BREAK.split(passage.text):
+        if not (_FREQUENCY_COUNT.search(clause) or _FREQUENCY_PERCENT.search(clause)):
+            continue
+        excerpt = _report_excerpt(clause)
+        match = _FREQUENCY_COUNT.search(excerpt) or _FREQUENCY_PERCENT.search(excerpt)
+        if match is None or len(excerpt) < 24:
+            continue
+        normalized = excerpt.casefold()
+        mentions_subject = (
+            _cited_identifier(patterns, clause, excerpt)
+            if patterns
+            else any(term in normalized for term in subject_terms)
+        )
+        if mentions_subject and any(marker in normalized for marker in _FREQUENCY_DEFECT_MARKERS):
+            return match.group(0), excerpt
+    return None
 
 
 def _frequency_measurements(
@@ -1753,18 +1801,11 @@ def _frequency_measurements(
     for source in sources:
         if source["source_tier"] not in {"A", "B"} or source["applicability"] not in {"exact", "analog"}:
             continue
-        for passage, sentence in _source_sentences(conn, source, relevant.get(source["document_id"])):
-            match = _FREQUENCY_COUNT.search(sentence) or _FREQUENCY_PERCENT.search(sentence)
-            if match is None:
+        for passage in _selected_passages(conn, source, relevant.get(source["document_id"])):
+            candidate = _measured_excerpt(passage, patterns, subject_terms)
+            if candidate is None:
                 continue
-            normalized = sentence.casefold()
-            mentions_subject = (
-                _cited_identifier(patterns, passage, sentence)
-                if patterns
-                else any(term in normalized for term in subject_terms)
-            )
-            if not mentions_subject or not any(marker in normalized for marker in _FREQUENCY_DEFECT_MARKERS):
-                continue
+            measurement, excerpt = candidate
             measurements.append(
                 {
                     "status": "reported_source_measurement",
@@ -1772,8 +1813,8 @@ def _frequency_measurements(
                     "source_url": passage.source_url,
                     "source_tier": source["source_tier"],
                     "applicability": source["applicability"],
-                    "measurement": match.group(0),
-                    "excerpt": sentence,
+                    "measurement": measurement,
+                    "excerpt": excerpt,
                 }
             )
             break
@@ -1793,7 +1834,7 @@ def _confidence_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ][:1]
     representatives: dict[str, dict[str, Any]] = {}
     for source in direct:
-        domain = discovery_domain(str(source.get("canonical_url") or source["url"]))
+        domain = publisher_domain(str(source.get("canonical_url") or source["url"]))
         if domain:
             representatives.setdefault(domain, source)
             if len(representatives) == 2:
@@ -1805,6 +1846,15 @@ def _report_source_examples(
     sources: list[dict[str, Any]], confidence_sources: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     needed = {source["document_id"] for source in confidence_sources}
+    # Retain one cited example of each restriction so an evidence shortlist
+    # cannot hide a qualified exclusion behind more positively ranked sources.
+    for label in ("conflict", "excluded"):
+        restriction = next(
+            (source for source in sources if source["source_tier"] in {"A", "B"} and source["applicability"] == label),
+            None,
+        )
+        if restriction is not None:
+            needed.add(restriction["document_id"])
     other = (source for source in sources if source["document_id"] not in needed)
     needed.update(source["document_id"] for source in islice(other, 20 - len(needed)))
     return [source for source in sources if source["document_id"] in needed]
@@ -1823,7 +1873,7 @@ def _overall_confidence(sources: list[dict[str, Any]], confidence_sources: list[
 def _source_domains(sources: list[dict[str, Any]]) -> int:
     domains: set[str] = set()
     for source in sources:
-        domain = discovery_domain(str(source.get("canonical_url") or source["url"]))
+        domain = publisher_domain(str(source.get("canonical_url") or source["url"]))
         if domain:
             domains.add(domain)
     return len(domains)
@@ -1848,6 +1898,13 @@ def _report_limitations(
         limitations.append(
             {"code": "no_exact_context_match", "detail": "fitment_and_diagnosis_require_separate_verification"}
         )
+    if any(
+        source["source_tier"] in {"A", "B"} and source["applicability"] in {"excluded", "conflict"}
+        for source in sources
+    ):
+        limitations.append({"code": "qualified_source_scope_limits", "detail": "tier_a_b_exclusion_or_conflict"})
+    if any(source.get("body_truncated") for source in sources):
+        limitations.append({"code": "source_text_truncated", "detail": "one_or_more_public_texts_reached_the_limit"})
     if not frequency_measurements:
         limitations.append({"code": "frequency_not_measured", "detail": "no_qualified_population_measurement"})
     if any(failure["reason"] != _WORKER_FAILED for failure in search_failures):
@@ -1893,7 +1950,7 @@ def research_report(job_id: str) -> dict[str, Any]:
             rows = conn.execute(
                 """SELECT id,url,canonical_url,title,CASE WHEN ? THEN body ELSE '' END AS body,
                           source_class,source_basis,source_tier,
-                          search_snippet,search_rank,retrieved_at,pdf_limitations
+                          search_snippet,search_rank,retrieved_at,pdf_limitations,body_truncated
                    FROM documents WHERE job_id=? AND status='fetched'""",
                 (bool(context), job_id),
             )
@@ -2387,8 +2444,18 @@ _DocumentFragment = tuple[int, str, str, str, int, int, str, bool]
 
 def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> list[_DocumentFragment]:
     raw_fragments = fetch_result.get("fragments")
-    if not isinstance(raw_fragments, list) or fetch_result.get("text") != body:
+    if not isinstance(raw_fragments, list) or not raw_fragments:
         return []
+    if fetch_result.get("text") != body:
+        if not all(item["fragment_kind"] == "pdf_page" for item in raw_fragments):
+            return []
+        # Final redaction can change offsets while retaining physical page
+        # separators. Rebuild PDF offsets against the text being stored.
+        raw_fragments = _pdf_fragments(
+            body,
+            frozenset(item["page"] for item in raw_fragments if item.get("extraction_method") == "pdf_ocr"),
+            frozenset(item["page"] for item in raw_fragments if item.get("truncated") is True),
+        )
     fragments = []
     last_page = last_end = 0
     for item in raw_fragments[:MAX_PUBLIC_FRAGMENTS]:
@@ -2478,15 +2545,7 @@ def _work_public_job(job_id: str) -> None:
                     "SELECT id,query FROM queries WHERE job_id=? AND status='pending' ORDER BY id LIMIT 1", (job_id,)
                 ).fetchone()
             elif not sources_only:
-                conn.execute(
-                    """UPDATE queries SET status='partial',error=?
-                       WHERE job_id=? AND status='pending' AND (error=? OR primary_admitted=1)""",
-                    (_SEARCH_INTERRUPTED, job_id, _SEARCH_INTERRUPTED),
-                )
-                conn.execute(
-                    "UPDATE queries SET status='skipped',error=? WHERE job_id=? AND status='pending'",
-                    (_PAGE_BUDGET_REACHED, job_id),
-                )
+                _close_queries_at_page_limit(conn, job_id)
             # Submission order for supplied URLs, ranked admission order for queries.
             pending_doc = conn.execute(
                 "SELECT id,url FROM documents WHERE job_id=? AND status='pending' ORDER BY created_at,rowid LIMIT 1",
@@ -2551,11 +2610,17 @@ def _work_public_job(job_id: str) -> None:
                     is_pdf_text = kind == "pdf" and fetch_result.get("extraction_method") in {"pdf_text", "pdf_mixed"}
                     limitations = fetch_result.get("pdf_limitations")
                     pdf_limitations = json.dumps(limitations) if limitations else ""
-                    body = redact_sensitive(
-                        fetch_result.get("text", ""),
-                        limit=MAX_PUBLIC_PDF_TEXT_CHARS if is_pdf_text else MAX_DOCUMENT_CHARS,
-                        preserve_page_breaks=is_pdf_text,
-                    )
+                    body_truncated = fetch_result.get("body_truncated") is True
+                    raw_body = str(fetch_result.get("text") or "")
+                    if kind == "pdf":
+                        body = redact_sensitive(
+                            raw_body,
+                            limit=MAX_PUBLIC_PDF_TEXT_CHARS if is_pdf_text else MAX_DOCUMENT_CHARS,
+                            preserve_page_breaks=is_pdf_text,
+                        )
+                    else:
+                        body, storage_truncated = _bounded_public_text(raw_body, MAX_DOCUMENT_CHARS)
+                        body_truncated |= storage_truncated
                     fetched_url = public_url(fetch_result.get("url", "")) or url
                     canonical_url = _canonical_url(fetched_url, supplied=sources_only) or _canonical_url(
                         url, supplied=sources_only
@@ -2585,7 +2650,7 @@ def _work_public_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='duplicate',url=?,canonical_url=?,title=?,kind=?,body='',
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
-                               source_tier=?,pdf_limitations=?,
+                               source_tier=?,pdf_limitations=?,body_truncated=?,
                                duplicate_of=?,duplicate_kind=?,duplicate_score=?,error=?,retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -2600,6 +2665,7 @@ def _work_public_job(job_id: str) -> None:
                                 source_basis,
                                 source_tier,
                                 pdf_limitations,
+                                body_truncated,
                                 primary["id"],
                                 duplicate_kind,
                                 duplicate_score,
@@ -2635,7 +2701,7 @@ def _work_public_job(job_id: str) -> None:
                         conn.execute(
                             """UPDATE documents SET status='fetched',url=?,canonical_url=?,title=?,kind=?,body=?,
                                content_hash=?,content_simhash=?,language=?,extraction_method=?,source_class=?,source_basis=?,
-                               source_tier=?,pdf_limitations=?,
+                               source_tier=?,pdf_limitations=?,body_truncated=?,
                                duplicate_of='',duplicate_kind='',duplicate_score=0,error='',retrieved_at=? WHERE id=?""",
                             (
                                 stored_url,
@@ -2651,6 +2717,7 @@ def _work_public_job(job_id: str) -> None:
                                 source_basis,
                                 source_tier,
                                 pdf_limitations,
+                                body_truncated,
                                 retrieved_at,
                                 doc_id,
                             ),
@@ -2696,24 +2763,30 @@ def prepare_rollback() -> dict[str, Any]:
 
     if not _db_path().is_file():
         return _error("j1_store_unavailable")
+    reconciled = 0
     queued = 0
     discarded = 0
     try:
         with _worker_lock(), _db() as conn, conn:
             conn.execute("BEGIN IMMEDIATE")
             jobs = conn.execute(
-                """SELECT DISTINCT j.id,j.max_pages FROM jobs j
-                   JOIN queries q ON q.job_id=j.id JOIN query_candidates c ON c.query_id=q.id
-                   WHERE j.status IN ('queued','running') ORDER BY j.id"""
+                """SELECT j.id,j.max_pages FROM jobs j WHERE j.status IN ('queued','running')
+                   AND EXISTS (SELECT 1 FROM queries q WHERE q.job_id=j.id) ORDER BY j.id"""
             ).fetchall()
             for job in jobs:
                 job_id = job["id"]
                 available = max(0, job["max_pages"] - _document_count(conn, job_id))
+                moved = 0
                 for _ in range(available):
                     if _enqueue_query_candidate(conn, job_id) is None:
                         break
-                    queued += 1
-                discarded += _clear_query_candidates(conn, job_id)
+                    moved += 1
+                cleared = _clear_query_candidates(conn, job_id)
+                # Older workers cannot inspect this budget before dispatching a pending search.
+                closed = _close_queries_at_page_limit(conn, job_id) if moved == available else 0
+                reconciled += bool(moved or cleared or closed)
+                queued += moved
+                discarded += cleared
     except BlockingIOError:
         return _error("j1_worker_active")
     except (OSError, sqlite3.Error):
@@ -2721,7 +2794,7 @@ def prepare_rollback() -> dict[str, Any]:
     return {
         "ok": True,
         "schema": SCHEMA,
-        "jobs_reconciled": len(jobs),
+        "jobs_reconciled": reconciled,
         "documents_queued": queued,
         "candidates_discarded": discarded,
     }
@@ -2762,11 +2835,16 @@ def _run_locked_worker(*, once: bool) -> None:
                     ).rowcount
                     if failed:
                         # Close only the phases already claimed under this job.
-                        for table in ("queries", "documents"):
-                            conn.execute(
-                                f"UPDATE {table} SET status='failed',error=? WHERE job_id=? AND status='running'",
-                                (_WORKER_FAILED, job_id),
-                            )
+                        conn.execute(
+                            """UPDATE queries SET status=CASE WHEN error=? OR primary_admitted=1 THEN 'partial'
+                                                       ELSE 'failed' END,error=?
+                               WHERE job_id=? AND status='running'""",
+                            (_SEARCH_INTERRUPTED, _WORKER_FAILED, job_id),
+                        )
+                        conn.execute(
+                            "UPDATE documents SET status='failed',error=? WHERE job_id=? AND status='running'",
+                            (_WORKER_FAILED, job_id),
+                        )
                     conn.commit()
         elif once:
             return

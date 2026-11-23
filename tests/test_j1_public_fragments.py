@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import shutil
+import subprocess
 from threading import Barrier
+from unittest.mock import Mock
 
 import pytest
 
-from autostop_manager import j1_fetch, j1_ocr, j1_research as j1
+from autostop_manager import j1_fetch, j1_ocr, j1_research as j1, j1_vin_documents
 
 
 @pytest.fixture(autouse=True)
@@ -167,6 +169,57 @@ def test_report_keeps_period_in_qualified_html_scope_heading(monkeypatch):
     assert not j1.research_report(job)["report"]["confirmed"]
 
 
+@pytest.mark.parametrize("mode", ["html", "retained-html", "text", "redacted-html"])
+def test_capped_public_text_keeps_display_and_only_completed_evidence(monkeypatch, mode):
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/capped-manual"
+    scope = "Workshop manual applies to Ficta Norvale model year 2021, engine MX204."
+    anchor = '<h2 id="diagnostics">Applicable models</h2><p>'
+    media_type, opening, closing = ("text/plain", "", "") if mode == "text" else ("text/html", anchor, "</p>")
+    tail = "AX204123456789012345" if mode == "redacted-html" else "P1A27-00"
+    wanted = tail[:17] if mode == "redacted-html" else "P1A27"
+
+    def source(padding):
+        return f"{opening}{scope} P1A28 is a documented fault. {padding} {tail}{closing}".encode()
+
+    probe = j1_fetch._extract_static_content(media_type, source("i"), url, {})["text"]
+    pad = "i" * (1 + j1.MAX_DOCUMENT_CHARS - len(wanted) - probe.index(tail))
+    body = source(pad)
+    extraction = j1_fetch._extract_static_content(media_type, body, url, {})
+    assert extraction["body_truncated"] is True and extraction["text"].endswith(wanted)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: (200, {"content-type": media_type}, body, url),
+    )
+    job = j1.research_sources(
+        objective="Check a synthetic diagnostic manual",
+        source_urls=[url],
+        idempotency_key="capped-html-regression",
+        automotive_context={"make": "Ficta", "model": "Norvale", "year": 2021, "engine": "MX204", "dtc": "P1A27"},
+    )["job_id"]
+    with j1._db() as conn:
+        assert j1._claim_job(conn) == job
+    j1._work_job(job)
+    document_id = j1.research_results(job)["results"][0]["document_id"]
+    if mode == "retained-html":
+        with j1._db() as conn, conn:
+            conn.execute("UPDATE documents SET body_truncated=0 WHERE id=?", (document_id,))
+    document = j1.research_document(job, document_id, offset=j1.MAX_DOCUMENT_CHARS - 30)
+    if mode == "redacted-html":
+        assert document["text"].endswith("[redacted]") and document["total_chars"] < j1.MAX_DOCUMENT_CHARS
+    else:
+        assert document["text"].endswith(wanted)
+    assert document.get("body_truncated", False) is (mode != "retained-html")
+    assert j1.research_results(job, query="P1A27", query_mode="dtc")["total"] == 0
+    exact = j1.research_results(job, query="P1A28", query_mode="dtc")
+    assert exact["total"] == 1
+    assert exact["results"][0].get("body_truncated", False) is (mode != "retained-html")
+    report = j1.research_report(job)["report"]
+    assert not report["confirmed"]
+    assert report["sources"][0].get("body_truncated", False) is (mode != "retained-html")
+    assert ("source_text_truncated" in {item["code"] for item in report["limitations"]}) is (mode != "retained-html")
+
+
 @pytest.mark.parametrize("preamble", [b"", b"<p>General service notes</p>"])
 def test_html_overflow_keeps_tail_searchable_without_a_false_citation(monkeypatch, preamble):
     monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_FRAGMENTS", 3)
@@ -203,6 +256,68 @@ def test_pdf_redacts_vin_at_real_poppler_page_break_without_renumbering(monkeypa
     assert "[P0420]: compare the diagnostic observations" in hit["excerpt"]
     saved = j1.research_document(job, hit["document_id"])["text"]
     assert "[redacted]" in saved and "WVWZZZ1KZ" not in saved and "6W000001" not in saved
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+def test_worker_keeps_pdf_page_offsets_when_final_redaction_changes_tail(monkeypatch):
+    url = "https://example.org/revised-manual.pdf"
+    prefix = "AX204123456789012"
+    pdf = _pdf(
+        "Service bulletin instructions for connector retention and inspection before work.",
+        "P1A27: check the actuator feedback signal and harness mechanical condition.",
+        prefix + "345",
+    )
+    native = j1_fetch._pdf_to_text(pdf)
+    monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_PDF_TEXT_CHARS", native.index(prefix) + len(prefix))
+    job = _collect(monkeypatch, {url: ("application/pdf", pdf)})
+
+    hit = j1.research_results(job, query="P1A27")["results"][0]
+    assert hit["page"] == 2 and hit["source_url"] == f"{url}#page=2"
+    document_id = hit["document_id"]
+    page = j1.research_document(job, document_id, page=2)
+    assert page["source_url"] == hit["source_url"] and page["text"].startswith("P1A27:")
+    tail = j1.research_document(job, document_id, page=3)
+    assert tail["text"] == "[redacted]" and tail["fragment_truncated"] is True
+    with j1._db(readonly=True) as conn:
+        assert prefix not in "\n".join(conn.iterdump())
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+@pytest.mark.parametrize("limit", ["page", "text"])
+def test_pdf_reports_limit_when_extraction_stops_on_complete_page_boundary(monkeypatch, limit):
+    url = "https://example.org/three-page-manual.pdf"
+    pdf = _pdf(
+        "Service bulletin instructions for connector retention and inspection before work.",
+        "Workshop procedure and full second page of the technical reference.",
+        "Unprocessed third page containing the final diagnostic procedure.",
+    )
+    if limit == "page":
+        monkeypatch.setattr(j1_fetch, "_PDF_TEXT_PAGES", 2)
+    else:
+        native = j1_fetch._pdf_to_text(pdf)
+        cap = native.index("\f", native.index("\f") + 1) + 1
+        monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_PDF_TEXT_CHARS", cap)
+    job = _collect(monkeypatch, {url: ("application/pdf", pdf)})
+    document_id = j1.research_results(job)["results"][0]["document_id"]
+    second = j1.research_document(job, document_id, page=2)
+    assert second["ok"] and "fragment_truncated" not in second
+    assert second["pdf_limitations"] == [f"pdf_{limit}_limit_reached"]
+    missed = j1.research_document(job, document_id, page=3)
+    assert missed["error"]["code"] == "document_page_unavailable"
+    assert missed["pdf_limitations"] == second["pdf_limitations"]
+
+
+def test_native_pdf_timeout_reaps_the_parser_process_group(monkeypatch):
+    parser = Mock()
+    parser.communicate.side_effect = subprocess.TimeoutExpired("pdftotext", 15)
+    start = Mock(return_value=parser)
+    reap = Mock()
+    monkeypatch.setattr(j1_fetch.subprocess, "Popen", start)
+    monkeypatch.setattr(j1_vin_documents, "_kill_parser", reap)
+
+    assert j1_fetch._pdf_to_text(b"%PDF-synthetic") == ""
+    assert start.call_args.kwargs["start_new_session"] is True
+    reap.assert_called_once_with(parser)
 
 
 def test_html_bulletin_served_at_pdf_address_keeps_html_sections(monkeypatch):

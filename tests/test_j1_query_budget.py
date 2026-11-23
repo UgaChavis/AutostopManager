@@ -203,6 +203,41 @@ def test_interrupted_search_retains_provider_and_discloses_failed_retry(monkeypa
     ]
 
 
+def test_interrupted_search_retains_provider_after_worker_storage_failure(monkeypatch):
+    calls = _research_inputs(monkeypatch)
+    search = j1.search_public
+
+    def interrupt_first_search(query, **kwargs):
+        results, provider = search(query, **kwargs)
+        if len(calls) == 1:
+            j1._STOP = True
+            return results, "search_interrupted"
+        return results, provider
+
+    monkeypatch.setattr(j1, "search_public", interrupt_first_search)
+    job_id = j1.start_research("Synthetic repair evidence", ["first query"], 2)["job_id"]
+    j1.run_worker(once=True)
+    with j1._db() as connection, connection:
+        connection.execute(
+            """CREATE TRIGGER fail_candidate_storage BEFORE INSERT ON query_candidates
+               BEGIN SELECT RAISE(ABORT, 'synthetic candidate storage failure'); END"""
+        )
+    monkeypatch.setattr(j1, "_STOP", False)
+    j1.run_worker(once=True)
+
+    status = j1.research_status(job_id)
+    assert (status["status"], status["pages_fetched"], status["queries_partial"], status["queries_failed"]) == (
+        "failed",
+        1,
+        1,
+        0,
+    )
+    assert status["search_failures"] == [{"reason": "worker_failed", "count": 1}]
+    assert status["coverage"]["search_providers"] == [
+        {"provider": "searxng", "queries": 1, "done": 0, "failed": 0, "partial": 1},
+    ]
+
+
 def test_automotive_first_pass_keeps_room_for_followups():
     result = j1.start_research(
         "Synthetic part fitment",
@@ -247,6 +282,31 @@ def test_automotive_dtc_list_normalizes_spacing_around_subcodes(separator):
     status = j1.research_status(created["job_id"])
     assert status["automotive_context"]["dtc"] == "P0304-01, U0100-02, B1234"
     assert all("P0304-01, U0100-02, B1234" in item["query"] for item in status["query_plan"])
+
+
+def test_automotive_dtc_limit_does_not_truncate_a_valid_subcode_to_its_base():
+    context = {"make": "Astra Demo", "model": "Alpha"}
+    overflow = j1.start_research(
+        "Synthetic repair evidence", automotive_context={**context, "dtc": "," * 115 + "P0304-01"}
+    )
+    assert overflow["error"]["code"] == "queries_or_automotive_context_invalid"
+
+    within_limit = j1.start_research(
+        "Synthetic repair evidence", automotive_context={**context, "dtc": "," * 112 + "P0304-01"}
+    )
+    assert within_limit["automotive_context"]["dtc"] == "P0304-01"
+
+
+def test_automotive_part_number_limit_does_not_shorten_requested_identifier():
+    context = {"make": "Astra Demo", "model": "Alpha"}
+    part_number = "AB" + "-" * 97 + "123"
+    overflow = j1.start_research("Synthetic part fitment", automotive_context={**context, "part_number": part_number})
+    assert overflow["error"]["code"] == "queries_or_automotive_context_invalid"
+
+    within_limit = j1.start_research(
+        "Synthetic part fitment", automotive_context={**context, "part_number": part_number[:100]}
+    )
+    assert within_limit["automotive_context"]["part_number"] == part_number[:100]
 
 
 def test_query_schema_migrates_previous_cache_and_keeps_pending_jobs(monkeypatch):
@@ -336,6 +396,31 @@ def test_prepare_rollback_passes_deferred_documents_to_the_legacy_queue(monkeypa
             ("https://example.org/A1", "fetched"),
             ("https://example.org/A2", "pending"),
         ]
+    assert j1.prepare_rollback()["jobs_reconciled"] == 0
+
+
+def test_prepare_rollback_closes_full_query_queue_even_without_deferred_candidates(monkeypatch):
+    source = "https://example.org/first"
+
+    def interrupted_search(*_args, **_kwargs):
+        j1._STOP = True
+        return [{"url": source, "source": "searxng"}], "search_interrupted"
+
+    monkeypatch.setattr(j1, "search_public", interrupted_search)
+    job_id = j1.start_research("Synthetic repair evidence", ["first query", "second query"], 1)["job_id"]
+    _work(job_id)
+    with j1._db() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM query_candidates").fetchone()[0] == 0
+
+    handoff = j1.prepare_rollback()
+    assert handoff["jobs_reconciled"] == 1
+    assert handoff["documents_queued"] == handoff["candidates_discarded"] == 0
+    with j1._db() as connection:
+        assert [
+            tuple(row)
+            for row in connection.execute("SELECT status,provider FROM queries WHERE job_id=? ORDER BY id", (job_id,))
+        ] == [("partial", "searxng"), ("skipped", "")]
+        assert connection.execute("SELECT status FROM documents WHERE job_id=?", (job_id,)).fetchone()[0] == "pending"
     assert j1.prepare_rollback()["jobs_reconciled"] == 0
 
 

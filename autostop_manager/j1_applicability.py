@@ -42,9 +42,18 @@ _ABSENT_DTC = re.compile(
     re.I,
 )
 _EXCEPTION_TO_EXCLUSION = re.compile(r"[,;]\s*(?:not|but\s+not|а\s+не)\b", re.I)
-_CONDITIONAL_SCOPE = re.compile(r"\b(?:may|might|could)\s+apply|\bsubject\s+to\b|\bможет\s+применяться\b", re.I)
+_CONDITIONAL_SCOPE = re.compile(
+    r"\b(?:may|might|could)\s+apply|\b(?:subject\s+to|only\s+(?:if|when)|provided\s+that|"
+    r"может\s+применяться|при\s+условии|только\s+при)\b",
+    re.I,
+)
 _EXCLUSIVE_SCOPE = re.compile(r"\b(?:only|solely|exclusively|только|исключительно)\b", re.I)
 _CAMPAIGN = re.compile(r"\b(?:recall|campaign|отзывн\w*\s+кампани\w*)\b", re.I)
+_CAMPAIGN_SUBJECT = re.compile(
+    r"^(?:(?:this|the)\s+)?(?:(?:service|safety)\s+)?(?:recall|campaign|отзывн\w*\s+кампани\w*)"
+    r"(?:\s+[A-Z0-9-]*[0-9][A-Z0-9-]*)?\s+(?:does|is|excludes|не|исключает)\b",
+    re.I,
+)
 _MODEL_YEAR = re.compile(
     r"\b(?:model\s+years?|my|модельн\w*\s+год\w*)\s*[: ]\s*(?P<year>[0-9]{4})\b"
     r"(?:\s*(?:[-‐‑‒–—]|to\b|through\b|по\b)\s*(?P<last_year>[0-9]{4})\b)?"
@@ -69,8 +78,15 @@ _EXPLICIT_DATE = re.compile(
     rf"""(?:\s+and\s+["']?(?P<last>{_DATE_VALUE})["']?)?(?!\w)""",
     re.I,
 )
-_ENGINE_CODE = re.compile(r"\b(?:engines?|двигател\w*)\s+(?:codes?\s+)?[:=]?\s*\w*[0-9]", re.I)
+_ENGINE_CODE = re.compile(
+    r"\b(?:engines?|двигател\w*)(?:\s+(?:codes?|код\w*))?\s*(?::|=|\s)\s*"
+    r"(?P<code>[A-Z0-9.\-‐‑‒–—]*[0-9][A-Z0-9.\-‐‑‒–—]*)",
+    re.I,
+)
 _MODEL_CONSTRAINT = re.compile(r"(?i:\b(?:models?|модел\w*)\s*(?::\s*|\s+))(?!(?i:years?|год\w*)\b)[A-ZА-ЯЁ0-9][\w-]*")
+_MARKET_LABEL = r"Europe(?:an)?|North America(?:n)?|United States|US(?:A)?|Canad(?:a|ian)|Japan(?:ese)?|Европ\w*|США|Канад\w*|Япони\w*"
+_MARKET_NAME = re.compile(rf"\b(?:{_MARKET_LABEL})\b", re.I)
+_MARKET_HEADING = re.compile(rf"(?:(?:market|рынок)\s*[:=]?\s+)?(?:{_MARKET_LABEL})(?:\s+(?:market|рынок))?", re.I)
 _MARKET_CONSTRAINT = re.compile(
     r"\b(?:markets?|regions?|рын\w*)\b|\b(?:European|North American|US|Canadian|Japanese)\s+"
     r"(?:vehicles?|model|specification)\b",
@@ -83,7 +99,7 @@ _SUBJECT_REFERENCE = re.compile(
     re.I,
 )
 _SUBJECT_DESCRIPTION = re.compile(r"\b(?:means|indicates|означает|расшифровывается)\b", re.I)
-_DTC_MENTION = re.compile(r"(?<!\w)[PBCU][0-3A-F][0-9A-F]{3}(?:\s*[-‐‑–]\s*[0-9A-F]{2})?(?!\w)", re.I)
+_DTC_MENTION = re.compile(r"(?<!\w)[PBCU][0-3A-F][0-9A-F]{3}(?:\s*[-‐‑‒–—−]\s*[0-9A-F]{2,})?(?!\w)", re.I)
 _BARE_DTC_HEADING = re.compile(
     r"(?:DTC|code|код)\s*[:#]?\s*[PBCU][0-3A-F][0-9A-F]{3}(?:\s*[-‐‑–]\s*[0-9A-F]{2})?", re.I
 )
@@ -97,12 +113,16 @@ _POSITION = (
     (re.compile(r"\b(?:left|лев\w*)\b", re.I), re.compile(r"\b(?:right|прав[а-яё]*)\b", re.I)),
 )
 _BARE_SCOPE_HEADING = re.compile(
-    r"^(?:model\s+years?|[0-9]{4}\s+model\s+years?|my\b|engine\s+codes?\b|"
-    r"модельн\w*\s+год\w*|код\s+двигател\w*)",
+    r"^(?:model\s+years?|[0-9]{4}\s+model\s+years?|my\b|engines?\b|"
+    r"модельн\w*\s+год\w*|(?:код\s+)?двигател\w*\b)",
     re.I,
 )
 _LOCAL_EXCLUSION = re.compile(r"\b(?:this|the)\s+(?:section|table|row)\b|\b(?:этом|данном)\s+разделе\b", re.I)
 _DOCUMENT_EXCLUSION = re.compile(r"\bthis\s+(?:bulletin|document|manual)\b|\b(?:весь|всём)\s+бюллетен\w*\b", re.I)
+_COHORT_JOIN = re.compile(r";|\b(?:and|or|respectively|whereas|и|или|либо|соответственно)\b", re.I)
+_COHORT_PAIRING = re.compile(r"\b(?:respectively|соответственно)\b", re.I)
+CLAUSE_BREAK = re.compile(r";|\b(?:whereas|while|в\s+то\s+время\s+как)\b", re.I)
+_BARE_YEAR = re.compile(r"(?<!\w)(?:19|20)[0-9]{2}(?!\w|[-/]\d)")
 _MAX_SCOPE_QUOTE = 400
 
 Subject = tuple[str, int]
@@ -239,6 +259,26 @@ def _position_applies(text: str, target: str) -> bool | None:
     return True
 
 
+def _joins_different_cohorts(text: str, years: set[str]) -> bool:
+    different_claims = CLAUSE_BREAK.search(text)
+    if not _COHORT_JOIN.search(text) and not different_claims:
+        return False
+    if _COHORT_PAIRING.search(text):
+        return True
+    selections = (
+        years or set(_BARE_YEAR.findall(text)),
+        {match["code"].rstrip(".").casefold() for match in _ENGINE_CODE.finditer(text)},
+        {market.casefold() for market in _MARKET_NAME.findall(text)},
+        {code.casefold() for code in _DTC_MENTION.findall(text)},
+        {part.casefold() for part in _PART_MENTION.findall(text)},
+    )
+    # Multiple different values in different fields can describe distinct
+    # variants. A literal match in one variant does not satisfy another.
+    return sum(len(values) > 1 for values in selections) >= 2 or (
+        different_claims is not None and any(len(values) > 1 for values in selections[-2:])
+    )
+
+
 def _selectors_apply(text: str, fields: set[str], context: Mapping[str, str]) -> bool | None:
     years = _model_years(text)
     if "year" in context and years and context["year"] not in years:
@@ -254,6 +294,10 @@ def _selectors_apply(text: str, fields: set[str], context: Mapping[str, str]) ->
         )
     ):
         return False
+    if "market" in context and "market" not in fields and _MARKET_HEADING.fullmatch(text):
+        return False
+    if _joins_different_cohorts(text, years):
+        return None
     if (position := context.get("position")) and (position_applies := _position_applies(text, position)) is not True:
         return position_applies
     if _EXCLUSIVE_SCOPE.search(text) and (
@@ -315,12 +359,19 @@ def _scope(
         _SCOPE_STATEMENT.search(text) and (fields & _VEHICLE_FIELDS or _VEHICLE_SCOPE_FIELD.search(text))
     )
     technical_heading = "model" in fields and bool(fields & {"engine", "year"}) and _TECHNICAL_DESCRIPTION.search(text)
-    selector_heading = (passage.is_heading or (len(text) <= 100 and _BARE_SCOPE_HEADING.match(text))) and bool(
-        _model_years(text)
-        or _ENGINE_CODE.search(text)
-        or _DATE_CUE.search(text)
-        or any(_positions(text))
-        or (_PART_MENTION.search(text) and "part_number" in context and "part_number" not in fields)
+    selector_heading = bool(
+        _MARKET_HEADING.fullmatch(text)
+        or (
+            (passage.is_heading or (len(text) <= 100 and _BARE_SCOPE_HEADING.match(text)))
+            and (
+                _model_years(text)
+                or _ENGINE_CODE.search(text)
+                or _DATE_CUE.search(text)
+                or (passage.is_heading and _MARKET_NAME.search(text) and _MARKET_CONSTRAINT.search(text))
+                or any(_positions(text))
+                or (_PART_MENTION.search(text) and "part_number" in context and "part_number" not in fields)
+            )
+        )
     )
     if not explicit_scope and not technical_heading and not selector_heading:
         return None
@@ -433,7 +484,7 @@ def _exclusion_evidence(
 ) -> tuple[Literal["excluded", "unrelated", "unknown"], Citation | None]:
     passage = entry.passage
     negative = _negative_clause(passage.text)
-    if _CAMPAIGN.search(passage.text) or negative is None:
+    if negative is None or _CAMPAIGN_SUBJECT.match(passage.text):
         return "unrelated", None
     restriction = negative[1]
     qualified = bool(

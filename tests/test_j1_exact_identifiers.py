@@ -104,6 +104,79 @@ def test_space_delimited_parts_match_only_complete_number(monkeypatch):
         assert j1.research_results(job, query, query_mode="part_number")["total"] == 0
 
 
+def test_labeled_part_field_binds_components_without_merging_separate_numbers(monkeypatch):
+    catalog, stock = "https://example.org/catalog", "https://example.org/stock"
+    _install_sources(
+        monkeypatch,
+        {
+            catalog: (
+                "text/html",
+                "<p>Part number: ax1 240b is available.</p><p>Артикул: ZXTDQ 8895.</p>",
+            ),
+            stock: ("text/plain", "Two stocked codes AX24 BX34."),
+        },
+    )
+    job = j1.research_sources(
+        source_urls=[catalog, stock], objective="Synthetic lookup", idempotency_key="catalog-component-boundaries"
+    )["job_id"]
+    j1.run_worker(once=True)
+
+    for code, expected in {
+        "AX1240B": [catalog],
+        "ZXTDQ8895": [catalog],
+        "AX1": [],
+        "240B": [],
+        "8895": [],
+        "AX24": [stock],
+        "BX34": [stock],
+        "AX24BX34": [],
+    }.items():
+        result = j1.research_results(job, code, query_mode="part_number")
+        assert result["ok"] and [item["url"] for item in result["results"]] == expected
+
+
+def test_dtc_match_distinguishes_cohort_counts_from_suffixes(monkeypatch):
+    count, extended, variant = (f"https://example.org/{name}" for name in ("count", "extended", "variant"))
+    _install_sources(
+        monkeypatch,
+        {
+            count: ("text/plain", "DTC P1A27 — 12 / 70 vehicles in the cohort."),
+            extended: ("text/plain", "DTC P1A27-002 is a distinct manufacturer variant."),
+            variant: ("text/plain", "Use P1A27 – 12 of the intermittent fault group."),
+        },
+    )
+    job = j1.research_sources(
+        source_urls=[count, extended, variant], objective="Synthetic DTC variants", idempotency_key="dtc-counts"
+    )["job_id"]
+    j1.run_worker(once=True)
+
+    for code, expected in {"P1A27": [count], "P1A27-12": [variant], "P1A27-00": []}.items():
+        result = j1.research_results(job, code, query_mode="dtc")
+        assert result["ok"] and [item["url"] for item in result["results"]] == expected
+
+
+@pytest.mark.parametrize("prefix", ("", "synthetic-document-identifier@example.org "))
+def test_clipped_title_cannot_manufacture_a_base_dtc_match(monkeypatch, prefix):
+    url = "https://example.org/long-title"
+    title_prefix = prefix + "Workshop guide P1A26. "
+    raw_title = title_prefix + "x" * (200 - len(title_prefix) - len(" P1A27")) + " P1A27-00"
+    _install_sources(
+        monkeypatch,
+        {url: ("text/html", f"<title>{raw_title}</title><h2 id='guide'>Workshop guide</h2><p>Read the guide.</p>")},
+    )
+    job = j1.research_sources(source_urls=[url], objective="Synthetic clipped title", idempotency_key="clipped-title")[
+        "job_id"
+    ]
+    j1.run_worker(once=True)
+
+    base = j1.research_results(job, "P1A27", query_mode="dtc")
+    assert base["ok"] and base["total"] == 0
+    subcode = j1.research_results(job, "P1A27-00", query_mode="dtc")
+    assert subcode["ok"] and subcode["total"] == int(bool(prefix))
+    complete = j1.research_results(job, "P1A26", query_mode="dtc")
+    assert complete["ok"] and complete["results"][0]["match_kind"] == "title"
+
+
 def test_retained_offsets_from_older_matcher_are_rebuilt(monkeypatch):
     url = "https://example.org/retained-catalog"
     _install_sources(monkeypatch, {url: ("text/plain", "Part number: AX - 240 - MP.")})
