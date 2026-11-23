@@ -14,6 +14,8 @@ from autostop_manager.j1_applicability import Passage, assess_applicability
 
 CONTEXT = {"make": "Ficta", "model": "Norvale", "year": "2021", "engine": "MX204", "dtc": "P1A27"}
 URL = "https://static.nhtsa.gov/synthetic/technical-bulletin"
+SCOPE = "This bulletin applies to model year 2021 Ficta Norvale vehicles with engine MX204."
+SUBJECT = "P1A27 means a connector feedback fault."
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +105,156 @@ def test_scope_requires_a_cited_vehicle_and_requested_subject(sentences, classif
     result = assess_applicability(CONTEXT, (Passage(sentence, 1, URL) for sentence in sentences))
     assert result.label == classification
     assert all(citation["quote"] in sentences for citation in result.evidence)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "sentences", "classification"),
+    [
+        (
+            {},
+            [
+                "This bulletin applies to 2020 model year Ficta Norvale vehicles with engine MX204 for DTC P1A27.",
+                SCOPE.removesuffix(".") + " for DTC P1A28.",
+            ],
+            "analog",
+        ),
+        ({}, [SCOPE, "In model year 2020, P1A27 means a connector feedback fault."], "analog"),
+        ({}, [SCOPE, "DTC P1A27 is defined for engine MX208."], "analog"),
+        ({}, [SCOPE, "DTC P1A27 is not covered in this bulletin."], "excluded"),
+        ({}, [SCOPE.removesuffix(".") + " unless DTC P1A27 is present."], "excluded"),
+        ({}, ["Do not use this procedure on vehicles with engine MX204.", SCOPE, SUBJECT], "conflict"),
+        (
+            {},
+            ["Запрещается использовать процедуру на автомобилях с двигателем MX204.", SCOPE, SUBJECT],
+            "conflict",
+        ),
+        (
+            {},
+            [
+                SCOPE.replace("2021", "2020").removesuffix(".") + " unless DTC P1A27 is present.",
+                SCOPE,
+                SUBJECT,
+            ],
+            "exact",
+        ),
+        ({}, [SCOPE, "This bulletin excludes engine MX208, not MX204.", SUBJECT], "exact"),
+        (
+            {},
+            [SCOPE, "This bulletin excludes engine MX204 unless DTC P1A27 is present.", SUBJECT],
+            "exact",
+        ),
+        (
+            {},
+            [SCOPE, "This bulletin excludes engine MX204 unless DTC P1A28 is present.", SUBJECT],
+            "conflict",
+        ),
+        (
+            {},
+            [SCOPE, "This bulletin excludes engine MX204 unless the revised harness was installed.", SUBJECT],
+            "analog",
+        ),
+        (
+            {},
+            [
+                SCOPE,
+                "This bulletin excludes model year 2021 Ficta Norvale vehicles with engine MX208.",
+                SUBJECT,
+            ],
+            "exact",
+        ),
+        ({}, [SCOPE.replace("MX204.", "MX204-T only."), SUBJECT], "analog"),
+        (
+            {"production_date": "2020-12-14"},
+            [
+                SCOPE.removesuffix(".") + ", built on 2020-12-14.",
+                "This bulletin excludes vehicles built before 2021-01-01.",
+                SUBJECT,
+            ],
+            "conflict",
+        ),
+        (
+            {"production_date": "2020-12-14"},
+            [
+                SCOPE.removesuffix(".") + ", built after 2020-12-01 and before 2020-12-10.",
+                SUBJECT,
+            ],
+            "analog",
+        ),
+        (
+            {"production_date": "2020-12-14"},
+            [
+                SCOPE.removesuffix(".") + ', built between "2020-12-01" and "2021-01-01".',
+                SUBJECT,
+            ],
+            "exact",
+        ),
+        (
+            {"production_date": "2020-12-14"},
+            [
+                SCOPE.removesuffix(".") + ", built on 2020-12-14.",
+                "This bulletin excludes model year 2021 Ficta Norvale vehicles with engine MX204 "
+                "manufactured on 2020-12-10.",
+                SUBJECT,
+            ],
+            "exact",
+        ),
+        (
+            {},
+            [SCOPE.removesuffix(".") + ", bui[redacted] and 2021-01-01.", SUBJECT],
+            "analog",
+        ),
+        (
+            {},
+            [SCOPE, "This bulletin excludes vehicles built before 2021-01-01.", SUBJECT],
+            "analog",
+        ),
+    ],
+)
+def test_applicability_keeps_scope_exceptions_and_subjects_together(overrides, sentences, classification):
+    passages = [Passage(sentence, page, URL) for page, sentence in enumerate(sentences, 1)]
+    result = assess_applicability(CONTEXT | overrides, passages)
+    assert result.label == classification
+    for evidence in result.evidence:
+        assert evidence["quote"] in sentences
+    if classification == "conflict":
+        assert {citation["kind"] for citation in result.evidence} >= {"vehicle_scope", "subject", "exclusion"}
+
+
+@pytest.mark.parametrize("majority_exact", [False, True])
+def test_report_keeps_independent_confidence_sources_in_shortlist(monkeypatch, majority_exact):
+    major = [f"https://static.nhtsa.gov/synthetic/{index:02}" for index in range(20)]
+    minor = ["https://www.denso.com/synthetic/primary", "https://www.bosch.com/synthetic/secondary"]
+    documents = {
+        url: SCOPE + f" {SUBJECT} Bulletin edition {index}."
+        if majority_exact or url in minor
+        else f"This bulletin explicitly excludes model year 2021 Ficta Norvale vehicles. Edition {index}."
+        for index, url in enumerate([*major, *minor])
+    }
+
+    def fetch(url, **_kwargs):
+        return {"ok": True, "url": url, "kind": "text", "text": documents[url]}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    started = j1.research_sources(
+        objective="Check synthetic evidence coverage",
+        source_urls=major,
+        idempotency_key="scope-coverage-1",
+        automotive_context=CONTEXT,
+    )
+    assert started["ok"], started
+    job_id = started["job_id"]
+    assert j1.research_sources(job_id=job_id, source_urls=minor)["ok"]
+    j1.run_worker(once=True)
+    report = j1.research_report(job_id)["report"]
+    assert report["evidence_confidence"]["level"] == "high"
+    assert report["evidence_confidence"]["retrieved_sources"] == len(documents)
+    assert len(report["sources"]) == 20
+    assert {source["url"] for source in report["sources"]} == set(
+        [*major[:19], minor[1]] if majority_exact else [*major[:18], *minor]
+    )
+    assert [source["url"] for source in report["sources"] if source["source_tier"] == "A"] == (
+        major[:19] if majority_exact else major[:18]
+    )
 
 
 def test_sources_only_context_is_immutable_and_scope_citations_resolve(monkeypatch: pytest.MonkeyPatch) -> None:

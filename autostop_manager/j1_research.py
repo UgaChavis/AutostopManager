@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime, timedelta
 import fcntl
 from functools import partial
 import hashlib
+from itertools import islice
 import json
 import os
 from pathlib import Path
@@ -508,6 +509,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             fragment_kind TEXT NOT NULL, section TEXT NOT NULL, source_url TEXT NOT NULL,
             start INTEGER NOT NULL, end INTEGER NOT NULL,
             extraction_method TEXT NOT NULL DEFAULT '',
+            truncated INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
             UNIQUE(document_id, page)
         );
@@ -516,7 +518,11 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     _migrate_jobs(conn)
     _migrate_queries(conn)
     _migrate_documents(conn)
-    _add_missing_columns(conn, "document_fragments", {"extraction_method": "TEXT NOT NULL DEFAULT ''"})
+    _add_missing_columns(
+        conn,
+        "document_fragments",
+        {"extraction_method": "TEXT NOT NULL DEFAULT ''", "truncated": "INTEGER NOT NULL DEFAULT 0"},
+    )
     _migrate_duplicate_titles(conn)
     j1_identifiers.init_schema(conn)
 
@@ -638,45 +644,52 @@ def _validated_automotive_context(value: object) -> tuple[dict[str, str] | None,
     return context, None
 
 
-def _context_phrase(context: dict[str, str], *fields: str) -> str:
+def _context_phrase(context: dict[str, str], fields: tuple[str, ...], *, limit: int) -> str:
     values: list[str] = []
     seen: set[str] = set()
     for field in fields:
         value = context.get(field, "")
         if value and value.casefold() not in seen:
-            values.append(value)
+            # Keep identifiers, build date and position distinct in the search text.
+            values.append(f"{value}," if field in {"dtc", "part_number", "production_date", "position"} else value)
             seen.add(value.casefold())
-    return _clean_input(" ".join(values), limit=500)
+    phrase = " ".join(values)
+    if len(phrase) > limit:
+        phrase = phrase[: limit + 1].rsplit(" ", 1)[0]
+    return phrase.rstrip(",")
 
 
 def _automotive_query_plan(context: dict[str, str]) -> list[tuple[str, str]]:
     """Generate a small first pass for the evidence the task needs."""
 
-    identity = _context_phrase(context, "make", "model", "year", "engine")
-    catalog = _context_phrase(context, "part_number", "make", "model", "year", "engine", "system")
+    search_context = {**context, "symptom": _clean_input(context.get("symptom", ""), limit=100)}
+    identity = ("market", "position", "make", "model", "year", "engine")
+    catalog = ("part_number", *identity, "system")
+    catalog_dated = ("part_number", "production_date", *identity, "system")
+    templates: tuple[tuple[str, tuple[str, ...], str], ...]
     if context.get("part_number") and not (context.get("dtc") or context.get("symptom")):
         templates = (
-            ("catalog_fitment_en", f"{catalog} OEM parts catalog fitment"),
-            ("technical_context_en", f"{catalog} component manufacturer specifications"),
-            ("catalog_fitment_ru", f"{catalog} каталог оригинальных деталей применимость"),
-            ("technical_context_ru", f"{catalog} техническая документация производителя детали"),
+            ("catalog_fitment_en", catalog, "OEM parts catalog fitment"),
+            ("technical_context_en", catalog, "component manufacturer specifications"),
+            ("catalog_fitment_ru", catalog_dated, "каталог оригинальных деталей применимость"),
+            ("technical_context_ru", catalog, "техническая документация производителя детали"),
         )
     else:
-        diagnostic = _context_phrase(context, "dtc", "system")
-        symptom = _clean_input(context.get("symptom", ""), limit=100)
-        subject = f"{identity} {diagnostic} {symptom}"
+        diagnosis = ("dtc", *identity, "system", "symptom")
+        diagnosis_dated = ("dtc", "production_date", *identity, "system", "symptom")
         templates = (
-            ("official_bulletin_en", f"{subject} OEM technical service bulletin"),
-            ("technical_diagnosis_en", f"{subject} diagnostic procedure service manual"),
-            ("technical_diagnosis_ru", f"{subject} руководство по ремонту диагностика"),
-            ("catalog_fitment_en", f"{catalog} OEM parts catalog fitment")
+            ("official_bulletin_en", diagnosis, "OEM technical service bulletin"),
+            ("technical_diagnosis_en", diagnosis, "diagnostic procedure service manual"),
+            ("technical_diagnosis_ru", diagnosis_dated, "руководство по ремонту диагностика"),
+            ("catalog_fitment_en", catalog, "OEM parts catalog fitment")
             if context.get("part_number")
-            else ("official_bulletin_ru", f"{subject} бюллетень производителя"),
+            else ("official_bulletin_ru", diagnosis, "бюллетень производителя"),
         )
     planned: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for intent, raw in templates:
-        query = _clean_input(raw, limit=500)
+    for intent, fields, suffix in templates:
+        phrase = _context_phrase(search_context, fields, limit=500 - len(suffix) - 1)
+        query = f"{phrase} {suffix}".strip()
         normalized = query.casefold()
         if query and _input_is_safe(query) and normalized not in seen:
             planned.append((query, intent))
@@ -1296,6 +1309,8 @@ def _result_item(row: sqlite3.Row) -> dict[str, Any]:
         )
         if row["fragment_kind"] == "pdf_page":
             result["fragment_extraction_method"] = row["fragment_extraction_method"] or "pdf_text"
+            if row["fragment_truncated"]:
+                result["fragment_truncated"] = True
     if row["pdf_limitations"]:
         result["pdf_limitations"] = json.loads(row["pdf_limitations"])
     if row["match_kind"] is not None:
@@ -1358,7 +1373,7 @@ def research_results(
                                    min(coalesce(f.end,length(d.body)),i.start+280)
                                    - max(coalesce(f.start,0),i.start-80)) AS excerpt,
                                f.page,f.fragment_kind,f.section,f.source_url,
-                               f.extraction_method AS fragment_extraction_method
+                               f.extraction_method AS fragment_extraction_method,f.truncated AS fragment_truncated
                             FROM identifier_matches i JOIN documents d ON d.id=i.document_id
                             LEFT JOIN documents primary_doc ON primary_doc.id=d.duplicate_of
                             LEFT JOIN document_fragments f ON f.document_id=i.document_id AND f.page=i.page
@@ -1381,7 +1396,7 @@ def research_results(
                                   WHERE hit.rowid=documents_fts.rowid AND hit.body MATCH ?
                               ) END AS body_match,
                               f.page,f.fragment_kind,f.section,f.source_url,
-                              f.extraction_method AS fragment_extraction_method
+                              f.extraction_method AS fragment_extraction_method,f.truncated AS fragment_truncated
                        FROM documents_fts JOIN documents AS d ON d.id=documents_fts.document_id
                        LEFT JOIN documents AS primary_doc ON primary_doc.id=d.duplicate_of
                        LEFT JOIN document_fragments AS f ON f.fts_rowid=documents_fts.rowid AND f.document_id=d.id
@@ -1500,7 +1515,7 @@ def research_document(
                 )
                 if fragment["fragment_kind"] == "pdf_page":
                     paging["fragment_extraction_method"] = fragment["extraction_method"] or "pdf_text"
-                    if body.find("\f", fragment["end"]) == -1:
+                    if fragment["truncated"] or body.find("\f", fragment["end"]) == -1:
                         paging["fragment_truncated"] = True
                 body = body[fragment["start"] : fragment["end"]]
             end = min(offset + max_chars, len(body))
@@ -1711,13 +1726,38 @@ def _frequency_measurements(
     return measurements
 
 
-def _overall_confidence(sources: list[dict[str, Any]]) -> str:
+def _confidence_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the source examples that establish high or moderate coverage."""
     direct = [
         source for source in sources if source["source_tier"] in {"A", "B"} and source["applicability"] == "exact"
     ]
-    if len(direct) >= 2 and _source_domains(direct) >= 2:
+    if not direct:
+        return [
+            source for source in sources if source["source_tier"] in {"A", "B"} and source["applicability"] == "analog"
+        ][:1]
+    representatives: dict[str, dict[str, Any]] = {}
+    for source in direct:
+        domain = discovery_domain(str(source.get("canonical_url") or source["url"]))
+        if domain:
+            representatives.setdefault(domain, source)
+            if len(representatives) == 2:
+                return list(representatives.values())
+    return direct[:1]
+
+
+def _report_source_examples(
+    sources: list[dict[str, Any]], confidence_sources: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    needed = {source["document_id"] for source in confidence_sources}
+    other = (source for source in sources if source["document_id"] not in needed)
+    needed.update(source["document_id"] for source in islice(other, 20 - len(needed)))
+    return [source for source in sources if source["document_id"] in needed]
+
+
+def _overall_confidence(sources: list[dict[str, Any]], confidence_sources: list[dict[str, Any]]) -> str:
+    if len(confidence_sources) >= 2:
         return "high"
-    if direct or any(source["source_tier"] in {"A", "B"} and source["applicability"] == "analog" for source in sources):
+    if confidence_sources:
         return "moderate"
     if sources:
         return "low"
@@ -1801,7 +1841,8 @@ def research_report(job_id: str) -> dict[str, Any]:
             # Rank lightweight metadata. Read a body for excerpt extraction only
             # while examining that source, even for a full 300-document job.
             all_sources = sorted((_report_source_item(conn, row, context) for row in rows), key=_report_source_sort_key)
-            sources = all_sources[:20]
+            confidence_sources = _confidence_sources(all_sources)
+            sources = _report_source_examples(all_sources, confidence_sources)
             alternative_causes = _alternative_cause_mentions(conn, sources)
             frequency_measurements = _frequency_measurements(conn, all_sources, context)
             duplicates = [
@@ -1885,7 +1926,7 @@ def research_report(job_id: str) -> dict[str, Any]:
         "automotive_context": context or None,
         "report": {
             "evidence_confidence": {
-                "level": _overall_confidence(all_sources),
+                "level": _overall_confidence(all_sources, confidence_sources),
                 "retrieved_sources": len(all_sources),
                 "independent_domains": _source_domains(all_sources),
                 "source_tiers": tier_counts,
@@ -2254,7 +2295,13 @@ def _enqueue_query_candidate(
     return {"id": document_id, "url": candidate["url"]}
 
 
-_DocumentFragment = tuple[int, str, str, str, int, int, str]
+def _clear_query_candidates(conn: sqlite3.Connection, job_id: str) -> int:
+    return conn.execute(
+        "DELETE FROM query_candidates WHERE query_id IN (SELECT id FROM queries WHERE job_id=?)", (job_id,)
+    ).rowcount
+
+
+_DocumentFragment = tuple[int, str, str, str, int, int, str, bool]
 
 
 def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> list[_DocumentFragment]:
@@ -2265,15 +2312,18 @@ def _document_fragments(fetch_result: dict[str, Any], body: str, url: str) -> li
     last_page = last_end = 0
     for item in raw_fragments[:MAX_PUBLIC_FRAGMENTS]:
         page, start, end = item["page"], item["start"], item["end"]
-        if not (last_page < page <= MAX_PUBLIC_FRAGMENTS and last_end <= start < end <= len(body)):
-            return []
         fragment_kind = item["fragment_kind"]
+        truncated = fragment_kind == "pdf_page" and item.get("truncated") is True
+        if not (last_page < page <= MAX_PUBLIC_FRAGMENTS and last_end <= start <= end <= len(body)):
+            return []
+        if start == end and not truncated:
+            return []
         section = redact_sensitive(item.get("section", ""), limit=200)
         anchor = f"page={page}" if fragment_kind == "pdf_page" else quote(item.get("anchor", ""), safe="")
         source_url = f"{url}#{anchor}" if anchor else url
         method = "pdf_ocr" if item.get("extraction_method") == "pdf_ocr" else ""
         fragments.append(
-            (page, fragment_kind, section, source_url if public_url(source_url) else url, start, end, method)
+            (page, fragment_kind, section, source_url if public_url(source_url) else url, start, end, method, truncated)
         )
         last_page, last_end = page, end
     return fragments
@@ -2293,13 +2343,13 @@ def _index_document(
     if not fragments:
         conn.execute(insert_text, (job_id, document_id, title, body))
         return
-    for index, (page, kind, section, source_url, start, end, method) in enumerate(fragments):
+    for index, (page, kind, section, source_url, start, end, method, truncated) in enumerate(fragments):
         cursor = conn.execute(insert_text, (job_id, document_id, title if index == 0 else "", body[start:end]))
         conn.execute(
             """INSERT INTO document_fragments(
-                   fts_rowid,document_id,page,fragment_kind,section,source_url,start,end,extraction_method
-               ) VALUES(?,?,?,?,?,?,?,?,?)""",
-            (cursor.lastrowid, document_id, page, kind, section, source_url, start, end, method),
+                   fts_rowid,document_id,page,fragment_kind,section,source_url,start,end,extraction_method,truncated
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (cursor.lastrowid, document_id, page, kind, section, source_url, start, end, method, truncated),
         )
 
 
@@ -2380,10 +2430,7 @@ def _work_public_job(job_id: str) -> None:
                 phase = "document"
             else:
                 if not sources_only:
-                    conn.execute(
-                        "DELETE FROM query_candidates WHERE query_id IN (SELECT id FROM queries WHERE job_id=?)",
-                        (job_id,),
-                    )
+                    _clear_query_candidates(conn, job_id)
                 conn.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (_utcnow(), job_id))
                 conn.commit()
                 return
@@ -2483,7 +2530,7 @@ def _work_public_job(job_id: str) -> None:
                         fragments = _document_fragments(fetch_result, body, fetched_url)
                         expected_bytes = len(body.encode("utf-8")) * 3 + sum(
                             256 + len(section.encode("utf-8")) + len(source_url.encode("utf-8"))
-                            for _, _, section, source_url, _, _, _ in fragments
+                            for _, _, section, source_url, _, _, _, _ in fragments
                         )
                         if _cache_size() + expected_bytes > MAX_CORPUS_BYTES:
                             _prune(conn)
@@ -2544,12 +2591,54 @@ def _on_stop(_signum: int, _frame: Any) -> None:
     _STOP = True
 
 
+@contextmanager
+def _worker_lock() -> Iterator[None]:
+    with (_cache_dir() / "worker.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
 def run_worker(*, once: bool = False) -> None:
     reject_obsolete_runtime_config()
     _cache_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (_cache_dir() / "worker.lock").open("a+b") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with _worker_lock():
         _run_locked_worker(once=once)
+
+
+def prepare_rollback() -> dict[str, Any]:
+    """Move deferred URLs into the document queue understood by older workers."""
+
+    if not _db_path().is_file():
+        return _error("j1_store_unavailable")
+    queued = 0
+    discarded = 0
+    try:
+        with _worker_lock(), _db() as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            jobs = conn.execute(
+                """SELECT DISTINCT j.id,j.max_pages FROM jobs j
+                   JOIN queries q ON q.job_id=j.id JOIN query_candidates c ON c.query_id=q.id
+                   WHERE j.status IN ('queued','running') ORDER BY j.id"""
+            ).fetchall()
+            for job in jobs:
+                job_id = job["id"]
+                available = max(0, job["max_pages"] - _document_count(conn, job_id))
+                for _ in range(available):
+                    if _enqueue_query_candidate(conn, job_id) is None:
+                        break
+                    queued += 1
+                discarded += _clear_query_candidates(conn, job_id)
+    except BlockingIOError:
+        return _error("j1_worker_active")
+    except (OSError, sqlite3.Error):
+        return _error("j1_store_unavailable")
+    return {
+        "ok": True,
+        "schema": SCHEMA,
+        "jobs_reconciled": len(jobs),
+        "documents_queued": queued,
+        "candidates_discarded": discarded,
+    }
 
 
 def _run_locked_worker(*, once: bool) -> None:
@@ -2644,13 +2733,13 @@ def _vin_runtime_status() -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="J1 public research worker")
-    parser.add_argument("command", choices=("worker", "probe"))
+    parser.add_argument("command", choices=("worker", "probe", "prepare-rollback"))
     parser.add_argument("--once", action="store_true", help="Process one queued job and exit")
     args = parser.parse_args()
     if args.command == "worker":
         run_worker(once=args.once)
     else:
-        result = probe()
+        result = prepare_rollback() if args.command == "prepare-rollback" else probe()
         print(json.dumps(result, ensure_ascii=False))
         if not result["ok"]:
             sys.exit(1)

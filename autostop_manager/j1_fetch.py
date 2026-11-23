@@ -754,20 +754,24 @@ def _pdf_to_text(body: bytes) -> str:
     )
 
 
-def _pdf_fragments(text: str, ocr_pages: frozenset[int] = frozenset()) -> list[dict[str, Any]]:
+def _pdf_fragments(
+    text: str, ocr_pages: frozenset[int] = frozenset(), truncated_pages: frozenset[int] = frozenset()
+) -> list[dict[str, Any]]:
     fragments = []
     offset = 0
     for number, body in enumerate(text.split("\f", _PDF_TEXT_PAGES), 1):
         start = offset + len(body) - len(body.lstrip())
         end = offset + len(body.rstrip())
-        if start < end:
+        truncated = number in truncated_pages
+        if start < end or truncated:
             fragments.append(
                 {
                     "page": number,
                     "fragment_kind": "pdf_page",
-                    "start": start,
+                    "start": min(start, end),
                     "end": end,
                     "extraction_method": "pdf_ocr" if number in ocr_pages else "pdf_text",
+                    "truncated": truncated,
                 }
             )
         offset += len(body) + 1
@@ -785,7 +789,7 @@ def mixed_ocr_budget(reserve_page: Callable[[], str | None]) -> Iterator[None]:
 
 
 def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | None]) -> dict[str, Any]:
-    from .j1_ocr import extract_mixed_pdf_page
+    from .j1_ocr import complete_ocr_lines, extract_mixed_pdf_page
 
     pages = text.split("\f", _PDF_TEXT_PAGES)
     # The trailing chunk may be a truncated page. A form feed proves the
@@ -797,7 +801,8 @@ def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | 
     if len(missing) > MIXED_OCR_PAGES_PER_DOCUMENT:
         limitations.add("ocr_document_budget")
     remaining_chars = MAX_PUBLIC_PDF_TEXT_CHARS - len(text)
-    ocr_pages = set()
+    ocr_pages: set[int] = set()
+    truncated_pages: set[int] = set()
     for index in missing[:MIXED_OCR_PAGES_PER_DOCUMENT]:
         if remaining_chars <= 0:
             limitations.add("ocr_text_limit")
@@ -809,26 +814,39 @@ def _extract_mixed_pdf(body: bytes, text: str, reserve_page: Callable[[], str | 
         page_text, problem = extract_mixed_pdf_page(body, index + 1)
         if problem:
             limitations.add(problem)
+        if problem == "ocr_text_limit":
+            truncated_pages.add(index + 1)
+        if len(page_text) > remaining_chars:
+            limitations.add("ocr_text_limit")
+            truncated_pages.add(index + 1)
+            prefix = page_text[:remaining_chars]
+            page_text = prefix.rstrip() if page_text[remaining_chars] == "\n" else complete_ocr_lines(prefix)
         if page_text:
-            if len(page_text) > remaining_chars:
-                limitations.add("ocr_text_limit")
-            pages[index] = page_text[:remaining_chars]
-            remaining_chars -= len(pages[index])
+            pages[index] = page_text
+            remaining_chars -= len(page_text)
             ocr_pages.add(index + 1)
     return {
         "ok": True,
         "text": redact_sensitive("\f".join(pages), limit=MAX_PUBLIC_PDF_TEXT_CHARS, preserve_page_breaks=True),
         "extraction_method": "pdf_mixed" if ocr_pages else "pdf_text",
-        "ocr_pages": frozenset(ocr_pages),
+        "ocr_pages": frozenset(ocr_pages | truncated_pages),
+        "truncated_pages": frozenset(truncated_pages),
         "pdf_limitations": sorted(limitations),
     }
+
+
+def _is_challenge_text(text: str) -> bool:
+    opening = text[:3000].casefold()
+    return any(marker in opening for marker in ("captcha", "введите капчу", "sign in to continue", "please log in"))
 
 
 def _extract_pdf(body: bytes) -> dict[str, Any]:
     text = _pdf_to_text(body)
     if text.strip():
         reserve_page = _MIXED_OCR_RESERVATION.get()
-        if reserve_page is not None:
+        # A native PDF already readable without OCR keeps its access decision.
+        # Scanned workshop instructions may describe a login without gating access to the PDF.
+        if reserve_page is not None and not _is_challenge_text(text):
             return _extract_mixed_pdf(body, text, reserve_page)
         return {"ok": True, "text": text, "extraction_method": "pdf_text"}
     # Kept lazy to avoid a module cycle: the OCR helper redacts with this
@@ -864,7 +882,11 @@ def _extract_static_content(content_type: str, body: bytes, final_url: str, head
             "title": (decoded_name if decoded_name.isprintable() else filename)[:200],
             "text": extracted["text"],
             "extraction_method": method,
-            "fragments": _pdf_fragments(extracted["text"], extracted.get("ocr_pages", frozenset()))
+            "fragments": _pdf_fragments(
+                extracted["text"],
+                extracted.get("ocr_pages", frozenset()),
+                extracted.get("truncated_pages", frozenset()),
+            )
             if method in {"pdf_text", "pdf_mixed"}
             else [],
             "pdf_limitations": extracted.get("pdf_limitations", []),
@@ -928,10 +950,7 @@ def _browser_fallback(
     rendered_text = redact_sensitive(str(rendered.get("text") or ""), limit=bounded_chars)
     if not rendered_url or len(rendered_text) < 80:
         return {"ok": False, "error": "browser_response_invalid", "browser_attempted": True}
-    if any(
-        marker in rendered_text[:3000].casefold()
-        for marker in ("captcha", "введите капчу", "sign in to continue", "please log in")
-    ):
+    if _is_challenge_text(rendered_text):
         return {"ok": False, "error": "requires_human", "browser_attempted": True}
     return {
         "ok": True,
@@ -1034,10 +1053,7 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
         extracted["fragments"] = []
         final_url = fallback["url"]
     text = extracted["text"]
-    if any(
-        marker in text[:3000].casefold()
-        for marker in ("captcha", "введите капчу", "sign in to continue", "please log in")
-    ):
+    if extracted["extraction_method"] != "pdf_mixed" and _is_challenge_text(text):
         return {
             "ok": False,
             "error": "requires_human",

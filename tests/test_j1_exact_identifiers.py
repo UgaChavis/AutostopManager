@@ -61,6 +61,22 @@ def test_exact_parts_keep_boundaries_quotes_and_refresh_after_append(monkeypatch
     assert refreshed["total"] == 3 and {item["url"] for item in refreshed["results"]} == {guide, extra, title}
 
 
+def test_spaced_hyphenated_part_matches_only_whole_identifier(monkeypatch):
+    url = "https://example.org/catalog"
+    body = "Catalog: AX - 240 - MP. Related item — BX ‑ 150 ‑ RT — for order."
+    _install_sources(monkeypatch, {url: ("text/plain", body)})
+    job = j1.research_sources(
+        source_urls=[url], objective="Synthetic catalog test", idempotency_key="spaced-exact-parts"
+    )["job_id"]
+    j1.run_worker(once=True)
+
+    for query in ("AX240MP", "BX150RT"):
+        result = j1.research_results(job, query, query_mode="part_number")
+        assert result["total"] == 1 and result["results"][0]["match_kind"] == "body"
+    for query in ("AX240", "240MP", "BX150", "150RT"):
+        assert j1.research_results(job, query, query_mode="part_number")["total"] == 0
+
+
 def test_exact_dtc_baseline_and_suffixes_keep_automotive_document_variants(monkeypatch):
     documents = {code: f"https://example.org/{code}" for code in ("P1A27", "P1A27-00", "P1A27-01", "P1A28")}
     _install_sources(

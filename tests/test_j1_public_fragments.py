@@ -339,6 +339,95 @@ def test_worker_ocr_indexes_only_empty_pdf_page_and_redacts_across_pages(monkeyp
     assert "WVWZZZ1KZ" not in saved and "6W000001" not in saved
 
 
+def test_mixed_pdf_manual_login_text_preserves_native_evidence_and_challenge_guard(monkeypatch):
+    manual = "https://example.org/manual.pdf"
+    challenge = "https://example.org/challenge.pdf"
+    manual_body, challenge_body = b"%PDF-manual", b"%PDF-challenge"
+    native = {
+        manual_body: "Service manual with a native procedure for connector retention and harness inspection.\f\f",
+        challenge_body: "Please log in to continue before accessing the requested workshop service documentation.\f\f",
+    }
+    calls = []
+
+    def recognize(body, page):
+        calls.append((body, page))
+        return "Please log in to the dealer portal after checking the connector.", None
+
+    monkeypatch.setattr(j1_fetch, "_pdf_to_text", native.__getitem__)
+    monkeypatch.setattr(j1_ocr, "extract_mixed_pdf_page", recognize)
+    job = _collect(
+        monkeypatch, {manual: ("application/pdf", manual_body), challenge: ("application/pdf", challenge_body)}
+    )
+
+    assert calls == [(manual_body, 2)]
+    hit = j1.research_results(job, query="harness inspection")["results"][0]
+    assert (hit["page"], hit["source_url"], hit["fragment_extraction_method"]) == (1, f"{manual}#page=1", "pdf_text")
+    scanned = j1.research_document(job, hit["document_id"], page=2)
+    assert "Please log in to the dealer portal" in scanned["text"]
+    report = j1.research_report(job)["report"]
+    assert [source["url"] for source in report["sources"]] == [manual]
+    assert [(source["url"], source["reason"]) for source in report["unavailable"]] == [(challenge, "requires_human")]
+
+
+@pytest.mark.parametrize(
+    ("cap", "complete"),
+    [
+        ("document", "Inspect the harness mounting clip."),
+        ("parser", "Inspect the harness mounting clip."),
+        ("document", ""),
+    ],
+)
+def test_capped_mixed_pdf_ocr_cannot_invent_base_dtc_in_search_or_report(monkeypatch, cap, complete):
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/mixed.pdf"
+    native = (
+        "Workshop manual applies to Ficta Norvale model year 2021, engine MX204.\n"
+        "Read the scanned connector label on the following page.\f\f"
+    )
+    ocr_text = (complete + "\n" if complete else "") + "P1A27-00 connector label."
+    prefix_len = ocr_text.index("-00")
+
+    def run_parser(argv, *_args, **kwargs):
+        if argv[0].endswith("/pdftoppm"):
+            return "ok", b"\xff\xd8jpeg-fixture"
+        if cap == "parser":
+            limit = kwargs["output_limit"]
+            return "output_limit", ocr_text.encode()[:limit]
+        return "ok", ocr_text.encode()
+
+    monkeypatch.setattr(j1_fetch, "_pdf_to_text", lambda _body: native)
+    if cap == "document":
+        monkeypatch.setattr(j1_fetch, "MAX_PUBLIC_PDF_TEXT_CHARS", len(native) + prefix_len)
+    else:
+        monkeypatch.setattr(j1_ocr, "MIXED_PAGE_TEXT_BYTES", prefix_len)
+    monkeypatch.setattr(j1_ocr, "_ocr_languages_available", lambda: True)
+    monkeypatch.setattr(j1_ocr, "_run_parser", run_parser)
+    monkeypatch.setattr(
+        j1_fetch,
+        "_request_public",
+        lambda *_args, **_kwargs: (200, {"content-type": "application/pdf"}, b"%PDF-synthetic", url),
+    )
+    monkeypatch.setattr(j1, "search_public", lambda *_args, **_kwargs: ([{"url": url}], "fixture"))
+    job = j1.start_research(
+        objective="Inspect synthetic workshop instructions",
+        automotive_context={"make": "Ficta", "model": "Norvale", "year": 2021, "engine": "MX204", "dtc": "P1A27"},
+    )["job_id"]
+    with j1._db() as conn:
+        assert j1._claim_job(conn) == job
+    j1._work_job(job)
+
+    assert j1.research_results(job, query="P1A27", query_mode="dtc")["total"] == 0
+    report = j1.research_report(job)["report"]
+    assert not report["confirmed"]
+    source = report["sources"][0]
+    assert source["pdf_limitations"] == ["ocr_text_limit"]
+    page = j1.research_document(job, source["document_id"], page=2)
+    assert page["text"] == complete
+    assert page["fragment_truncated"] is True and page["fragment_extraction_method"] == "pdf_ocr"
+    if complete:
+        hit = j1.research_results(job, query="mounting clip")["results"][0]
+        assert hit["page"] == 2 and hit["fragment_truncated"] is True
+
+
 def test_mixed_pdf_worker_charges_failed_attempts_and_keeps_digital_pages(monkeypatch):
     sources = {}
     attempts = []

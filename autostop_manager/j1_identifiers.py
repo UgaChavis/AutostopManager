@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Iterator
-from typing import Literal
+from typing import Literal, NamedTuple
 
 QueryMode = Literal["lexical", "dtc", "part_number"]
 
-_DASHES = r"\-‐‑‒–—−"
-_SPACE = r" \t\u00a0\u202f"
+_HORIZONTAL_SPACE = " \t\u00a0\u202f"
+_DASH_CHARS = "-‐‑‒–—−"
+_HYPHENS = "-‐‑"
+_DASHES = re.escape(_DASH_CHARS)
+_SPACE = re.escape(_HORIZONTAL_SPACE)
 _SEPARATORS = f"[{_SPACE}{_DASHES}]"
 _PART_NUMBER = re.compile(rf"[a-zA-Z0-9]+(?:{_SEPARATORS}+[a-zA-Z0-9]+)*")
 _DTC = re.compile(r"[PBCU][0-3A-F][0-9A-F]{3}(?:-[0-9A-F]{2})?")
@@ -28,17 +31,45 @@ def normalize(query: str, mode: QueryMode) -> str | None:
     return code if 2 <= len(code) <= 64 else None
 
 
-def match_pattern(code: str, mode: QueryMode) -> re.Pattern[str]:
+def _connected_part(text: str, boundary: int, direction: int) -> bool:
+    position = boundary
+    while 0 <= position < len(text) and text[position] in _HORIZONTAL_SPACE:
+        position += direction
+    if not 0 <= position < len(text) or text[position] not in _DASH_CHARS:
+        return False
+    dash = position
+    position += direction
+    while 0 <= position < len(text) and text[position] in _HORIZONTAL_SPACE:
+        position += direction
+    # A typographic dash surrounded by spaces also separates ordinary prose.
+    if text[dash] not in _HYPHENS and boundary != dash and abs(position - dash) > 1:
+        return False
+    return 0 <= position < len(text) and text[position].isascii() and text[position].isalnum()
+
+
+class _PartPattern(NamedTuple):
+    candidates: re.Pattern[str]
+
+    def search(self, text: str) -> re.Match[str] | None:
+        for match in self.candidates.finditer(text):
+            if not _connected_part(text, match.start() - 1, -1) and not _connected_part(text, match.end(), 1):
+                return match
+        return None
+
+
+IdentifierPattern = re.Pattern[str] | _PartPattern
+
+
+def match_pattern(code: str, mode: QueryMode) -> IdentifierPattern:
     """Match a normalized identifier in the original text."""
     if mode == "dtc":
         body = code.replace("-", rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*")
         continuation = rf"[{_SPACE}]*[{_DASHES}][{_SPACE}]*(?ai:[A-F0-9]{{2}})(?!\w)"
-    else:
-        # Horizontal separators are valid within a part number. A newline
-        # or page boundary can separate unrelated identifiers.
-        body = f"{_SEPARATORS}*".join(code)
-        continuation = rf"[{_DASHES}][{_SPACE}]*[A-Za-z0-9]|[{_SPACE}]+[\-‐‑][{_SPACE}]{{0,1}}[A-Za-z0-9]"
-    return re.compile(rf"(?<!\w)(?<!\w[{_DASHES}])(?ai:{body})(?!\w|{continuation})")
+        return re.compile(rf"(?<!\w)(?<!\w[{_DASHES}])(?ai:{body})(?!\w|{continuation})")
+    # Horizontal separators can be internal to an article. Check both ends
+    # of each candidate against the surrounding dash-connected components.
+    body = f"{_SEPARATORS}*".join(code)
+    return _PartPattern(re.compile(rf"(?<!\w)(?ai:{body})(?!\w)"))
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
@@ -62,7 +93,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 
 def _positions(
-    conn: sqlite3.Connection, document: sqlite3.Row, pattern: re.Pattern[str]
+    conn: sqlite3.Connection, document: sqlite3.Row, pattern: IdentifierPattern
 ) -> Iterator[tuple[int, int, int]]:
     body = document["body"]
     fragments = (

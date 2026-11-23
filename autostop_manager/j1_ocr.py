@@ -108,6 +108,11 @@ def _failure(code: str, *, retryable: bool) -> dict[str, Any]:
     return {"ok": False, "error": code, "retryable": retryable, "extraction_method": "pdf_ocr"}
 
 
+def complete_ocr_lines(text: str) -> str:
+    """Drop an unfinished line so a capped OCR prefix cannot invent a code."""
+    return text.rpartition("\n")[0].strip()
+
+
 def extract_mixed_pdf_page(body: bytes, page: int) -> tuple[str, str | None]:
     """Read one physical page from the already downloaded public PDF."""
     deadline = time.monotonic() + MIXED_PAGE_TIMEOUT_SECONDS
@@ -155,10 +160,11 @@ def extract_mixed_pdf_page(body: bytes, page: int) -> tuple[str, str | None]:
         return "", "ocr_timeout"
     if status not in {"ok", "output_limit"}:
         return "", "ocr_extract_failed"
-    text = output.decode("utf-8", "replace").replace("\f", "\n").strip()
-    if not text:
-        return "", "ocr_empty"
-    return text, "ocr_text_limit" if status == "output_limit" else None
+    text = output.decode("utf-8", "replace").replace("\f", "\n")
+    if status == "output_limit":
+        return complete_ocr_lines(text), "ocr_text_limit"
+    text = text.strip()
+    return (text, None) if text else ("", "ocr_empty")
 
 
 def extract_scanned_pdf(

@@ -157,3 +157,98 @@ def test_query_schema_migrates_previous_cache_and_keeps_pending_jobs(monkeypatch
     _work(job_id)
     status = j1.research_status(job_id)
     assert (status["status"], status["queries_done"], status["pages_fetched"]) == ("completed", 1, 2)
+
+
+@pytest.mark.parametrize("dtc", [None, "P0304"])
+def test_auto_search_uses_market_position_and_one_production_date_hint(dtc):
+    context = {"make": "Astra Demo", "model": "Alpha", "year": 2024, "part_number": "D-424242", "dtc": dtc}
+    for market, position, date in (
+        ("Europe", "front left", "2024-02-05"),
+        ("Japan", "rear right", "2024-10-05"),
+    ):
+        created = j1.start_research(
+            "Synthetic part fitment",
+            automotive_context={**context, "market": market, "position": position, "production_date": date},
+        )
+        plan = j1.research_status(created["job_id"])["query_plan"]
+        assert len(plan) == 4
+        assert all(market in item["query"] and position in item["query"] for item in plan)
+        assert sum(date in item["query"] for item in plan) == 1
+        assert j1.research_cancel(created["job_id"])["status"] == "cancelled"
+
+
+def test_long_auto_search_context_preserves_distinct_intent_terms():
+    context = {
+        "make": "manufacturer " * 6,
+        "model": "generation " * 9,
+        "year": 2024,
+        "engine": "powertrain " * 10,
+        "system": "suspension " * 12,
+        "part_number": "component " * 10,
+        "market": "Europe",
+        "position": "rear right",
+    }
+    created = j1.start_research("Synthetic part fitment", automotive_context=context)
+    plan = j1.research_status(created["job_id"])["query_plan"]
+    assert len(plan) == 4
+    assert all(len(item["query"]) <= 500 and "Europe rear right" in item["query"] for item in plan)
+    assert plan[0]["query"].endswith("OEM parts catalog fitment")
+    assert plan[1]["query"].endswith("component manufacturer specifications")
+
+
+def _stop_with_deferred_documents(monkeypatch, max_pages):
+    _research_inputs(monkeypatch)
+    fetch = j1.fetch_document
+
+    def stop_after_fetch(url, **kwargs):
+        result = fetch(url, **kwargs)
+        j1._STOP = True
+        return result
+
+    monkeypatch.setattr(j1, "fetch_document", stop_after_fetch)
+    job_id = j1.start_research("Synthetic repair evidence", ["first query"], max_pages)["job_id"]
+    _work(job_id)
+    assert j1.research_status(job_id)["status"] == "queued"
+    return job_id
+
+
+def test_prepare_rollback_passes_deferred_documents_to_the_legacy_queue(monkeypatch):
+    job_id = _stop_with_deferred_documents(monkeypatch, 2)
+    with j1._worker_lock():
+        assert j1.prepare_rollback()["error"]["code"] == "j1_worker_active"
+
+    assert j1.prepare_rollback() == {
+        "ok": True,
+        "schema": j1.SCHEMA,
+        "jobs_reconciled": 1,
+        "documents_queued": 1,
+        "candidates_discarded": 1,
+    }
+    with j1._db() as connection:
+        queued = connection.execute(
+            "SELECT url,status FROM documents WHERE job_id=? ORDER BY search_rank", (job_id,)
+        ).fetchall()
+        assert [tuple(row) for row in queued] == [
+            ("https://example.org/A1", "fetched"),
+            ("https://example.org/A2", "pending"),
+        ]
+    assert j1.prepare_rollback()["jobs_reconciled"] == 0
+
+
+def test_prepare_rollback_retains_deferred_urls_on_write_failure(monkeypatch):
+    job_id = _stop_with_deferred_documents(monkeypatch, 3)
+    with j1._db() as connection:
+        connection.execute(
+            """CREATE TRIGGER reject_last_candidate BEFORE INSERT ON documents
+               WHEN NEW.search_rank=3 BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END"""
+        )
+        connection.commit()
+
+    assert j1.prepare_rollback()["error"]["code"] == "j1_store_unavailable"
+    with j1._db() as connection:
+        records = connection.execute("SELECT rank FROM query_candidates ORDER BY rank").fetchall()
+        assert [row["rank"] for row in records] == [2, 3]
+        connection.execute("DROP TRIGGER reject_last_candidate")
+        connection.commit()
+    assert j1.research_status(job_id)["pages_total"] == 1
+    assert j1.prepare_rollback()["documents_queued"] == 2
