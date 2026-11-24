@@ -331,6 +331,15 @@ Wake. При установке Work `deploy_telegram_bridge.sh` проверя�
 файлы для отката первой установки и публикует каталог релиза. Установщик Wake
 применим при совпадении физических корней Manager и Work Telegram.
 
+Перед запуском `deploy_telegram_bridge.sh` на существующей Work-установке
+сверь `/opt/autostop-work-telegram-venv` и его физическую цель внутри
+`/opt/autostop-work-telegram-runtimes`. Установщик также сверяет SHA чистого
+checkout с живой веткой `origin/AutostopManager` и требует подготовленные
+Python и модель для этого SHA. При фактическом запуске через общий холодный
+Python без такого alias сначала согласуй другой проверенный порядок выпуска.
+`telegram_wake setup` меняет только закрепление инструкций и сохраняет
+служебный чат. Отдельно сверяй Work `current` и запуск обоих процессов.
+
 Устанавливай `autostop-work-telegram.service` и `autostop-codex-wake.service`
 одним пакетом. При переходе со старого порядка установи новый unit Bridge и
 перечитай конфигурацию systemd через `daemon-reload` перед установкой Wake.

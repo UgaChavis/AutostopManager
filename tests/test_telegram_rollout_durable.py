@@ -16,6 +16,74 @@ from telegram_duty_fakes import duty_fixture
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("alias_state", ["missing", "outside-runtime-root"])
+def test_existing_work_release_requires_previous_runtime_before_side_effects(tmp_path, alias_state):
+    release_root = tmp_path / "opt/autostop-work-telegram-releases"
+    previous_release = release_root / "previous"
+    previous_release.mkdir(parents=True)
+    current = release_root / "current"
+    current.symlink_to(previous_release)
+    runtime_root = tmp_path / "opt/autostop-work-telegram-runtimes"
+    runtime_root.mkdir()
+    venv = tmp_path / "opt/autostop-work-telegram-venv"
+    outside = tmp_path / "outside-venv"
+    if alias_state == "outside-runtime-root":
+        outside.mkdir()
+        venv.symlink_to(outside)
+
+    lock = tmp_path / "run/autostop-work-telegram-control.lock"
+    lock.parent.mkdir()
+    log = tmp_path / "calls.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    unexpected = '#!/bin/sh\nprintf "%s\\n" "${0##*/}" >> "$FAKE_LOG"\nexit 1\n'
+    for name in ("git", "install", "sudo"):
+        fake = fake_bin / name
+        fake.write_text(unexpected)
+        fake.chmod(0o755)
+    flock = fake_bin / "flock"
+    flock.write_text(unexpected.replace("exit 1", "exit 0"))
+    flock.chmod(0o755)
+    systemctl = fake_bin / "systemctl"
+    systemctl.write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        '  "show --property=LoadState --value "*) echo loaded; exit 0;;\n'
+        '  "show --property=ActiveState --value "*) echo active; exit 0;;\n'
+        '  "show --property=UnitFileState --value "*) echo enabled; exit 0;;\n'
+        "esac\n" + unexpected.split("\n", 1)[1]
+    )
+    systemctl.chmod(0o755)
+
+    script = tmp_path / "scripts/deploy_telegram_bridge.sh"
+    script.parent.mkdir()
+    group_helper = script.with_name("ensure-automation-group.sh")
+    group_helper.write_text(unexpected)
+    group_helper.chmod(0o755)
+    source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
+    for prefix in ("/opt/", "/etc/", "/run/", "/var/lib/", "/usr/local/sbin/"):
+        source = source.replace(prefix, f"{tmp_path}{prefix}")
+    root_check = 'if [[ "${EUID}" -ne 0 ]]; then'
+    assert root_check in source
+    script.write_text(source.replace(root_check, "if [[ 0 -ne 0 ]]; then"))
+
+    result = subprocess.run(
+        ["bash", str(script), "--account", "work", "--no-start"],
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "FAKE_LOG": str(log)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "existing work Telegram release requires a valid previous runtime venv alias" in result.stderr
+    assert not log.exists() and not lock.exists()
+    assert set(release_root.iterdir()) == {current, previous_release}
+    assert current.resolve(strict=True) == previous_release
+    if alias_state == "outside-runtime-root":
+        assert venv.resolve(strict=True) == outside
+    else:
+        assert not venv.exists() and not venv.is_symlink()
+
+
 def test_work_bridge_ready_uses_release_not_cwd_after_sudo_environment_reset(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
     functions = re.findall(r"(?ms)^(?:work_bridge_status|bridge_ready)\(\) \{\n.*?^\}", source)

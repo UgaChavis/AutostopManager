@@ -78,7 +78,24 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "ERROR: run as root" >&2
   exit 1
 fi
+
+work_runtime_alias_target() {
+  local link_path="$1" required="$2" target
+  if [[ ! -e "${link_path}" && ! -L "${link_path}" ]]; then
+    [[ "${required}" -eq 0 ]]
+    return
+  fi
+  [[ -L "${link_path}" ]] || return 1
+  target="$(readlink -e -- "${link_path}" 2>/dev/null)" || return 1
+  [[ "${target}" == "${work_runtime_root}/"* && -d "${target}" && ! -L "${target}" ]] || return 1
+  printf '%s\n' "${target}"
+}
+
 if [[ "${account}" == "work" ]]; then
+  if [[ -e "${release_root}/current" ]] && ! work_runtime_alias_target "${venv_root}" 1 >/dev/null; then
+    echo "ERROR: existing work Telegram release requires a valid previous runtime venv alias" >&2
+    exit 1
+  fi
   control_lock="/run/autostop-work-telegram-control.lock"
   exec 9>"${control_lock}"
   flock -x 9
@@ -194,7 +211,7 @@ if [[ -e "${release_dir}" || -L "${release_dir}" ]]; then
 fi
 
 prepare_work_runtime_candidate() {
-  local candidate_manifest previous_target
+  local candidate_manifest require_previous_venv=0
   [[ "${account}" == "work" ]] || return 0
   work_runtime_dir="${work_runtime_root}/${revision}"
   candidate_work_venv="${work_runtime_dir}/venv"
@@ -212,20 +229,11 @@ prepare_work_runtime_candidate() {
     && "$(stat -c '%U:%G:%a' "${candidate_manifest}")" == "root:root:600" ]] || return 1
   git -C "${SOURCE_DIR}" show "${revision}:deploy/telegram/faster-whisper-small.sha256" \
     | cmp -s - "${candidate_manifest}" || return 1
-  if [[ -e "${venv_root}" || -L "${venv_root}" ]]; then
-    [[ -L "${venv_root}" ]] || return 1
-    previous_target="$(readlink -f -- "${venv_root}" 2>/dev/null || true)"
-    [[ "${previous_target}" == "${work_runtime_root}/"* && -d "${previous_target}" && ! -L "${previous_target}" ]] || return 1
-    previous_work_venv="${previous_target}"
-  elif [[ -n "${previous_release}" ]]; then
-    return 1
+  if [[ -n "${previous_release}" ]]; then
+    require_previous_venv=1
   fi
-  if [[ -e "${work_model_link}" || -L "${work_model_link}" ]]; then
-    [[ -L "${work_model_link}" ]] || return 1
-    previous_target="$(readlink -f -- "${work_model_link}" 2>/dev/null || true)"
-    [[ "${previous_target}" == "${work_runtime_root}/"* && -d "${previous_target}" && ! -L "${previous_target}" ]] || return 1
-    previous_work_model="${previous_target}"
-  fi
+  previous_work_venv="$(work_runtime_alias_target "${venv_root}" "${require_previous_venv}")" || return 1
+  previous_work_model="$(work_runtime_alias_target "${work_model_link}" 0)" || return 1
 }
 
 switch_work_runtime_link() {
