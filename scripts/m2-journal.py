@@ -126,6 +126,22 @@ def canonical_record(record):
     return {**record, "id": str(UUID(record["id"]))}
 
 
+def write_state(root, state):
+    atomic_write(root / "current-state.md", "# M2 — текущее состояние\n\n" + state.strip() + "\n")
+
+
+def restore_missing_state(root):
+    if (root / "current-state.md").exists():
+        return
+    for path in reversed(week_paths(root)):
+        entries = records(path)
+        if entries:
+            record = {key: value for key, value in entries[-1].items() if key != "at"}
+            validate(record)
+            write_state(root, record["state"])
+            return
+
+
 def publish_pointers(root, week):
     path = ensure_week(root, week)
     entries = records(path)
@@ -181,7 +197,7 @@ def recover(root):
             + "\n```\n"
         )
         atomic_write(path, path.read_text(encoding="utf-8").rstrip() + "\n" + block)
-    atomic_write(root / "current-state.md", "# M2 — текущее состояние\n\n" + record["state"].strip() + "\n")
+    write_state(root, record["state"])
     publish_pointers(root, week)
     pending.unlink()
 
@@ -203,6 +219,7 @@ def run(root=ROOT, record=None, at=None, *, expected_state_sha256=None):
         fcntl.flock(stream, fcntl.LOCK_EX)
         ensure_week(root, week)
         recover(root)
+        restore_missing_state(root)
         if record is not None:
             normalized = canonical_record(record)
             existing = [
@@ -223,7 +240,7 @@ def run(root=ROOT, record=None, at=None, *, expected_state_sha256=None):
                 atomic_write(root / ".pending-record.json", json.dumps(payload, ensure_ascii=False))
                 recover(root)
         if not (root / "current-state.md").exists():
-            atomic_write(root / "current-state.md", "# M2 — текущее состояние\n\nНужна первая техническая проверка.\n")
+            write_state(root, "Нужна первая техническая проверка.")
         return publish_pointers(root, week)
 
 

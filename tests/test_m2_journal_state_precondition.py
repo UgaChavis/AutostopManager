@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib.util
 import json
@@ -87,6 +87,59 @@ def test_old_token_exact_and_alias_replay_preserve_newer_state_and_uuid_conflict
     with pytest.raises(ValueError, match=r"^journal_record_conflict$"):
         journal.run(root=root, record={**a, "state": "changed body"}, at=AT, expected_state_sha256="absent")
     assert files(root) == newer
+
+
+@pytest.mark.parametrize("repeat_old_record", [False, True], ids=["start", "older-uuid-replay"])
+def test_missing_state_is_recovered_from_latest_committed_record(tmp_path, repeat_old_record):
+    root = tmp_path / "M2"
+    older = record(ID_A, S0)
+    newer = record(ID_B, S0 + QA + QB)
+    journal.run(root=root, record=older, at=AT)
+    journal.run(root=root, record=newer, at=AT + timedelta(weeks=1))
+    state = root / "current-state.md"
+    expected = state.read_bytes()
+    original_entries = entries(root)
+    state.unlink()
+
+    options = {"record": older, "expected_state_sha256": "absent"} if repeat_old_record else {}
+    journal.run(root=root, at=AT + timedelta(weeks=2), **options)
+
+    assert state.read_bytes() == expected
+    assert entries(root) == original_entries
+
+
+def test_guarded_append_cannot_replace_recoverable_history_using_absent(tmp_path):
+    root = tmp_path / "M2"
+    journal.run(root=root, record=record(ID_A, S0 + QA), at=AT)
+    state = root / "current-state.md"
+    recovered = state.read_bytes()
+    state.unlink()
+    replacement = record(ID_B, S0 + QB)
+
+    with pytest.raises(ValueError, match=r"^journal_state_conflict$"):
+        journal.run(root=root, record=replacement, at=AT, expected_state_sha256="absent")
+
+    assert state.read_bytes() == recovered
+    assert [entry["id"] for entry in entries(root)] == [ID_A]
+    assert not (root / ".pending-record.json").exists()
+    replacement["state"] = S0 + QA + QB
+    journal.run(root=root, record=replacement, at=AT, expected_state_sha256=state_hash(root))
+    assert state.read_text() == HEADER + S0 + QA + QB
+
+
+def test_clean_restore_keeps_copied_state_without_journal_history(tmp_path):
+    root = tmp_path / "M2"
+    root.mkdir()
+    state = root / "current-state.md"
+    copied_state = (HEADER + S0 + QA).encode()
+    state.write_bytes(copied_state)
+
+    report = journal.run(root=root, at=AT)
+
+    assert state.read_bytes() == copied_state
+    assert report["entries"] == 0 and entries(root) == []
+    assert (root / "journal/INDEX.md").is_file()
+    assert (root / "summaries" / f"{report['week']}.md").is_file()
 
 
 @pytest.mark.parametrize("replay_pending", [False, True])
