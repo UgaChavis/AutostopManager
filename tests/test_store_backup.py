@@ -1,6 +1,7 @@
 """Synthetic boundaries for the one-generation host backup helper."""
 
 from datetime import UTC, datetime
+import errno
 import importlib.util
 import json
 import os
@@ -62,6 +63,92 @@ class StoreBackupTests(unittest.TestCase):
         self.assertTrue(manifest["validation"]["source_stable_across_dump"])
         self.assertTrue(any("--file=/dev/null" in args for args in self.commands))
         self.assertFalse(any("-d" in args for args in self.commands))
+
+    def test_partial_retirement_preserves_publication_and_allows_next_capture(self):
+        for interrupted in (False, True):
+            with self.subTest(sigterm=interrupted):
+                root = self.base / ("sigterm" if interrupted else "io-error")
+                root.mkdir(mode=0o700)
+                old = root / self.old.name
+                shutil.copytree(self.old, old)
+                unrelated = root / "unique-work"
+                unrelated.mkdir()
+                published = root / "20261124T033000Z-4321"
+                latest = root / "20261125T033000Z-4321"
+
+                def stop_removal(path, *, root=root, published=published, interrupted=interrupted):
+                    holder = Path(path)
+                    self.assertEqual(holder.parent, root)
+                    self.assertTrue(json.loads((published / "manifest.json").read_text())["complete"])
+                    (manifest,) = holder.rglob("manifest.json")
+                    manifest.unlink()
+                    if interrupted:
+                        backup.terminate(signal.SIGTERM, None)
+                    raise OSError(errno.EIO, "synthetic error after removing the old manifest")
+
+                with (
+                    patch.object(backup, "datetime") as clock,
+                    patch.object(backup.os, "getpid", return_value=4321),
+                    patch.object(backup, "quiet_run", side_effect=self.command),
+                ):
+                    clock.now.return_value = datetime(2026, 11, 24, 3, 30, tzinfo=UTC)
+                    with patch.object(backup.shutil, "rmtree", side_effect=stop_removal):
+                        if interrupted:
+                            with self.assertRaises(SystemExit) as stopped:
+                                backup.create_backup(root, self.base / "backup.lock")
+                            self.assertEqual(stopped.exception.code, 128 + signal.SIGTERM)
+                        else:
+                            result = backup.create_backup(root, self.base / "backup.lock")
+                            self.assertFalse(result["ok"])
+                            self.assertEqual(Path(result["backup"]), published)
+                            self.assertEqual(result["manifest_sha256"], backup.digest(published / "manifest.json"))
+                            self.assertEqual(result["retired_generations"], [])
+                            (error,) = result["rotation_errors"]
+                            self.assertEqual(error["generation"], old.name)
+                            self.assertRegex(error["reason"], r"^[a-zA-Z][a-zA-Z0-9_]*$")
+
+                    (residue,) = set(root.iterdir()) - {published, unrelated}
+                    self.assertRegex(residue.name, rf"^\.retiring-{old.name}-.+$")
+                    self.assertFalse(old.exists())
+                    self.assertEqual(list(residue.rglob("manifest.json")), [])
+                    if not interrupted:
+                        self.assertEqual(result["rotation_residue"], [residue.name])
+
+                    clock.now.return_value = datetime(2026, 11, 25, 3, 30, tzinfo=UTC)
+                    result = backup.create_backup(root, self.base / "backup.lock")
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(Path(result["backup"]), latest)
+                self.assertTrue(json.loads((latest / "manifest.json").read_text())["complete"])
+                self.assertEqual(result["manifest_sha256"], backup.digest(latest / "manifest.json"))
+                self.assertEqual(result["retired_generations"], [published.name])
+                self.assertEqual(result["rotation_residue"], [residue.name])
+                self.assertEqual(set(root.iterdir()), {latest, unrelated, residue})
+
+    def test_missing_manifest_preserves_orphan_and_retires_valid_previous(self):
+        orphan = self.root / "20251231T235959Z-123"
+        orphan.mkdir(mode=0o700)
+        sentinel = orphan / "database.dump"
+        sentinel.write_bytes(b"unknown synthetic file")
+        actual_iterdir = Path.iterdir
+
+        def oldest_first(path):
+            entries = actual_iterdir(path)
+            return iter(sorted(entries)) if path == self.root else entries
+
+        with patch.object(Path, "iterdir", oldest_first):
+            result = self.create()
+
+        current = Path(result["backup"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["manifest_sha256"], backup.digest(current / "manifest.json"))
+        self.assertEqual(result["retired_generations"], [self.old.name])
+        self.assertEqual(
+            result["rotation_errors"], [{"generation": orphan.name, "reason": "previous_backup_manifest_missing"}]
+        )
+        self.assertEqual(result["rotation_residue"], [])
+        self.assertEqual(sentinel.read_bytes(), b"unknown synthetic file")
+        self.assertEqual(set(self.root.iterdir()), {orphan, current})
 
     def test_changed_source_preserves_previous_and_removes_partial(self):
         def mutate(args, **kwargs):

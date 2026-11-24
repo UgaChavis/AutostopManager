@@ -13,10 +13,13 @@ import signal
 import stat
 import subprocess
 import tarfile
+import tempfile
 from datetime import UTC, datetime
 
 SCHEMA = "autostop.store-backup.v1"
 GENERATION = re.compile(r"\d{8}T\d{6}Z-\d+\Z")
+RETIRING_GENERATION = re.compile(r"\.retiring-\d{8}T\d{6}Z-\d+-[a-z0-9_]+\Z")
+BACKUP_FILES = {"manifest.json", "database.dump", "files.tar"}
 SOURCES = {
     "uploads": Path("/var/lib/docker/volumes/autostop-app_uploads_data/_data"),
     "photos": Path("/var/lib/docker/volumes/autostop-app_quote_request_vin_photos_data/_data"),
@@ -135,23 +138,64 @@ def sync_directory(path):
         os.close(fd)
 
 
+def previous_backup_problem(old):
+    info = old.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+        return "previous_backup_ownership_invalid"
+    metadata = old / "manifest.json"
+    if metadata.is_symlink() or not metadata.is_file():
+        return "previous_backup_manifest_missing"
+    try:
+        record = json.loads(metadata.read_text())
+    except ValueError:
+        return "previous_backup_manifest_invalid"
+    if not isinstance(record, dict) or record.get("schema") != SCHEMA or record.get("complete") is not True:
+        return "previous_backup_manifest_invalid"
+    if any(child.name not in BACKUP_FILES or not stat.S_ISREG(child.lstat().st_mode) for child in old.iterdir()):
+        return "previous_backup_unexpected_entries"
+    return None
+
+
 def retire_previous(root, current):
-    removed = []
-    for old in root.iterdir():
+    removed, errors = [], []
+    try:
+        generations = sorted(root.iterdir())
+    except OSError:
+        return removed, [{"generation": None, "reason": "retirement_inventory_failed"}], []
+    for old in generations:
         if old == current or not GENERATION.fullmatch(old.name):
             continue
-        if old.is_symlink() or not old.is_dir() or old.stat().st_uid != os.geteuid():
-            raise RuntimeError("previous_backup_ownership_invalid")
-        metadata = old / "manifest.json"
-        if metadata.is_symlink() or not metadata.is_file():
-            raise RuntimeError("previous_backup_manifest_missing")
-        record = json.loads(metadata.read_text())
-        if record.get("schema") != SCHEMA or record.get("complete") is not True:
-            raise RuntimeError("previous_backup_manifest_invalid")
-        shutil.rmtree(old)
-        removed.append(old.name)
-    sync_directory(root)
-    return removed
+        try:
+            reason = previous_backup_problem(old)
+            if reason is None:
+                holder = Path(tempfile.mkdtemp(prefix=f".retiring-{old.name}-", dir=root))
+                try:
+                    old.rename(holder / old.name)
+                except OSError:
+                    holder.rmdir()
+                    raise
+                # Make the move durable before any files are removed. A partial
+                # retirement is then outside the published generation namespace.
+                sync_directory(holder)
+                sync_directory(root)
+                shutil.rmtree(holder)
+                removed.append(old.name)
+            else:
+                errors.append({"generation": old.name, "reason": reason})
+        except OSError:
+            errors.append({"generation": old.name, "reason": "previous_backup_retirement_io_failed"})
+            # A storage fault can affect the other retained copies as well.
+            break
+    try:
+        sync_directory(root)
+    except OSError:
+        errors.append({"generation": None, "reason": "retirement_sync_failed"})
+    try:
+        residue = sorted(path.name for path in root.iterdir() if RETIRING_GENERATION.fullmatch(path.name))
+    except OSError:
+        errors.append({"generation": None, "reason": "retirement_inventory_failed"})
+        residue = []
+    return removed, errors, residue
 
 
 def create_backup(root, lock_path):
@@ -228,13 +272,17 @@ def create_backup(root, lock_path):
         stage.rename(final)
         stage = None
         sync_directory(root)
-        removed = retire_previous(root, final)
-        return {
-            "ok": True,
+        manifest_sha256 = digest(final / "manifest.json")
+        removed, errors, residue = retire_previous(root, final)
+        result = {
+            "ok": not (errors or residue),
             "backup": str(final),
-            "manifest_sha256": digest(final / "manifest.json"),
+            "manifest_sha256": manifest_sha256,
             "retired_generations": removed,
         }
+        if errors or residue:
+            result.update(rotation_errors=errors, rotation_residue=residue)
+        return result
     finally:
         try:
             if stage is not None and stage.exists():
@@ -256,7 +304,10 @@ def main():
     try:
         if os.geteuid() != 0:
             raise RuntimeError("root_required")
-        print(json.dumps(create_backup(args.root, args.lock)))
+        result = create_backup(args.root, args.lock)
+        print(json.dumps(result))
+        if not result["ok"]:
+            raise SystemExit(1)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
         # No subprocess stderr, archive contents or credentials in the journal.
         print(json.dumps({"ok": False, "error_type": type(error).__name__}))
