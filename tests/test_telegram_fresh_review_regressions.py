@@ -1030,6 +1030,67 @@ def test_already_answered_requires_supplied_verified_answer_not_ack_or_claim(
     asyncio.run(scenario())
 
 
+def test_verified_ack_does_not_allow_no_reply_without_current_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "_resolve_peer", resolve)
+
+    async def scenario():
+        config, monitor = _runtime(tmp_path)
+        monitor.config = config
+        with monitor.inbox as inbox:
+            first = _message(100, text="Synthetic parts question")
+            first_event = monitor.record(first)
+            job = _job(monitor)
+            client = Client([first])
+            text = "Synthetic acknowledgement"
+            dry = await _send(client, config, monitor, job, kind="ack", text=text)
+            ack = await _send(client, config, monitor, job, kind="ack", text=text, mode="apply", dry=dry)
+            assert ack["verified"] and client.sent == 1
+
+            followup = _message(102, text="Synthetic follow-up question")
+            client.messages[followup.id] = followup
+            second_event = monitor.record(followup)
+            event_ids = [first_event, second_event]
+            job = (
+                await bridge._handle_job_operation(
+                    client, config, {"operation": "job_refresh", **guard(job), "event_ids": event_ids}, monitor
+                )
+            )["job"]
+            before = inbox.read_job(job["job_id"])
+            generation = inbox.generation
+            request = {
+                "operation": "job_result",
+                **guard(job),
+                "outcome": "no_reply_needed",
+                "reason_code": "not_actionable",
+                "event_ids": event_ids,
+            }
+            for receipts in ([], [ack["receipt_key"]]):
+                with pytest.raises(bridge.BridgeError, match=r"^context_history_incomplete$"):
+                    await bridge._handle_job_operation(client, config, request | {"receipt_keys": receipts}, monitor)
+                assert inbox.read_job(job["job_id"]) == before and inbox.generation == generation
+                assert inbox.event_state(first_event) == inbox.event_state(second_event) == "open"
+                assert client.sent == 1
+
+            result = await send_result(client, config, monitor, job)
+            assert result["verified"] and client.sent == 2
+            done = await bridge._handle_job_operation(
+                client,
+                config,
+                {
+                    "operation": "job_result",
+                    **guard(job),
+                    "outcome": "answered",
+                    "event_ids": event_ids,
+                    "receipt_keys": [result["receipt_key"]],
+                },
+                monitor,
+            )
+            assert done["job"]["state"] == "completed"
+            assert inbox.event_state(first_event) == inbox.event_state(second_event) == "reply_verified"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("parked", [False, True])
 def test_started_failed_turn_remains_bound_for_cross_system_review_even_without_telegram_effects(tmp_path, parked):
     _config, monitor = _runtime(tmp_path)

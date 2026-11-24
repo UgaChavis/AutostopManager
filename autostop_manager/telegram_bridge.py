@@ -4931,21 +4931,10 @@ def _require_result_history(
     monitor: DurableInboundMonitor,
     job: dict[str, Any],
     request: dict[str, Any],
-    receipt_keys: list[str],
-    *,
-    verified_answer: bool,
-    delivered_question: bool,
 ) -> None:
     if request.get("outcome") != "no_reply_needed":
         return
-    covered_receipt = any(effect["verified"] and effect["receipt_key"] in receipt_keys for effect in job["effects"])
-    if (
-        job.get("manual_recovery")
-        or delivered_question
-        or verified_answer
-        or covered_receipt
-        or request.get("reason_code") in {"paused", "human_takeover", "already_answered"}
-    ):
+    if job.get("manual_recovery") or request.get("reason_code") in {"paused", "human_takeover", "already_answered"}:
         return
     monitor.begin_context(job)
     monitor.inbox.require_current_context(job["job_id"])
@@ -5018,14 +5007,7 @@ async def _handle_job_operation(
             executor = _effect_executor()
             if executor.failed.is_set() or executor.has_job_work(str(request.get("job_id") or "")):
                 raise BridgeError("inbox_execution_effect_active")
-        _require_result_history(
-            monitor,
-            current_job,
-            request,
-            receipt_keys,
-            verified_answer=verified_answer,
-            delivered_question=delivered_question,
-        )
+        _require_result_history(monitor, current_job, request)
         if request.get("outcome") == "handoff":
             _require_job_handoff_receipts(config, inbox, request)
         if request.get("reason_code") == "human_answered":
