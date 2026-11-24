@@ -440,6 +440,11 @@ def _deadline(deadline: float) -> None:
         raise MaintenanceError("deletion_budget_exceeded")
 
 
+def _check_manifest_expiry(expires_at: float | None) -> None:
+    if expires_at is not None and time.time() >= expires_at:
+        raise MaintenanceError("manifest_expired")
+
+
 def _walk_guard(fd: int, device: int, mount: str, allow_links: bool, deadline: float) -> None:
     _deadline(deadline)
     if os.fstat(fd).st_dev != device or _mount_id(fd) != mount:
@@ -463,7 +468,9 @@ def _walk_guard(fd: int, device: int, mount: str, allow_links: bool, deadline: f
             raise MaintenanceError("candidate_special_file")
 
 
-def _remove_contents(fd: int, device: int, mount: str, allow_links: bool, deadline: float) -> None:
+def _remove_contents(
+    fd: int, device: int, mount: str, allow_links: bool, deadline: float, expires_at: float | None
+) -> None:
     _walk_guard(fd, device, mount, allow_links, deadline)
     for name in os.listdir(fd):
         _deadline(deadline)
@@ -474,10 +481,11 @@ def _remove_contents(fd: int, device: int, mount: str, allow_links: bool, deadli
                 opened = os.fstat(child)
                 if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                     raise MaintenanceError("candidate_inode_changed")
-                _remove_contents(child, device, mount, allow_links, deadline)
+                _remove_contents(child, device, mount, allow_links, deadline, expires_at)
                 current = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
                     raise MaintenanceError("candidate_inode_changed")
+                _check_manifest_expiry(expires_at)
                 os.rmdir(name, dir_fd=fd)
             finally:
                 os.close(child)
@@ -501,10 +509,11 @@ def _remove_contents(fd: int, device: int, mount: str, allow_links: bool, deadli
                         raise MaintenanceError("candidate_mount_escape")
                 finally:
                     os.close(leaf)
+            _check_manifest_expiry(expires_at)
             os.unlink(name, dir_fd=fd)
 
 
-def secure_delete(candidate: dict, policy: dict, deadline: float) -> None:
+def secure_delete(candidate: dict, policy: dict, deadline: float, expires_at: float | None = None) -> None:
     path = _candidate_path(candidate, policy)
     parent = _open_directory(path.parent)
     try:
@@ -532,6 +541,7 @@ def secure_delete(candidate: dict, policy: dict, deadline: float) -> None:
                     raise MaintenanceError("candidate_mount_escape")
             finally:
                 os.close(leaf)
+            _check_manifest_expiry(expires_at)
             os.unlink(path.name, dir_fd=parent)
         elif stat.S_ISDIR(info.st_mode):
             child = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
@@ -544,10 +554,11 @@ def secure_delete(candidate: dict, policy: dict, deadline: float) -> None:
                     and path.parent == Path(runtime_root)
                     and candidate["proof"].get("allow_leaf_symlinks") is True
                 )
-                _remove_contents(child, info.st_dev, _mount_id(parent), allow_links, deadline)
+                _remove_contents(child, info.st_dev, _mount_id(parent), allow_links, deadline, expires_at)
                 current = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
                     raise MaintenanceError("candidate_inode_changed")
+                _check_manifest_expiry(expires_at)
                 os.rmdir(path.name, dir_fd=parent)
             finally:
                 os.close(child)
@@ -557,7 +568,7 @@ def secure_delete(candidate: dict, policy: dict, deadline: float) -> None:
         os.close(parent)
 
 
-def delete_image(candidate: dict, deadline: float) -> None:
+def delete_image(candidate: dict, deadline: float, expires_at: float | None = None) -> None:
     _deadline(deadline)
     image_id = candidate["image_id"]
     tags = candidate["identity"].get("tags")
@@ -578,6 +589,7 @@ def delete_image(candidate: dict, deadline: float) -> None:
             matches = False
         if inspected.returncode or not matches:
             raise MaintenanceError("candidate_image_identity_changed")
+        _check_manifest_expiry(expires_at)
         result = run(["docker", "image", "rm", target], timeout=min(60, max(1, deadline - time.monotonic())))
         if result.returncode:
             raise MaintenanceError("image_delete_failed")
@@ -656,10 +668,10 @@ def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool)
     validate_manifest(manifest, policy)
     result["preserved_receipts"] = _verify_protected(manifest, policy, ci_ready=ci_ready)
     deadline = time.monotonic() + policy["delete_budget_seconds"]
+    expires_at = manifest["expires_at"]
     for candidate in manifest["candidates"]:
         _deadline(deadline)
-        if time.time() >= manifest["expires_at"]:
-            raise MaintenanceError("manifest_expired")
+        _check_manifest_expiry(expires_at)
         if requires_ci(candidate) and not ci_ready:
             result["skipped"].append({"component": candidate.get("component"), "reason": "ci_fence_unavailable"})
             continue
@@ -669,10 +681,11 @@ def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool)
         inventory.revalidate(candidate, policy)
         try:
             with cache_fence(candidate):
+                _check_manifest_expiry(expires_at)
                 if candidate["kind"] == "docker_image":
-                    delete_image(candidate, deadline)
+                    delete_image(candidate, deadline, expires_at)
                 else:
-                    secure_delete(candidate, policy, deadline)
+                    secure_delete(candidate, policy, deadline, expires_at)
         except MaintenanceError as exc:
             if exc.code not in {"apt_cache_busy", "apt_lock_invalid"}:
                 raise

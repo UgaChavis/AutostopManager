@@ -309,6 +309,112 @@ def test_manual_wait_expiry_restores_ci_without_deleting(setup, monkeypatch):
     assert calls == ["pause", "resume"]
 
 
+@pytest.mark.parametrize("kind", ["recovery_directory", "docker_image"])
+@pytest.mark.parametrize("expired", [False, True], ids=["before-expiry", "at-expiry"])
+def test_apply_checks_manifest_expiry_after_entering_candidate_fence(setup, monkeypatch, kind, expired):
+    policy, candidates, _, calls = setup
+    if kind == "docker_image":
+        selected = {
+            "kind": kind,
+            "component": "crm",
+            "image_id": "sha256:" + "a" * 64,
+            "identity": {},
+            "estimated_reclaim_bytes": 4096,
+            "proof": {"metadata_valid": True},
+        }
+    else:
+        selected = candidate(data_directory(policy))
+    candidates.append(selected)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(core.time, "time", lambda: clock[0])
+    manifest = core.make_plan(policy)
+    path = Path(policy["state_root"]) / "approval.json"
+    util.atomic_json(path, manifest)
+
+    @contextmanager
+    def delayed_fence(target):
+        assert target == selected
+        clock[0] = manifest["expires_at"] - (0 if expired else 1)
+        yield
+
+    mutations = []
+    monkeypatch.setattr(core, "cache_fence", delayed_fence)
+    monkeypatch.setattr(core, "secure_delete", lambda row, *_: mutations.append(("recovery_directory", row)))
+    monkeypatch.setattr(core, "delete_image", lambda row, *_: mutations.append(("docker_image", row)))
+    result = core.apply(policy, path, util.sha256_file(path))
+    assert calls == ["pause", "revalidate", "resume"]
+    assert result["ci_restored"] is True
+    if expired:
+        assert mutations == [] and result["deleted"] == []
+        assert result["errors"] == ["manifest_expired"] and not result["ok"]
+    else:
+        assert mutations == [(kind, selected)]
+        assert result["ok"] and result["deleted"][0]["kind"] == kind
+
+
+def test_apply_checks_manifest_expiry_after_walking_candidate_tree(setup, monkeypatch):
+    policy, candidates, _, calls = setup
+    old = data_directory(policy)
+    candidates.append(candidate(old))
+    clock = [1_000_000.0]
+    monkeypatch.setattr(core.time, "time", lambda: clock[0])
+    manifest = core.make_plan(policy)
+    path = Path(policy["state_root"]) / "approval.json"
+    util.atomic_json(path, manifest)
+
+    walk = core._walk_guard
+
+    def delayed_walk(*args):
+        walk(*args)
+        clock[0] = manifest["expires_at"]
+
+    monkeypatch.setattr(core, "_walk_guard", delayed_walk)
+    result = core.apply(policy, path, util.sha256_file(path))
+    assert result["errors"] == ["manifest_expired"] and result["deleted"] == []
+    assert result["ci_restored"] is True
+    assert (old / "artifact").read_bytes() == b"synthetic"
+    assert calls == ["pause", "revalidate", "resume"]
+
+
+def test_apply_checks_manifest_expiry_after_each_docker_inspect(setup, monkeypatch):
+    policy, candidates, _, calls = setup
+    image = "sha256:" + "a" * 64
+    tags = ["autostopcrm:aaaaaaaaaaaa", "autostopcrm:bbbbbbbbbbbb"]
+    candidates.append(
+        {
+            "kind": "docker_image",
+            "component": "crm",
+            "image_id": image,
+            "identity": {"tags": tags.copy()},
+            "estimated_reclaim_bytes": 4096,
+            "proof": {"metadata_valid": True},
+        }
+    )
+    clock = [1_000_000.0]
+    monkeypatch.setattr(core.time, "time", lambda: clock[0])
+    manifest = core.make_plan(policy)
+    path = Path(policy["state_root"]) / "approval.json"
+    util.atomic_json(path, manifest)
+    removals = []
+
+    def command(argv, **kwargs):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            if removals:
+                clock[0] = manifest["expires_at"]
+            return subprocess.CompletedProcess(argv, 0, json.dumps(image) + " " + json.dumps(tags), "")
+        assert argv[:3] == ["docker", "image", "rm"]
+        tags.remove(argv[-1])
+        removals.append(argv[-1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(core, "run", command)
+    result = core.apply(policy, path, util.sha256_file(path))
+    assert removals == ["autostopcrm:aaaaaaaaaaaa"] and tags == ["autostopcrm:bbbbbbbbbbbb"]
+    assert result["errors"] == ["manifest_expired"] and result["deleted"] == []
+    assert result["ci_restored"] is True
+    assert calls == ["pause", "revalidate", "resume"]
+
+
 def test_ci_unavailable_skips_store_but_cleans_native_crm(setup, monkeypatch):
     policy, candidates, _, calls = setup
     store = data_directory(policy, root="store_recovery")
