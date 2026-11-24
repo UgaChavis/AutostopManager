@@ -326,9 +326,9 @@ env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verif
 `deploy_telegram_bridge.sh --account work --no-start` останавливает и запускает
 Bridge. Для проверки до окна подготовь отдельный архив точного Git SHA с
 `REVISION` и `MANIFEST.sha256`, затем сверь хеши и загрузку всего графа инструкций
-Wake. `deploy_telegram_bridge.sh` добавляет `REVISION`, а проверка Wake требует
-также `MANIFEST.sha256`. Установщик Wake применим при совпадении физических
-корней Manager и Work Telegram.
+Wake. При установке Work `deploy_telegram_bridge.sh` формирует и проверяет манифест
+в каталоге подготовки до переключения `current`. Установщик Wake применим при
+совпадении физических корней Manager и Work Telegram.
 
 Устанавливай `autostop-work-telegram.service` и `autostop-codex-wake.service`
 одним пакетом. При переходе со старого порядка установи новый unit Bridge и

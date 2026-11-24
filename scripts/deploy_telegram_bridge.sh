@@ -299,17 +299,22 @@ cleanup_initial_release_backups() {
   fi
 }
 
-if ! backup_initial_release_assets; then
-  echo "ERROR: existing Telegram release assets cannot be safely backed up" >&2
-  exit 1
-fi
 install -d -o root -g root -m 0755 "${staging_dir}"
 git -C "${SOURCE_DIR}" archive --format=tar "${revision}" | tar -xf - -C "${staging_dir}"
+if [[ "${account}" == "work" ]]; then
+  if [[ -e "${staging_dir}/REVISION" || -L "${staging_dir}/REVISION" \
+    || -e "${staging_dir}/MANIFEST.sha256" || -L "${staging_dir}/MANIFEST.sha256" ]] \
+    || ! invalid_entry="$(find -P "${staging_dir}" -mindepth 1 ! -type d ! -type f -print -quit)" \
+    || [[ -n "${invalid_entry}" ]]; then
+    echo "ERROR: work Telegram archive contains invalid entries" >&2
+    exit 1
+  fi
+fi
 printf '%s\n' "${revision}" > "${staging_dir}/REVISION"
 chown -R root:root "${staging_dir}"
 find "${staging_dir}" -type d -exec chmod 0755 {} +
-find "${staging_dir}" -type f -exec chmod 0644 {} +
 if [[ "${account}" == "work" ]]; then
+  find "${staging_dir}" -type f -exec chmod u=rwX,go=rX {} +
   duty_controller_source="${staging_dir}/scripts/set-work-telegram-duty.sh"
   wake_installer_source="${staging_dir}/scripts/install-codex-wake.sh"
   media_wrapper_source="${staging_dir}/scripts/run-work-telegram-media.sh"
@@ -335,6 +340,37 @@ if [[ "${account}" == "work" ]]; then
     "${wake_installer_source}" \
     "${media_wrapper_source}" \
     "${monitor_voice_wrapper_source}"
+  if ! /usr/bin/python3 -I -B - "${staging_dir}" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+names = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+manifest = root / "MANIFEST.sha256"
+with manifest.open("x", encoding="utf-8", newline="\n") as output:
+    for name in names:
+        if "\\" in name or name.splitlines() != [name]:
+            raise SystemExit("work_telegram_manifest_path_invalid=true")
+        with (root / name).open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        output.write(f"{digest}  {name}\n")
+manifest.chmod(0o644)
+PY
+  then
+    echo "ERROR: work Telegram release manifest could not be written" >&2
+    exit 1
+  fi
+  if ! (cd -- "${staging_dir}" && sha256sum --strict --quiet --check MANIFEST.sha256); then
+    echo "ERROR: work Telegram release manifest verification failed" >&2
+    exit 1
+  fi
+else
+  find "${staging_dir}" -type f -exec chmod 0644 {} +
+fi
+if ! backup_initial_release_assets; then
+  echo "ERROR: existing Telegram release assets cannot be safely backed up" >&2
+  exit 1
 fi
 mv -- "${staging_dir}" "${release_dir}"
 

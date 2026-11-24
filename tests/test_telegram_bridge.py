@@ -561,26 +561,38 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="deploy-script fixture requires its root-only path")
 @pytest.mark.parametrize(
-    ("active_state", "unit_state", "voice_exit", "inbound_intent", "receipt_case", "reconciliation"),
+    (
+        "active_state",
+        "unit_state",
+        "voice_exit",
+        "inbound_intent",
+        "receipt_case",
+        "reconciliation",
+        "archive_error",
+    ),
     [
-        ("inactive", "disabled", 1, False, "old_shape", "unknown"),
-        ("inactive", "disabled", 0, False, "old_shape", "unknown"),
-        ("active", "enabled", 0, False, "complete", "unknown"),
-        ("active", "enabled", 0, True, "complete", "complete"),
-        ("active", "enabled", 0, True, "held", "held"),
-        ("active", "enabled", 0, True, "in_progress", "in_progress"),
-        ("active", "enabled", 0, True, "false_complete", "unknown"),
-        ("active", "enabled", 0, True, "old_shape", "unknown"),
-        ("active", "enabled", 0, True, "unavailable", "unknown"),
-        ("active", "enabled", 0, True, "malformed", "unknown"),
-        ("inactive", "enabled", 0, False, "old_shape", "unknown"),
-        ("failed", "disabled", 0, False, "old_shape", "unknown"),
-        ("activating", "disabled", 0, False, "old_shape", "unknown"),
-        ("inactive", "masked", 0, False, "old_shape", "unknown"),
+        ("inactive", "disabled", 1, False, "old_shape", "unknown", None),
+        ("inactive", "disabled", 0, False, "old_shape", "unknown", None),
+        ("active", "enabled", 0, False, "complete", "unknown", None),
+        ("active", "enabled", 0, True, "complete", "complete", None),
+        ("active", "enabled", 0, True, "held", "held", None),
+        ("active", "enabled", 0, True, "in_progress", "in_progress", None),
+        ("active", "enabled", 0, True, "false_complete", "unknown", None),
+        ("active", "enabled", 0, True, "old_shape", "unknown", None),
+        ("active", "enabled", 0, True, "unavailable", "unknown", None),
+        ("active", "enabled", 0, True, "malformed", "unknown", None),
+        ("inactive", "enabled", 0, False, "old_shape", "unknown", None),
+        ("failed", "disabled", 0, False, "old_shape", "unknown", None),
+        ("activating", "disabled", 0, False, "old_shape", "unknown", None),
+        ("inactive", "masked", 0, False, "old_shape", "unknown", None),
+        ("active", "enabled", 0, True, "complete", "complete", "MANIFEST.sha256"),
+        ("active", "enabled", 0, True, "complete", "complete", "REVISION"),
+        ("active", "enabled", 0, True, "complete", "complete", "symlink"),
+        ("inactive", "disabled", 0, False, "old_shape", "unknown", "checksum"),
     ],
 )
 def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
-    tmp_path, active_state, unit_state, voice_exit, inbound_intent, receipt_case, reconciliation
+    tmp_path, active_state, unit_state, voice_exit, inbound_intent, receipt_case, reconciliation, archive_error
 ) -> None:
     source = tmp_path / "source"
     remote = tmp_path / "origin.git"
@@ -592,6 +604,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     model_link = tmp_path / "models" / "faster-whisper-small"
     fake_bin = tmp_path / "bin"
     daemon_reload_count = tmp_path / "daemon-reload-count"
+    bridge_stopped = tmp_path / "bridge-stopped"
     active_state_path = tmp_path / "active-state"
     unit_state_path = tmp_path / "unit-state"
     monitor_env = tmp_path / "monitor.env"
@@ -615,6 +628,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         )
     source.mkdir()
     for relative_path, content in {
+        ".fixture notes": "Tracked fixture file\n",
         "deploy/systemd/autostop-work-telegram.service": "[Service]\nExecStart=/bin/true\n",
         "scripts/ensure-automation-group.sh": (
             '#!/usr/bin/env bash\nset -eu\nprintf called > "$FAKE_AUTOMATION_GROUP_HELPER_CALLED"\n'
@@ -631,6 +645,10 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     (source / "scripts" / "ensure-automation-group.sh").chmod(0o755)
+    if archive_error == "symlink":
+        (source / "linked-notes").symlink_to(".fixture notes")
+    elif archive_error in {"MANIFEST.sha256", "REVISION"}:
+        (source / archive_error).write_text("Reserved metadata must be generated during deploy\n")
     for command in (
         ["git", "init", str(source)],
         ["git", "-C", str(source), "config", "user.email", "test@example.invalid"],
@@ -692,7 +710,9 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
     )
     release_root.mkdir(exist_ok=True)
-    (release_root / "current").symlink_to(previous_release)
+    first_release = archive_error == "checksum"
+    if not first_release:
+        (release_root / "current").symlink_to(previous_release)
     unit_path.parent.mkdir()
     unit_path.write_text(previous_unit, encoding="utf-8")
     media_wrapper_path.parent.mkdir()
@@ -703,6 +723,13 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         monitor_env.chmod(0o644)
 
     fake_bin.mkdir()
+    if first_release:
+        media_wrapper_path.write_text("Existing wrapper\n", encoding="utf-8")
+        sha256sum = fake_bin / "sha256sum"
+        sha256sum.write_text(
+            '#!/bin/sh\nprintf "changed\\n" >> ".fixture notes"\nexec /usr/bin/sha256sum "$@"\n', encoding="utf-8"
+        )
+        sha256sum.chmod(0o755)
     (fake_bin / "systemctl").write_text(
         "#!/usr/bin/env bash\n"
         "set -eu\n"
@@ -712,7 +739,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "    exit 0\n"
         "    ;;\n"
         '  is-active) [[ "$(cat "$FAKE_ACTIVE_STATE_PATH")" == active ]]; exit $? ;;\n'
-        '  stop) printf inactive > "$FAKE_ACTIVE_STATE_PATH"; exit 0 ;;\n'
+        '  stop) touch "$FAKE_BRIDGE_STOPPED"; printf inactive > "$FAKE_ACTIVE_STATE_PATH"; exit 0 ;;\n'
         '  enable) printf enabled > "$FAKE_UNIT_STATE_PATH"; '
         '    [[ "${2:-}" != --now ]] || printf active > "$FAKE_ACTIVE_STATE_PATH"; exit 0 ;;\n'
         "  daemon-reload)\n"
@@ -761,6 +788,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "FAKE_SYSTEMCTL_COUNT_FILE": str(daemon_reload_count),
+            "FAKE_BRIDGE_STOPPED": str(bridge_stopped),
             "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
             "FAKE_UNIT_STATE_PATH": str(unit_state_path),
             "FAKE_VOICE_CHECKED": str(voice_checked),
@@ -773,7 +801,18 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
 
     assert automation_group_helper_called.read_text(encoding="utf-8") == "called"
     coherent_lifecycle = (active_state, unit_state) in {("active", "enabled"), ("inactive", "disabled")}
-    if not coherent_lifecycle:
+    if first_release:
+        assert completed.returncode == 1
+        assert "work Telegram release manifest verification failed" in completed.stderr
+        assert not bridge_stopped.exists() and not daemon_reload_count.exists()
+        assert set(release_root.iterdir()) == {previous_release}
+        assert media_wrapper_path.read_text(encoding="utf-8") == "Existing wrapper\n"
+    elif archive_error is not None:
+        assert completed.returncode == 1
+        assert "work Telegram archive contains invalid entries" in completed.stderr
+        assert not bridge_stopped.exists() and not daemon_reload_count.exists()
+        assert set(release_root.iterdir()) == {release_root / "current", previous_release}
+    elif not coherent_lifecycle:
         assert completed.returncode == 1
         assert "lifecycle must be active-enabled or legacy inactive-disabled" in completed.stderr
         assert not daemon_reload_count.exists()
@@ -786,7 +825,19 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
             f"inbound_restored={str(restored).lower()}",
             f"intake_reconciliation={reconciliation}",
         ]
-        assert (release_root / "current").resolve() != previous_release
+        installed = (release_root / "current").resolve()
+        assert installed != previous_release
+        expected_files = {
+            name: (source / name).read_bytes()
+            for name in subprocess.check_output(["git", "-C", str(source), "ls-files", "-z"], text=True).split("\0")
+            if name
+        }
+        expected_files["REVISION"] = (revision + "\n").encode()
+        expected_manifest = "".join(
+            f"{hashlib.sha256(content).hexdigest()}  {name}\n" for name, content in sorted(expected_files.items())
+        )
+        assert (installed / "MANIFEST.sha256").read_text(encoding="utf-8") == expected_manifest
+        assert (installed / "scripts" / "ensure-automation-group.sh").stat().st_mode & 0o777 == 0o755
         assert venv_link.resolve() == candidate_runtime / "venv"
         assert model_link.resolve() == candidate_runtime / "model"
         assert daemon_reload_count.read_text(encoding="utf-8") == "1"
@@ -802,7 +853,8 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         assert completed.returncode == 1
         assert "previous release assets restored" in completed.stderr
         assert daemon_reload_count.read_text(encoding="utf-8") == "2"
-    assert (release_root / "current").resolve() == previous_release
+    if not first_release:
+        assert (release_root / "current").resolve() == previous_release
     assert unit_path.read_text(encoding="utf-8") == previous_unit
     assert venv_link.resolve() == previous_venv
     assert model_link.resolve() == previous_model
