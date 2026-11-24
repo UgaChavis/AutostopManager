@@ -537,6 +537,209 @@ def test_unconfirmed_pending_prevents_all_remote_operations(store, case):
     assert delivery.read_json(store[1], "delivery-intent.json") == record
 
 
+@pytest.fixture
+def interrupted_publication(store, monkeypatch):
+    root, fd = store
+    previous = prepare(store, 1, b"previous ready archive")
+    path = SCRIPT.with_name("crm_backup_coordinator.py")
+    spec = importlib.util.spec_from_file_location("crm_backup_publication_fixture", path)
+    coordinator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(coordinator)
+    monkeypatch.setattr(coordinator, "ROOT_UID", os.geteuid())
+    save = coordinator.save
+
+    def fail_readiness(path, record):
+        if path.name == "pending-ready.json":
+            raise OSError("synthetic readiness write failure")
+        save(path, record)
+
+    staged = root / ".staged-fixture.tar.gz"
+    staged.write_bytes(b"new capture")
+    staged.chmod(0o600)
+    with monkeypatch.context() as fault:
+        fault.setattr(coordinator, "save", fail_readiness)
+        with pytest.raises(OSError, match="readiness write failure"):
+            coordinator.publish(root, staged, f"{2:032x}")
+    pending = delivery.read_json(fd, "pending.json")
+    delivery.write_json(
+        fd, "attempt.json", {"attempt": pending["id"], "phase": "complete", "restore": "ok", "copy": "unknown"}
+    )
+    assert delivery.read_json(fd, "pending-ready.json") == previous
+    remote = FakeWindows()
+    monkeypatch.setattr(delivery, "ROOT", root)
+    monkeypatch.setattr(delivery, "Windows", lambda: remote)
+    return previous, pending, remote
+
+
+def test_partial_publication_recovers_previous_pointer_for_next_tick(store, interrupted_publication, capsys):
+    root, fd = store
+    previous, pending, remote = interrupted_publication
+    for ident in ("a" * 32, "b" * 32):
+        earlier = dict(previous, id=ident, file=f"crm-{ident}.tar.gz")
+        delivery.remember(fd, earlier)
+        remote.finals[ident] = b"previous ready archive"
+    delivery.set_status(fd, earlier, "ok")
+    receipts = (root / "delivered.json").read_bytes()
+    status = (root / "delivery-status.json").read_bytes()
+    attempt = (root / "attempt.json").read_bytes()
+    ready = (root / "pending-ready.json").read_bytes()
+
+    assert delivery.main() == 0
+
+    assert capsys.readouterr() == ("crm_pending_repaired=previous_ready\n", "")
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert delivery.pending_record(fd) == previous
+    assert (root / "pending-ready.json").read_bytes() == ready
+    assert (root / "attempt.json").read_bytes() == attempt
+    assert (root / previous["file"]).read_bytes() == b"previous ready archive"
+    assert (root / pending["file"]).read_bytes() == b"new capture"
+    assert delivery.read_json(fd, "delivery-intent.json") is None
+    assert (root / "delivered.json").read_bytes() == receipts
+    assert (root / "delivery-status.json").read_bytes() == status
+
+    assert delivery.main() == 0
+    assert set(remote.finals) == {"a" * 32, "b" * 32, previous["id"]}
+    assert remote.finals[previous["id"]] == b"previous ready archive"
+    assert remote.deletes == []
+    assert (root / pending["file"]).read_bytes() == b"new capture"
+    assert (root / "attempt.json").read_bytes() == attempt
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    [
+        "no-ready",
+        "wrong-attempt",
+        "not-complete",
+        "restore-unknown",
+        "copy-running",
+        "intent",
+        "null-intent",
+        "old-receipt",
+        "new-receipt",
+        "invalid-receipt",
+        "status",
+        "invalid-status-time",
+        "invalid-status-code",
+        "wrong-hash",
+        "old-inode-missing",
+        "new-inode-missing",
+    ],
+)
+def test_partial_publication_preserves_ambiguous_state(store, interrupted_publication, blocker):
+    root, fd = store
+    previous, pending, remote = interrupted_publication
+    if blocker == "no-ready":
+        (root / "pending-ready.json").unlink()
+    elif blocker in {"wrong-attempt", "not-complete", "restore-unknown", "copy-running"}:
+        changes = {
+            "wrong-attempt": {"attempt": "f" * 32},
+            "not-complete": {"phase": "recovering"},
+            "restore-unknown": {"restore": "unknown"},
+            "copy-running": {"copy": "running"},
+        }
+        attempt = delivery.read_json(fd, "attempt.json")
+        delivery.write_json(fd, "attempt.json", attempt | changes[blocker])
+    elif blocker in {"intent", "null-intent"}:
+        delivery.write_json(fd, "delivery-intent.json", previous if blocker == "intent" else None)
+    elif blocker in {"old-receipt", "new-receipt"}:
+        delivery.remember(fd, previous if blocker == "old-receipt" else pending)
+    elif blocker == "invalid-receipt":
+        delivery.write_json(fd, "delivered.json", [{"id": "f" * 32}])
+    elif blocker == "status":
+        delivery.set_status(fd, previous, "unknown")
+    elif blocker in {"invalid-status-time", "invalid-status-code"}:
+        status = {"id": "f" * 32, "status": "ok", "at": "2026-01-01T00:00:00+00:00", "error_code": None}
+        status["at" if blocker == "invalid-status-time" else "error_code"] = 123
+        delivery.write_json(fd, "delivery-status.json", status)
+    elif blocker == "wrong-hash":
+        (root / previous["file"]).write_bytes(b"X" * previous["size"])
+    elif blocker == "old-inode-missing":
+        (root / previous["file"]).unlink()
+    else:
+        (root / pending["file"]).unlink()
+    before = {p.name: p.read_bytes() for p in root.iterdir() if not p.name.endswith(".lock")}
+
+    assert delivery.main() == 1
+
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert {p.name: p.read_bytes() for p in root.iterdir() if not p.name.endswith(".lock")} == before
+
+
+@pytest.mark.parametrize("name", ["coordinator.lock", "operation.lock"])
+def test_partial_publication_defers_to_native_lock_owner(store, interrupted_publication, name):
+    _, fd = store
+    _, pending, remote = interrupted_publication
+    guard = delivery.lock(fd, name)
+    try:
+        assert delivery.main() == 1
+    finally:
+        os.close(guard)
+    assert delivery.read_json(fd, "pending.json") == pending
+    assert remote.inspections == []
+
+
+@pytest.mark.parametrize("replace_newer", [False, True])
+def test_partial_publication_rechecks_named_inodes_after_hash(
+    store, interrupted_publication, monkeypatch, replace_newer
+):
+    root, fd = store
+    previous, pending, remote = interrupted_publication
+    verify = delivery.verify_source
+
+    def replace_after_hash(stream, record):
+        result = verify(stream, record)
+        path = root / (pending if replace_newer else previous)["file"]
+        replacement = root / "replacement"
+        replacement.write_bytes(path.read_bytes())
+        replacement.chmod(0o600)
+        replacement.replace(path)
+        return result
+
+    monkeypatch.setattr(delivery, "verify_source", replace_after_hash)
+    assert delivery.main() == 1
+    assert delivery.read_json(fd, "pending.json") == pending
+    assert delivery.read_json(fd, "pending-ready.json") == previous
+    assert remote.inspections == []
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_partial_publication_defers_transport_if_repair_durability_is_unknown(
+    store, interrupted_publication, monkeypatch, visible
+):
+    root, fd = store
+    previous, pending, remote = interrupted_publication
+    replace, fsync = os.replace, os.fsync
+    replaced = False
+
+    def fail_before_replace(source, destination, **kwargs):
+        nonlocal replaced
+        if destination == "pending.json" and not visible:
+            raise OSError("synthetic pre-replace failure")
+        replace(source, destination, **kwargs)
+        replaced = destination == "pending.json"
+
+    def fail_after_replace(descriptor):
+        if replaced:
+            raise OSError("synthetic directory fsync failure")
+        fsync(descriptor)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(os, "replace", fail_before_replace)
+        fault.setattr(os, "fsync", fail_after_replace)
+        assert delivery.main() == 1
+
+    assert remote.inspections == remote.writes == remote.moves == remote.deletes == []
+    assert delivery.read_json(fd, "pending.json") == (previous if visible else pending)
+    assert delivery.read_json(fd, "pending-ready.json") == previous
+    assert (root / previous["file"]).is_file() and (root / pending["file"]).is_file()
+    assert delivery.read_json(fd, "delivery-intent.json") is None
+    if not visible:
+        assert delivery.main() == 0
+        assert remote.inspections == []
+    assert delivery.pending_record(fd) == previous
+
+
 @pytest.mark.parametrize("marker", ["pending.json", "pending-ready.json", "delivery-intent.json"])
 def test_present_null_marker_refuses_rotation(store, marker):
     root, fd = store

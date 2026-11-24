@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from pathlib import Path
 
 ROOT = Path("/var/lib/autostop-manager/crm-backup")
@@ -104,7 +104,7 @@ def _unique_pairs(pairs):
 
 
 def _open_file(dirfd, name, flags=os.O_RDONLY):
-    return os.open(name, flags | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=dirfd)
+    return os.open(name, flags | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
 
 
 def read_json(dirfd, name, *, missing=None):
@@ -197,9 +197,9 @@ def current(dirfd):
     return value
 
 
-def open_source(dirfd, record):
+def open_source(dirfd, record, *, nonblocking=False):
     """Acquire an immutable-generation fd while holding only the short lock."""
-    guard = lock(dirfd, "pending.lock")
+    guard = lock(dirfd, "pending.lock", nonblocking=nonblocking)
     try:
         try:
             fd = _open_file(dirfd, record["file"])
@@ -378,6 +378,96 @@ def journal(dirfd):
     return rows
 
 
+def partial_publication_state(dirfd):
+    pending = read_json(dirfd, "pending.json")
+    ready = read_json(dirfd, "pending-ready.json")
+    if pending is None or ready is None or read_json(dirfd, "delivery-intent.json") is not None:
+        return None
+    pending, ready = valid_record(pending), valid_record(ready)
+    if pending["id"] == ready["id"]:
+        return None
+    attempt = read_json(dirfd, "attempt.json")
+    if not isinstance(attempt, dict) or (
+        attempt.get("attempt"),
+        attempt.get("phase"),
+        attempt.get("restore"),
+        attempt.get("copy"),
+    ) != (pending["id"], "complete", "ok", "unknown"):
+        return None
+    ids = {pending["id"], ready["id"]}
+    rows = journal(dirfd)
+    if any(record["id"] in ids for record in rows):
+        return None
+    status = read_json(dirfd, "delivery-status.json")
+    if status is not None and (
+        not isinstance(status, dict)
+        or set(status) != {"id", "status", "at", "error_code"}
+        or not isinstance(status["id"], str)
+        or not re.fullmatch(r"[0-9a-f]{32}", status["id"])
+        or status["id"] in ids
+        or status["status"] not in ("pending", "running", "ok", "failed", "unknown")
+        or not isinstance(status["at"], str)
+        or (status["error_code"] is not None and not isinstance(status["error_code"], str))
+    ):
+        return None
+    return pending, ready, attempt, rows, status
+
+
+def same_named_source(dirfd, record, stream, expected):
+    current = os.fstat(stream.fileno())
+    named = os.stat(record["file"], dir_fd=dirfd, follow_symlinks=False)
+    return (
+        stat.S_ISREG(current.st_mode)
+        and current.st_uid == OWNER_UID
+        and not current.st_mode & 0o077
+        and named.st_nlink == current.st_nlink == 1
+        and _identity(named) == _identity(current) == _identity(expected)
+    )
+
+
+def restore_previous_ready(dirfd):
+    # The caller already owns delivery.lock. An active producer or recovery
+    # attempt must finish before a mismatched publication can be repaired.
+    with (
+        suppress(DeliveryError, OSError),
+        os.fdopen(lock(dirfd, "coordinator.lock", nonblocking=True), "rb"),
+        ExitStack() as sources,
+    ):
+        with (
+            os.fdopen(lock(dirfd, "operation.lock", nonblocking=True), "rb"),
+            os.fdopen(lock(dirfd, "pending.lock", nonblocking=True), "rb"),
+        ):
+            state = partial_publication_state(dirfd)
+        if state is None:
+            return False
+        pending, ready, *_ = state
+        streams = []
+        for record in (pending, ready):
+            stream = open_source(dirfd, record, nonblocking=True)
+            if stream is None:
+                return False
+            streams.append(sources.enter_context(stream))
+        newer, previous = streams
+        newer_info = os.fstat(newer.fileno())
+        if newer_info.st_size != pending["size"]:
+            return False
+        # Keep the pending lock out of the archive hash and recheck before writing.
+        previous_info = verify_source(previous, ready)
+        with (
+            os.fdopen(lock(dirfd, "operation.lock", nonblocking=True), "rb"),
+            os.fdopen(lock(dirfd, "pending.lock", nonblocking=True), "rb"),
+        ):
+            if (
+                partial_publication_state(dirfd) != state
+                or not same_named_source(dirfd, pending, newer, newer_info)
+                or not same_named_source(dirfd, ready, previous, previous_info)
+            ):
+                return False
+            write_json(dirfd, "pending.json", ready)
+            return read_json(dirfd, "pending.json") == ready == read_json(dirfd, "pending-ready.json")
+    return False
+
+
 def remember(dirfd, record):
     rows = journal(dirfd)
     for existing in rows:
@@ -521,7 +611,17 @@ def deliver_once(dirfd, remote):
     # Recover the visible M2 state even when the preceding run already
     # delivered and removed its pending pointer before refresh failed.
     refresh_status()
-    pending = pending_record(dirfd)
+    try:
+        pending = pending_record(dirfd)
+    except DeliveryError as error:
+        if error.code != "pending_not_ready" or not restore_previous_ready(dirfd):
+            raise
+        print("crm_pending_repaired=previous_ready")
+        return
+    deliver_or_rotate(dirfd, remote, pending)
+
+
+def deliver_or_rotate(dirfd, remote, pending):
     record = read_json(dirfd, "delivery-intent.json")
     previous = None
     if record is None:
