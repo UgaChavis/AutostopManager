@@ -373,6 +373,13 @@ CRM/Telegram и исходные состояния управления. Неи
 новый boot ID, `uname -r`, SHA, systemd, containers, публичный TLS/HTTP, Gateway/MCP,
 G1, Telegram duty, J1 static/browser и Codex.
 
+Если CRM возвращает `502` после загрузки, сопоставь время запуска Nginx, создания
+и старта текущего контейнера CRM и последних ошибок upstream. Готовность CRM
+подтверди ответом `200` на `/api/health` и `401` на `/mcp` без авторизации сначала
+на loopback (`8000` и `8001` соответственно), затем на публичном домене. Если
+`502` повторяется после этих проверок, сверь локальный и публичный ответы снова
+с учётом той же ревизии и того же контейнера.
+
 При изменениях соответствующих компонентов используй их действующие gates:
 Manager — `scripts/release-gates.sh` с одноразовой БД; CRM — `run_checks.ps1 -Profile ci`
 и текущий CRM runbook; Store — `scripts/run-backend-tests.sh --agent-write-smoke`,
