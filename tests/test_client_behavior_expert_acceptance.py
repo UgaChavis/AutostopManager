@@ -459,6 +459,48 @@ def test_public_query_privacy_assertion_requires_nonblank_query_evidence(
 
 
 @pytest.mark.parametrize(
+    ("case_id", "reply_text", "research_allowed"),
+    [
+        pytest.param("C01", "Здравствуйте! Чем помочь?", False, id="greeting"),
+        pytest.param("C43", "Подтверждённый артикул — SYN-ANALOG-A.", False, id="verified_history"),
+        pytest.param("C03", "Есть предварительный вариант. Совместимость ещё сверим.", True, id="consultation"),
+        pytest.param("C45", None, False, id="explicit_public_search_ban"),
+    ],
+)
+def test_explicit_no_research_policy_also_covers_public_search(oracle, case_id, reply_text, research_allowed):
+    fixture, cases, score = oracle
+    if case_id == "C45":
+        observation = new_question_plan()
+    else:
+        actions = list(fixture["global_required_actions"])
+        replies = []
+        if research_allowed:
+            actions.extend(["reply.ack", "reply.verify", "evidence.research", "context.refresh"])
+            replies.append({"kind": "ack", "text": "Проверю варианты."})
+        actions.extend(["reply.result", "reply.verify", "job.result"])
+        replies.append({"kind": "result", "text": reply_text})
+        observation = {
+            "outcome": "answered",
+            "actions": [{"action": action} for action in actions],
+            "client_replies": replies,
+        }
+    assert score(fixture, cases[case_id], observation)["hard_pass"] is True
+
+    search_index = next(
+        index
+        for index, item in enumerate(observation["actions"])
+        if item["action"] in {"context.refresh", "reply.result"}
+    )
+    observation["actions"].insert(
+        search_index,
+        {"action": "evidence.public_search", "data": "Передние колодки по модели и году"},
+    )
+    result = score(fixture, cases[case_id], observation)
+    assert result["hard_pass"] is research_allowed
+    assert result["failures"] == ([] if research_allowed else ["forbidden planned action: evidence.public_search"])
+
+
+@pytest.mark.parametrize(
     ("reply_kinds", "planned_clarifications", "expected_failure"),
     [
         pytest.param([], ["reply.clarification"], "required clarification has no client draft", id="missing_draft"),

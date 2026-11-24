@@ -172,6 +172,8 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     # A complete mutation ban also covers the generic write label.
     if {"crm.create", "crm.update"}.issubset(forbidden) and "crm.write" not in forbidden:
         forbidden = [*forbidden, "crm.write"]
+    if "evidence.research" in forbidden and "evidence.public_search" not in forbidden:
+        forbidden = [*forbidden, "evidence.public_search"]
     for action in forbidden:
         if action in actions:
             failures.append("forbidden planned action: " + action)

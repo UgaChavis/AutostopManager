@@ -112,6 +112,10 @@ premises do not need to be echoed as imaginary service calls. A strict missing
 canonical step flags an incomplete proposed workflow, not a deployed code defect.
 Its exit 0 remains a policy-only result; expert acceptance stays pending.
 
+An explicit ban on `evidence.research` also covers `evidence.public_search`.
+For a verified answer already in the conversation, evaluate the direct reply
+against that history.
+
 For `answered` and `handoff`, plan a separate `reply.verify` after the final
 client reply and before `job.result`. If the trace sends another client message
 or attachment in between, its verification cannot stand in for the final
