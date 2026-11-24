@@ -197,6 +197,11 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
             failures.append(claim + " lacks planned independent card/delivery verification")
     if checks.get("confirmed_handoff_requires_receipts") and facts.get("crm_independent_reread") != "matches":
         failures.append("fixture cannot support successful card handoff")
+    if checks.get("confirmed_booking_requires_receipts") and claims.get("booking_confirmed") is True:
+        if facts.get("crm_independent_reread") != "matches":
+            failures.append("booking confirmed without matching CRM reread")
+        if facts.get("owner_notification_delivery") != "verified":
+            failures.append("booking confirmed despite unverified owner notification")
     if "card_target" in checks and claims.get("crm_card_id") != checks["card_target"]:
         failures.append("wrong existing CRM card identity")
     if "card_column" in checks and claims.get("crm_column") != checks["card_column"]:

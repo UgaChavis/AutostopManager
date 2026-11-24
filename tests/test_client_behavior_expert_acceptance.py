@@ -352,6 +352,44 @@ def test_semantic_handoff_alias_keeps_independent_receipt_guards(oracle, fault):
     assert result["hard_pass"] is False and result["failures"]
 
 
+@pytest.mark.parametrize(("case_id", "booking_time"), [("C22", "12:00"), ("C23", "18:00")])
+@pytest.mark.parametrize(
+    ("receipt_facts", "expected_failure"),
+    [
+        pytest.param({}, None, id="verified"),
+        pytest.param(
+            {"crm_independent_reread": "mismatch"},
+            "booking confirmed without matching CRM reread",
+            id="crm_mismatch",
+        ),
+        pytest.param(
+            {"owner_notification_delivery": "unknown"},
+            "booking confirmed despite unverified owner notification",
+            id="owner_unknown",
+        ),
+    ],
+)
+def test_booking_confirmation_checks_independent_receipts_at_both_boundaries(
+    oracle, case_id, booking_time, receipt_facts, expected_failure
+):
+    fixture, cases, score = oracle
+    case = deepcopy(cases[case_id])
+    case["inputs"]["facts"].update(receipt_facts)
+    observation = scripted_handoff(case_id)
+    observation["client_replies"] = [{"kind": "result", "text": f"Записал на приём 14 октября в {booking_time}."}]
+    next(item for item in observation["actions"] if item["action"] == "reply.handoff")["action"] = "reply.result"
+    observation["claims"] = {
+        "booking_confirmed": True,
+        "booking_date": "2026-10-14",
+        "booking_time": booking_time,
+        "timezone": "Asia/Krasnoyarsk",
+    }
+
+    result = score(fixture, case, observation)
+    assert result["hard_pass"] is (expected_failure is None)
+    assert result["failures"] == ([] if expected_failure is None else [expected_failure])
+
+
 @pytest.mark.parametrize("fault", ["false_handoff", "manual_pending"])
 def test_prose_only_false_handoff_still_requires_semantic_review(rehearsal, oracle, fault):
     observation = scripted_handoff("C21")
