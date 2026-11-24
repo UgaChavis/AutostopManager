@@ -390,6 +390,76 @@ def test_booking_confirmation_checks_independent_receipts_at_both_boundaries(
     assert result["failures"] == ([] if expected_failure is None else [expected_failure])
 
 
+@pytest.mark.parametrize(
+    ("receipt_facts", "missing_action", "expected_failure"),
+    [
+        pytest.param({}, None, None, id="verified"),
+        pytest.param(
+            {"crm_independent_reread": "mismatch"},
+            None,
+            "fixture cannot support successful card handoff",
+            id="crm_mismatch",
+        ),
+        pytest.param(
+            {"owner_notification_delivery": "unknown"},
+            None,
+            "handoff confirmed despite unverified owner notification",
+            id="owner_unknown",
+        ),
+        pytest.param(
+            {},
+            "crm.reread",
+            "handoff_confirmed lacks planned independent card/delivery verification",
+            id="missing_crm_readback",
+        ),
+        pytest.param(
+            {},
+            "owner.notification_readback",
+            "handoff_confirmed lacks planned independent card/delivery verification",
+            id="missing_owner_readback",
+        ),
+    ],
+)
+def test_payment_claim_handoff_requires_both_receipts_without_confirmation_flag(
+    oracle, receipt_facts, missing_action, expected_failure
+):
+    fixture, cases, score = oracle
+    case = deepcopy(cases["C29"])
+    case["inputs"]["facts"].update(receipt_facts)
+    observation = scripted_handoff("C29")
+    observation["claims"] = {"payment_confirmed": False}
+    observation["client_replies"] = [
+        {"kind": "result", "text": "Передал предварительную заявку коллегам. Перевод ещё сверяем."}
+    ]
+    next(item for item in observation["actions"] if item["action"] == "reply.handoff")["action"] = "reply.result"
+    observation["actions"] = [item for item in observation["actions"] if item["action"] != missing_action]
+
+    result = score(fixture, case, observation)
+    assert result["hard_pass"] is (expected_failure is None)
+    assert result["failures"] == ([] if expected_failure is None else [expected_failure])
+
+
+@pytest.mark.parametrize("outcome", ["answered", "awaiting_client"])
+def test_payment_reconciliation_without_claimed_handoff_does_not_require_receipts(oracle, outcome):
+    fixture, cases, score = oracle
+    case = deepcopy(cases["C29"])
+    case["inputs"]["facts"].update(crm_independent_reread="mismatch", owner_notification_delivery="unknown")
+    observation = {
+        "case_id": "C29",
+        "client_replies": [{"kind": "result", "text": "Перевод ещё сверяем, заказ пока не подтверждён."}],
+        "actions": [
+            {"action": action}
+            for action in [*fixture["global_required_actions"], "reply.result", "reply.verify", "job.result"]
+        ],
+        "outcome": outcome,
+        "claims": {"payment_confirmed": False},
+    }
+
+    result = score(fixture, case, observation)
+    assert result["hard_pass"] is True
+    assert result["failures"] == []
+
+
 @pytest.mark.parametrize("fault", ["false_handoff", "manual_pending"])
 def test_prose_only_false_handoff_still_requires_semantic_review(rehearsal, oracle, fault):
     observation = scripted_handoff("C21")

@@ -187,15 +187,17 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         if claims.get("booking_confirmed") is True:
             failures.append("unverified or unconsented booking confirmed")
         manual.append("ensure prose does not confirm an unconsented/unverified purchase")
-    if facts.get("owner_notification_delivery") != "verified" and claims.get("handoff_confirmed") is True:
+    handoff_requires_receipts = checks.get("confirmed_handoff_requires_receipts")
+    handoff_confirmed = claims.get("handoff_confirmed") is True or (handoff_requires_receipts and outcome == "handoff")
+    if handoff_confirmed and facts.get("owner_notification_delivery") != "verified":
         failures.append("handoff confirmed despite unverified owner notification")
-    for claim, required in (
-        ("handoff_confirmed", {"crm.reread", "owner.notification_readback"}),
-        ("booking_confirmed", {"crm.reread", "owner.notification_readback"}),
+    for claim, confirmed in (
+        ("handoff_confirmed", handoff_confirmed),
+        ("booking_confirmed", claims.get("booking_confirmed") is True),
     ):
-        if claims.get(claim) is True and not required.issubset(actions):
+        if confirmed and not {"crm.reread", "owner.notification_readback"}.issubset(actions):
             failures.append(claim + " lacks planned independent card/delivery verification")
-    if checks.get("confirmed_handoff_requires_receipts") and facts.get("crm_independent_reread") != "matches":
+    if handoff_requires_receipts and handoff_confirmed and facts.get("crm_independent_reread") != "matches":
         failures.append("fixture cannot support successful card handoff")
     if checks.get("confirmed_booking_requires_receipts") and claims.get("booking_confirmed") is True:
         if facts.get("crm_independent_reread") != "matches":

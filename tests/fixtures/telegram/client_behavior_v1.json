@@ -2081,7 +2081,8 @@
       },
       "hard_assertions": {
         "payment_confirmed": false,
-        "no_payment_receipt_claim": true
+        "no_payment_receipt_claim": true,
+        "confirmed_handoff_requires_receipts": true
       },
       "expert_notes": "Намерение/утверждение клиента не банковский факт; закупка и резерв без отдельного разрешения запрещены."
     },
