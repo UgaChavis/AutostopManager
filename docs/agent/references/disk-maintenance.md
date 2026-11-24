@@ -5,6 +5,7 @@
 ## Действующее хранение
 
 - Сохраняй согласованную копию Manager + CRM; перед обслуживанием подтверждай её фактический путь, состав и пригодность к восстановлению. Одна текущая генерация Store: `/var/backups/autostop-current/store`. Состав, проверка и замена — [complete-backup.md](complete-backup.md).
+- Store deploy сам ротирует копии для отката в `/opt/autostop-app-backups`. Закрепляй этот каталог целиком в `pinned_paths`, а действующую генерацию проверяй по `backup_dir` в `/opt/autostop-app-deploys/current.env` и её manifest. После ротации отсутствующий pin отдельного каталога останавливает обслуживание с `protected_path_unavailable`.
 - `autostop24-db-backup.timer` сохраняет запуск в **03:30 UTC**, но служба использует новый [store-backup.py](../../../scripts/store-backup.py). Прежний `disk-retention.conf`/`pg-retain` после backup и автоматический complete bundle больше не активны. Старые backup roots исключаются из актуальной `/etc/autostop-maintenance/policy.json`; не возвращай их из сохранённого шаблона.
 - Технические системные журналы хранятся три дня: journald `MaxRetentionSec=3day`, `MaxFileSec=1day`, существующие лимиты `500M/100M`; logrotate `daily`, `rotate 3`, `maxage 3`; sysstat `HISTORY=3`. Деловые данные, audit и очереди CRM/Store не относятся к техническим логам.
 - Ежедневный существующий `logrotate.service` вызывает [technical-retention.py](../../../scripts/technical-retention.py): только закрытые технические логи и разрешённые download caches. Лимиты — 1 GiB суммарно для root/runner pip `http-v2` и npm `_cacache`, ещё 1 GiB для неиспользуемого cache Docker builder `default`. Активные сборки/установки, CI и открытые файлы откладывают очистку. `_npx`, Python/venv, браузеры, модели, образы/volumes и инструменты этой процедурой не удаляются.
@@ -34,8 +35,10 @@ receipts и восстановление CI — `/var/lib/autostop-manager/priva
 | `autostop-disk-maintenance.service` | Выполняет `maintain`; фактические drop-ins могут добавлять отдельные post-hooks, поэтому запуск всей службы не заменяет ограниченный CLI smoke. |
 | `autostop-disk-maintenance-recovery.service` | Возвращает только сохранённые изменения CI своего предыдущего запуска. |
 
-При достаточном месте и подтверждённом пустом плане `maintain` возвращает no-op
-под native locks, с повторной проверкой здоровья и снимка; CI не приостанавливается.
+При подтверждённом пустом плане `maintain` возвращает no-op под native locks
+с повторной проверкой здоровья и снимка. Если при проверке плана обнаружен
+дефицит места, проверяются также закреплённые ресурсы. Квитанция отражает
+фактический остаток и достижение цели. CI для пустого плана не приостанавливается.
 Общий cleanup lock, native locks PostgreSQL, CRM deploy и рабочего Telegram
 исключают пересечение с копированием и выпуском. Занятость lock означает отсутствие
 удалений в этой попытке; отдельно проверь результат `recover-ci` и владельца lock.
@@ -71,6 +74,21 @@ Store backup работает по отдельной текущей схеме 
 `0640`/`0644` до `0600`; чужое правило, symlink, hardlink или небезопасные права
 прерывают установку. Сам runtime lock при откате сохраняется.
 
+Store backup и disk maintenance используют общий
+`/run/lock/autostop24-db-backup.lock`. Создай отдельный root-owned
+`/etc/tmpfiles.d/autostop-store-backup-lock.conf` до первого ночного обслуживания
+после загрузки. Disk maintenance может стартовать раньше Store backup.
+
+```text
+f /run/lock/autostop24-db-backup.lock 0600 root root -
+```
+
+Перед `systemd-tmpfiles --create /etc/tmpfiles.d/autostop-store-backup-lock.conf`
+проверь отсутствие дублирующего правила. Если lock уже есть, проверь, что это
+обычный файл root:root с правами `0600` и одной ссылкой. После команды проверь
+те же свойства и сверь устройство и inode с исходными, если файл уже был.
+При новой загрузке tmpfiles создаст lock до старта disk maintenance.
+
 После выпуска перечитай actual current links, `REVISION`, manifest, process cwd,
 Python и все container images. Обнови pinned policy по независимому readback;
 `policy_refresh_required` сохраняет изменённый класс, не подтверждает его очистку.
@@ -78,3 +96,18 @@ Cold runtime keeper и coherent current/previous tuples не настроены;
 и старые backup roots исключены. При пустом `coherent_keep_paths` runtime-кандидаты
 сохраняются с `policy_refresh_required`. Прежние команды остаются в коде и
 Git-истории, но не задают действующий порядок обслуживания.
+
+При обновлении только policy:
+
+1. Сохрани действующий файл и его SHA256 в root-private каталоге. В отдельном
+   файле `0600` подготовь минимальный diff по проверенным путям и image IDs.
+2. Запусти `autostop-disk-maintenance --policy /ROOT_PRIVATE/policy.json plan --output /ROOT_PRIVATE/manifest.json`.
+   Проверь здоровье, состав защищённых ресурсов и кандидатов. `plan` пишет
+   manifest. Пригодность копий проверяй отдельно по [complete-backup.md](complete-backup.md).
+3. Между запусками обслуживания под cleanup lock и затем native locks повторно
+   сверь SHA256 действующего файла и снимок плана. При совпадении атомарно замени
+   policy в том же каталоге с сохранением root:root `0600`. При изменении
+   исходного файла или снимка пересобери план.
+4. Прочитай установленный файл и повтори `plan` с ним. Wrapper читает policy
+   при каждом запуске, поэтому изменение только файла не требует переустановки
+   или `daemon-reload`.

@@ -150,7 +150,13 @@ def test_empty_plan_below_space_goal_requires_valid_protection_but_no_deletion_r
     assert not result["target_reached"] and result["deficit_bytes"] == 10_000_000_000
     assert result["ci_restored"] and result["deleted"] == []
     assert result["errors"] == ([] if protection_valid else ["preserved_verification_missing"])
-    assert calls == ["pause", "resume"]
+    if protection_valid:
+        assert result["preserved_receipts"] == []
+        assert result["noop"] == {"goal_satisfied": False, "no_candidates": True, "ci_not_paused": True}
+    else:
+        assert "noop" not in result
+    assert calls == []
+    assert not (Path(policy["state_root"]) / "ci-state.json").exists()
 
 
 @pytest.mark.parametrize("recover_pending_ci", [False, True])
@@ -218,19 +224,21 @@ def test_empty_maintenance_keeps_native_lock_guard(setup):
     assert "noop" not in result and result["deleted"] == [] and not calls
 
 
-def test_space_falling_below_goal_does_not_claim_maintenance_noop(setup, monkeypatch):
+def test_space_falling_below_goal_verifies_protection_without_pausing_ci(setup, monkeypatch):
     policy, _, _, calls = setup
     policy["goal_bytes"] = 10_000_000_000
     checks = []
 
     def space(value):
         checks.append("space")
-        return policy["goal_bytes"] + 1 if len(checks) < 4 else policy["goal_bytes"] - 1
+        return policy["goal_bytes"] + 1 if len(checks) < 3 else policy["goal_bytes"] - 1
 
     monkeypatch.setattr(core, "available_bytes", space)
     result = core.maintain(policy)
-    assert result["ok"] and not result["target_reached"] and "noop" not in result
-    assert calls == ["pause", "resume"]
+    assert result["ok"] and not result["target_reached"] and result["deficit_bytes"] == 1
+    assert result["preserved_receipts"]
+    assert result["noop"] == {"goal_satisfied": False, "no_candidates": True, "ci_not_paused": True}
+    assert calls == []
 
 
 @pytest.mark.parametrize("changed", ["host", "policy", "runtime", "expiry"])
@@ -264,7 +272,8 @@ def test_approval_sha_and_private_mode_guard(setup):
 
 
 def test_maintain_regenerates_manifest_after_ci_wait(setup, monkeypatch):
-    policy, _, _, calls = setup
+    policy, candidates, _, calls = setup
+    candidates.append(candidate(data_directory(policy)))
     clock = [1_000_000.0]
     original_pause = core.ci.pause
     monkeypatch.setattr(core.time, "time", lambda: clock[0])
@@ -277,7 +286,7 @@ def test_maintain_regenerates_manifest_after_ci_wait(setup, monkeypatch):
     result = core.maintain(policy)
     manifest = util.read_json(Path(policy["state_root"]) / "last-plan.json", private=True)
     assert result["ok"] and manifest["created_at"] == clock[0]
-    assert calls == ["pause", "resume"]
+    assert calls == ["pause", "revalidate", "resume"]
 
 
 def test_manual_wait_expiry_restores_ci_without_deleting(setup, monkeypatch):
@@ -377,7 +386,8 @@ def test_keyboard_interrupt_still_restores_saved_ci(setup, monkeypatch):
 
 
 def test_failed_resume_is_durable_then_recovery_retries(setup, monkeypatch):
-    policy, _, _, calls = setup
+    policy, candidates, _, calls = setup
+    candidates.append(candidate(data_directory(policy)))
     original = core.ci.resume
     monkeypatch.setattr(
         core.ci, "resume", lambda *args: (_ for _ in ()).throw(MaintenanceError("ci_resume_incomplete"))
@@ -387,7 +397,7 @@ def test_failed_resume_is_durable_then_recovery_retries(setup, monkeypatch):
     assert util.read_json(Path(policy["state_root"]) / "ci-state.json", private=True)["phase"] == "paused"
     monkeypatch.setattr(core.ci, "resume", original)
     assert core.recover_ci(policy)["ci_restored"]
-    assert calls == ["pause", "resume"]
+    assert calls == ["pause", "revalidate", "resume"]
     assert util.read_json(Path(policy["state_root"]) / "last-result.json", private=True) == result
 
 

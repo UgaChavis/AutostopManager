@@ -636,8 +636,7 @@ def cache_fence(candidate: dict):
             os.close(fd)
 
 
-def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool) -> None:
-    validate_manifest(manifest, policy)
+def _verify_protected(manifest: dict, policy: dict, *, ci_ready: bool) -> list[dict]:
     proof = inventory.verify_protected(policy)
     if (
         proof.get("ok") is not True
@@ -650,7 +649,12 @@ def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool)
     required = _required_receipts(manifest["candidates"], ci_ready=ci_ready)
     if not required.issubset(present):
         raise MaintenanceError("preserved_component_verification_missing")
-    result["preserved_receipts"] = proof["receipts"]
+    return proof["receipts"]
+
+
+def _apply_locked(manifest: dict, policy: dict, result: dict, *, ci_ready: bool) -> None:
+    validate_manifest(manifest, policy)
+    result["preserved_receipts"] = _verify_protected(manifest, policy, ci_ready=ci_ready)
     deadline = time.monotonic() + policy["delete_budget_seconds"]
     for candidate in manifest["candidates"]:
         _deadline(deadline)
@@ -728,6 +732,8 @@ def _finish(policy: dict, result: dict) -> dict:
     result["free_after"] = available_bytes(policy)
     result["deficit_bytes"] = max(0, policy["goal_bytes"] - result["free_after"])
     result["target_reached"] = result["deficit_bytes"] == 0
+    if "noop" in result:
+        result["noop"]["goal_satisfied"] = result["target_reached"]
     result["ok"] = not result["errors"] and result["ci_restored"]
     result["finished_at"] = datetime.now(UTC).isoformat()
     _receipt(policy, result)
@@ -740,18 +746,16 @@ def _error_code(exc: BaseException) -> str:
 
 
 def _maintenance_noop(policy: dict, result: dict) -> bool:
-    """A verified empty plan needs neither CI admission changes nor deletion proofs."""
-    if available_bytes(policy) < policy["goal_bytes"]:
-        return False
+    """Verify an empty plan without pausing CI, including protection if space is short."""
     with native_locks(policy):
         fresh = make_plan(policy)
         if fresh["candidates"]:
             return False
         validate_manifest(fresh, policy)
-        if available_bytes(policy) < policy["goal_bytes"]:
-            return False
         atomic_json(state_root(policy) / "last-plan.json", fresh)
-        result["noop"] = {"goal_satisfied": True, "no_candidates": True, "ci_not_paused": True}
+        if min(result["free_before"], fresh["free_bytes"], available_bytes(policy)) < policy["goal_bytes"]:
+            result["preserved_receipts"] = _verify_protected(fresh, policy, ci_ready=False)
+        result["noop"] = {"no_candidates": True, "ci_not_paused": True}
         return True
 
 
