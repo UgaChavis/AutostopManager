@@ -323,6 +323,16 @@ env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verif
 инструментами со своими эффектами; перед использованием читай текущие flags и
 реализацию. Их запуск не заменяет общий порядок обслуживания.
 
+Устанавливай `autostop-work-telegram.service` и `autostop-codex-wake.service`
+одним пакетом. При переходе со старого порядка установи новый unit Bridge и
+перечитай конфигурацию systemd через `daemon-reload` перед установкой Wake.
+При возврате сначала верни прежний unit Wake, затем Bridge. После
+`daemon-reload` проверь эффективный `After` с учётом drop-ins. Установщик Wake
+останавливается, если Bridge всё ещё упорядочен после Wake или `After` недоступен.
+При общем запуске Bridge стартует раньше Wake. При общей остановке Wake завершается
+первым и успевает сверить исполнение через ещё работающий Bridge. Readiness обеих
+служб проверяй отдельно.
+
 Сохраняй отдельные personal/work Telegram sessions, выбранный worker и закреплённые
 инструкции, durable registry, незавершённые задания и их ID. Старый RAM-only комплект
 не запускается поверх durable registry. Импорт исторических ссылок и выбор нового
@@ -348,7 +358,11 @@ CRM/Telegram и исходные состояния управления. Неи
 Перед обновлением ОС сохрани root-only пакетный перечень, config служб/сети/proxy,
 свежий проверенный dump и `/proc/sys/kernel/random/boot_id`. Используй поддерживаемые
 обновления без снятия vendor phasing и автоматического удаления данных. Reboot —
-отдельное поручение, после окончания deploy/backup процессов. После него проверь
+отдельное поручение, после окончания deploy/backup процессов. Если установлен
+старый порядок `Bridge After=Wake`, перед согласованным reboot или выключением
+заверши либо безопасно удержи задания рабочего Telegram, останови только Wake
+при работающем Bridge и подтверди `Result=success` и отсутствие активных слотов.
+Сохрани исходные duty и enablement. После загрузки проверь
 новый boot ID, `uname -r`, SHA, systemd, containers, публичный TLS/HTTP, Gateway/MCP,
 G1, Telegram duty, J1 static/browser и Codex.
 

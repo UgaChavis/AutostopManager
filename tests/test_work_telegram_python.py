@@ -157,8 +157,21 @@ def test_bridge_launcher_rejects_mismatched_revision_before_execution(runtime):
     assert result.stderr.strip() == "work_telegram_release_mismatch=true" and not result.stdout
 
 
-@pytest.mark.parametrize("work_aligned", [True, False])
-def test_wake_installer_requires_one_release_and_uses_bridge_runtime(runtime, work_aligned):
+@pytest.mark.parametrize(
+    ("work_aligned", "bridge_after", "expected_error"),
+    [
+        (True, "network-online.target", ""),
+        (False, "network-online.target", "codex_wake_release_alias_mismatch=true"),
+        (
+            True,
+            "network-online.target autostop-codex-wake.service sysinit.target",
+            "codex_wake_bridge_order_conflict=true",
+        ),
+        (True, "", "codex_wake_bridge_order_unavailable=true"),
+        (True, None, "codex_wake_bridge_order_unavailable=true"),
+    ],
+)
+def test_wake_installer_preflights_effective_bridge_unit(runtime, work_aligned, bridge_after, expected_error):
     scripts, env, python, tmp_path = runtime
     source = (ROOT / "scripts/install-codex-wake.sh").read_text().split("export PYTHONPATH", 1)[0]
     source = source.replace('[[ "${EUID}" -eq 0 ]]', "true")
@@ -173,9 +186,13 @@ def test_wake_installer_requires_one_release_and_uses_bridge_runtime(runtime, wo
         'case "$*" in\n'
         "  is-active*) exit 3;;\n"
         '  *ExecStart*autostop-work-telegram.service*) printf "{ path=%s ; argv[]=python -m autostop_manager.telegram_bridge daemon ; }\\n" "$ACTIVE_PYTHON";;\n'
+        '  *After*autostop-work-telegram.service*) test "${BRIDGE_AFTER+x}" = x || exit 5; printf "%s\\n" "$BRIDGE_AFTER";;\n'
         "  *) exit 9;;\n"
         "esac\n",
     )
+    env.pop("BRIDGE_AFTER", None)
+    if bridge_after is not None:
+        env["BRIDGE_AFTER"] = bridge_after
     result = subprocess.run(
         ["bash", "-c", source + 'printf "%s\\n" "$python"\n'],
         env=env,
@@ -184,12 +201,12 @@ def test_wake_installer_requires_one_release_and_uses_bridge_runtime(runtime, wo
         text=True,
         timeout=15,
     )
-    if work_aligned:
+    if not expected_error:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == str(python)
     else:
         assert result.returncode == 1
-        assert result.stderr.strip() == "codex_wake_release_alias_mismatch=true"
+        assert result.stderr.strip() == expected_error
         assert not result.stdout
 
 

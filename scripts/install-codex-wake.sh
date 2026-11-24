@@ -14,6 +14,15 @@ boot_unit=/etc/systemd/system/autostop-codex-start.service
 [[ "$(stat -c %U "$release")" == root ]]
 # The bridge is installed first; a fresh wake unit need not exist yet.
 python="$(bash "$release/scripts/work-telegram-python.sh" bridge)"
+if ! bridge_after="$(timeout 10 systemctl show --property=After --value autostop-work-telegram.service)" \
+  || [[ -z "$bridge_after" ]]; then
+  echo 'codex_wake_bridge_order_unavailable=true' >&2
+  exit 1
+fi
+if [[ "$bridge_after" =~ (^|[[:space:]])autostop-codex-wake\.service($|[[:space:]]) ]]; then
+  echo 'codex_wake_bridge_order_conflict=true' >&2
+  exit 1
+fi
 if systemctl is-active --quiet autostop-codex-wake.service; then
   echo "codex_wake_service_must_be_inactive=true" >&2
   exit 1

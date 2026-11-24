@@ -1,6 +1,7 @@
 [Unit]
 Description=AutoStop work Telegram event wake for Codex
-After=network-online.target autostop-codex-start.service
+# Wake uses the durable bridge to verify execution shutdown.
+After=network-online.target autostop-codex-start.service autostop-work-telegram.service
 Requires=autostop-codex-start.service
 
 [Service]

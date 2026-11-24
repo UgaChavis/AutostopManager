@@ -1,7 +1,7 @@
 [Unit]
 Description=AutoStop Manager work Telegram bridge
 Wants=network-online.target
-After=network-online.target autostop-codex-wake.service
+After=network-online.target
 
 [Service]
 Type=simple
