@@ -2,6 +2,7 @@ import errno
 import importlib.util
 import json
 import os
+import subprocess
 from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
@@ -194,39 +195,83 @@ def test_receipt_mode_failure_closes_unpublished_temporary_file(tmp_path, monkey
 
 
 @pytest.mark.parametrize(
-    "load,active,substate,expected",
+    "load,active,substate,enabled,expected_activity,expected_enablement",
     [
-        ("loaded", "", "", "не подтверждён"),
-        ("bad-setting", "active", "waiting", "не подтверждён"),
-        ("loaded", "active", "", "не подтверждён"),
-        ("loaded", "active", "elapsed", "без следующего запуска"),
-        ("loaded", "active", "waiting", "включён"),
-        ("loaded", "active", "running", "включён"),
-        ("loaded", "inactive", "dead", "не активен"),
-        ("masked", "inactive", "dead", "не активен"),
-        ("loaded", "failed", "failed", "в состоянии ошибки"),
-        ("not-found", "", "", "не установлен"),
+        ("loaded", "", "", "", "не подтверждён", "не подтверждён"),
+        ("bad-setting", "active", "waiting", "enabled", "не подтверждён", "включён"),
+        ("loaded", "active", "", "", "не подтверждён", "не подтверждён"),
+        ("loaded", "active", "elapsed", "enabled", "без следующего запуска", "включён"),
+        ("loaded", "active", "waiting", "disabled", "ожидает запуска", "выключен"),
+        ("loaded", "active", "running", "enabled-runtime", "выполняется", "включён до перезагрузки"),
+        ("loaded", "inactive", "dead", "enabled", "не активен", "включён"),
+        ("masked", "inactive", "dead", "masked", "не активен", "замаскирован"),
+        ("loaded", "failed", "failed", "disabled", "в состоянии ошибки", "выключен"),
+        ("not-found", "", "", "", "не установлен", "не подтверждён"),
     ],
 )
-def test_backup_status_reports_the_observed_timer_state(tmp_path, monkeypatch, load, active, substate, expected):
-    properties = {"LoadState": load, "ActiveState": active, "SubState": substate}
+def test_backup_status_reports_each_timer_activity_and_enablement(
+    tmp_path, monkeypatch, load, active, substate, enabled, expected_activity, expected_enablement
+):
+    delivery_timer = "autostop-crm-backup-delivery.timer"
+    properties = {
+        m.TIMER: {"LoadState": load, "ActiveState": active, "SubState": substate, "UnitFileState": enabled},
+        delivery_timer: {
+            "LoadState": "loaded",
+            "ActiveState": "failed",
+            "SubState": "failed",
+            "UnitFileState": "enabled",
+        },
+    }
     calls = []
 
-    def show(*args):
-        assert args[:3] == ("systemctl", "show", m.TIMER)
-        calls.append(args)
-        if "--value" in args:
-            return properties[args[4]]
-        return "\n".join(f"{key}={value}" for key, value in properties.items())
+    def show(command, action, unit, *args, **_kwargs):
+        assert (command, action) == ("systemctl", "show")
+        assert "--value" not in args
+        calls.append(unit)
+        return "\n".join(f"{key}={value}" for key, value in properties[unit].items() if key in args)
 
     monkeypatch.setattr(m, "run", show)
     status_path = tmp_path / "status.md"
     m.status(status_path, {"attempt": "a" * 32, "copy": "ok", "restore": "ok", "delivery": "ok"})
 
-    line = status_path.read_text().splitlines()[2]
-    assert line == f"Расписание: 02:00 Asia/Krasnoyarsk; таймер {expected}."
-    assert len(calls) == 1 and all(key in calls[0] for key in properties)
-    assert "--value" not in calls[0]
+    lines = status_path.read_text().splitlines()
+    assert "Расписание: 02:00 Asia/Krasnoyarsk." in lines
+    assert f"Таймер копирования {expected_activity}. Автозапуск {expected_enablement}." in lines
+    assert "Таймер доставки в состоянии ошибки. Автозапуск включён." in lines
+    assert calls == [m.TIMER, delivery_timer]
+
+
+@pytest.mark.parametrize("systemctl_missing", [False, True])
+def test_backup_status_keeps_receipts_when_timer_observations_fail(tmp_path, monkeypatch, systemctl_missing):
+    def show(_command, _action, unit, *_args, **_kwargs):
+        if systemctl_missing:
+            raise FileNotFoundError("systemctl unavailable")
+        if unit == m.TIMER:
+            raise subprocess.TimeoutExpired("systemctl", 3)
+        return "LoadState=loaded\nActiveState=active\nSubState=waiting\nUnitFileState=disabled"
+
+    monkeypatch.setattr(m, "run", show)
+    status_path = tmp_path / "status.md"
+    m.status(
+        status_path,
+        {
+            "attempt": "a" * 32,
+            "copy": "ok",
+            "restore": "ok",
+            "delivery": "ok",
+            "delivery_at": "2026-11-24T00:00:00Z",
+        },
+    )
+
+    lines = status_path.read_text().splitlines()
+    assert "Таймер копирования не подтверждён. Автозапуск не подтверждён." in lines
+    if systemctl_missing:
+        assert "Таймер доставки не подтверждён. Автозапуск не подтверждён." in lines
+    else:
+        assert "Таймер доставки ожидает запуска. Автозапуск выключен." in lines
+    assert "Копия: успех." in lines
+    assert "Возврат служб: успех." in lines
+    assert "Передача на ПК: успех; время: 2026-11-24T00:00:00Z." in lines
 
 
 def test_backup_restores_before_publishing_and_preserves_one_pending(ctx, monkeypatch):

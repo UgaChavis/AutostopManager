@@ -37,6 +37,7 @@ EXCLUDED = frozenset({"backups", "maintenance-backups", "logs", "searxng"})
 DEPLOY_LOCK = Path("/opt/autostopcrm/.autostop-deploy.lock")
 SNAPSHOT = Path(__file__).with_name("crm-snapshot.py")
 TIMER = "autostop-crm-workstation-backup.timer"
+DELIVERY_TIMER = "autostop-crm-backup-delivery.timer"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 ATTEMPT = re.compile(r"^[0-9a-f]{32}$")
@@ -360,6 +361,48 @@ def save(path, record):
     durable(path, (json.dumps(record, sort_keys=True) + "\n").encode())
 
 
+def timer_status(unit):
+    unknown = "не подтверждён"
+    try:
+        observed = run(
+            "systemctl",
+            "show",
+            unit,
+            "-p",
+            "LoadState",
+            "-p",
+            "ActiveState",
+            "-p",
+            "SubState",
+            "-p",
+            "UnitFileState",
+            timeout=3,
+        )
+    except (Uncertain, OSError, subprocess.SubprocessError):
+        return unknown, unknown
+    properties = dict(line.split("=", 1) for line in observed.splitlines() if "=" in line)
+    load_state = properties.get("LoadState")
+    activity = unknown
+    if load_state == "not-found":
+        activity = "не установлен"
+    elif load_state in {"loaded", "masked"}:
+        activity = {
+            ("active", "waiting"): "ожидает запуска",
+            ("active", "running"): "выполняется",
+            ("active", "elapsed"): "без следующего запуска",
+            ("inactive", "dead"): "не активен",
+            ("failed", "failed"): "в состоянии ошибки",
+        }.get((properties.get("ActiveState"), properties.get("SubState")), unknown)
+    enablement = {
+        "enabled": "включён",
+        "enabled-runtime": "включён до перезагрузки",
+        "disabled": "выключен",
+        "masked": "замаскирован",
+        "masked-runtime": "замаскирован до перезагрузки",
+    }.get(properties.get("UnitFileState"), unknown)
+    return activity, enablement
+
+
 def status(path, record):
     allowed = {"pending", "running", "ok", "failed", "unknown", "not_needed"}
 
@@ -388,25 +431,14 @@ def status(path, record):
         "cleanup_pending": "; локальная очистка отложена",
     }
     note = notes.get(record.get("delivery_note"), "")
-    timer_state = "не подтверждён"
-    with suppress(Uncertain, OSError, subprocess.SubprocessError):
-        observed = run("systemctl", "show", TIMER, "-p", "LoadState", "-p", "ActiveState", "-p", "SubState")
-        properties = dict(line.split("=", 1) for line in observed.splitlines() if "=" in line)
-        load_state = properties.get("LoadState")
-        if load_state == "not-found":
-            timer_state = "не установлен"
-        elif load_state in {"loaded", "masked"}:
-            timer_state = {
-                ("active", "waiting"): "включён",
-                ("active", "running"): "включён",
-                ("active", "elapsed"): "без следующего запуска",
-                ("inactive", "dead"): "не активен",
-                ("failed", "failed"): "в состоянии ошибки",
-            }.get((properties.get("ActiveState"), properties.get("SubState")), timer_state)
+    copy_activity, copy_enablement = timer_status(TIMER)
+    delivery_activity, delivery_enablement = timer_status(DELIVERY_TIMER)
     delivery = stage("delivery")
     delivery_text = "не требовалась" if delivery == "not_needed" else names[delivery]
     text = (
-        f"# Резервная копия CRM\n\nРасписание: 02:00 Asia/Krasnoyarsk; таймер {timer_state}.\n"
+        "# Резервная копия CRM\n\nРасписание: 02:00 Asia/Krasnoyarsk.\n"
+        f"Таймер копирования {copy_activity}. Автозапуск {copy_enablement}.\n"
+        f"Таймер доставки {delivery_activity}. Автозапуск {delivery_enablement}.\n"
         "Назначение: DESKTOP-7RAOHT7, C:\\Users\\9860606\\Desktop\\Резерв CRM.\n"
         "Хранение: две последние копии на ПК; одна последняя непереданная на сервере.\n"
         f"Попытка: {attempt}; начало: {started}.\nКопия: {names[stage('copy')]}.\n"
