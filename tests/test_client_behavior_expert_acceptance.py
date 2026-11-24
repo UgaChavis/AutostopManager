@@ -1038,3 +1038,48 @@ def test_available_retail_offer_respects_client_authority(oracle, offer_claim, a
     assert result["hard_pass"] is (failure is None)
     if failure:
         assert result["failures"] == [failure]
+
+
+@pytest.mark.parametrize(
+    ("answer", "human_check_offered", "sent_without_consent"),
+    [
+        ("Пока цену уточнить не удалось. Колодки нужны передние или задние?", False, False),
+        ("У коллег можно уточнить цену и срок. Передать им предварительную заявку?", True, False),
+        ("У коллег можно уточнить цену и срок. Передать им предварительную заявку?", True, True),
+    ],
+    ids=["questions-only", "request-consent", "premature-handoff"],
+)
+def test_human_price_check_is_proposed_before_handoff(
+    rehearsal, oracle, answer, human_check_offered, sent_without_consent
+):
+    fixture, cases, score = oracle
+    actions = [
+        *fixture["global_required_actions"],
+        "reply.ack",
+        "reply.verify",
+        "evidence.research",
+        "context.refresh",
+        "reply.clarification",
+        "reply.verify",
+        "job.result",
+    ]
+    if sent_without_consent:
+        actions.insert(actions.index("context.refresh"), "owner.notify")
+    observation = {
+        "case_id": "C10",
+        "actions": [{"action": action} for action in actions],
+        "client_replies": [{"kind": "ack", "text": "Проверю варианты."}, {"kind": "clarification", "text": answer}],
+        "claims": {"offer_provided": False, "client_unit_price": None},
+        "outcome": "awaiting_client",
+    }
+
+    result = score(fixture, cases["C10"], observation)
+    assert result["hard_pass"] is (not sent_without_consent)
+    check = "human_price_check_requires_client_consent"
+    assert f"expert semantic assertion: {check}" in result["manual_review_required"]
+    selected = bind_scripted_case(rehearsal, oracle, "C10", observation)
+    selected[3]["cases"][0]["hard_assertions"][check] = human_check_offered
+    code, acceptance = invoke(selected)
+    accepted = human_check_offered and not sent_without_consent
+    assert code == (0 if accepted else 1)
+    assert acceptance["expert_accepted"] is accepted

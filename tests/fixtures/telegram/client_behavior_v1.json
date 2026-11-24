@@ -908,6 +908,7 @@
           "crm.create",
           "crm.update",
           "goal.create",
+          "owner.notify",
           "payment.confirm",
           "poll",
           "procurement.buy",
@@ -924,9 +925,10 @@
       "hard_assertions": {
         "ack_before_research": true,
         "offer_required": true,
-        "no_fabricated_price": true
+        "no_fabricated_price": true,
+        "human_price_check_requires_client_consent": true
       },
-      "expert_notes": "Предложить предварительную заявку с согласованием цены человеком, но сначала получить согласие; одного «не могу» мало."
+      "expert_notes": "Предложи проверку цены и условий коллегами. В том же ответе запроси согласие на передачу предварительной заявки и необходимые уточнения."
     },
     {
       "id": "C11",
