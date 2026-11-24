@@ -96,6 +96,8 @@ may be a JSON list or an object containing `results` or `observations`. Each
 observation follows the original fixture contract: `case_id`, `client_replies`,
 `actions` with semantic `action` and optional string `data`, `outcome`, `claims`
 and `unresolved`. No returned field is executed.
+Both `score` and `accept` reject an action trace if a supplied `data` value has
+a type other than string.
 
 `client_replies.kind` describes the meaning of the draft message. A semantic
 `handoff` closing does not request the native Telegram effect kind `handoff`.

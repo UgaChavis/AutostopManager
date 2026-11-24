@@ -97,6 +97,22 @@ def test_policy_score_stays_pending_and_cannot_claim_expert_acceptance(rehearsal
     assert result["runtime_or_delivery_proof"] is False
 
 
+@pytest.mark.parametrize(("data", "valid"), [("Synthetic evidence", True), ({"id": "FAKE"}, False), (None, False)])
+def test_action_data_is_optional_text(rehearsal, data, valid):
+    _, _, results_path, review, observations = rehearsal
+    observations[0]["actions"][0]["data"] = data
+    results_path.write_text(json.dumps(observations))
+    review["artifacts"]["results_sha256"] = digest(results_path)
+
+    code, score = invoke(rehearsal, "score")
+    assert code == (0 if valid else 1)
+    assert score["all_hard_passed"] is valid
+    assert score["reports"][0]["failures"] == ([] if valid else ["invalid action trace"])
+    code, acceptance = invoke(rehearsal)
+    assert code == (0 if valid else 1)
+    assert acceptance["expert_accepted"] is valid
+
+
 def test_complete_review_accepts_only_the_supplied_synthetic_observations(rehearsal):
     code, result = invoke(rehearsal)
     assert code == 0 and result["expert_accepted"] is True and result["reviewed_cases"] == 2

@@ -133,7 +133,7 @@
     "actions": [
       {
         "action": "semantic action name",
-        "data": "optional fake-only fields"
+        "data": "optional plain text about fake evidence; omit this field if unused"
       }
     ],
     "outcome": "answered|awaiting_client|handoff|no_reply_needed|needs_review",
