@@ -1397,9 +1397,10 @@
         "no_fabricated_contact": true,
         "confirmed_handoff_requires_receipts": true,
         "parts_closing_phrase": true,
-        "internal_costs_private": true
+        "internal_costs_private": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
-      "expert_notes": "Карточка допустима без телефона; имяfallback «Клиент Telegram», формальный Store-заказ не обязателен."
+      "expert_notes": "Карточка допустима без телефона; при неизвестном имени используй «Клиент Telegram». Клиент согласовал один комплект, сохрани эту единицу. Формальный Store-заказ не обязателен."
     },
     {
       "id": "C19",
@@ -1470,9 +1471,10 @@
       "hard_assertions": {
         "card_target": "FIXTURE_CARD_A",
         "preserve_unrelated_fields": true,
-        "confirmed_handoff_requires_receipts": true
+        "confirmed_handoff_requires_receipts": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
-      "expert_notes": "Продолжить найденную карточку после полного чтения, не создавать новую."
+      "expert_notes": "Продолжить найденную карточку после полного чтения, без дубля. Подтверждено количество позиций, единица продажи уточняется. Проверь текст ответа и план записи в карточку."
     },
     {
       "id": "C20",
@@ -2141,9 +2143,10 @@
       "hard_assertions": {
         "ack_before_research": true,
         "internal_costs_private": true,
-        "no_crm_links_to_client": true
+        "no_crm_links_to_client": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
-      "expert_notes": "Дать клиентское предложение; закупочный план/прибыль не пересылать."
+      "expert_notes": "Дать клиентское предложение, сохранив закупку и прибыль внутри команды. Сверь основание единицы цены и различие между кодом предложения и каталожным артикулом."
     },
     {
       "id": "C31",
