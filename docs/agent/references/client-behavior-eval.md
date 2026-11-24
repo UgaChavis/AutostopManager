@@ -126,6 +126,13 @@ In C06 the client corrects the request after research. Check that a context
 refresh appears between research and the first closing reply. A refresh
 before research can still appear as an additional step.
 
+For cases with `quoted_parts_identity_and_unit_grounded`, the helper checks
+offer IDs from `inputs.facts.offers` in the proposed client result. One shared
+offer-code label can cover both IDs. When evidence leaves the sale unit or
+package contents open, include that uncertainty with the quote in the result.
+An ACK does not satisfy this check. The expert still reviews the meaning of the
+product identity, quantity and caveat against the evidence.
+
 The required semantic `reply.result` also accepts a useful `reply.handoff`
 closing. This alias changes only the required-action check: native effect kinds,
 consent, independent receipts, unknown-effect stops and manual semantic review
@@ -134,7 +141,10 @@ read back that original effect and retain `needs_review`, without a new ACK or
 research. C38 may use `awaiting_client` after a useful preliminary answer and a
 necessary clarification; all seven rubric dimensions and critical assertions
 remain required. These oracle corrections do not revise prior observations or
-grades. Changed fixture bytes require a new bound expert review.
+grades. If a correction changes only hidden assertions, compare the emitted
+inputs before reusing any observation. Rescore all results and bind a fresh
+expert review to the new fixture. Keep the origin of reused observations and
+the separate evidence for any rerun.
 
 ## Independent expert acceptance
 
