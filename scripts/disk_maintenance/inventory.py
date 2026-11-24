@@ -895,9 +895,20 @@ def verify_protected(policy: dict) -> dict:
     return {"ok": True, "receipts": receipts, "fingerprint": inventory["fingerprint"]}
 
 
-def _checksum_rows(manifest: Path) -> dict[str, str]:
+def _checksum_rows(manifest: Path, *, strict: bool = False) -> dict[str, str]:
     _regular(manifest)
-    lines = [line for line in manifest.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    if strict:
+        limit = 4 * 1024 * 1024
+        with manifest.open("rb") as source:
+            content = source.read(limit + 1)
+        if len(content) > limit:
+            raise MaintenanceError("preserved_checksums_invalid")
+        try:
+            lines = content.decode("utf-8").splitlines()
+        except UnicodeError as exc:
+            raise MaintenanceError("preserved_checksums_invalid") from exc
+    else:
+        lines = [line for line in manifest.read_text().splitlines() if line.strip() and not line.startswith("#")]
     if not lines:
         raise MaintenanceError("preserved_checksums_empty")
     result = {}
@@ -905,17 +916,38 @@ def _checksum_rows(manifest: Path) -> dict[str, str]:
         match = re.fullmatch(r"([0-9a-f]{64}) [ *](.+)", line)
         if not match:
             raise MaintenanceError("preserved_checksums_invalid")
-        name = match[2].removeprefix("./")
+        name = match[2] if strict else match[2].removeprefix("./")
+        if strict:
+            relative = PurePosixPath(name)
+            if (
+                relative.is_absolute()
+                or relative.as_posix() != name
+                or ".." in relative.parts
+                or "\\" in name
+                or "\x00" in name
+            ):
+                raise MaintenanceError("preserved_checksums_invalid")
         if name in result:
             raise MaintenanceError("preserved_checksums_invalid")
         result[name] = match[1]
     return result
 
 
-def _verify_checksum_list(directory: Path, manifest: Path) -> None:
-    for name, digest in _checksum_rows(manifest).items():
+def _verify_checksum_list(directory: Path, manifest: Path, *, strict: bool = False) -> dict[str, str]:
+    rows = _checksum_rows(manifest, strict=strict)
+    for name, digest in rows.items():
         if sha256_file(_member(directory, name)) != digest:
             raise MaintenanceError("preserved_hash_mismatch")
+    return rows
+
+
+def _verify_sealed_work_manifest(path: Path, root: Path, manifest: Path) -> dict[str, str]:
+    _guard(path, root)
+    rows = _verify_checksum_list(path, manifest, strict=True)
+    files = {child.relative_to(path).as_posix() for child in path.rglob("*") if child != manifest and child.is_file()}
+    if "REVISION" not in rows or rows.keys() != files:
+        raise MaintenanceError("work_release_coverage_missing")
+    return rows
 
 
 def _verify_work_release(path: Path, policy: dict) -> str:
@@ -945,16 +977,34 @@ def _verify_work_release(path: Path, policy: dict) -> str:
     revision = (manager / "REVISION").read_text().strip()
     if not _manager_name_matches_revision(manager, revision) or revision[:12] != match[1]:
         raise MaintenanceError("work_release_revision_invalid")
-    _verify_checksum_list(manager, manager / "MANIFEST.sha256")
+    trusted = _verify_checksum_list(manager, manager / "MANIFEST.sha256")
+    manifest = path / "MANIFEST.sha256"
+    work = None
+    if manifest.exists() or manifest.is_symlink():
+        if telegrams is None:
+            raise MaintenanceError("work_release_identity_invalid")
+        work = _verify_sealed_work_manifest(path, telegrams, manifest)
+    if work is not None:
+        expected_revision = hashlib.sha256((revision + "\n").encode("ascii")).hexdigest()
+        if work["REVISION"] != expected_revision:
+            raise MaintenanceError("work_release_revision_invalid")
+        if "autostop_manager/telegram_bridge.py" not in work:
+            raise MaintenanceError("work_release_coverage_missing")
+        # Both sealed releases carry the same Git tree. REVISION is generated
+        # separately and has already been checked above.
+        del work["REVISION"]
+        trusted.pop("REVISION", None)
+        if work != trusted:
+            raise MaintenanceError("work_release_source_mismatch")
+        return revision
+
+    # Legacy Git archives lack a seal. Compare their Python and launch/config
+    # files against the bound Manager manifest without importing release code.
     revision_path = path / "REVISION"
     if revision_path.exists() or revision_path.is_symlink():
         _regular(revision_path)
         if revision_path.read_text().strip() != revision:
             raise MaintenanceError("work_release_revision_invalid")
-    trusted = _checksum_rows(manager / "MANIFEST.sha256")
-    # Native work releases are git archives without their own manifest.
-    # Compare the complete executable Python package and its launch/config
-    # files to the matching trusted Manager manifest; never import the code.
     names = [str(child.relative_to(path)) for child in (path / "autostop_manager").rglob("*.py")]
     names += [
         name

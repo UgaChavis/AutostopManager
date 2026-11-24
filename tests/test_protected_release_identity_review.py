@@ -1,6 +1,6 @@
 """Protected release identity follows configured roots and producer names.
 
-Twenty-two distinct cases, no CLI/native repeats. All artifacts are synthetic.
+All artifacts are synthetic.
 Only unrelated collect() discovery and synthetic UID are replaced; checksums,
 cold-registry empty handling, roots, binding and protected verification are real.
 This checks verification receipts, not retention, deletion or installed health.
@@ -24,9 +24,15 @@ from scripts.disk_maintenance import inventory as inv
 REVISION = "a" * 40
 SOURCE_NAMES = (
     "autostop_manager/telegram_bridge.py",
+    "autostop_manager/telegram_wake.py",
     "deploy/systemd/autostop-work-telegram.service",
     "deploy/telegram/faster-whisper-small.sha256",
     "scripts/run-work-telegram-media.sh",
+    "AGENTS.md",
+    "docs/agent/modules/B4.md",
+    ".agents/skills/example/SKILL.md",
+    "docs/maintenance-backlog.md",
+    "docs/technical-note.md",
 )
 
 
@@ -39,6 +45,16 @@ def _write(path, value):
 def _checksums(directory, names, target):
     rows = [f"{hashlib.sha256((directory / name).read_bytes()).hexdigest()}  ./{name}\n" for name in names]
     _write(target, "".join(rows))
+
+
+def _seal_work(directory):
+    manifest = directory / "MANIFEST.sha256"
+    names = sorted(path for path in directory.rglob("*") if path.is_file() and path != manifest)
+    rows = [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(directory).as_posix()}\n" for path in names
+    ]
+    _write(manifest, "".join(rows))
+    return manifest
 
 
 def _snapshot(root):
@@ -150,6 +166,74 @@ def test_supported_release_layouts_are_verified(layout, variant):
         _relocate(layout, "manager", layout.roots["manager_releases"] / name)
     _verify(layout)
     assert not (layout.paths["telegram"] / "MANIFEST.sha256").exists()
+
+
+def test_sealed_telegram_verifies_the_complete_matching_manager_tree(layout):
+    telegram = layout.paths["telegram"]
+    _write(telegram / "REVISION", REVISION + "\n")
+    _seal_work(telegram)
+    _verify(layout)
+
+
+@pytest.mark.parametrize(
+    ("defect", "error"),
+    (
+        ("missing_revision", "work_release_coverage_missing"),
+        ("noncanonical_revision", "work_release_revision_invalid"),
+        ("missing_python", "work_release_source_mismatch"),
+        ("missing_instruction", "work_release_source_mismatch"),
+        ("missing_linked_instruction", "work_release_source_mismatch"),
+        ("missing_launcher", "work_release_source_mismatch"),
+        ("changed_instruction", "work_release_source_mismatch"),
+        ("changed_project_skill", "work_release_source_mismatch"),
+        ("extra_archive_file", "work_release_source_mismatch"),
+        ("changed_after_seal", "preserved_hash_mismatch"),
+        ("unlisted_file", "work_release_coverage_missing"),
+        ("comment_row", "preserved_checksums_invalid"),
+        ("dot_prefix", "preserved_checksums_invalid"),
+        ("linked_manifest", "candidate_symlink"),
+        ("writable_file", "candidate_tree_owner_or_mode_invalid"),
+    ),
+)
+def test_sealed_telegram_requires_owned_complete_tree_and_manager_agreement(layout, defect, error):
+    telegram = layout.paths["telegram"]
+    revision = telegram / "REVISION"
+    note = telegram / "docs/technical-note.md"
+    _write(revision, REVISION + "\n")
+    if defect == "missing_revision":
+        revision.unlink()
+    elif defect == "noncanonical_revision":
+        _write(revision, REVISION + "\u00a0\n")
+    elif defect == "missing_python":
+        (telegram / "autostop_manager/telegram_wake.py").unlink()
+    elif defect == "missing_instruction":
+        (telegram / "docs/agent/modules/B4.md").unlink()
+    elif defect == "missing_linked_instruction":
+        (telegram / "docs/maintenance-backlog.md").unlink()
+    elif defect == "missing_launcher":
+        (telegram / "scripts/run-work-telegram-media.sh").unlink()
+    elif defect == "changed_instruction":
+        _write(telegram / "docs/agent/modules/B4.md", "Changed synthetic instruction\n")
+    elif defect == "changed_project_skill":
+        _write(telegram / ".agents/skills/example/SKILL.md", "Changed synthetic project skill\n")
+    elif defect == "extra_archive_file":
+        _write(telegram / "extra.txt", "Synthetic Work-only archive file\n")
+    manifest = _seal_work(telegram)
+    if defect == "changed_after_seal":
+        _write(note, "Changed synthetic non-runtime file\n")
+    elif defect == "unlisted_file":
+        _write(telegram / "unlisted.txt", "Unlisted synthetic file\n")
+    elif defect == "comment_row":
+        _write(manifest, "# extra comment\n" + manifest.read_text())
+    elif defect == "dot_prefix":
+        _write(manifest, manifest.read_text().replace("  REVISION\n", "  ./REVISION\n"))
+    elif defect == "linked_manifest":
+        manifest.unlink()
+        manifest.symlink_to(telegram / "absent")
+    elif defect == "writable_file":
+        note.chmod(0o666)
+    with pytest.raises(inv.MaintenanceError, match=error):
+        _verify(layout)
 
 
 @pytest.mark.parametrize(
