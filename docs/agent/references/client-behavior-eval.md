@@ -118,6 +118,10 @@ or attachment in between, its verification cannot stand in for the final
 reply. When a trace uses alternative labels for its closing or completion,
 the reviewer checks their meaning and order.
 
+In C06 the client corrects the request after research. Check that a context
+refresh appears between research and the first closing reply. A refresh
+before research can still appear as an additional step.
+
 The required semantic `reply.result` also accepts a useful `reply.handoff`
 closing. This alias changes only the required-action check: native effect kinds,
 consent, independent receipts, unknown-effect stops and manual semantic review

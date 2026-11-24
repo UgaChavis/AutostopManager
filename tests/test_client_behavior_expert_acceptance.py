@@ -363,6 +363,60 @@ def test_noncanonical_final_reply_boundaries_remain_subject_to_manual_review(ora
 
 
 @pytest.mark.parametrize(
+    ("between_early_refresh_and_result", "passes", "manual_order"),
+    [
+        pytest.param(["evidence.research"], False, False, id="early_refresh_only"),
+        pytest.param(["evidence.research", "context.refresh"], True, False, id="early_and_late_refresh"),
+        pytest.param(
+            ["evidence.research", "reply.result", "reply.verify", "context.refresh"],
+            False,
+            False,
+            id="refresh_after_first_result",
+        ),
+        pytest.param(["evidence.research", "unrecognized.note"], False, False, id="known_bad_order_with_unknown_note"),
+        pytest.param(["catalog.lookup", "context.refresh"], True, True, id="noncanonical_research_boundary"),
+    ],
+)
+def test_c06_late_correction_is_refreshed_after_research_before_first_result(
+    oracle, between_early_refresh_and_result, passes, manual_order
+):
+    fixture, cases, score = oracle
+    actions = [
+        *fixture["global_required_actions"],
+        "media.photo.read",
+        "media.voice.transcribe",
+        "media.cleanup",
+        "reply.ack",
+        "reply.verify",
+        "context.refresh",
+        *between_early_refresh_and_result,
+        "reply.result",
+        "reply.verify",
+        "job.result",
+    ]
+    replies = [{"kind": "ack", "text": "Посмотрю варианты."}]
+    if actions.count("reply.result") == 2:
+        replies.append({"kind": "result", "text": "Посчитал три комплекта. Работу считаю отдельно."})
+    replies.append({"kind": "result", "text": "Посчитал один комплект. Работу считаю отдельно."})
+
+    result = score(
+        fixture,
+        cases["C06"],
+        {
+            "outcome": "answered",
+            "claims": {"quantity": 1},
+            "actions": [{"action": action} for action in actions],
+            "client_replies": replies,
+        },
+    )
+    assert result["hard_pass"] is passes
+    assert result["failures"] == (
+        [] if passes else ["late correction not reconciled after research before first reply"]
+    )
+    assert ("review late correction order with noncanonical labels" in result["manual_review_required"]) is manual_order
+
+
+@pytest.mark.parametrize(
     ("case_id", "reply_text"),
     [
         pytest.param("C16", "Срок уточню. Пока ничего не оформляю.", id="price_interest"),

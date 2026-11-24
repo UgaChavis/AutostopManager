@@ -101,6 +101,27 @@ def check_final_reply_verification(
     failures.append("final reply verification must precede successful completion")
 
 
+def check_late_correction_order(actions: list[str], unknown: set[str], failures: list[str], manual: list[str]) -> None:
+    first_reply = next(
+        (
+            index
+            for index, action in enumerate(actions)
+            if action in FINAL_REPLY_ACTIONS or action == "reply.clarification"
+        ),
+        None,
+    )
+    if first_reply is None or "evidence.research" not in actions:
+        if unknown and "context.refresh" in actions:
+            manual.append("review late correction order with noncanonical labels")
+        else:
+            failures.append("late correction not reconciled before final answer")
+        return
+
+    research = actions.index("evidence.research")
+    if "context.refresh" not in actions[research + 1 : first_reply]:
+        failures.append("late correction not reconciled after research before first reply")
+
+
 def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside all runtime paths.
     fixture: dict[str, Any], case: dict[str, Any], observation: dict[str, Any]
 ) -> dict[str, Any]:
@@ -182,10 +203,7 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
             failures.append("acknowledgement or empty output claimed as completed useful result")
         check_final_reply_verification(actions, unknown, failures, manual)
     if checks.get("late_events_covered"):
-        if "context.refresh" not in actions or "reply.result" not in actions:
-            failures.append("late correction not reconciled before final answer")
-        elif actions.index("context.refresh") > actions.index("reply.result"):
-            failures.append("final answer precedes latest context reconciliation")
+        check_late_correction_order(actions, unknown, failures, manual)
     for field in ("quantity", "client_unit_price", "discount_rate"):
         if field in checks:
             value = claims.get(field)
