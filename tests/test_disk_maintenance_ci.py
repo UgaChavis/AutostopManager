@@ -42,6 +42,7 @@ class FakeCI:
         self.clock = 0.0
         self.on_sleep = None
         self.after_disable = None
+        self.disable_readbacks = {}
         self.timestamp = 1
         self.head = "a" * 40
         self.head_reads = 0
@@ -117,6 +118,8 @@ class FakeCI:
         workflow = self.workflows[int(parts[1])]
         if len(parts) == 2:
             assert method == "GET"
+            if workflow["state"] == "disabled_manually" and (readbacks := self.disable_readbacks.get(workflow["id"])):
+                return self.result(argv, readbacks.pop(0))
             return self.result(argv, workflow)
         assert method == "PUT" and parts[2] in {"disable", "enable"}
         saved = next(value for value in self.read()["workflows"] if value["id"] == workflow["id"])
@@ -170,6 +173,55 @@ def test_ci_pause_before_mutation_receipt_and_idempotent_resume(fake):
     assert_original_workflows(fake)
     assert fake.runner["active_state"] == "active"
     assert len(fake.mutations("enable")) == 2
+
+
+def test_ci_stale_disable_readback_confirms_with_one_put_per_workflow(fake):
+    fake.disable_readbacks[1] = [dict(fake.workflows[1])] * 2
+
+    state = ci.pause({}, fake.path)
+
+    assert state["phase"] == "paused" and fake.clock == 2
+    assert state["workflows"][0]["disabled_updated_at"] == fake.workflows[1]["updated_at"]
+    assert [call[-1] for call in fake.mutations("disable")] == [
+        f"repos/{ci.REPOSITORY}/actions/workflows/{workflow_id}/disable" for workflow_id in (1, 2)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"state": "disabled_inactivity"}, "ci_disable_unconfirmed"),
+        ({"updated_at": "2026-10-03T00:01:00Z"}, "ci_disable_unconfirmed"),
+        ({"id": 42}, "ci_workflow_identity_changed"),
+    ],
+)
+def test_ci_changed_disable_readback_exits_without_retry(fake, change, error):
+    fake.disable_readbacks[1] = [{**fake.workflows[1], **change}]
+
+    with pytest.raises(ci.MaintenanceError, match=error):
+        ci.pause({}, fake.path)
+
+    assert fake.clock == 0 and len(fake.mutations("disable")) == 1
+    assert_original_workflows(fake)
+
+
+def test_ci_ambiguous_restore_is_deferred_if_catalog_disagrees(fake):
+    fake.disable_readbacks[1] = [dict(fake.workflows[1])] * 4
+
+    with pytest.raises(ci.MaintenanceError, match="ci_pause_recovery_required"):
+        ci.pause({}, fake.path)
+
+    state = fake.read()
+    saved = state["workflows"][0]
+    assert state["phase"] == "recovery_required" and not state["runner_stopped"]
+    assert state["resume_errors"] == ["ci_workflow_recovery_conflict"]
+    assert saved["disable_intent"] and not saved["disabled"] and not saved["restored"]
+    assert fake.clock == 2 and len(fake.mutations("disable")) == 1
+    assert not fake.mutations("enable")
+
+    assert ci.resume({}, fake.path)["restored"]
+    assert len(fake.mutations("enable")) == 1
+    assert_original_workflows(fake)
 
 
 @pytest.mark.parametrize("applied_before_error", [False, True])

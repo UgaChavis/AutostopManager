@@ -351,14 +351,19 @@ def _disable(settings: dict, path: Path, state: dict) -> None:
     for saved in state["workflows"]:
         if saved["original_state"] != "active":
             continue
-        current = _get_workflow(settings, saved)
-        if current["state"] != "active" or current["updated_at"] != saved["original_updated_at"]:
+        original = _get_workflow(settings, saved)
+        if original["state"] != "active" or original["updated_at"] != saved["original_updated_at"]:
             raise MaintenanceError("ci_workflow_state_changed")
         saved["disable_intent"] = True
         state["admission_gap_possible"] = True
         _save(path, state)
         _api(settings, f"workflows/{saved['id']}/disable", method="PUT")
         current = _get_workflow(settings, saved)
+        for _ in range(2):
+            if current != original:
+                break
+            time.sleep(min(settings["poll_seconds"], 1))
+            current = _get_workflow(settings, saved)
         if current["state"] != "disabled_manually":
             raise MaintenanceError("ci_disable_unconfirmed")
         saved["disabled"] = True
@@ -504,6 +509,10 @@ def _restore_workflow(settings: dict, path: Path, state: dict, saved: dict) -> N
                 raise MaintenanceError("ci_enable_unconfirmed")
         elif current["state"] != "active":
             raise MaintenanceError("ci_workflow_recovery_conflict")
+        elif not saved["disabled"]:
+            catalog = {entry["id"]: entry for entry in _workflows(settings)}
+            if catalog.get(saved["id"]) != current:
+                raise MaintenanceError("ci_workflow_recovery_conflict")
     saved["restored"] = True
     _save(path, state)
 
