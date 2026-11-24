@@ -188,9 +188,10 @@ in `base_revision`; all prompts still read the selected current instructions.
 
 For C21, an attempted unverified job-bound effect prevents both new effects and
 terminal completion in the native inbox. `needs_review` is a correct response.
-Do not change the runtime or force a false terminal result to satisfy an oracle.
-If a trace proposes another verified human handoff, evaluate that evidence and
-the actual recipient/transfer separately.
+The policy check rejects planned sends after the unknown notification attempt
+and any terminal claim while the fixture's original notification is unresolved.
+Review the meaning of alternative action labels and verify that the readback
+uses the original notification key.
 
 For C28, a verified appointment within the allowed window is a reception time.
 It may be confirmed while installation explicitly remains conditional on parts

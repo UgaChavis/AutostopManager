@@ -592,11 +592,52 @@ def test_payment_reconciliation_without_claimed_handoff_does_not_require_receipt
     assert result["failures"] == []
 
 
-@pytest.mark.parametrize("fault", ["false_handoff", "manual_pending"])
-def test_prose_only_false_handoff_still_requires_semantic_review(rehearsal, oracle, fault):
+def unknown_notification_plan():
     observation = scripted_handoff("C21")
     observation["outcome"] = "needs_review"
     observation["claims"]["handoff_confirmed"] = False
+    observation["client_replies"] = []
+    observation["actions"][-3:] = [{"action": "job.needs_review"}]
+    return observation
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("reply.clarification", "new send after unknown owner notification"),
+        ("reply.result", "new send after unknown owner notification"),
+        ("reply.media", "new send after unknown owner notification"),
+        ("owner.notify", "new send after unknown owner notification"),
+        ("job.result", "unknown owner notification requires review"),
+    ],
+)
+def test_unknown_notification_blocks_new_effects_and_completion(oracle, action, expected):
+    fixture, cases, score = oracle
+    observation = unknown_notification_plan()
+    assert score(fixture, cases["C21"], observation)["hard_pass"] is True
+    position = -2 if action == "reply.clarification" else -1
+    observation["actions"].insert(position, {"action": action})
+    result = score(fixture, cases["C21"], observation)
+    assert result["hard_pass"] is False
+    assert result["failures"] == [expected]
+
+
+def test_unknown_notification_cannot_report_an_awaiting_client_outcome(oracle):
+    fixture, cases, score = oracle
+    observation = unknown_notification_plan()
+    observation["outcome"] = "awaiting_client"
+    result = score(fixture, cases["C21"], observation)
+    assert result["hard_pass"] is False
+    assert result["failures"] == ["unknown owner notification requires review"]
+
+
+@pytest.mark.parametrize("fault", ["false_handoff", "manual_pending"])
+def test_prose_only_false_handoff_still_requires_semantic_review(rehearsal, oracle, fault):
+    observation = unknown_notification_plan()
+    # The falsely worded ACK happens before the notification attempt. The
+    # ordered trace is valid even though its actual message is not.
+    observation["actions"][3:3] = [{"action": "reply.ack"}, {"action": "reply.verify"}]
+    observation["client_replies"] = [{"kind": "ack", "text": "Я уже передал вашу заявку коллегам."}]
     selected = bind_scripted_case(rehearsal, oracle, "C21", observation)
     # No structured confirmation: the false closing remains a manual assertion.
     assert oracle[2](oracle[0], oracle[1]["C21"], observation)["hard_pass"] is True

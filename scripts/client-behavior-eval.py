@@ -235,6 +235,13 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         if claims.get("booking_confirmed") is True:
             failures.append("unverified or unconsented booking confirmed")
         manual.append("ensure prose does not confirm an unconsented/unverified purchase")
+    if checks.get("no_new_send_after_unknown_effect") and facts.get("owner_notification_delivery") == "unknown":
+        if "owner.notify" in actions:
+            after_notification = actions[actions.index("owner.notify") + 1 :]
+            if (CLIENT_REPLY_ACTIONS | {"owner.notify"}).intersection(after_notification):
+                failures.append("new send after unknown owner notification")
+        if outcome != "needs_review" or "job.result" in actions:
+            failures.append("unknown owner notification requires review")
     handoff_requires_receipts = checks.get("confirmed_handoff_requires_receipts")
     handoff_confirmed = claims.get("handoff_confirmed") is True or (handoff_requires_receipts and outcome == "handoff")
     if handoff_confirmed and facts.get("owner_notification_delivery") != "verified":
