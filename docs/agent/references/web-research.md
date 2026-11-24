@@ -182,6 +182,8 @@ manager_snapshot=$(readlink -f /opt/autostop-manager-releases/current)
 env PYTHONSAFEPATH=1 PYTHONPATH="$manager_snapshot" "${runtime_python:?Set verified service Python}" -m autostop_manager.cli mcp-probe --url http://127.0.0.1:41931/mcp --timeout 90 --browser-check
 ```
 
-Нужны cache_ready, browser_ready и browser_containers_ready, совпадение browser release/attestation revision, `checks.fetch_page_browser.ok=true`. J1 probe не делает search; для отдельно порученного synthetic static вызова годятся Example Domain/example.com без персональных данных. Green probe не доказывает качество выдачи/источника.
+Нужны cache_ready, browser_ready и browser_containers_ready, совпадение browser release/attestation revision, `checks.fetch_page_browser.ok=true`. Для отдельно порученного synthetic static вызова годятся Example Domain/example.com без персональных данных.
+
+В J1 probe `search_configured` подтверждает наличие и валидный адрес SearXNG, а HTTP 200 на его корневом маршруте подтверждает доступность локального HTTP. Для сбоя поиска сверяй `search_failures`, `search_attempts` и время ошибок внешних поисковых систем в журнале SearXNG. В отчёте сохраняй только агрегаты и технические категории без текстов запросов и URL. Если в сохранённом задании нет `search_attempts`, укажи, что причина отдельного запроса не подтверждена.
 
 Browser activation внутри coordinated deploy требует `MemAvailable >=2 GiB`, `SwapFree >=1 GiB`, нулевой `pswpin/pswpout` за 60 секунд и повторной проверки capacity. Старый marker после нового SHA не годится. Диагностика: worker/cache → SearXNG DNS/HTTP → static fetch → browser topology/socket/marker → MCP schema/tool → source. Восстановление использует официальный rollback без ручной подмены release links/marker/persistent cache.
