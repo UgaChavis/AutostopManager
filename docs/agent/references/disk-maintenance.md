@@ -67,6 +67,21 @@ symlink/mount переходы и связанные hardlinks сохраняю�
 ошибка остаётся видимой в receipt. Новая версия Store требует обычного workflow,
 сам maintenance deploy не запускает.
 
+### Проверка ночного запуска
+
+Сверь `LastTriggerUSec` основного таймера и запуск `maintain` в журнале
+`autostop-disk-maintenance.service` за нужное окно. После перезагрузки проверь
+также предыдущую загрузку. Пустое время запуска и `Result=success` могут
+означать, что служба ещё не выполнялась.
+
+В `last-result.json` проверь `operation=maintain`, `started_at` и `finished_at`
+для того же запуска, затем `ok`, `errors`, `skipped`, `ci_restored` и
+`target_reached`. Цель по месту может остаться недостигнутой при успешной
+проверке пустого плана. Ручной `apply` пишет в тот же файл. `last-plan.json` и
+`last-recovery.json` отражают план и восстановление CI. Если после окончания
+окна с учётом `AccuracyUSec` таймера и `TimeoutStartUSec` службы свежего
+результата нет, зафиксируй отсутствие подтверждения и сверь журнал службы.
+
 ## Обновление
 
 Установка: `python3 scripts/install-autostop-disk-maintenance.py --source-commit SHA
