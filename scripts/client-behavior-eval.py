@@ -74,14 +74,14 @@ def number_matches(actual: Any, expected: Any) -> bool:
 
 
 def check_final_reply_verification(
-    actions: list[str], unknown: set[str], failures: list[str], manual: list[str]
+    actions: list[str], unknown: set[str], failures: list[str], manual: list[str], *, clarification: bool = False
 ) -> None:
     if "reply.verify" not in actions:
         failures.append("success claim without planned reply verification")
         return
 
-    final_actions = FINAL_REPLY_ACTIONS
-    if not final_actions.intersection(actions) and "reply.clarification" in actions:
+    final_actions = {"reply.clarification"} if clarification else FINAL_REPLY_ACTIONS
+    if not clarification and not final_actions.intersection(actions) and "reply.clarification" in actions:
         manual.append("verify whether the clarification label denotes a useful final reply")
         final_actions = {"reply.clarification"}
     final_reply = max((index for index, action in enumerate(actions) if action in final_actions), default=-1)
@@ -182,6 +182,20 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         failures.append("duplicate or unnecessary acknowledgement")
     if "max_client_replies" in checks and len(replies) > checks["max_client_replies"]:
         failures.append("unnecessary reply after the dialogue was already answered or closed")
+    if outcome == "awaiting_client" and "max_clarification_messages" in checks:
+        draft_kinds = {"clarification", "result"}
+        planned_kinds = {"reply.clarification", "reply.result"}
+        known_clarifications = max(
+            sum(kind in draft_kinds for kind in kinds), sum(action in planned_kinds for action in actions)
+        )
+        if known_clarifications > checks["max_clarification_messages"]:
+            failures.append("too many clarification messages")
+        elif "reply.clarification" in actions:
+            check_final_reply_verification(actions, unknown, failures, manual, clarification=True)
+        if "reply.clarification" in expected["required"] and not any(
+            reply["kind"] in draft_kinds and reply["text"].strip() for reply in replies
+        ):
+            failures.append("required clarification has no client draft")
     if checks.get("ack_before_research"):
         research = [index for index, action in enumerate(actions) if action == "evidence.research"]
         if not research or "reply.ack" not in actions:

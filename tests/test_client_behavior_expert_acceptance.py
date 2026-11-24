@@ -459,6 +459,81 @@ def test_public_query_privacy_assertion_requires_nonblank_query_evidence(
 
 
 @pytest.mark.parametrize(
+    ("reply_kinds", "planned_clarifications", "expected_failure"),
+    [
+        pytest.param([], ["reply.clarification"], "required clarification has no client draft", id="missing_draft"),
+        pytest.param(["ack"], ["reply.clarification"], "required clarification has no client draft", id="ack_only"),
+        pytest.param(
+            ["clarification", "clarification"],
+            ["reply.clarification"],
+            "too many clarification messages",
+            id="duplicate_drafts",
+        ),
+        pytest.param(
+            ["clarification"],
+            ["reply.clarification", "reply.clarification"],
+            "too many clarification messages",
+            id="duplicate_planned_sends",
+        ),
+        pytest.param(
+            ["clarification", "result"],
+            ["reply.clarification"],
+            "too many clarification messages",
+            id="extra_result_draft",
+        ),
+        pytest.param(["clarification"], ["reply.clarification"], None, id="one_bundled_question"),
+        pytest.param(["clarification"], ["reply.ask"], None, id="noncanonical_plan_label"),
+        pytest.param(["result"], ["reply.clarification"], None, id="draft_meaning_requires_expert"),
+    ],
+)
+def test_unintelligible_voice_requires_one_bounded_clarification(
+    oracle, reply_kinds, planned_clarifications, expected_failure
+):
+    fixture, cases, score = oracle
+    actions = [*fixture["global_required_actions"], "media.voice.transcribe", "media.cleanup"]
+    for action in planned_clarifications:
+        actions.extend([action, "reply.verify"])
+    actions.append("job.result")
+    question = "Повторите, пожалуйста, какую деталь и для какой модели нужно подобрать."
+    observation = {
+        "outcome": "awaiting_client",
+        "actions": [{"action": action} for action in actions],
+        "client_replies": [
+            {"kind": kind, "text": "Послушаю голосовое." if kind == "ack" else question} for kind in reply_kinds
+        ],
+    }
+
+    result = score(fixture, cases["C07"], observation)
+    assert result["hard_pass"] is (expected_failure is None)
+    assert result["failures"] == ([] if expected_failure is None else [expected_failure])
+    assert "expert semantic assertion: max_clarification_messages" in result["manual_review_required"]
+    if "reply.ask" in planned_clarifications:
+        assert "review unrecognised action semantics: reply.ask" in result["manual_review_required"]
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["reply.verify", "reply.clarification", "job.result"],
+        ["reply.clarification", "job.result", "reply.verify"],
+    ],
+    ids=["readback_before_clarification", "readback_after_completion"],
+)
+def test_required_clarification_is_verified_before_waiting_for_client(oracle, actions):
+    fixture, cases, score = oracle
+    observation = {
+        "outcome": "awaiting_client",
+        "actions": [
+            {"action": action}
+            for action in [*fixture["global_required_actions"], "media.voice.transcribe", "media.cleanup", *actions]
+        ],
+        "client_replies": [{"kind": "clarification", "text": "Повторите, пожалуйста, вопрос текстом."}],
+    }
+    result = score(fixture, cases["C07"], observation)
+    assert result["failures"] == ["final reply verification must precede successful completion"]
+
+
+@pytest.mark.parametrize(
     ("case_id", "reply_text"),
     [
         pytest.param("C16", "Срок уточню. Пока ничего не оформляю.", id="price_interest"),
