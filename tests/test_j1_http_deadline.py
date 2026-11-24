@@ -331,10 +331,14 @@ def test_https_deadline_bounds_decrypted_body_with_verified_tls(
     if openssl is None:
         pytest.skip("openssl needed to generate an isolated TLS test certificate")
     certificate, key = tmp_path / "certificate.pem", tmp_path / "key.pem"
+    config = tmp_path / "openssl.cnf"
+    config.write_text("[req]\ndistinguished_name = dn\n[dn]\n", encoding="utf-8")
     subprocess.run(
         [
             openssl,
             "req",
+            "-config",
+            str(config),
             "-x509",
             "-newkey",
             "rsa:2048",

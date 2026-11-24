@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -423,7 +424,8 @@ def test_cold_runtime_real_plan_subset_approval_and_apply_preserve_hot_tuples(bu
     assert cold_registry.verify(complete, full=True)[0]["ok"]
 
 
-def test_locked_hydration_approval_and_atomic_activation_never_replace_existing_runtime(bundle, tmp_path, monkeypatch):
+@pytest.fixture
+def locked_restore(bundle, tmp_path, monkeypatch, request):
     policy, record, _ = registry_fixture(bundle, tmp_path)
     state = tmp_path / "restore-state"
     state.mkdir(mode=0o700)
@@ -431,6 +433,22 @@ def test_locked_hydration_approval_and_atomic_activation_never_replace_existing_
     monkeypatch.setattr(core, "locked", lambda _: nullcontext())
     monkeypatch.setattr(core, "native_locks", lambda _: nullcontext())
     monkeypatch.setattr(core, "health", lambda _: {"ok": True})
+
+    # Model the reserve checked by hydration independently of the host filesystem.
+    root_free_gib = getattr(request, "param", 7)
+    block_size = 4096
+    root_space = SimpleNamespace(f_bavail=root_free_gib * 1024**3 // block_size, f_frsize=block_size)
+    real_statvfs = os.statvfs
+
+    def statvfs(path):
+        return root_space if path == "/" else real_statvfs(path)
+
+    monkeypatch.setattr(cas.os, "statvfs", statvfs)
+    return policy, record, state
+
+
+def test_locked_hydration_approval_and_atomic_activation_never_replace_existing_runtime(locked_restore):
+    policy, record, state = locked_restore
     with pytest.raises(MaintenanceError, match="cold_restore_approval_invalid"):
         cold_restore.restore(policy, record["revision"], "0" * 64, output=None, activate=True)
     result = cold_restore.restore(policy, record["revision"], record["manifest_sha256"], output=None, activate=True)
@@ -451,16 +469,14 @@ def test_locked_hydration_approval_and_atomic_activation_never_replace_existing_
     assert (raced / "sentinel").read_bytes() == b"existing target" and staging.exists()
 
 
-@pytest.fixture
-def locked_restore(bundle, tmp_path, monkeypatch):
-    policy, record, _ = registry_fixture(bundle, tmp_path)
-    state = tmp_path / "restore-state"
-    state.mkdir(mode=0o700)
-    policy.update(state_root=str(state), locks={"cleanup": str(tmp_path / "cleanup.lock")})
-    monkeypatch.setattr(core, "locked", lambda _: nullcontext())
-    monkeypatch.setattr(core, "native_locks", lambda _: nullcontext())
-    monkeypatch.setattr(core, "health", lambda _: {"ok": True})
-    return policy, record, state
+@pytest.mark.parametrize("locked_restore", [6], indirect=True, ids=["exact-floor"])
+def test_locked_hydration_at_reserve_rejects_nonempty_block_without_remnants(locked_restore):
+    policy, record, state = locked_restore
+    with pytest.raises(MaintenanceError, match=r"^cold_scratch_floor$"):
+        cold_restore.restore(policy, record["revision"], record["manifest_sha256"], output=None, activate=True)
+    assert list(state.iterdir()) == []
+    assert list(Path(record["path"]).parent.iterdir()) == []
+    assert cas.verify_bundle(Path(record["bundle_dir"]), record["manifest_sha256"])["ok"]
 
 
 @pytest.mark.parametrize("failure", ["attest", "verify", "publish"])
