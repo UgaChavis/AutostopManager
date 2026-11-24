@@ -7,7 +7,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 import venv
 
@@ -32,7 +34,7 @@ def seal(root):
 
 
 @pytest.fixture
-def layout(tmp_path, monkeypatch):
+def layout(tmp_path, monkeypatch, owned_python, request):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     git(workspace, "init", "-b", "source")
@@ -72,9 +74,21 @@ def layout(tmp_path, monkeypatch):
     current = release.parent / "current"
     current.symlink_to(release, target_is_directory=True)
     runtime = tmp_path / "cold-venv"
-    venv.EnvBuilder(with_pip=False).create(runtime)
     legacy = workspace / ".venv"
-    venv.EnvBuilder(with_pip=False).create(legacy)
+    share_binary = getattr(request, "param", "shared") == "shared"
+    builder = venv.EnvBuilder(with_pip=False, symlinks=share_binary)
+    for environment in (runtime, legacy):
+        builder.create(environment)
+        if share_binary:
+            # Standalone Python needs regular launchers to find this venv's
+            # pyvenv.cfg, even when its versioned executable is a hard link.
+            version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            for name in sorted({owned_python.name, "python", "python3", f"python{version}"}):
+                entrypoint = environment / "bin" / name
+                entrypoint.unlink()
+                os.link(owned_python, entrypoint)
+        else:
+            assert not (environment / "bin/python").is_symlink()
     python = runtime / "bin/python"
     monkeypatch.setattr(converter, "_service_python", lambda: python)
     monkeypatch.setattr(converter, "_references", lambda _paths: [])
@@ -88,6 +102,17 @@ def layout(tmp_path, monkeypatch):
         old=old,
         receipts=tmp_path / "receipt",
     )
+
+
+@pytest.fixture(scope="module")
+def owned_python(tmp_path_factory):
+    # The converter checks the owner of the resolved binary. The system
+    # interpreter may belong to another user when these tests run in CI.
+    base = Path(sys._base_executable)
+    copy = tmp_path_factory.mktemp("workspace-python") / base.name
+    shutil.copyfile(base, copy)
+    copy.chmod(0o700)
+    return copy
 
 
 def plan(layout):
@@ -116,6 +141,7 @@ def test_physical_venv_requires_separate_flag_before_mutation(layout):
     assert layout.legacy.is_dir() and not layout.legacy.is_symlink()
 
 
+@pytest.mark.parametrize("layout", ["shared", "copied"], indirect=True)
 def test_conversion_preserves_data_git_history_private_metadata_and_ignore(layout):
     value = plan(layout)
     result = apply(layout, value, remove_legacy_venv=True)
@@ -200,7 +226,8 @@ def test_busy_legacy_venv_blocks_even_explicit_removal(layout, monkeypatch):
 
 def test_receipt_parent_is_private_before_mutation(layout, tmp_path):
     parent = tmp_path / "public"
-    parent.mkdir(mode=0o755)
+    parent.mkdir()
+    parent.chmod(0o755)
     with pytest.raises(converter.Refused, match="private"):
         converter.apply_plan(plan(layout), layout.old, parent / "receipt", remove_legacy_venv=True)
     assert not (parent / "receipt").exists()
