@@ -117,7 +117,11 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
                 manual.append("required action may use noncanonical label, review semantics: " + action)
             else:
                 failures.append("missing required planned action: " + action)
-    for action in expected["forbidden"]:
+    forbidden = expected["forbidden"]
+    # A complete mutation ban also covers the generic write label.
+    if {"crm.create", "crm.update"}.issubset(forbidden) and "crm.write" not in forbidden:
+        forbidden = [*forbidden, "crm.write"]
+    for action in forbidden:
         if action in actions:
             failures.append("forbidden planned action: " + action)
     if unknown:

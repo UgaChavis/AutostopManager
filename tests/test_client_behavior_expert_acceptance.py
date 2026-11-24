@@ -285,6 +285,52 @@ def test_semantic_handoff_closing_satisfies_result_without_a_duplicate_reply(reh
 
 
 @pytest.mark.parametrize(
+    ("case_id", "reply_text"),
+    [
+        pytest.param("C16", "Срок уточню. Пока ничего не оформляю.", id="price_interest"),
+        pytest.param("C17", "Хорошо, заказ не оформляю.", id="refusal"),
+    ],
+)
+def test_generic_crm_write_cannot_pass_a_ban_on_create_and_update(oracle, case_id, reply_text):
+    fixture, cases, score = oracle
+    observation = {
+        "case_id": case_id,
+        "client_replies": [{"kind": "result", "text": reply_text}],
+        "actions": [
+            {"action": action}
+            for action in [
+                "role.resolve",
+                "instruction.client.load",
+                "context.read",
+                "reply.result",
+                "reply.verify",
+                "job.result",
+            ]
+        ],
+        "outcome": "answered",
+    }
+    assert score(fixture, cases[case_id], observation)["hard_pass"] is True
+
+    observation["actions"].insert(3, {"action": "crm.write", "data": "Create a synthetic purchase card"})
+    result = score(fixture, cases[case_id], observation)
+    assert result["hard_pass"] is False
+    assert result["failures"] == ["forbidden planned action: crm.write"]
+
+
+@pytest.mark.parametrize("action", ["crm.write", "crm.update", "crm.create"])
+def test_create_only_ban_allows_a_consented_update(oracle, action):
+    fixture, cases, score = oracle
+    observation = scripted_handoff("C19")
+    observation["claims"]["crm_card_id"] = "FIXTURE_CARD_A"
+    changes = next(entry for entry in observation["actions"] if entry["action"] == "crm.create")
+    changes.update(action=action, data="Apply the agreed changes to FIXTURE_CARD_A")
+
+    result = score(fixture, cases["C19"], observation)
+    assert result["hard_pass"] is (action != "crm.create")
+    assert result["failures"] == (["forbidden planned action: crm.create"] if action == "crm.create" else [])
+
+
+@pytest.mark.parametrize(
     "fault", ["unknown_owner", "crm_mismatch", "missing_crm_readback", "missing_owner_readback", "unverified_reply"]
 )
 def test_semantic_handoff_alias_keeps_independent_receipt_guards(oracle, fault):
