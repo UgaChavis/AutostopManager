@@ -235,13 +235,36 @@ def test_canonical_workspace_skill_aliases_are_verified_without_rpc_path_reads(r
     assert result["instruction_model_context_verified"] is False
 
 
-@pytest.mark.parametrize("change", [None, "revision", "skill_bytes"])
-def test_stable_workspace_alias_verifies_only_matching_installed_skill_bytes(runtime, tmp_path, monkeypatch, change):
+@pytest.mark.parametrize(
+    ("condition", "differences", "unverified"),
+    [
+        ("same_revision", 0, 0),
+        ("split_same_bytes", 0, 0),
+        ("split_changed_skill", 1, 0),
+        ("split_invalid_manifest", 0, len(bundles.PROJECT_SKILLS)),
+        ("split_skill_symlink_escape", 0, len(bundles.PROJECT_SKILLS)),
+    ],
+)
+def test_stable_workspace_alias_compares_verified_release_skills(
+    runtime, tmp_path, monkeypatch, condition, differences, unverified
+):
     releases = tmp_path / "manager-releases"
-    alternate = create_instruction_bundle(releases / "installed", revision=("b" if change == "revision" else "a") * 40)
-    if change == "skill_bytes":
-        (alternate / ".agents/skills/manage-autostop-client/SKILL.md").write_text("Changed project policy.\n")
+    manager_revision = ("a" if condition == "same_revision" else "b") * 40
+    alternate = create_instruction_bundle(releases / "installed", revision=manager_revision)
+    client_skill = alternate / ".agents/skills/manage-autostop-client/SKILL.md"
+    if condition in {"split_changed_skill", "split_invalid_manifest"}:
+        client_skill.write_text("Changed project policy.\n")
+    if condition == "split_skill_symlink_escape":
+        foreign = tmp_path / "foreign-client-skill.md"
+        foreign.write_bytes(client_skill.read_bytes())
+        client_skill.unlink()
+        client_skill.symlink_to(foreign)
+    if condition in {"split_changed_skill", "split_skill_symlink_escape"}:
         seal_instruction_bundle(alternate)
+    for root in (runtime.release, alternate):
+        for path in root.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                path.chmod(0o444)
     (releases / "current").symlink_to(alternate, target_is_directory=True)
     shutil.rmtree(runtime.stale / ".agents")
     (runtime.stale / ".agents").symlink_to(releases / "current/.agents", target_is_directory=True)
@@ -251,9 +274,11 @@ def test_stable_workspace_alias_verifies_only_matching_installed_skill_bytes(run
 
     result = diagnostics.audit_instruction_sources()
 
-    assert result["ok"] is (change is None)
-    assert result["raw_project_skill_unverified"] == (len(bundles.PROJECT_SKILLS) if change == "revision" else 0)
-    assert result["raw_project_skill_differences"] == (1 if change == "skill_bytes" else 0)
+    assert result["ok"] is (not differences and not unverified)
+    assert result["bundle"]["revision"] == runtime.bundle.revision
+    assert result["raw_project_skill_unverified"] == unverified
+    assert result["raw_project_skill_differences"] == differences
+    assert result["instruction_model_context_verified"] is False
 
 
 @pytest.mark.parametrize("kind", ["file", "directory"])

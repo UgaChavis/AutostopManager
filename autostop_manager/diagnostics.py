@@ -365,7 +365,7 @@ _INSTALLED_MANAGER_RELEASES = Path("/opt/autostop-manager-releases")
 
 
 def _installed_manager_alias_root(cwd: str, bundle: Any) -> Path | None:
-    """Verify the separate Manager release used by the stable workspace."""
+    """Verify the Manager release at its own revision for raw skill discovery."""
     if Path(cwd) != _INSTALLED_MANAGER_WORKSPACE:
         return None
     from .instruction_bundle import InstructionBundleError, load_instruction_bundle
@@ -374,7 +374,7 @@ def _installed_manager_alias_root(cwd: str, bundle: Any) -> Path | None:
         installed = (_INSTALLED_MANAGER_RELEASES / "current").resolve(strict=True)
         if installed == Path(bundle.root):
             return None
-        verified = load_instruction_bundle(installed, bundle.revision, allowed_roots=(_INSTALLED_MANAGER_RELEASES,))
+        verified = load_instruction_bundle(installed, None, allowed_roots=(_INSTALLED_MANAGER_RELEASES,))
         return Path(verified.root)
     except (InstructionBundleError, OSError, RuntimeError):
         return None
