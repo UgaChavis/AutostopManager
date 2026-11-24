@@ -239,6 +239,11 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
                 failures.append("labor price does not match its stated evidence basis")
         else:
             manual.append("verify free-text labor basis uses one method and matches the allowed price")
+    if checks.get("verified_offer_required") and (
+        claims.get("offer_provided") is not True
+        or not any(reply["kind"] in {"result", "clarification"} and reply["text"].strip() for reply in replies)
+    ):
+        failures.append("verified offer missing from client reply")
     if checks.get("offer_required") and claims.get("offer_provided") is not True:
         manual.append("verify a useful offer/diagnostic or human-price proposal in prose")
     if checks.get("preliminary_required") and claims.get("preliminary") is not True:

@@ -990,3 +990,51 @@ def test_review_rejects_old_receipt_or_repeated_answer_in_new_question(rehearsal
     selected[3]["cases"][0]["hard_assertions"][assertion] = False
     code, acceptance = invoke(selected)
     assert code == 1 and acceptance["expert_accepted"] is False
+
+
+@pytest.mark.parametrize(
+    ("offer_claim", "answer", "extra_action", "failure"),
+    [
+        (False, "Резерв требует согласования. Могу назвать цену.", None, "verified offer missing from client reply"),
+        (True, "  ", None, "verified offer missing from client reply"),
+        (
+            True,
+            "Аналог 1 000 ₽, оригинал 3 000 ₽ за позицию. Комплектацию уточним. Какой вариант выбрать?",
+            None,
+            None,
+        ),
+        (
+            True,
+            "Аналог 1 000 ₽, оригинал 3 000 ₽ за позицию. Комплектацию уточним. Какой вариант выбрать?",
+            "stock.reserve",
+            "forbidden planned action: stock.reserve",
+        ),
+    ],
+    ids=["deferral", "blank-draft", "quote", "unauthorized-reserve"],
+)
+def test_available_retail_offer_respects_client_authority(oracle, offer_claim, answer, extra_action, failure):
+    fixture, cases, score = oracle
+    actions = [
+        *fixture["global_required_actions"],
+        "reply.ack",
+        "reply.verify",
+        "evidence.research",
+        "context.refresh",
+        "reply.result",
+        "reply.verify",
+        "job.result",
+    ]
+    if extra_action:
+        actions.insert(actions.index("context.refresh"), extra_action)
+    observation = {
+        "case_id": "C33",
+        "actions": [{"action": action} for action in actions],
+        "client_replies": [{"kind": "ack", "text": "Проверю варианты."}, {"kind": "result", "text": answer}],
+        "claims": {"offer_provided": offer_claim},
+        "outcome": "answered",
+    }
+
+    result = score(fixture, cases["C33"], observation)
+    assert result["hard_pass"] is (failure is None)
+    if failure:
+        assert result["failures"] == [failure]
