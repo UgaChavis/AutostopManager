@@ -1041,6 +1041,94 @@ def test_available_retail_offer_respects_client_authority(oracle, offer_claim, a
 
 
 @pytest.mark.parametrize(
+    ("case_id", "answer", "failures"),
+    [
+        (
+            "C11",
+            "Оригинал SYN-ORIGINAL-A — 3 000 ₽ за комплект. Аналог SYN-ANALOG-A — 1 000 ₽ за комплект.",
+            {
+                "fixture offer ID must be described as an offer code",
+                "uncertain fixture sale unit or packaging must be stated",
+            },
+        ),
+        (
+            "C12",
+            "Оригинал SYN-ORIGINAL-A — 3 000 ₽ за комплект. Упаковка подтверждена, уточню срок.",
+            {
+                "fixture offer ID must be described as an offer code",
+                "uncertain fixture sale unit or packaging must be stated",
+            },
+        ),
+        (
+            "C06",
+            "На один комплект аналог 1 000 ₽, код предложения SYN-ANALOG-A. "
+            "Оригинал 3 000 ₽, код предложения SYN-ORIGINAL-A. Замена 1 150 ₽.",
+            {"uncertain fixture sale unit or packaging must be stated"},
+        ),
+        (
+            "C11",
+            "Код предложения SYN-ORIGINAL-A — 3 000 ₽ за позицию. "
+            "Код предложения SYN-ANALOG-A — 1 000 ₽ за позицию. Состав упаковки уточняется.",
+            set(),
+        ),
+        (
+            "C12",
+            "SYN-ORIGINAL-A — 3 000 ₽ за позицию. Это код предложения. Уточним, что именно входит в комплект.",
+            set(),
+        ),
+        (
+            "C30",
+            "Аналог SYN-ANALOG-A — 1 000 ₽ за позицию. Оригинал SYN-ORIGINAL-A — 3 000 ₽ за позицию. "
+            "Оба кода относятся к предложениям. Сколько штук входит, ещё выясним.",
+            set(),
+        ),
+    ],
+    ids=[
+        "bare-codes",
+        "unrelated-uncertainty",
+        "ack-caveat-only",
+        "explicit-labels",
+        "separate-label",
+        "collective-label",
+    ],
+)
+def test_fixture_offer_codes_and_units_are_grounded_in_final_reply(oracle, case_id, answer, failures):
+    fixture, cases, score = oracle
+    media = ["media.photo.read", "media.voice.transcribe", "media.cleanup"] if case_id == "C06" else []
+    actions = [
+        *fixture["global_required_actions"],
+        *media,
+        "reply.ack",
+        "reply.verify",
+        "evidence.research",
+        "context.refresh",
+        "reply.result",
+        "reply.verify",
+        "job.result",
+    ]
+    observation = {
+        "case_id": case_id,
+        "actions": [{"action": action} for action in actions],
+        "client_replies": [
+            {"kind": "ack", "text": "Проверю варианты. Упаковку уточню."},
+            {"kind": "result", "text": answer},
+        ],
+        "claims": {
+            "offer_provided": True,
+            "quantity": cases[case_id]["hard_assertions"].get("quantity"),
+            "client_unit_price": 3000,
+            "discount_rate": 0,
+        },
+        "outcome": "answered",
+    }
+
+    result = score(fixture, cases[case_id], observation)
+    assert result["hard_pass"] is (not failures)
+    assert set(result["failures"]) == failures
+    assert "expert semantic assertion: quoted_parts_identity_and_unit_grounded" in result["manual_review_required"]
+
+
+@pytest.mark.parametrize(
     ("answer", "human_check_offered", "sent_without_consent"),
     [
         ("Пока цену уточнить не удалось. Колодки нужны передние или задние?", False, False),

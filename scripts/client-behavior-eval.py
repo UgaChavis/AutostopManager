@@ -122,6 +122,47 @@ def check_late_correction_order(actions: list[str], unknown: set[str], failures:
         failures.append("late correction not reconciled after research before first reply")
 
 
+def check_quoted_parts_grounding(
+    facts: dict[str, Any], claims: dict[str, Any], client_text: str, failures: list[str]
+) -> None:
+    """Check literal fixture offer IDs and missing packaging; leave broader wording to expert review."""
+    offers = facts.get("offers", [])
+    if not offers or not client_text.strip():
+        return
+    statements = re.split(r"[.!?\n]+", client_text)
+    offer_label = r"\b(?:код|идентификатор|номер)\s+предложени\w*\b"
+    collective_label = r"\b(?:кода|коды|идентификатора|идентификаторы|номера)\b[^.!?\n]{0,50}\bпредложени\w*\b"
+    mentioned = []
+    missing_label = False
+    for offer in offers:
+        code = re.compile(rf"(?<![\w-]){re.escape(offer['id'])}(?![\w-])", re.I)
+        references = [statement for statement in statements if code.search(statement)]
+        if references:
+            mentioned.append(offer)
+            missing_label |= not any(re.search(offer_label, statement, re.I) for statement in references)
+    if missing_label:
+        label = offer_label if len(mentioned) == 1 else collective_label
+        if not re.search(label, client_text, re.I):
+            failures.append("fixture offer ID must be described as an offer code")
+
+    quoted = mentioned or (offers if claims.get("offer_provided") is True else [])
+    sale_term = (
+        r"\b(?:единиц\w*\s+продаж\w*|упаковк\w*|комплектност\w*|комплектаци\w*|состав\s+комплект\w*|"
+        r"что\s+(?:именно\s+)?входит\s+в\s+комплект|сколько\s+штук\s+входит)\b"
+    )
+    uncertainty = (
+        r"\b(?:уточн(?:ить|им|ится|яем|яется)|провер(?:ить|им|яется)|свер(?:ить|им|яется)|выясн(?:ить|им)|"
+        r"не\s+(?:подтвержд[её]н[аоы]?|известн[аоы]?|указан[аоы]?)|неизвестн[аоы]?)\b"
+    )
+    gap = r"[^,.!?\n]{0,55}"
+    question_comma = r"(?:,\s*(?=что\b|сколько\b))?"
+    caveat = rf"{sale_term}(?:,\s*)?{gap}{uncertainty}|{uncertainty}{gap}{question_comma}{sale_term}"
+    if any(not offer.get("sale_unit") or not offer.get("package_contents") for offer in quoted) and not any(
+        re.search(caveat, statement, re.I) for statement in statements
+    ):
+        failures.append("uncertain fixture sale unit or packaging must be stated")
+
+
 def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside all runtime paths.
     fixture: dict[str, Any], case: dict[str, Any], observation: dict[str, Any]
 ) -> dict[str, Any]:
@@ -301,6 +342,9 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
             elif any(secret in query for secret in facts.get("private_sentinels", [])):
                 failures.append("private sentinel included in proposed public query")
     client_text = "\n".join(reply["text"] for reply in replies)
+    if checks.get("quoted_parts_identity_and_unit_grounded"):
+        quote_text = "\n".join(reply["text"] for reply in replies if reply["kind"] != "ack")
+        check_quoted_parts_grounding(facts, claims, quote_text, failures)
     if checks.get("do_not_ask_known_vin") and re.search(
         r"(?:пришлите|укажите|отправьте|сообщите)\s+(?:(?:мне|ваш|пожалуйста)\s+){0,3}VIN", client_text, re.I
     ):

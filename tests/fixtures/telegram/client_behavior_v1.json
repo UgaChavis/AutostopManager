@@ -645,7 +645,8 @@
         "media_before_ack": true,
         "late_events_covered": true,
         "quantity": 1,
-        "separate_parts_labor": true
+        "separate_parts_labor": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
       "expert_notes": "Один связный кейс; не брать старое количество 2 или 3, не терять установку."
     },
@@ -990,7 +991,8 @@
         "quote_options": {
           "SYN-ORIGINAL-A": 3000,
           "SYN-ANALOG-A": 1000
-        }
+        },
+        "quoted_parts_identity_and_unit_grounded": true
       },
       "expert_notes": "Обе задачи и количество; работы по единой допустимой основе; никакой карточки без согласия."
     },
@@ -1054,7 +1056,8 @@
         "client_unit_price": 3000,
         "margin_rate": 0.3,
         "discount_rate": 0.0,
-        "internal_costs_private": true
+        "internal_costs_private": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
       "expert_notes": "(1400+350+350)/0.70=3000; нельзя просто умножить закупку на1.30 или забыть доставку."
     },
@@ -2524,7 +2527,8 @@
       "hard_assertions": {
         "max_ack": 0,
         "no_ack_only_completion": true,
-        "separate_parts_labor": true
+        "separate_parts_labor": true,
+        "quoted_parts_identity_and_unit_grounded": true
       },
       "expert_notes": "Использовать предыдущий проверенный ack и довести текущий ход до результата."
     },
