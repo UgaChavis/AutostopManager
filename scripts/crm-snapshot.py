@@ -218,6 +218,18 @@ def _info(name, metadata, directory=False):
     return info
 
 
+def validate_change_feed_schema(connection: sqlite3.Connection) -> None:
+    # CRM initializes missing metadata and upgrades versions 1 through 3 to version 4.
+    metadata = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata' COLLATE NOCASE"
+    ).fetchone()
+    if metadata is None:
+        return
+    version = connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+    if version is not None and str(version[0]) not in {"1", "2", "3", "4"}:
+        raise ValueError("unsupported CRM change-feed schema")
+
+
 def _sqlite_copy(path: Path, metadata, wal_metadata, target: Path):
     # SQLite can create WAL/SHM on a read. Copy the fenced source and WAL
     # without following links, then let SQLite operate only in private scratch.
@@ -237,6 +249,7 @@ def _sqlite_copy(path: Path, metadata, wal_metadata, target: Path):
             source.backup(dest)
             if dest.execute("PRAGMA integrity_check").fetchone() != ("ok",):
                 raise ValueError("sqlite integrity check failed")
+            validate_change_feed_schema(dest)
         finally:
             dest.close()
             source.close()

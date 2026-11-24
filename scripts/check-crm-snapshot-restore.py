@@ -134,6 +134,7 @@ def check_archive(archive_path: Path, destination: Path):
     try:
         if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
             raise ValueError("restored SQLite corrupt")
+        snapshot.validate_change_feed_schema(connection)
     finally:
         connection.close()
     for path, mode, uid, gid in reversed(directories):

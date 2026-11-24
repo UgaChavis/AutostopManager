@@ -55,6 +55,12 @@ class CrmSnapshotTest(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
+    def seed_change_feed_schema(self, version):
+        self.db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        if version is not None:
+            self.db.execute("INSERT OR REPLACE INTO metadata VALUES (?, ?)", ("schema_version", version))
+        self.db.commit()
+
     def test_real_archive_and_isolated_restore_with_key_and_wal(self):
         path = self.stage / "snapshot.tar.gz"
         snapshot.create_snapshot(self.source, path, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
@@ -70,6 +76,39 @@ class CrmSnapshotTest(unittest.TestCase):
         self.assertFalse((destination / "crm" / "change_feed.sqlite3-wal").exists())
         with sqlite3.connect(destination / "crm" / "change_feed.sqlite3") as db:
             self.assertEqual(db.execute("SELECT value FROM sample").fetchone(), ("synthetic",))
+
+    def test_snapshot_and_restore_preserve_supported_and_uninitialized_change_feed_versions(self):
+        for version in (None, "1", "2", "3", "4"):
+            with self.subTest(version=version):
+                self.seed_change_feed_schema(version)
+                archive = self.stage / f"snapshot-{version}.tar.gz"
+                destination = self.base / f"restore-{version}"
+                destination.mkdir(mode=0o700)
+                snapshot.create_snapshot(self.source, archive, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+                self.assertEqual(restore.check_archive(archive, destination), "a" * 40)
+                feed = (destination / "crm" / "change_feed.sqlite3").as_uri()
+                with sqlite3.connect(feed + "?mode=ro&immutable=1", uri=True) as db:
+                    observed = db.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+                self.assertEqual(observed, (version,) if version is not None else None)
+
+    def test_snapshot_rejects_unsupported_change_feed_schema(self):
+        self.seed_change_feed_schema("999")
+        self.assertEqual(self.db.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+        archive = self.stage / "snapshot.tar.gz"
+        with self.assertRaisesRegex(ValueError, "unsupported CRM change-feed schema"):
+            snapshot.create_snapshot(self.source, archive, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        self.assertFalse(archive.exists())
+
+    def test_restore_rejects_unsupported_change_feed_schema_from_an_older_snapshotter(self):
+        self.seed_change_feed_schema("999")
+        archive = self.stage / "snapshot.tar.gz"
+        with mock.patch.object(snapshot, "validate_change_feed_schema", create=True):
+            snapshot.create_snapshot(self.source, archive, "a" * 40, self.key, "sha256:" + "c" * 64, self.runtime)
+        destination = self.base / "restore"
+        destination.mkdir(mode=0o700)
+
+        with self.assertRaisesRegex(ValueError, "unsupported CRM change-feed schema"):
+            restore.check_archive(archive, destination)
 
     def test_cold_wal_snapshot_does_not_create_source_sidecars(self):
         self.db.close()
