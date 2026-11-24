@@ -87,7 +87,10 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
     actions = [item["action"] for item in raw_actions]
     replies = observation.get("client_replies", [])
     if not isinstance(replies, list) or any(
-        not isinstance(reply, dict) or not isinstance(reply.get("text"), str) for reply in replies
+        not isinstance(reply, dict)
+        or reply.get("kind") not in ("ack", "result", "clarification", "handoff")
+        or not isinstance(reply.get("text"), str)
+        for reply in replies
     ):
         return {"case_id": case["id"], "hard_pass": False, "failures": ["invalid client replies"]}
     claims = observation.get("claims", {})

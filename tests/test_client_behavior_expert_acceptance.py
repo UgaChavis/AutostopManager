@@ -113,6 +113,29 @@ def test_action_data_is_optional_text(rehearsal, data, valid):
     assert acceptance["expert_accepted"] is valid
 
 
+@pytest.mark.parametrize(
+    ("fields", "position"),
+    [
+        pytest.param({}, 0, id="missing"),
+        pytest.param({"kind": None}, 0, id="null"),
+        pytest.param({"kind": {"value": "result"}}, 0, id="object"),
+        pytest.param({"kind": ["result"]}, 0, id="array"),
+        pytest.param({"kind": "unknown"}, 1, id="unknown_after_result"),
+    ],
+)
+def test_invalid_client_reply_kind_rejects_case_without_losing_other_reports(rehearsal, fields, position):
+    _, _, results_path, review, observations = rehearsal
+    observations[0]["client_replies"].insert(position, {"text": "Синтетический ответ клиенту.", **fields})
+    results_path.write_text(json.dumps(observations))
+    review["artifacts"]["results_sha256"] = digest(results_path)
+
+    code, score = invoke(rehearsal, "score")
+    assert code == 1 and score["reports"][0]["failures"] == ["invalid client replies"]
+    assert score["reports"][1]["hard_pass"] is True
+    code, acceptance = invoke(rehearsal)
+    assert code == 1 and acceptance["expert_accepted"] is False
+
+
 def test_complete_review_accepts_only_the_supplied_synthetic_observations(rehearsal):
     code, result = invoke(rehearsal)
     assert code == 0 and result["expert_accepted"] is True and result["reviewed_cases"] == 2
