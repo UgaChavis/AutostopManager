@@ -728,15 +728,18 @@ def _resume(policy: dict, result: dict) -> None:
             result["errors"].append("ci_recovery_required")
 
 
-def _finish(policy: dict, result: dict) -> dict:
+def _finish(policy: dict, result: dict, *, write_receipt: bool = True) -> dict:
     result["free_after"] = available_bytes(policy)
     result["deficit_bytes"] = max(0, policy["goal_bytes"] - result["free_after"])
     result["target_reached"] = result["deficit_bytes"] == 0
     if "noop" in result:
         result["noop"]["goal_satisfied"] = result["target_reached"]
+    if result["operation"] == "pg-retain":
+        result["retention_pending"] = bool(result["errors"])
     result["ok"] = not result["errors"] and result["ci_restored"]
     result["finished_at"] = datetime.now(UTC).isoformat()
-    _receipt(policy, result)
+    if write_receipt:
+        _receipt(policy, result)
     return result
 
 
@@ -792,7 +795,7 @@ def execute(policy: dict, *, operation: str, manifest: dict | None = None) -> di
         finally:
             if operation != "pg-retain":
                 _resume(policy, result)
-    return _finish(policy, result)
+        return _finish(policy, result)
 
 
 def apply(policy: dict, manifest_path: Path, approval: str) -> dict:
@@ -819,14 +822,12 @@ def pg_retain(policy: dict) -> dict:
     scoped["operation"] = "pg-retain"
     scoped["health"] = {"units": [], "containers": [], "http": []}
     try:
-        result = execute(scoped, operation="pg-retain")
+        return execute(scoped, operation="pg-retain")
     except (MaintenanceError, OSError) as exc:
         result = _new_result(scoped, "pg-retain")
         result["errors"].append(_error_code(exc))
-        _finish(scoped, result)
-    result["retention_pending"] = bool(result["errors"])
-    _receipt(scoped, result)
-    return result
+        # An attempt without the cleanup lock cannot replace the last receipt.
+        return _finish(scoped, result, write_receipt=False)
 
 
 def recover_ci(policy: dict) -> dict:
@@ -835,10 +836,10 @@ def recover_ci(policy: dict) -> dict:
     try:
         with locked(Path(policy["locks"]["cleanup"]), create=True):
             _resume(policy, result)
+            return _finish(policy, result)
     except MaintenanceError as exc:
         if exc.code != "native_lock_busy":
             raise
         # A running main job owns this state. The recovery timer must leave it
         # untouched, and ExecStopPost will retry after the main process exits.
         return {"ok": True, "busy": True}
-    return _finish(policy, result)

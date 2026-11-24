@@ -401,6 +401,50 @@ def test_failed_resume_is_durable_then_recovery_retries(setup, monkeypatch):
     assert util.read_json(Path(policy["state_root"]) / "last-result.json", private=True) == result
 
 
+def test_apply_cannot_overtake_an_earlier_maintain_receipt(setup, monkeypatch):
+    policy, _, _, _ = setup
+    state = Path(policy["state_root"])
+    approved = state / "approved.json"
+    receipt = state / "last-result.json"
+    util.atomic_json(approved, core.make_plan(policy))
+    approval = util.sha256_file(approved)
+    write_receipt = core._receipt
+    competing_results = []
+
+    def write_with_competitor(current_policy, result):
+        if result["operation"] == "maintain":
+            try:
+                competing = core.apply(policy, approved, approval)
+            except MaintenanceError as exc:
+                competing_results.append(exc.code)
+            else:
+                assert util.read_json(receipt, private=True) == competing
+                competing_results.append("newer_apply_already_published")
+        write_receipt(current_policy, result)
+
+    monkeypatch.setattr(core, "_receipt", write_with_competitor)
+    result = core.maintain(policy)
+    assert result["ok"] and util.read_json(receipt, private=True) == result
+    assert competing_results == ["native_lock_busy"]
+
+
+@pytest.mark.parametrize("operation", [core.recover_ci, core.pg_retain])
+def test_final_receipt_is_written_once_under_cleanup_lock(setup, monkeypatch, operation):
+    policy, _, _, _ = setup
+    write_receipt = core._receipt
+    writes = []
+
+    def write_under_lock(current_policy, result):
+        with pytest.raises(MaintenanceError, match="native_lock_busy"), core.locked(Path(policy["locks"]["cleanup"])):
+            pytest.fail("cleanup lock released before publishing the result")
+        writes.append(copy.deepcopy(result))
+        write_receipt(current_policy, result)
+
+    monkeypatch.setattr(core, "_receipt", write_under_lock)
+    result = operation(policy)
+    assert writes == [result]
+
+
 def test_recovery_timer_never_resumes_running_main(setup, monkeypatch, capsys):
     policy, _, _, calls = setup
     entry_path = Path(__file__).parents[1] / "scripts" / "autostop-disk-maintenance.py"
@@ -776,13 +820,26 @@ def test_missing_ci_only_keeper_receipt_does_not_block_native_crm(setup, monkeyp
     assert result["ok"] and not crm.exists() and store.exists()
 
 
-def test_pg_outer_cleanup_busy_records_private_pending(setup):
+@pytest.mark.parametrize("lost_lock", [False, True], ids=["busy", "changed"])
+def test_pg_outer_cleanup_lock_failure_preserves_last_receipt(setup, monkeypatch, lost_lock):
     policy, _, _, calls = setup
-    with core.locked(Path(policy["locks"]["cleanup"])):
+    previous = core.pg_retain(policy)
+    receipt = Path(policy["state_root"]) / "last-retention.json"
+    if lost_lock:
+
+        def changed(*args, **kwargs):
+            raise MaintenanceError("lock_inode_changed")
+
+        monkeypatch.setattr(core, "locked", changed)
         result = core.pg_retain(policy)
-    assert result["retention_pending"] and result["errors"] == ["native_lock_busy"]
-    saved = util.read_json(Path(policy["state_root"]) / "last-retention.json", private=True)
-    assert saved["retention_pending"] and not calls
+    else:
+        with core.locked(Path(policy["locks"]["cleanup"])):
+            result = core.pg_retain(policy)
+    assert result["retention_pending"] and result["errors"] == [
+        "lock_inode_changed" if lost_lock else "native_lock_busy"
+    ]
+    assert util.read_json(receipt, private=True) == previous
+    assert not calls
 
 
 def test_image_requires_both_application_keeper_receipts():
