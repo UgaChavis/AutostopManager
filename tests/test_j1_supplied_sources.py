@@ -185,7 +185,8 @@ def test_supplied_order_controls_browser_budget(monkeypatch):
     ids = iter(UUID(int=value) for value in (1, 30, 20))
     fetched = []
 
-    def fetch(url, *, allow_browser):
+    def fetch(url, *, allow_browser, allow_large_pdf):
+        assert allow_large_pdf
         fetched.append((url, allow_browser))
         return {"ok": False, "error": "synthetic_missing", "browser_attempted": allow_browser}
 

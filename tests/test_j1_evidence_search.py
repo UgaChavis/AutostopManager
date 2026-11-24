@@ -158,15 +158,15 @@ def test_ddg_parser_preserves_result_snippet() -> None:
 
 
 def test_fetch_retries_one_transient_failure_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
+    calls: list[bool] = []
 
-    def once(_url: str, *, allow_browser: bool) -> dict[str, Any]:
-        calls.append("fetch")
+    def once(_url: str, *, allow_browser: bool, allow_large_pdf: bool) -> dict[str, Any]:
+        calls.append(allow_large_pdf)
         return {"ok": False, "error": "fetch_failed"} if len(calls) == 1 else {"ok": True, "text": "public"}
 
     monkeypatch.setattr(j1_fetch, "_fetch_document_once", once)
-    result = j1_fetch.fetch_document("https://example.org/article")
-    assert calls == ["fetch", "fetch"]
+    result = j1_fetch.fetch_document("https://example.org/manual.pdf", allow_large_pdf=True)
+    assert calls == [True, True]
     assert result == {"ok": True, "text": "public"}
 
 
@@ -176,7 +176,7 @@ def test_fetch_retries_one_transient_failure_only(monkeypatch: pytest.MonkeyPatc
 def test_fetch_never_retries_nontransient_or_safety_errors(monkeypatch: pytest.MonkeyPatch, error: str) -> None:
     calls: list[str] = []
 
-    def blocked(_url: str, *, allow_browser: bool) -> dict[str, Any]:
+    def blocked(_url: str, *, allow_browser: bool, allow_large_pdf: bool) -> dict[str, Any]:
         calls.append("fetch")
         return {"ok": False, "error": error}
 
@@ -189,7 +189,7 @@ def test_fetch_honors_a_bounded_single_429_retry(monkeypatch: pytest.MonkeyPatch
     calls: list[str] = []
     waits: list[float] = []
 
-    def limited(_url: str, *, allow_browser: bool) -> dict[str, Any]:
+    def limited(_url: str, *, allow_browser: bool, allow_large_pdf: bool) -> dict[str, Any]:
         calls.append("fetch")
         return (
             {"ok": False, "error": "rate_limited", "retry_after_seconds": 999.0}

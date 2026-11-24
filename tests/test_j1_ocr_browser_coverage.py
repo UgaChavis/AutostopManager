@@ -259,6 +259,44 @@ def test_ocr_pipeline_redacts_sensitive_text_and_rejects_empty_result(monkeypatc
     }
 
 
+def test_scanned_ocr_keeps_caps_and_masks_a_cross_page_identifier_without_chown(monkeypatch):
+    body = b"%PDF-1.4\nsynthetic private temporary input"
+    texts = {
+        1: b"Workshop instructions for diagnosing an actuator or connector fault.\nWVWZZZ1KZ",
+        2: b"6W000001\nThe connector label CX-402A appears in this technical reference.",
+    }
+    pages = []
+
+    def no_chown(*_args):
+        raise PermissionError
+
+    def count(pdf, _directory, _descriptor, _deadline):
+        assert pdf == body
+        return 7
+
+    def run_parser(argv, _directory, _descriptor, *, payload, timeout, output_limit):
+        if argv[0].endswith("/pdftoppm"):
+            page = int(argv[argv.index("-f") + 1])
+            assert int(argv[argv.index("-l") + 1]) == page
+            assert payload == body and 0 < timeout <= 15
+            assert output_limit == j1_ocr.MAX_IMAGE_FILE_BYTES
+            pages.append(page)
+            return "ok", b"\xff\xd8" + bytes([page])
+        assert argv[1:3] == ["stdin", "stdout"] and 0 < timeout <= 5
+        assert output_limit == 1000
+        return "ok", texts[payload[-1]]
+
+    monkeypatch.setattr(j1_ocr, "_ocr_languages_available", lambda: True)
+    monkeypatch.setattr(j1_ocr, "_prepare_workdir", no_chown)
+    monkeypatch.setattr(j1_ocr, "_pdf_page_count", count)
+    monkeypatch.setattr(j1_ocr, "_run_parser", run_parser)
+    result = j1_ocr.extract_scanned_pdf(body, max_pages=2, max_chars=500)
+    assert result["ok"] and result["pages_processed"] == 2 and pages == [1, 2]
+    assert "CX-402A" in result["text"] and "[redacted]" in result["text"]
+    assert "WVWZZZ1KZ" not in result["text"] and "6W000001" not in result["text"]
+    assert "\f" not in result["text"]
+
+
 @pytest.mark.parametrize(
     "char_limit,page_text,expected_pages",
     [(80, b"Technical text. " * 6, 1), (80, b"Technical text. " * 2, 3), (1000, b"Technical text. " * 2, 10)],

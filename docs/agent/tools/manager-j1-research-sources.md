@@ -8,8 +8,8 @@
 
 Вызов: native Manager MCP `j1_research_sources`.
 
-Входы: `source_urls`, `objective`, `job_id`, `idempotency_key`.
-Defaults: `{"idempotency_key":null,"job_id":null,"objective":null}`.
+Входы: `source_urls`, `objective`, `job_id`, `idempotency_key`, `automotive_context`.
+Defaults: `{"automotive_context":null,"idempotency_key":null,"job_id":null,"objective":null}`.
 Обязательные facade поля: `source_urls`.
 Текущая inputSchema и проверка версии — [D1](../modules/D1.md).
 
@@ -29,5 +29,6 @@ Defaults: `{"idempotency_key":null,"job_id":null,"objective":null}`.
 - До 20 публичных HTTP(S) URL за вызов и до 300 разных URL на задание. VIN, контакты и секреты запрещены. Повторный URL определяется по canonical URL. Среди разных ссылок точная копия текста отмечается как дубликат, близкие версии доступны для сравнения.
 - Вызов ставит URL в локальную очередь. Исполнитель J1 читает ссылки по действующим правилам доступа. Результаты и документы доступны через существующие вызовы.
 - При известном job_id проверь статус и список принятых ссылок. Если ответ старта потерян вместе с job_id, точный повтор исходного тела с тем же ключом возвращает ID в пределах срока хранения задания. Удаление задания из кэша также удаляет привязку ключа.
+- Обезличенный automotive_context передаётся только при создании. Добавленные ссылки наследуют контекст задания.
 
 Подробный контракт: [справочник](../references/web-research.md).

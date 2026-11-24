@@ -273,6 +273,35 @@ def test_similar_supplied_bulletins_keep_distinct_part_numbers_and_cited_excerpt
     assert {cause["source_url"] for cause in report["alternative_causes"]} == {url + "#failure" for url in urls}
 
 
+def test_general_report_keeps_distinct_cited_causes_from_the_same_source(monkeypatch):
+    guide = "https://www.hella.com/bench-guide"
+    notes = "https://engineering.example.org/bench-notes"
+    inlet = "Bench pump loss of prime was caused by an air leak at the inlet joint."
+    seal = "Intermittent loss of prime was caused by a torn inlet seal."
+    valve = "Loss of prime after storage was caused by a stuck foot valve."
+    excerpts = {guide: (inlet, seal), notes: (inlet, valve)}
+
+    def fetch(url, **_kwargs):
+        content = '<h2 id="observations">Bench observations</h2>' + "".join(f"<p>{text}</p>" for text in excerpts[url])
+        return j1_fetch._extract_static_content("text/html", content.encode(), url, {}) | {"url": url}
+
+    monkeypatch.setattr(j1, "fetch_document", fetch)
+    job = j1.research_sources(
+        objective="Find observed causes for a bench pump losing prime",
+        source_urls=[guide, notes],
+        idempotency_key="multiple-cited-pump-causes",
+    )
+    j1.run_worker(once=True)
+    report = j1.research_report(job["job_id"])["report"]
+    assert [(cause["excerpt"], cause["source_url"]) for cause in report["alternative_causes"]] == [
+        (inlet, guide + "#observations"),
+        (valve, notes + "#observations"),
+        (seal, guide + "#observations"),
+    ]
+    assert all(cause["status"] == "unverified_source_mention" for cause in report["alternative_causes"])
+    assert not {"no_exact_context_match", "frequency_not_measured"} & {item["code"] for item in report["limitations"]}
+
+
 def test_report_counts_the_whole_corpus_beyond_its_twenty_source_examples(monkeypatch):
     urls = [f"https://example.com/parts/{n}" for n in range(20)]
     last = "https://example.org/parts/more"
@@ -333,14 +362,14 @@ def test_automotive_profile_builds_balanced_bounded_plan() -> None:
     assert created["ok"] is True
     assert created["profile"] == j1.AUTOMOTIVE_PROFILE
     assert created["max_pages"] == j1.AUTOMOTIVE_MAX_PAGES
-    assert created["query_count"] == j1.AUTOMOTIVE_MAX_QUERIES
+    assert created["query_count"] == 4
     status = j1.research_status(created["job_id"])
     assert status["profile"] == j1.AUTOMOTIVE_PROFILE
     intents = {item["intent"] for item in status["query_plan"]}
-    assert {"official_bulletin_en", "technical_diagnosis_en", "catalog_fitment_en", "owner_experience_en"}.issubset(
-        intents
-    )
+    assert intents == {"official_bulletin_en", "technical_diagnosis_en", "technical_diagnosis_ru", "catalog_fitment_en"}
     assert status["query_suggestions"] == []
+    followup = [f"public follow-up question {number}" for number in range(8)]
+    assert j1.research_add_queries(created["job_id"], followup)["queries_total"] == j1.AUTOMOTIVE_MAX_QUERIES
     assert (
         j1.research_add_queries(created["job_id"], ["one more public query"])["error"]["code"] == "query_limit_reached"
     )
@@ -1154,7 +1183,7 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     assert rows[0]["title"] == "Public report"
     assert rows[0]["snippet"] == ""
     assert rows[0]["source"] == "searxng"
-    assert rows[0]["engines"] == ["bing", "yahoo"]
+    assert rows[0]["engines"] == ["bing", "searxng_default", "yahoo"]
     assert (rows[0]["source_class"], rows[0]["source_tier"], rows[0]["search_rank"]) == (
         "unknown",
         "unclassified",
@@ -1248,9 +1277,7 @@ def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: py
     def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
         calls.append(query)
         if query.startswith("!bing "):
-            return [
-                {"url": "https://bing.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
-            ]
+            return [{"url": "https://www.ford.com/brake-pads", "title": "Brake pads operation", "source": "searxng"}]
         if query.startswith("!yahoo "):
             return [
                 {"url": "https://yahoo.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
@@ -1266,7 +1293,7 @@ def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: py
     rows, source = j1_fetch.search_public("brake pads operation technical guide", searxng_url="http://127.0.0.1:8080")
     assert source == "searxng"
     assert {row["url"]: row["engines"] for row in rows} == {
-        "https://bing.example.org/brake-pads": ["bing"],
+        "https://www.ford.com/brake-pads": ["bing"],
         "https://yahoo.example.org/brake-pads": ["yahoo"],
     }
     assert calls == [
@@ -1290,6 +1317,8 @@ def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest
             return [
                 {"url": "https://example.org/rfc-2606", "title": "RFC 2606 reserved DNS names", "source": "searxng"}
             ]
+        if query == "RFC 2606 reserved DNS names":
+            return []
         pytest.fail("legacy SearXNG engine was queried")
 
     monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
@@ -1302,7 +1331,11 @@ def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest
     assert source == "searxng"
     assert [row["url"] for row in rows] == ["https://example.org/rfc-2606"]
     assert rows[0]["engines"] == ["yahoo"]
-    assert calls == ["!bing RFC 2606 reserved DNS names", "!yahoo RFC 2606 reserved DNS names"]
+    assert calls == [
+        "!bing RFC 2606 reserved DNS names",
+        "!yahoo RFC 2606 reserved DNS names",
+        "RFC 2606 reserved DNS names",
+    ]
 
 
 def test_search_uses_searxng_defaults_then_filters_and_ranks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1381,14 +1414,23 @@ def test_stage1_exact_duplicate_links_to_first_fetched_source(monkeypatch: pytes
 
 def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPatch) -> None:
     urls = [f"https://example.org/dynamic/{index}" for index in range(j1.MAX_BROWSER_PAGES + 1)]
+    batch_size = j1_fetch.MAX_SEARCH_RESULTS
+    batches = {
+        f"public dynamic material {start}": urls[start : start + batch_size]
+        for start in range(0, len(urls), batch_size)
+    }
     attempts: list[bool] = []
     monkeypatch.setattr(
         j1,
         "search_public",
-        lambda _query, **_kwargs: ([{"url": url, "title": url, "source": "searxng"} for url in urls], "searxng"),
+        lambda query, **_kwargs: (
+            [{"url": url, "title": url, "source": "searxng"} for url in batches[query]],
+            "searxng",
+        ),
     )
 
-    def dynamic_fetch(_url: str, *, allow_browser: bool) -> dict[str, object]:
+    def dynamic_fetch(_url: str, *, allow_browser: bool, allow_large_pdf: bool) -> dict[str, object]:
+        assert allow_large_pdf
         attempts.append(allow_browser)
         return {
             "ok": False,
@@ -1397,7 +1439,7 @@ def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPa
         }
 
     monkeypatch.setattr(j1, "fetch_document", dynamic_fetch)
-    job_id = j1.start_research("Public dynamic material", ["public dynamic material"], max_pages=len(urls))["job_id"]
+    job_id = j1.start_research("Public dynamic material", list(batches), max_pages=len(urls))["job_id"]
     j1.run_worker(once=True)
     status = j1.research_status(job_id)
     assert attempts == [True] * j1.MAX_BROWSER_PAGES + [False]
@@ -1683,7 +1725,7 @@ def test_j1003_completion_preserves_concurrent_control(j1003_offline, monkeypatc
     assert final["pages_fetched"] == 1
 
 
-def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
+def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=(), excluded_urls=()):
     context = {"make": "Lexus", "model": "RX200T", "engine": "8AR-FTS", "system": "fuel injection"}
     created = j1.start_research("Investigate public technical evidence", automotive_context=context)
     assert created["ok"], created
@@ -1694,6 +1736,8 @@ def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
             body = "Lexus RX200T 8AR-FTS fuel injection public technical reference " + str(index)
             if url in cohort_urls:
                 body += ". The study found fuel injection leakage in 12 of 100 vehicles."
+            if url in excluded_urls:
+                body += ". This bulletin excludes Lexus RX200T vehicles."
             connection.execute(
                 "INSERT INTO documents(id,job_id,url,canonical_url,title,kind,status,body,source_class,source_basis,"
                 "source_tier,created_at,retrieved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1729,6 +1773,8 @@ def _j1003_report_fixture(urls, *, canonical_urls=None, cohort_urls=()):
             ["https://redirect-one.example/a.pdf", "https://redirect-two.example/b.pdf"],
             ["https://static.nhtsa.gov/a.pdf", "https://www.nhtsa.gov/b.pdf"],
         ),
+        (["https://static.nhtsa.gov/a.pdf", "https://www.safercar.gov/b.pdf"], None),
+        (["https://techinfo.toyota.com/a.pdf", "https://www.toyota-tech.eu/b.pdf"], None),
     ],
 )
 def test_j1003_report_groups_source_authority_aliases(j1003_offline, urls, canonical_urls):
@@ -1736,6 +1782,17 @@ def test_j1003_report_groups_source_authority_aliases(j1003_offline, urls, canon
     assert report["evidence_confidence"]["independent_domains"] == 1
     assert report["evidence_confidence"]["level"] == "moderate"
     assert report["evidence_confidence"]["source_tiers"]["A"] == 2
+
+
+def test_j1003_report_keeps_qualified_exclusion_in_source_shortlist(j1003_offline):
+    urls = [f"https://static.nhtsa.gov/docs/{index:02}.pdf" for index in range(21)]
+    excluded = urls[-1]
+    report = _j1003_report_fixture(urls, excluded_urls={excluded})
+    assert len(report["sources"]) == 20
+    restriction = next(source for source in report["sources"] if source["url"] == excluded)
+    assert restriction["applicability"] in {"conflict", "excluded"}
+    assert any(item["kind"] == "exclusion" for item in restriction["applicability_evidence"])
+    assert "qualified_source_scope_limits" in {item["code"] for item in report["limitations"]}
 
 
 def test_j1003_report_does_not_promote_unknown_manual_provenance(j1003_offline):
