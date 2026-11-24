@@ -472,26 +472,36 @@ def refresh_status():
     print("CRM backup: M2 status unavailable during delivery.", file=sys.stderr)
 
 
-def set_status(dirfd, record, status, error=None):
+def set_status(dirfd, record, status, error=None, *, at=None):
     write_json(
         dirfd,
         "delivery-status.json",
-        {"id": record["id"], "status": status, "at": dt.datetime.now(dt.UTC).isoformat(), "error_code": error},
+        {"id": record["id"], "status": status, "at": at or dt.datetime.now(dt.UTC).isoformat(), "error_code": error},
     )
     refresh_status()
 
 
-def confirmed_cleanup_pending(dirfd, record):
+def confirmation_time(status):
+    at = status.get("at")
+    if not isinstance(at, str) or len(at) > 40 or "\n" in at:
+        return None
+    with suppress(ValueError):
+        if dt.datetime.fromisoformat(at).tzinfo is not None:
+            return at
+    return None
+
+
+def confirmed_delivery_status(dirfd, record):
     with suppress(DeliveryError, OSError):
         previous = read_json(dirfd, "delivery-status.json")
         if (
             isinstance(previous, dict)
             and previous.get("id") == record["id"]
             and previous.get("status") == "ok"
-            and previous.get("error_code") == "cleanup_pending"
+            and record in journal(dirfd)
         ):
-            return record in journal(dirfd)
-    return False
+            return previous
+    return None
 
 
 def rotate_when_idle(dirfd, remote):
@@ -504,7 +514,7 @@ def rotate_when_idle(dirfd, remote):
     ):
         rows = journal(dirfd)
         if rows and status.get("id") == rows[-1]["id"]:
-            set_status(dirfd, rows[-1], "ok")
+            set_status(dirfd, rows[-1], "ok", at=confirmation_time(status) or "неизвестно")
 
 
 def deliver_once(dirfd, remote):
@@ -513,7 +523,7 @@ def deliver_once(dirfd, remote):
     refresh_status()
     pending = pending_record(dirfd)
     record = read_json(dirfd, "delivery-intent.json")
-    cleanup_retry = False
+    previous = None
     if record is None:
         record = pending
         if record is None:
@@ -523,9 +533,11 @@ def deliver_once(dirfd, remote):
         write_json(dirfd, "delivery-intent.json", record)
     else:
         valid_record(record)
-        cleanup_retry = confirmed_cleanup_pending(dirfd, record)
-    if not cleanup_retry:
+        previous = confirmed_delivery_status(dirfd, record)
+    if previous is None:
         set_status(dirfd, record, "running")
+    cleanup_retry = previous is not None and previous.get("error_code") == "cleanup_pending"
+    verified_at = confirmation_time(previous) if previous is not None else None
     stream = None
     inspection_failed = False
     confirmed = False
@@ -561,6 +573,7 @@ def deliver_once(dirfd, remote):
             remote.verify(record, final=False)
             remote.publish(record)
         remote.verify(record, final=True)
+        verified_at = verified_at or dt.datetime.now(dt.UTC).isoformat()
         remember(dirfd, record)
         confirmed = True
         try:
@@ -569,7 +582,7 @@ def deliver_once(dirfd, remote):
             # Delivery is confirmed; failed housekeeping must not be reported
             # as a failed copy or prevent a newer pending generation.
             rotation_note = "rotation_pending"
-        set_status(dirfd, record, "ok", rotation_note)
+        set_status(dirfd, record, "ok", rotation_note, at=verified_at)
         cleanup_pending(dirfd, record, stream)
         unlink_file(dirfd, "delivery-intent.json")
     except (DeliveryError, OSError) as exc:
@@ -585,7 +598,7 @@ def deliver_once(dirfd, remote):
         # A failed connection during cleanup leaves the exact earlier
         # confirmation intact. The retry still reports the transport error.
         if confirmed:
-            set_status(dirfd, record, "ok", rotation_note or "cleanup_pending")
+            set_status(dirfd, record, "ok", rotation_note or "cleanup_pending", at=verified_at)
         elif not (cleanup_retry and inspection_failed and error.code == "ssh_unknown"):
             set_status(dirfd, record, "unknown" if error.unknown else "failed", error.code)
         if error is exc:

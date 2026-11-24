@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +110,19 @@ def store(tmp_path, monkeypatch):
         yield tmp_path, fd
     finally:
         os.close(fd)
+
+
+@pytest.fixture
+def delivery_clock(monkeypatch):
+    class Clock(datetime):
+        current = datetime(2026, 1, 1, 3, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(delivery, "dt", SimpleNamespace(UTC=UTC, datetime=Clock))
+    return Clock
 
 
 def test_production_owner_is_root():
@@ -628,7 +642,7 @@ def test_conflicting_old_final_is_preserved_when_new_generation_exists(store):
     assert remote.finals[newer["id"]] == b"newer"
 
 
-def test_failed_rotation_keeps_all_old_generations_then_retries(store):
+def test_failed_rotation_keeps_all_old_generations_then_retries(store, monkeypatch, delivery_clock):
     remote = FakeWindows()
     records = []
     for number in (1, 2):
@@ -636,15 +650,63 @@ def test_failed_rotation_keeps_all_old_generations_then_retries(store):
         records.append(record)
         delivery.deliver_once(store[1], remote)
     newest = prepare(store, 3, b"generation-3")
+    verified_at = delivery_clock.current.isoformat()
     remote.bad_inspection = records[-1]["id"]
-    delivery.deliver_once(store[1], remote)
+    inspect = remote.inspect
+
+    def inspect_after_verification(record):
+        if record == records[-1]:
+            delivery_clock.current = datetime(2026, 1, 1, 3, 5, tzinfo=UTC)
+        return inspect(record)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "inspect", inspect_after_verification)
+        delivery.deliver_once(store[1], remote)
     assert set(remote.finals) == {r["id"] for r in [*records, newest]}
     assert remote.deletes == []
-    assert delivery.read_json(store[1], "delivery-status.json")["error_code"] == "rotation_pending"
+    prior = delivery.read_json(store[1], "delivery-status.json")
+    assert prior["error_code"] == "rotation_pending"
+    assert prior["at"] == verified_at
+
     remote.bad_inspection = None
+    delivery_clock.current = datetime(2026, 1, 1, 10, 30, tzinfo=UTC)
     delivery.deliver_once(store[1], remote)
     assert set(remote.finals) == {records[-1]["id"], newest["id"]}
-    assert delivery.read_json(store[1], "delivery-status.json")["error_code"] is None
+    assert delivery.read_json(store[1], "delivery-status.json") == {**prior, "error_code": None}
+    assert remote.writes == remote.moves == [row["id"] for row in [*records, newest]]
+
+    newer = prepare(store, 4, b"generation-4")
+    delivery.deliver_once(store[1], remote)
+    status = delivery.read_json(store[1], "delivery-status.json")
+    assert status["id"] == newer["id"]
+    assert status["at"] == delivery_clock.current.isoformat()
+
+
+@pytest.mark.parametrize("legacy_at", [None, "not-a-timestamp"])
+def test_idle_note_clear_without_a_verification_time_keeps_time_unknown(store, delivery_clock, legacy_at):
+    _, fd = store
+    remote = FakeWindows()
+    record = prepare(store, 1, b"synthetic")
+    delivery.deliver_once(fd, remote)
+    prior = delivery.read_json(fd, "delivery-status.json")
+    if legacy_at is None:
+        prior.pop("at")
+    else:
+        prior["at"] = legacy_at
+    delivery.write_json(fd, "delivery-status.json", {**prior, "error_code": "rotation_pending"})
+    remote.inspections.clear()
+
+    delivery_clock.current = datetime(2026, 1, 1, 10, 30, tzinfo=UTC)
+    delivery.deliver_once(fd, remote)
+
+    assert remote.inspections == []
+    assert delivery.journal(fd) == [record]
+    assert delivery.read_json(fd, "delivery-status.json") == {
+        "id": record["id"],
+        "status": "ok",
+        "at": "неизвестно",
+        "error_code": None,
+    }
 
 
 @pytest.mark.parametrize("attempt", ["unknown", "different"])
@@ -867,7 +929,10 @@ def test_failed_confirmed_receipt_keeps_source_until_exact_remote_retry(store, m
     assert remote.writes == [record["id"]]
 
 
-def test_cleanup_failure_preserves_confirmed_status_and_retries_without_upload(store, monkeypatch):
+@pytest.mark.parametrize("saved_time_valid", [True, False])
+def test_cleanup_failure_preserves_confirmed_status_and_retries_without_upload(
+    store, monkeypatch, delivery_clock, saved_time_valid
+):
     remote = FakeWindows()
     record = prepare(store, 1, b"synthetic")
     original = delivery.cleanup_pending
@@ -881,14 +946,20 @@ def test_cleanup_failure_preserves_confirmed_status_and_retries_without_upload(s
         delivery.deliver_once(store[1], remote)
     status = delivery.read_json(store[1], "delivery-status.json")
     assert status["status"] == "ok" and status["error_code"] == "cleanup_pending"
+    verified_at = delivery_clock.current.isoformat()
+    assert status["at"] == verified_at
     assert delivery.read_json(store[1], "delivery-intent.json") == record
     assert delivery.read_json(store[1], "pending.json") is None
     assert not (store[0] / record["file"]).exists()
 
+    if not saved_time_valid:
+        delivery.write_json(store[1], "delivery-status.json", {**status, "at": "invalid"})
+    delivery_clock.current = datetime(2026, 1, 1, 10, 30, tzinfo=UTC)
     monkeypatch.setattr(delivery, "cleanup_pending", original)
     delivery.deliver_once(store[1], remote)
     status = delivery.read_json(store[1], "delivery-status.json")
     assert status["status"] == "ok" and status["error_code"] is None
+    assert status["at"] == (verified_at if saved_time_valid else delivery_clock.current.isoformat())
     assert delivery.read_json(store[1], "delivery-intent.json") is None
     assert remote.writes == [record["id"]]
     assert remote.finals[record["id"]] == b"synthetic"
