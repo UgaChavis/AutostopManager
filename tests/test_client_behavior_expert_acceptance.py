@@ -417,6 +417,48 @@ def test_c06_late_correction_is_refreshed_after_research_before_first_result(
 
 
 @pytest.mark.parametrize(
+    ("case_id", "query_fields", "expected_failure"),
+    [
+        pytest.param("C31", {}, "proposed public query missing privacy evidence", id="missing_query"),
+        pytest.param("C31", {"data": " \t"}, "proposed public query missing privacy evidence", id="blank_query"),
+        pytest.param(
+            "C31",
+            {"data": "Передние колодки SYNTHETIC_VIN_PRIVATE"},
+            "private sentinel included in proposed public query",
+            id="private_marker",
+        ),
+        pytest.param("C31", {"data": "Передние колодки, модель и год"}, None, id="sanitized_query"),
+        pytest.param("C31", None, None, id="no_public_search"),
+        pytest.param("C03", {}, None, id="case_without_privacy_assertion"),
+    ],
+)
+def test_public_query_privacy_assertion_requires_nonblank_query_evidence(
+    oracle, case_id, query_fields, expected_failure
+):
+    fixture, cases, score = oracle
+    actions = [
+        {"action": action}
+        for action in [*fixture["global_required_actions"], "reply.ack", "reply.verify", "evidence.research"]
+    ]
+    if query_fields is not None:
+        actions.append({"action": "evidence.public_search", **query_fields})
+    actions.extend({"action": action} for action in ["context.refresh", "reply.result", "reply.verify", "job.result"])
+    observation = {
+        "outcome": "answered",
+        "claims": {"offer_provided": True},
+        "actions": actions,
+        "client_replies": [
+            {"kind": "ack", "text": "Проверю варианты."},
+            {"kind": "result", "text": "Предварительно от 2400 ₽. Совместимость нужно подтвердить."},
+        ],
+    }
+
+    result = score(fixture, cases[case_id], observation)
+    assert result["hard_pass"] is (expected_failure is None)
+    assert result["failures"] == ([] if expected_failure is None else [expected_failure])
+
+
+@pytest.mark.parametrize(
     ("case_id", "reply_text"),
     [
         pytest.param("C16", "Срок уточню. Пока ничего не оформляю.", id="price_interest"),
