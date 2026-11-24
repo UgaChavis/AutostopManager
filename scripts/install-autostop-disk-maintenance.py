@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -40,4 +41,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Route SIGTERM through the same rollback path as an interactive interrupt.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     raise SystemExit(main())

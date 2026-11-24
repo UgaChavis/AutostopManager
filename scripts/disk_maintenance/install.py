@@ -618,6 +618,6 @@ def _install_locked(
                 raise MaintenanceError("install_timer_readback_failed")
         receipt["status"] = "installed"
         atomic_json(receipt_path, receipt)
-    except (OSError, subprocess.SubprocessError, MaintenanceError):
+    except (OSError, subprocess.SubprocessError, MaintenanceError, KeyboardInterrupt):
         _rollback(receipt_path, receipt)
     return receipt

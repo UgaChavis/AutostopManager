@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -158,10 +160,11 @@ def test_policy_migration_refuses_either_busy_cleanup_lock_before_mutation(migra
     assert all(call[0] == "git" for call in migration["calls"])
 
 
-@pytest.mark.parametrize("fail", [False, True], ids=["success", "rollback"])
-def test_policy_migration_holds_both_cleanup_locks_through_activation_and_rollback(migration, monkeypatch, fail):
+@pytest.mark.parametrize("failure", [None, "verify", "interrupt"], ids=["success", "rollback", "interrupted"])
+def test_policy_migration_holds_both_cleanup_locks_through_activation_and_rollback(migration, monkeypatch, failure):
     activate = installer._activate
     command = migration["command"]
+    previous_timers = deepcopy(command.states)
     activations = []
     locks = (*migration["cleanup"], installer.STATE / ".install.lock")
 
@@ -173,19 +176,28 @@ def test_policy_migration_holds_both_cleanup_locks_through_activation_and_rollba
         activate(new_target)
 
     def verify(argv, *, allow_failure=False):
-        if fail and argv[0] == "systemd-analyze":
-            raise MaintenanceError("injected_verify_failure")
+        if argv[0] == "systemd-analyze":
+            if failure == "verify":
+                raise MaintenanceError("injected_verify_failure")
+            if failure == "interrupt":
+                assert installer._current_target() != migration["initial_target"]
+                assert json.loads(migration["receipt"].read_text())["status"] == "prepared"
+                raise KeyboardInterrupt
         return command(argv, allow_failure=allow_failure)
 
     monkeypatch.setattr(installer, "_activate", guarded_activate)
     monkeypatch.setattr(installer, "_command", verify)
     arguments = (migration["root"], migration["policy"], migration["revision"], migration["receipt"])
-    if fail:
-        with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
-            installer.install(*arguments)
+    if failure:
+        try:
+            with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
+                installer.install(*arguments)
+        except KeyboardInterrupt:
+            pytest.fail("installer let the interruption escape before rolling back")
         assert len(activations) == 2 and activations[-1] == migration["initial_target"]
         assert installer.POLICY.read_bytes() == migration["previous_policy"]
         assert json.loads(migration["receipt"].read_text())["status"] == "rolled_back"
+        assert command.states == previous_timers
     else:
         result = installer.install(*arguments)
         assert activations == ["releases/" + result["payload_sha256"]]
@@ -194,6 +206,55 @@ def test_policy_migration_holds_both_cleanup_locks_through_activation_and_rollba
     for path in locks:
         with locked(path):
             pass
+
+
+def test_installer_cli_routes_sigterm_to_interruption_without_affecting_imports():
+    entrypoint = Path(installer.__file__).resolve().parents[1] / "install-autostop-disk-maintenance.py"
+    child = """
+import os
+import runpy
+import signal
+import sys
+
+entrypoint = sys.argv.pop(1)
+previous = signal.getsignal(signal.SIGTERM)
+runpy.run_path(entrypoint)
+assert signal.getsignal(signal.SIGTERM) == previous
+
+from disk_maintenance import install as installer
+from disk_maintenance.util import MaintenanceError
+
+def fake_install(*args):
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except KeyboardInterrupt:
+        raise MaintenanceError("install_failed_rolled_back") from None
+    raise AssertionError("SIGTERM did not interrupt the installer")
+
+installer.install = fake_install
+runpy.run_path(entrypoint, run_name="__main__")
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            child,
+            str(entrypoint),
+            "--source-commit",
+            "synthetic",
+            "--policy-file",
+            "unused",
+            "--receipt",
+            "unused",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode != -signal.SIGTERM, "SIGTERM terminated the CLI before rollback could run"
+    assert result.returncode == 1, result.stderr
+    assert json.loads(result.stdout) == {"ok": False, "error": "install_failed_rolled_back"}
 
 
 def test_concurrent_installer_cannot_start_adoption(source, target, monkeypatch, tmp_path):
