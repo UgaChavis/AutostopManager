@@ -5,11 +5,12 @@ import os
 import stat
 import subprocess
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 from scripts.disk_maintenance import install as installer
-from scripts.disk_maintenance.core import DEFAULT_POLICY
+from scripts.disk_maintenance.core import DEFAULT_POLICY, locked
 from scripts.disk_maintenance.util import MaintenanceError
 
 
@@ -111,6 +112,126 @@ def target(tmp_path, monkeypatch):
     command.states = states
     monkeypatch.setattr(installer, "_command", command)
     return policy, receipt, calls, command
+
+
+@pytest.fixture
+def migration(source, target, tmp_path):
+    root, revision = source
+    policy, receipt, calls, command = target
+    initial = installer.install(root, policy, revision, receipt)
+    previous_policy = installer.POLICY.read_bytes()
+    updated = json.loads(previous_policy)
+    cleanup_before = Path(updated["locks"]["cleanup"])
+    cleanup_after = cleanup_before.with_name("cleanup-after.lock")
+    updated["locks"]["cleanup"] = str(cleanup_after)
+    policy.write_text(json.dumps(updated))
+    (root / "scripts/disk_maintenance/core.py").write_text("# new synthetic core\n")
+    subprocess.run(["git", "-C", str(root), "commit", "-qam", "new synthetic payload"], check=True, capture_output=True)
+    revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    calls.clear()
+    return {
+        "root": root,
+        "revision": revision,
+        "policy": policy,
+        "receipt": tmp_path / "next-receipt" / "install.json",
+        "cleanup": (cleanup_before, cleanup_after),
+        "initial_target": "releases/" + initial["payload_sha256"],
+        "previous_policy": previous_policy,
+        "calls": calls,
+        "command": command,
+    }
+
+
+@pytest.mark.parametrize("busy_index", [0, 1], ids=["current-policy", "candidate-policy"])
+def test_policy_migration_refuses_either_busy_cleanup_lock_before_mutation(migration, busy_index):
+    units_before = {path: path.read_bytes() for path in installer.SYSTEMD.iterdir() if path.is_file()}
+    releases_before = set((installer.BASE / "releases").iterdir())
+    with locked(migration["cleanup"][busy_index], create=True):
+        with pytest.raises(MaintenanceError, match="native_lock_busy"):
+            installer.install(migration["root"], migration["policy"], migration["revision"], migration["receipt"])
+
+    assert installer._current_target() == migration["initial_target"]
+    assert installer.POLICY.read_bytes() == migration["previous_policy"]
+    assert {path: path.read_bytes() for path in units_before} == units_before
+    assert set((installer.BASE / "releases").iterdir()) == releases_before
+    assert not migration["receipt"].parent.exists()
+    assert all(call[0] == "git" for call in migration["calls"])
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "rollback"])
+def test_policy_migration_holds_both_cleanup_locks_through_activation_and_rollback(migration, monkeypatch, fail):
+    activate = installer._activate
+    command = migration["command"]
+    activations = []
+    locks = (*migration["cleanup"], installer.STATE / ".install.lock")
+
+    def guarded_activate(new_target):
+        for path in locks:
+            with pytest.raises(MaintenanceError, match="native_lock_busy"), locked(path):
+                pytest.fail("installer released its lock before activation")
+        activations.append(new_target)
+        activate(new_target)
+
+    def verify(argv, *, allow_failure=False):
+        if fail and argv[0] == "systemd-analyze":
+            raise MaintenanceError("injected_verify_failure")
+        return command(argv, allow_failure=allow_failure)
+
+    monkeypatch.setattr(installer, "_activate", guarded_activate)
+    monkeypatch.setattr(installer, "_command", verify)
+    arguments = (migration["root"], migration["policy"], migration["revision"], migration["receipt"])
+    if fail:
+        with pytest.raises(MaintenanceError, match="install_failed_rolled_back"):
+            installer.install(*arguments)
+        assert len(activations) == 2 and activations[-1] == migration["initial_target"]
+        assert installer.POLICY.read_bytes() == migration["previous_policy"]
+        assert json.loads(migration["receipt"].read_text())["status"] == "rolled_back"
+    else:
+        result = installer.install(*arguments)
+        assert activations == ["releases/" + result["payload_sha256"]]
+        assert installer.POLICY.read_bytes() == migration["policy"].read_bytes()
+    assert installer._current_target() == activations[-1]
+    for path in locks:
+        with locked(path):
+            pass
+
+
+def test_concurrent_installer_cannot_start_adoption(source, target, monkeypatch, tmp_path):
+    root, revision = source
+    policy, receipt, _, _ = target
+    activate = installer._activate
+    competing_receipt = tmp_path / "competing" / "install.json"
+    attempted = []
+
+    def activate_with_competitor(target):
+        if not attempted:
+            attempted.append(True)
+            with pytest.raises(MaintenanceError, match="native_lock_busy"):
+                installer.install(root, policy, revision, competing_receipt)
+        activate(target)
+
+    monkeypatch.setattr(installer, "_activate", activate_with_competitor)
+    assert installer.install(root, policy, revision, receipt)["status"] == "installed"
+    assert attempted and not competing_receipt.parent.exists()
+
+
+def test_install_rechecks_receipt_after_source_preflight(source, target, monkeypatch):
+    root, revision = source
+    policy, receipt, calls, _ = target
+    read_payload = installer._payload
+
+    def appear(*args):
+        payload = read_payload(*args)
+        receipt.write_bytes(b"another installation receipt")
+        receipt.chmod(0o600)
+        return payload
+
+    monkeypatch.setattr(installer, "_payload", appear)
+    with pytest.raises(MaintenanceError, match="install_receipt_already_exists"):
+        installer.install(root, policy, revision, receipt)
+    assert receipt.read_bytes() == b"another installation receipt"
+    assert not installer.BASE.exists() and not installer.POLICY.exists()
+    assert all(call[0] == "git" for call in calls)
 
 
 def test_install_freezes_only_committed_payload_and_private_policy(source, target):

@@ -10,9 +10,10 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
-from .util import MaintenanceError, atomic_json, no_symlink_ancestors, private_file
+from .util import MaintenanceError, atomic_json, no_symlink_ancestors, private_file, read_json
 
 INSTALL_SOURCE = ("scripts/install-autostop-disk-maintenance.py", "scripts/disk_maintenance/install.py")
 TMPFILES_SOURCE = "deploy/tmpfiles.d/autostop-disk-maintenance-locks.conf"
@@ -508,12 +509,52 @@ def _rollback(receipt_path: Path, receipt: dict) -> None:
 
 
 def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) -> dict:
+    from .core import _absolute, locked
+
     if os.geteuid() != 0:
         raise MaintenanceError("install_root_required")
     if receipt_path.exists() or receipt_path.is_symlink():
         raise MaintenanceError("install_receipt_already_exists")
     contents, digest = _payload(source, revision)
     policy_bytes = _approved_policy(policy_file)
+    try:
+        _directory(STATE, 0o700)
+    except FileExistsError:
+        # Two first-time installers can race to create the state directory.
+        _directory(STATE, 0o700)
+    installation_lock = STATE / ".install.lock"
+    with locked(installation_lock, create=True), ExitStack() as cleanup_locks:
+        previous_current = _current_target()
+        previous_policy = None
+        lock_paths = {Path(json.loads(policy_bytes)["locks"]["cleanup"])}
+        if previous_current is not None:
+            _trusted_package(BASE / previous_current)
+            previous_policy = read_json(POLICY, private=True)
+            installed_locks = previous_policy.get("locks")
+            if not isinstance(installed_locks, dict):
+                raise MaintenanceError("install_previous_policy_invalid")
+            lock_paths.add(_absolute(installed_locks.get("cleanup")))
+
+        # Keep both runtimes fenced when the approved policy moves the lock.
+        for path in sorted(lock_paths - {installation_lock}):
+            cleanup_locks.enter_context(locked(path, create=True))
+        if receipt_path.exists() or receipt_path.is_symlink():
+            raise MaintenanceError("install_receipt_already_exists")
+        if _current_target() != previous_current:
+            raise MaintenanceError("install_current_changed")
+        if previous_policy is not None and read_json(POLICY, private=True) != previous_policy:
+            raise MaintenanceError("install_previous_policy_changed")
+        return _install_locked(contents, digest, policy_bytes, revision, receipt_path, previous_current)
+
+
+def _install_locked(
+    contents: dict[str, bytes],
+    digest: str,
+    policy_bytes: bytes,
+    revision: str,
+    receipt_path: Path,
+    previous_current: str | None,
+) -> dict:
     retain_pg = json.loads(policy_bytes)["pg_retention_enabled"]
     hook_path = SYSTEMD / RETENTION_UNIT
     hook_bytes = contents["deploy/systemd/" + RETENTION_UNIT]
@@ -527,15 +568,11 @@ def install(source: Path, policy_file: Path, revision: str, receipt_path: Path) 
     _directory(BASE, 0o750)
     _directory(BASE / "releases", 0o750)
     _directory(POLICY.parent, 0o700)
-    _directory(STATE, 0o700)
     _directory(receipt_path.parent, 0o700)
     _install_package(BASE / "releases" / digest, contents)
     unit_paths = [SYSTEMD / name for name in UNITS]
     for path in unit_paths:
         _directory(path.parent, 0o755)
-    previous_current = _current_target()
-    if previous_current is not None:
-        _trusted_package(BASE / previous_current)
     prior = _snapshot([POLICY, WRAPPER, *unit_paths], receipt_path.parent)
     enabled = {name: _timer_enabled(name) for name in TIMERS}
     active = {name: _timer_active(name) for name in TIMERS}
