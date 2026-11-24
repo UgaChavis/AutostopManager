@@ -17,7 +17,11 @@ import pytest
 from autostop_manager import j1_vin_documents as documents
 from test_j1_vin_evidence import Sandbox, sandbox as sandbox
 
-_PYTHON = str(Path(sys.executable).resolve())
+# The parser execs after dropping root to nobody. Its standard-library probes
+# cannot use a test interpreter installed under a private root directory.
+_PARSER_PYTHON = str(Path(sys.executable).resolve())
+if os.geteuid() == 0:
+    _PARSER_PYTHON = shutil.which("python3", path="/usr/bin:/bin") or _PARSER_PYTHON
 _FORMAT_TAGS = ["b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]
 
 
@@ -840,7 +844,7 @@ def test_real_parser_inherited_cwd_privilege_and_resource_caps(tmp_path: Path) -
     )
     with documents._parser_workspace(workspace) as (directory, descriptor):
         outcome, output = documents._run_parser(
-            [_PYTHON, "-c", script], directory, descriptor, timeout=3, output_limit=4096
+            [_PARSER_PYTHON, "-c", script], directory, descriptor, timeout=3, output_limit=4096
         )
         assert outcome == "ok"
         report = json.loads(output)
@@ -860,17 +864,17 @@ def test_real_parser_deadline_failure_and_file_output_limit(tmp_path: Path) -> N
     workspace = _workspace(tmp_path)
     with documents._parser_workspace(workspace) as (directory, descriptor):
         outcome, output = documents._run_parser(
-            [_PYTHON, "-c", "import time;time.sleep(10)"], directory, descriptor, timeout=0.05, output_limit=100
+            [_PARSER_PYTHON, "-c", "import time;time.sleep(10)"], directory, descriptor, timeout=0.05, output_limit=100
         )
         assert (outcome, output) == ("timeout", b"")
         assert (
             documents._run_parser(
-                [_PYTHON, "-c", "raise SystemExit(3)"], directory, descriptor, timeout=2, output_limit=100
+                [_PARSER_PYTHON, "-c", "raise SystemExit(3)"], directory, descriptor, timeout=2, output_limit=100
             )[0]
             == "failed"
         )
         outcome, output = documents._run_parser(
-            [_PYTHON, "-c", "import os;os.write(1,b'x'*1000)"],
+            [_PARSER_PYTHON, "-c", "import os;os.write(1,b'x'*1000)"],
             directory,
             descriptor,
             timeout=2,
@@ -881,7 +885,9 @@ def test_real_parser_deadline_failure_and_file_output_limit(tmp_path: Path) -> N
             documents._run_parser(["/missing/parser"], directory, descriptor, timeout=2, output_limit=100)[0]
             == "unavailable"
         )
-        assert documents._run_parser([_PYTHON], directory, descriptor, timeout=0, output_limit=100)[0] == "timeout"
+        assert (
+            documents._run_parser([_PARSER_PYTHON], directory, descriptor, timeout=0, output_limit=100)[0] == "timeout"
+        )
     assert list(workspace.iterdir()) == []
 
 
@@ -917,7 +923,7 @@ with tempfile.TemporaryDirectory(prefix='j1-vin-timeout-cap-') as raw:
         started = time.monotonic()
         with documents._parser_workspace(workspace) as (directory, descriptor):
             outcome, output = documents._run_parser(
-                [str(Path(sys.executable).resolve()), '-I', '-c', 'import time;time.sleep(0.6)'],
+                [sys.argv[1], '-I', '-c', 'import time;time.sleep(0.6)'],
                 directory, descriptor, timeout=0.04, output_limit=4096)
             process, child = created[-1]
             try:
@@ -951,6 +957,7 @@ with tempfile.TemporaryDirectory(prefix='j1-vin-timeout-cap-') as raw:
             sys.executable,
             "-c",
             script,
+            _PARSER_PYTHON,
         ],
         capture_output=True,
         timeout=15,
@@ -1042,7 +1049,7 @@ def test_small_remaining_budget_kills_real_parser_and_cleans_workspace(
 
     def slow_parser(_argv: list[str], *args: Any, **kwargs: Any) -> tuple[str, bytes]:
         timeouts.append(kwargs["timeout"])
-        return original([_PYTHON, "-c", "import time;time.sleep(10)"], *args, **kwargs)
+        return original([_PARSER_PYTHON, "-c", "import time;time.sleep(10)"], *args, **kwargs)
 
     monkeypatch.setattr(documents, "_run_parser", slow_parser)
     started = time.monotonic()
@@ -1194,7 +1201,7 @@ with tempfile.TemporaryDirectory(prefix='j1-vin-low-cap-', dir='/dev/shm') as di
     workspace.chmod(0o700)
     with documents._parser_workspace(workspace) as (parser_dir, descriptor):
         probe_status, probe_output = documents._run_parser(
-            [str(Path(sys.executable).resolve()), '-I', '-c', probe], parser_dir, descriptor,
+            [sys.argv[1], '-I', '-c', probe], parser_dir, descriptor,
             timeout=3, output_limit=4096)
     decoded = documents.extract_content(body, 'application/pdf', 'https://example.org/synthetic.pdf', workspace)
     recognized = documents.ocr_pages(body, [456], workspace)
@@ -1221,6 +1228,7 @@ with tempfile.TemporaryDirectory(prefix='j1-vin-low-cap-', dir='/dev/shm') as di
             sys.executable,
             "-c",
             script,
+            _PARSER_PYTHON,
         ],
         input=_pdf(456),
         capture_output=True,
