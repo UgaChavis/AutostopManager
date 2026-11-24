@@ -132,7 +132,7 @@ previous_work_venv=""
 previous_work_model=""
 work_runtime_switched=0
 current_link="${release_root}/current"
-previous_release="$(readlink -f "${current_link}" 2>/dev/null || true)"
+previous_release="$(readlink -e "${current_link}" 2>/dev/null || true)"
 work_service_was_active=0
 work_inbound_expected=0
 
@@ -368,11 +368,6 @@ PY
 else
   find "${staging_dir}" -type f -exec chmod 0644 {} +
 fi
-if ! backup_initial_release_assets; then
-  echo "ERROR: existing Telegram release assets cannot be safely backed up" >&2
-  exit 1
-fi
-mv -- "${staging_dir}" "${release_dir}"
 
 work_bridge_status() {
   sudo -u "${service_user}" env PYTHONSAFEPATH=1 PYTHONPATH="${current_link}" \
@@ -484,7 +479,7 @@ try:
         row = connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
     finally:
         connection.close()
-    if row is None or int(row[0]) not in versions:
+    if row is None or row[0] not in {str(version) for version in versions}:
         raise ValueError("unsupported_inbox_contract")
 except (OSError, ValueError, TypeError, SyntaxError, sqlite3.Error):
     raise SystemExit(1) from None
@@ -595,10 +590,15 @@ transcription_runtime_ready() {
     "${venv_root}/bin/python" -m autostop_manager.telegram_transcribe --account personal --self-check
 }
 
-if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${release_dir}"; then
+if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${staging_dir}"; then
   echo "durable_inbox_candidate_incompatible=true" >&2
   exit 1
 fi
+if ! backup_initial_release_assets; then
+  echo "ERROR: existing Telegram release assets cannot be safely backed up" >&2
+  exit 1
+fi
+mv -- "${staging_dir}" "${release_dir}"
 
 if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
   if ! systemctl stop "${service_unit}"; then

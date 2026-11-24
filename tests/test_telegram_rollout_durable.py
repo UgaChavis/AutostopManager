@@ -186,14 +186,15 @@ def test_rollback_refuses_ram_only_release_before_stopping_current_bridge(tmp_pa
     assert "unexpected_service_mutation" not in result.stdout
 
 
-def test_durable_compatibility_ignores_cwd_and_pythonpath(tmp_path):
+@pytest.mark.parametrize(("schema_version", "supported_result"), [("2", 0), ("02", 1)])
+def test_durable_compatibility_uses_canonical_schema_without_caller_imports(tmp_path, schema_version, supported_result):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
     helper = re.search(r"(?ms)^durable_inbox_compatible\(\) \{\n.*?^\}", source)
     assert helper is not None
     database = tmp_path / "inbound.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        connection.execute("INSERT INTO metadata VALUES ('schema_version','2')")
+        connection.execute("INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,))
     package = tmp_path / "candidate/autostop_manager"
     package.mkdir(parents=True)
     module = package / "telegram_inbox.py"
@@ -207,7 +208,7 @@ def test_durable_compatibility_ignores_cwd_and_pythonpath(tmp_path):
     for cwd, pythonpath in ((hostile, ""), (clean, str(hostile))):
         env = {**os.environ, "PYTHONPATH": pythonpath}
         env.pop("PYTHONSAFEPATH", None)
-        for versions, expected in (((1, 2), 0), ((1,), 1)):
+        for versions, expected in (((1, 2), supported_result), ((1,), 1)):
             module.write_text(f"SUPPORTED_INBOX_SCHEMA_VERSIONS = {versions!r}\n")
             result = subprocess.run(
                 ["bash", "-c", shell + '\ndurable_inbox_compatible "$1"\n', "test", str(package.parent)],
@@ -220,7 +221,9 @@ def test_durable_compatibility_ignores_cwd_and_pythonpath(tmp_path):
             assert result.returncode == expected, result.stderr
             assert not marker.exists()
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
-        assert connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == "2"
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0] == schema_version
+        )
 
 
 def test_rollback_checks_registry_version_before_mutating_a_durable_pair(tmp_path):
@@ -269,7 +272,7 @@ def test_explicit_downgrade_is_rejected_before_current_service_stops(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
     helper = re.search(r"(?ms)^durable_inbox_compatible\(\) \{\n.*?^\}", source)
     assert helper is not None
-    start = source.index('if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${release_dir}"; then')
+    start = source.index('if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${staging_dir}"; then')
     stop = source.index("if ! activate_new_release_assets; then", start)
     database = tmp_path / "inbound.sqlite3"
     with sqlite3.connect(database) as connection:
@@ -289,7 +292,7 @@ def test_explicit_downgrade_is_rejected_before_current_service_stops(tmp_path):
         env={
             **os.environ,
             "account": "work",
-            "release_dir": str(candidate.parent),
+            "staging_dir": str(candidate.parent),
             "work_service_was_active": "1",
             "service_unit": "fake.service",
         },

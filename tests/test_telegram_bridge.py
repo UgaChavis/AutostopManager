@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -568,7 +569,7 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
         "inbound_intent",
         "receipt_case",
         "reconciliation",
-        "archive_error",
+        "preflight_error",
     ),
     [
         ("inactive", "disabled", 1, False, "old_shape", "unknown", None),
@@ -589,10 +590,12 @@ def test_dedicated_telegram_deploy_script_is_syntax_valid_and_scoped() -> None:
         ("active", "enabled", 0, True, "complete", "complete", "REVISION"),
         ("active", "enabled", 0, True, "complete", "complete", "symlink"),
         ("inactive", "disabled", 0, False, "old_shape", "unknown", "checksum"),
+        ("active", "enabled", 0, True, "complete", "complete", "incompatible_inbox"),
+        ("inactive", "disabled", 0, False, "old_shape", "unknown", "incompatible_inbox_first_release"),
     ],
 )
 def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
-    tmp_path, active_state, unit_state, voice_exit, inbound_intent, receipt_case, reconciliation, archive_error
+    tmp_path, active_state, unit_state, voice_exit, inbound_intent, receipt_case, reconciliation, preflight_error
 ) -> None:
     source = tmp_path / "source"
     remote = tmp_path / "origin.git"
@@ -602,6 +605,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     runtime_root = tmp_path / "runtimes"
     venv_link = tmp_path / "venv"
     model_link = tmp_path / "models" / "faster-whisper-small"
+    inbox_db = tmp_path / "inbound.sqlite3"
     fake_bin = tmp_path / "bin"
     daemon_reload_count = tmp_path / "daemon-reload-count"
     bridge_stopped = tmp_path / "bridge-stopped"
@@ -645,10 +649,19 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     (source / "scripts" / "ensure-automation-group.sh").chmod(0o755)
-    if archive_error == "symlink":
+    if preflight_error == "symlink":
         (source / "linked-notes").symlink_to(".fixture notes")
-    elif archive_error in {"MANIFEST.sha256", "REVISION"}:
-        (source / archive_error).write_text("Reserved metadata must be generated during deploy\n")
+    elif preflight_error in {"MANIFEST.sha256", "REVISION"}:
+        (source / preflight_error).write_text("Reserved metadata must be generated during deploy\n")
+    incompatible_inbox = preflight_error in {"incompatible_inbox", "incompatible_inbox_first_release"}
+    if incompatible_inbox:
+        candidate_inbox = source / "autostop_manager" / "telegram_inbox.py"
+        candidate_inbox.parent.mkdir()
+        candidate_inbox.write_text("SUPPORTED_INBOX_SCHEMA_VERSIONS = (1,)\n", encoding="utf-8")
+        with sqlite3.connect(inbox_db) as connection:
+            connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute("INSERT INTO metadata VALUES ('schema_version', '2')")
+        original_inbox = inbox_db.read_bytes()
     for command in (
         ["git", "init", str(source)],
         ["git", "-C", str(source), "config", "user.email", "test@example.invalid"],
@@ -700,22 +713,24 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     model_link.symlink_to(previous_model)
 
     previous_release = release_root / "previous"
-    (previous_release / "deploy" / "systemd").mkdir(parents=True)
-    (previous_release / "scripts").mkdir()
     previous_unit = "[Service]\nExecStart=/bin/false\n"
-    (previous_release / "deploy" / "systemd" / "autostop-work-telegram.service").write_text(
-        previous_unit, encoding="utf-8"
-    )
-    (previous_release / "scripts" / "run-work-telegram-media.sh").write_text(
-        "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
-    )
-    release_root.mkdir(exist_ok=True)
-    first_release = archive_error == "checksum"
+    first_release = preflight_error in {"checksum", "incompatible_inbox_first_release"}
+    initial_releases = set()
     if not first_release:
+        (previous_release / "deploy" / "systemd").mkdir(parents=True)
+        (previous_release / "scripts").mkdir()
+        (previous_release / "deploy" / "systemd" / "autostop-work-telegram.service").write_text(
+            previous_unit, encoding="utf-8"
+        )
+        (previous_release / "scripts" / "run-work-telegram-media.sh").write_text(
+            "#!/usr/bin/env bash\nexit 0\n", encoding="utf-8"
+        )
         (release_root / "current").symlink_to(previous_release)
+        initial_releases = {release_root / "current", previous_release}
     unit_path.parent.mkdir()
     unit_path.write_text(previous_unit, encoding="utf-8")
     media_wrapper_path.parent.mkdir()
+    media_wrapper_path.write_text("Existing wrapper\n", encoding="utf-8")
     active_state_path.write_text(active_state, encoding="utf-8")
     unit_state_path.write_text(unit_state, encoding="utf-8")
     if inbound_intent:
@@ -723,8 +738,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         monitor_env.chmod(0o644)
 
     fake_bin.mkdir()
-    if first_release:
-        media_wrapper_path.write_text("Existing wrapper\n", encoding="utf-8")
+    if preflight_error == "checksum":
         sha256sum = fake_bin / "sha256sum"
         sha256sum.write_text(
             '#!/bin/sh\nprintf "changed\\n" >> ".fixture notes"\nexec /usr/bin/sha256sum "$@"\n', encoding="utf-8"
@@ -735,7 +749,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         "set -eu\n"
         'case "$1" in\n'
         "  show)\n"
-        '    case "$*" in *LoadState*) printf loaded ;; *ActiveState*) cat "$FAKE_ACTIVE_STATE_PATH" ;; *) cat "$FAKE_UNIT_STATE_PATH" ;; esac\n'
+        '    case "$*" in *LoadState*) printf "%s" "$FAKE_LOAD_STATE" ;; *ActiveState*) cat "$FAKE_ACTIVE_STATE_PATH" ;; *) cat "$FAKE_UNIT_STATE_PATH" ;; esac\n'
         "    exit 0\n"
         "    ;;\n"
         '  is-active) [[ "$(cat "$FAKE_ACTIVE_STATE_PATH")" == active ]]; exit $? ;;\n'
@@ -769,7 +783,7 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
         'media_wrapper_path="/usr/local/sbin/autostop-work-telegram-media"': f'media_wrapper_path="{media_wrapper_path}"',
         'monitor_env="/etc/autostop-work-telegram/monitor.env"': f'monitor_env="{monitor_env}"',
         'control_lock="/run/autostop-work-telegram-control.lock"': f'control_lock="{tmp_path / "control.lock"}"',
-        "/var/lib/autostop-work-telegram/inbound.sqlite3": str(tmp_path / "inbound.sqlite3"),
+        "/var/lib/autostop-work-telegram/inbound.sqlite3": str(inbox_db),
     }
     for old, new in replacements.items():
         assert old in script_text
@@ -779,39 +793,40 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     script.write_text(script_text, encoding="utf-8")
     script.chmod(0o755)
 
-    completed = subprocess.run(
-        [str(script), "--account", "work", "--no-start"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "FAKE_SYSTEMCTL_COUNT_FILE": str(daemon_reload_count),
-            "FAKE_BRIDGE_STOPPED": str(bridge_stopped),
-            "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
-            "FAKE_UNIT_STATE_PATH": str(unit_state_path),
-            "FAKE_VOICE_CHECKED": str(voice_checked),
-            "FAKE_TRANSPORT_STATUS": json.dumps(transport_status),
-            "FAKE_RECEIPT_STATUS": "{invalid" if receipt_case == "malformed" else json.dumps(receipt_status),
-            "FAKE_RECEIPT_EXIT": "1" if receipt_case == "unavailable" else "0",
-            "FAKE_AUTOMATION_GROUP_HELPER_CALLED": str(automation_group_helper_called),
-        },
-    )
+    command = [str(script), "--account", "work", "--no-start"]
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_SYSTEMCTL_COUNT_FILE": str(daemon_reload_count),
+        "FAKE_BRIDGE_STOPPED": str(bridge_stopped),
+        "FAKE_LOAD_STATE": "not-found" if first_release else "loaded",
+        "FAKE_ACTIVE_STATE_PATH": str(active_state_path),
+        "FAKE_UNIT_STATE_PATH": str(unit_state_path),
+        "FAKE_VOICE_CHECKED": str(voice_checked),
+        "FAKE_TRANSPORT_STATUS": json.dumps(transport_status),
+        "FAKE_RECEIPT_STATUS": "{invalid" if receipt_case == "malformed" else json.dumps(receipt_status),
+        "FAKE_RECEIPT_EXIT": "1" if receipt_case == "unavailable" else "0",
+        "FAKE_AUTOMATION_GROUP_HELPER_CALLED": str(automation_group_helper_called),
+    }
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, env=environment)
 
     assert automation_group_helper_called.read_text(encoding="utf-8") == "called"
     coherent_lifecycle = (active_state, unit_state) in {("active", "enabled"), ("inactive", "disabled")}
-    if first_release:
+    if preflight_error is not None:
+        expected_error = {
+            "checksum": "work Telegram release manifest verification failed",
+            "incompatible_inbox": "durable_inbox_candidate_incompatible=true",
+            "incompatible_inbox_first_release": "durable_inbox_candidate_incompatible=true",
+        }.get(preflight_error, "work Telegram archive contains invalid entries")
         assert completed.returncode == 1
-        assert "work Telegram release manifest verification failed" in completed.stderr
+        assert expected_error in completed.stderr
         assert not bridge_stopped.exists() and not daemon_reload_count.exists()
-        assert set(release_root.iterdir()) == {previous_release}
+        assert set(release_root.iterdir()) == initial_releases
         assert media_wrapper_path.read_text(encoding="utf-8") == "Existing wrapper\n"
-    elif archive_error is not None:
-        assert completed.returncode == 1
-        assert "work Telegram archive contains invalid entries" in completed.stderr
-        assert not bridge_stopped.exists() and not daemon_reload_count.exists()
-        assert set(release_root.iterdir()) == {release_root / "current", previous_release}
+        if incompatible_inbox:
+            assert inbox_db.read_bytes() == original_inbox
+        assert active_state_path.read_text(encoding="utf-8") == active_state
+        assert unit_state_path.read_text(encoding="utf-8") == unit_state
     elif not coherent_lifecycle:
         assert completed.returncode == 1
         assert "lifecycle must be active-enabled or legacy inactive-disabled" in completed.stderr
@@ -858,6 +873,18 @@ def test_work_deploy_restores_transport_and_rolls_back_failed_checks(
     assert unit_path.read_text(encoding="utf-8") == previous_unit
     assert venv_link.resolve() == previous_venv
     assert model_link.resolve() == previous_model
+    if first_release and incompatible_inbox:
+        with sqlite3.connect(inbox_db) as connection:
+            connection.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+        retried = subprocess.run(command, check=False, capture_output=True, text=True, env=environment)
+        assert retried.returncode == 0, retried.stderr
+        assert "telegram_bridge_deployed=true" in retried.stdout
+        installed = (release_root / "current").resolve(strict=True)
+        assert (installed / "REVISION").read_text(encoding="utf-8") == revision + "\n"
+        assert set(release_root.iterdir()) == {release_root / "current", installed}
+        assert venv_link.resolve() == candidate_runtime / "venv"
+        assert model_link.resolve() == candidate_runtime / "model"
+        assert not bridge_stopped.exists() and daemon_reload_count.read_text(encoding="utf-8") == "1"
 
 
 def test_telegram_dependency_installer_does_not_publish_a_unit_before_the_release() -> None:
