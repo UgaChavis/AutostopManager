@@ -41,6 +41,8 @@ Manager подтверждается `REVISION`, `MANIFEST.sha256` и cwd акт
 
 Для публичного доступа отдельно сравни DNS A, внешний TCP/TLS/redirect/HTTP, локальные upstream, private endpoint и public deny (`401` private без токена, `404` публичный internal маршрут). Различай DNS/network, transport/protocol, schema, auth/permissions, config, provider и application failures. Логи читай ограниченно, без секретов и business payload.
 
+В Store `failed_marketplace_export_jobs` — накопленное число строк `FAILED`. Для диагностики посмотри свежие строки по площадке, транспорту и причине, отдельно проверь `PENDING`. Фид может штатно исключить позицию без свободного остатка и записать по ней `FAILED`. `SENT` у FEED подтверждает локальный экспорт. Приём файла площадкой проверяй отдельно.
+
 ## Обслуживание хоста и резервирование
 
 Сохранённая точка Manager + CRM и штатная генерация Store описаны в [complete-backup.md](complete-backup.md). Для CRM также предусмотрены отдельная [копия и доставка на согласованный ПК](manager-runtime.md#скрипты-и-службы); фактическое состояние их служб и расписания проверяй перед обслуживанием. Старый complete bundle и `pg-retain` hook не активны.
