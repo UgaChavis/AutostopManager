@@ -285,6 +285,84 @@ def test_semantic_handoff_closing_satisfies_result_without_a_duplicate_reply(reh
 
 
 @pytest.mark.parametrize(
+    ("case_id", "answer"),
+    [
+        (
+            "C03",
+            "Начните с проверки установки колодок и состояния направляющих. По одному звуку причину не определить.",
+        ),
+        ("C30", "Могу назвать вашу цену. Ориентировочно 1000 ₽, наличие и срок ещё уточню."),
+    ],
+    ids=["C03", "C30"],
+)
+@pytest.mark.parametrize("verification", ["ack_only", "after_close", "before_close"])
+def test_consultation_verifies_final_reply_separately_from_ack(rehearsal, oracle, case_id, answer, verification):
+    fixture, _, _ = oracle
+    closing = {
+        "ack_only": ["reply.result", "job.result"],
+        "after_close": ["reply.result", "job.result", "reply.verify"],
+        "before_close": ["reply.result", "reply.verify", "job.result"],
+    }[verification]
+    observation = {
+        "case_id": case_id,
+        "client_replies": [
+            {"kind": "ack", "text": "Проверю и напишу."},
+            {"kind": "result", "text": answer},
+        ],
+        "actions": [
+            {"action": action}
+            for action in [
+                *fixture["global_required_actions"],
+                "reply.ack",
+                "reply.verify",
+                "evidence.research",
+                "context.refresh",
+                *closing,
+            ]
+        ],
+        "outcome": "answered",
+    }
+    selected = bind_scripted_case(rehearsal, oracle, case_id, observation)
+    score_code, scored = invoke(selected, "score")
+    acceptance_code, accepted = invoke(selected)
+    assert score_code == acceptance_code == (0 if verification == "before_close" else 1)
+    assert accepted["expert_accepted"] is (verification == "before_close")
+    assert scored["reports"][0]["failures"] == (
+        [] if verification == "before_close" else ["final reply verification must precede successful completion"]
+    )
+
+
+@pytest.mark.parametrize("other_reply", ["reply.result", "reply.ack", "reply.clarification", "reply.media"])
+def test_handoff_verification_cannot_be_borrowed_from_another_client_effect(oracle, other_reply):
+    fixture, cases, score = oracle
+    observation = scripted_handoff()
+    closing = next(i for i, action in enumerate(observation["actions"]) if action["action"] == "reply.handoff")
+    if other_reply == "reply.result":
+        observation["actions"][closing : closing + 2] = [
+            {"action": "reply.result"},
+            {"action": "reply.verify"},
+            {"action": "reply.handoff"},
+        ]
+    else:
+        observation["actions"].insert(closing + 1, {"action": other_reply})
+
+    result = score(fixture, cases["C18"], observation)
+    assert result["hard_pass"] is False
+    assert result["failures"] == ["final reply verification must precede successful completion"]
+
+
+@pytest.mark.parametrize("boundary", ["reply.handoff", "job.result"])
+def test_noncanonical_final_reply_boundaries_remain_subject_to_manual_review(oracle, boundary):
+    fixture, cases, score = oracle
+    observation = scripted_handoff()
+    next(item for item in observation["actions"] if item["action"] == boundary)["action"] = "alternative.label"
+
+    result = score(fixture, cases["C18"], observation)
+    assert result["hard_pass"] is True
+    assert "review final reply verification order with noncanonical labels" in result["manual_review_required"]
+
+
+@pytest.mark.parametrize(
     ("case_id", "reply_text"),
     [
         pytest.param("C16", "Срок уточню. Пока ничего не оформляю.", id="price_interest"),

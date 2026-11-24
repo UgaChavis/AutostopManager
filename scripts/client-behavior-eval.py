@@ -15,6 +15,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "tests/fixtures/telegram/client_behavior_v1.json"
 SUCCESS = {"answered", "handoff"}
+FINAL_REPLY_ACTIONS = {"reply.result", "reply.handoff"}
+CLIENT_REPLY_ACTIONS = FINAL_REPLY_ACTIONS | {"reply.ack", "reply.clarification", "reply.media"}
 
 
 def merge_inputs(fixture: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +71,34 @@ def number_matches(actual: Any, expected: Any) -> bool:
         return abs(Decimal(str(actual)) - Decimal(str(expected))) < Decimal("0.005")
     except Exception:  # noqa: BLE001 - malformed model claims are a failed number comparison.
         return False
+
+
+def check_final_reply_verification(
+    actions: list[str], unknown: set[str], failures: list[str], manual: list[str]
+) -> None:
+    if "reply.verify" not in actions:
+        failures.append("success claim without planned reply verification")
+        return
+
+    final_actions = FINAL_REPLY_ACTIONS
+    if not final_actions.intersection(actions) and "reply.clarification" in actions:
+        manual.append("verify whether the clarification label denotes a useful final reply")
+        final_actions = {"reply.clarification"}
+    final_reply = max((index for index, action in enumerate(actions) if action in final_actions), default=-1)
+    if final_reply == -1 or "job.result" not in actions:
+        if unknown:
+            manual.append("review final reply verification order with noncanonical labels")
+        else:
+            failures.append("success claim without a planned final reply and job completion")
+        return
+
+    completion = actions.index("job.result")
+    for action in actions[final_reply + 1 : completion]:
+        if action in CLIENT_REPLY_ACTIONS:
+            break
+        if action == "reply.verify":
+            return
+    failures.append("final reply verification must precede successful completion")
 
 
 def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside all runtime paths.
@@ -147,10 +177,10 @@ def score_case(  # noqa: C901 - finite fixture assertion interpreter, outside al
         for action in ("media.photo.read", "media.voice.transcribe"):
             if action not in actions or actions.index(action) > actions.index("reply.ack"):
                 failures.append("needed media not interpreted before acknowledgement: " + action)
-    if outcome in SUCCESS and not any(kind in {"result", "handoff"} for kind in kinds):
-        failures.append("acknowledgement or empty output claimed as completed useful result")
-    if outcome in SUCCESS and "reply.verify" not in actions:
-        failures.append("success claim without planned reply verification")
+    if outcome in SUCCESS:
+        if not any(kind in {"result", "handoff"} for kind in kinds):
+            failures.append("acknowledgement or empty output claimed as completed useful result")
+        check_final_reply_verification(actions, unknown, failures, manual)
     if checks.get("late_events_covered"):
         if "context.refresh" not in actions or "reply.result" not in actions:
             failures.append("late correction not reconciled before final answer")

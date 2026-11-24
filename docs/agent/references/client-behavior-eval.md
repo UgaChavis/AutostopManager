@@ -112,6 +112,12 @@ premises do not need to be echoed as imaginary service calls. A strict missing
 canonical step flags an incomplete proposed workflow, not a deployed code defect.
 Its exit 0 remains a policy-only result; expert acceptance stays pending.
 
+For `answered` and `handoff`, plan a separate `reply.verify` after the final
+client reply and before `job.result`. If the trace sends another client message
+or attachment in between, its verification cannot stand in for the final
+reply. When a trace uses alternative labels for its closing or completion,
+the reviewer checks their meaning and order.
+
 The required semantic `reply.result` also accepts a useful `reply.handoff`
 closing. This alias changes only the required-action check: native effect kinds,
 consent, independent receipts, unknown-effect stops and manual semantic review
