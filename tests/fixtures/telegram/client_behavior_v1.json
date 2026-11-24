@@ -3164,6 +3164,100 @@
         "no_sales_restart": true
       },
       "expert_notes": "Смайлик закрывает уже завершённый обмен. Ноль новых реплик, карточек, напоминаний и уговоров; это не согласие."
+    },
+    {
+      "id": "C45",
+      "title": "Новый вопрос после полного ручного ответа на прежний",
+      "category": "human_context",
+      "inputs": {
+        "actor": {
+          "target": "FIXTURE_CLIENT_A",
+          "kind": "private",
+          "role": "client",
+          "role_source": "exact_fake_monitor_target"
+        },
+        "profiles": [
+          "base"
+        ],
+        "facts": {
+          "current_request_already_answered": false,
+          "manual_outgoing_readback": "verified",
+          "human_message_ids": [
+            801
+          ],
+          "trusted_client_control": "active",
+          "photo_for_part_identification": "Читаемое фото маркировки можно прислать в этот чат."
+        },
+        "history": [
+          {
+            "id": "C45-event-1",
+            "out": false,
+            "text": "Сколько стоит комплект колодок?"
+          },
+          {
+            "id": 801,
+            "out": true,
+            "origin": "human",
+            "verified": true,
+            "covered_event_ids": [
+              "C45-event-1"
+            ],
+            "text": "Комплект SYN-ANALOG-A стоит 1000 ₽."
+          }
+        ],
+        "events": [
+          {
+            "id": "C45-event-2",
+            "kind": "text",
+            "phase": "after_verified_human_reply",
+            "text": "Отдельный вопрос: можно прислать фото маркировки снятой детали для подбора?"
+          }
+        ]
+      },
+      "expected_actions": {
+        "required": [
+          "context.read",
+          "reply.result",
+          "reply.verify",
+          "job.result"
+        ],
+        "forbidden": [
+          "background.send",
+          "crm.create",
+          "crm.create_duplicate",
+          "crm.read",
+          "crm.reread",
+          "crm.search",
+          "crm.update",
+          "crm.write",
+          "evidence.public_search",
+          "evidence.research",
+          "goal.create",
+          "payment.confirm",
+          "poll",
+          "procurement.buy",
+          "reply.ack",
+          "reply.clarification",
+          "reply.handoff",
+          "reply.media",
+          "reply.new_key_retry",
+          "reply.readback",
+          "stock.reserve",
+          "store.order",
+          "store.publish",
+          "timer.create"
+        ],
+        "allowed_outcomes": [
+          "answered"
+        ]
+      },
+      "hard_assertions": {
+        "max_ack": 0,
+        "max_client_replies": 1,
+        "new_reply_verified_for_current_event": true,
+        "answer_only_new_question": true
+      },
+      "expert_notes": "Ручное сообщение 801 подтверждено только для C45-event-1. Коротко ответить на C45-event-2 о фото маркировки. Проверить новый ответ и закрыть новое событие по его собственной квитанции. Прежнюю цену не повторять."
     }
   ],
   "action_vocabulary": {

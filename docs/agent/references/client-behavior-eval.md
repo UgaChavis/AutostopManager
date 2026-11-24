@@ -1,6 +1,6 @@
 # Isolated client behaviour rehearsal
 
-The offline fixture and input/check helper use 44 synthetic conversations and
+The offline fixture and input/check helper use 45 synthetic conversations and
 fake evidence. They make no service connections or OpenAI API calls. A separate
 model rehearsal can use an existing Codex AppServer with ephemeral threads and
 all external tools disabled; the model itself may run remotely. This needs no
@@ -125,7 +125,7 @@ grades. Changed fixture bytes require a new bound expert review.
 ## Independent expert acceptance
 
 `accept` checks the same policy results plus a separate expert review of all
-44 cases. It makes no model or service calls. `--instruction-root` selects the
+45 cases. It makes no model or service calls. `--instruction-root` selects the
 same physical instruction bundle that was supplied literally to the subject;
 the default is this helper's checkout. Finalise that bundle before the subject
 rehearsal and review. A changed instruction, fixture or result file requires a
@@ -167,10 +167,11 @@ The cases cover social messages, consultation, provisional offers, older VIN
 context, linked photo/voice and corrections, empty/quota evidence, mixed parts
 and labour, landed-cost margin and discounts, consent/refusal, CRM identity and
 reread, optional phone, failed notifications, six booking boundaries, payment
-claims, privacy, tool hints, role spoofing and bounded event completion. C37-C44
+claims, privacy, tool hints, role spoofing and bounded event completion. C37-C45
 add a confirmed repeated-question mistake, a complaint without confirmed blame,
 complete/partial/changed human replies, a price-only request without an image,
-an answer already verified in history, and a reaction after a closed refusal.
+an answer already verified in history, a reaction after a closed refusal, and
+a new substantive question after an earlier verified human reply.
 These require meaning-based expert review; a particular apology or sales phrase
 is not an oracle. The first 36 case premises originated at the revision recorded
 in `base_revision`; all prompts still read the selected current instructions.

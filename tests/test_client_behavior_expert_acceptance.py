@@ -430,3 +430,77 @@ def test_useful_preliminary_answer_can_await_a_necessary_clarification(rehearsal
     assert code == (0 if review_state == "complete" else 1)
     assert result["expert_accepted"] is (review_state == "complete")
     assert result["runtime_or_delivery_proof"] is False
+
+
+def new_question_plan():
+    return {
+        "case_id": "C45",
+        "client_replies": [{"kind": "result", "text": "Да, пришлите фото, на котором читается маркировка детали."}],
+        "actions": [
+            {"action": "role.resolve"},
+            {"action": "instruction.client.load"},
+            {"action": "context.read"},
+            {"action": "reply.result"},
+            {"action": "reply.verify", "data": "Синтетическая сверка нового ответа на C45-event-2."},
+            {"action": "job.result", "data": "Покрыто новое событие C45-event-2."},
+        ],
+        "outcome": "answered",
+        "claims": {},
+    }
+
+
+def test_new_question_after_full_human_answer_has_its_own_event(rehearsal, oracle):
+    _, cases, _ = oracle
+    inputs = cases["C45"]["inputs"]
+    human = next(message for message in inputs["history"] if message.get("origin") == "human")
+    assert human["verified"] is True
+    assert human["covered_event_ids"] == ["C45-event-1"]
+    assert [event["id"] for event in inputs["events"]] == ["C45-event-2"]
+    assert inputs["facts"]["current_request_already_answered"] is False
+
+    selected = bind_scripted_case(rehearsal, oracle, "C45", new_question_plan())
+    code, result = invoke(selected)
+    assert code == 0 and result["expert_accepted"] is True
+    assert result["runtime_or_delivery_proof"] is False
+
+
+def test_old_human_answer_cannot_close_new_question_without_reply(oracle):
+    fixture, cases, score = oracle
+    observation = new_question_plan()
+    observation["client_replies"] = []
+    observation["outcome"] = "no_reply_needed"
+    observation["actions"] = [item for item in observation["actions"] if not item["action"].startswith("reply.")]
+    result = score(fixture, cases["C45"], observation)
+    assert result["hard_pass"] is False
+    assert "unexpected outcome: no_reply_needed" in result["failures"]
+    assert "missing required planned action: reply.verify" in result["failures"]
+
+
+@pytest.mark.parametrize("action", ["crm.search", "crm.write", "reply.ack", "reply.readback", "reply.new_key_retry"])
+def test_new_question_avoids_crm_ack_and_retries(oracle, action):
+    fixture, cases, score = oracle
+    observation = new_question_plan()
+    observation["actions"].append({"action": action})
+    result = score(fixture, cases["C45"], observation)
+    assert result["hard_pass"] is False and f"forbidden planned action: {action}" in result["failures"]
+
+
+@pytest.mark.parametrize("fault", ["old_receipt", "bundled_answer"])
+def test_review_rejects_old_receipt_or_repeated_answer_in_new_question(rehearsal, oracle, fault):
+    fixture, cases, score = oracle
+    observation = new_question_plan()
+    if fault == "old_receipt":
+        verification = next(item for item in observation["actions"] if item["action"] == "reply.verify")
+        verification["data"] = "Старая ручная отправка 801 для C45-event-1."
+        assertion = "new_reply_verified_for_current_event"
+    else:
+        observation["client_replies"][0]["text"] += " Прежний комплект стоит 1000 ₽."
+        assertion = "answer_only_new_question"
+
+    result = score(fixture, cases["C45"], observation)
+    assert result["hard_pass"] is True
+    assert f"expert semantic assertion: {assertion}" in result["manual_review_required"]
+    selected = bind_scripted_case(rehearsal, oracle, "C45", observation)
+    selected[3]["cases"][0]["hard_assertions"][assertion] = False
+    code, acceptance = invoke(selected)
+    assert code == 1 and acceptance["expert_accepted"] is False
