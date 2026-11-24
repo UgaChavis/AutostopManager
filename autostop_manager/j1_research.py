@@ -8,8 +8,9 @@ is retained, for at most seven days; this is not Manager business memory.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, date, datetime, timedelta
 import fcntl
 from functools import partial
@@ -36,6 +37,8 @@ from .j1_fetch import (
     MIXED_OCR_PAGES_PER_DOCUMENT,
     _bounded_public_text,
     _pdf_fragments,
+    automotive_search_routing,
+    capture_search_attempts,
     complete_capped_text_end,
     complete_pdf_fragment_end,
     contains_sensitive,
@@ -72,6 +75,7 @@ _STOP = False
 _WORKER_FAILED = "worker_failed"
 _PAGE_BUDGET_REACHED = "page_budget_reached"
 _SEARCH_INTERRUPTED = "search_interrupted"
+_SEARCH_NO_RESULTS = "search_no_results"
 
 # The automotive profile remains a small extension of the generic public-web
 # corpus.  It is deliberately bounded more tightly because its automatic plan
@@ -419,6 +423,7 @@ def _migrate_jobs(conn: sqlite3.Connection) -> None:
         "automotive_context": "TEXT NOT NULL DEFAULT ''",
         "acquisition_mode": "TEXT NOT NULL DEFAULT 'queries'",
         "mixed_ocr_pages_used": "INTEGER NOT NULL DEFAULT 0",
+        "automatic_follow_up_query": "TEXT NOT NULL DEFAULT ''",
     }
     _add_missing_columns(conn, "jobs", required)
 
@@ -430,6 +435,7 @@ def _migrate_queries(conn: sqlite3.Connection) -> None:
         {
             "intent": "TEXT NOT NULL DEFAULT 'manual'",
             "primary_admitted": "INTEGER NOT NULL DEFAULT 0",
+            "search_attempts": "TEXT NOT NULL DEFAULT '[]'",
         },
     )
 
@@ -462,7 +468,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
             error TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT 'general',
             automotive_context TEXT NOT NULL DEFAULT '', acquisition_mode TEXT NOT NULL DEFAULT 'queries',
-            mixed_ocr_pages_used INTEGER NOT NULL DEFAULT 0
+            mixed_ocr_pages_used INTEGER NOT NULL DEFAULT 0, automatic_follow_up_query TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
         CREATE TABLE IF NOT EXISTS supplied_source_starts (
@@ -474,6 +480,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             query TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
             provider TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', intent TEXT NOT NULL DEFAULT 'manual',
             primary_admitted INTEGER NOT NULL DEFAULT 0,
+            search_attempts TEXT NOT NULL DEFAULT '[]',
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
             UNIQUE(job_id, query)
         );
@@ -699,6 +706,16 @@ def _automotive_query_plan(context: dict[str, str]) -> list[tuple[str, str]]:
             if context.get("part_number")
             else ("official_bulletin_ru", diagnosis, "бюллетень производителя"),
         )
+        if context.get("dtc") and not context.get("part_number"):
+            vehicle = ("make", "model") if context.get("make") or context.get("model") else ("engine",)
+            vehicle_lookup = ("dtc_vehicle", ("dtc", *vehicle), "")
+            # Find the code in the subsystem's documentation before adding
+            # vehicle qualifiers that may be absent from a shared manual.
+            templates = (
+                (("dtc_system", ("dtc", "system"), ""), vehicle_lookup, *templates[1:3])
+                if context.get("system")
+                else (vehicle_lookup, *templates[:3])
+            )
     planned: list[tuple[str, str]] = []
     seen: set[str] = set()
     for intent, fields, suffix in templates:
@@ -747,6 +764,15 @@ def _profile_and_queries(
     return AUTOMOTIVE_PROFILE, context, planned, min(max_pages, AUTOMOTIVE_MAX_PAGES)
 
 
+def _automatic_follow_up_query(context: dict[str, str]) -> str:
+    system, dtc = context.get("system"), context.get("dtc")
+    if not (system or dtc) or (context.get("part_number") and not (dtc or context.get("symptom"))):
+        return ""
+    fields = ("system",) if system else ("make", "model", "engine", "dtc")
+    query = f"{_context_phrase(context, fields, limit=485)} service manual"
+    return query if _input_is_safe(query) else ""
+
+
 def start_research(
     objective: str,
     queries: list[str] | None = None,
@@ -774,6 +800,9 @@ def start_research(
             return _error("queries_or_objective_invalid")
         return _error("queries_or_automotive_context_invalid")
     selected_profile, clean_context, planned_queries, effective_max_pages = configured
+    follow_up_query = _automatic_follow_up_query(clean_context)
+    if any(follow_up_query.casefold() == query.casefold() for query, _ in planned_queries):
+        follow_up_query = ""
     job_id = uuid4().hex
     now = _utcnow()
     try:
@@ -782,8 +811,9 @@ def start_research(
             if conn.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
                 return _error("j1_busy")
             conn.execute(
-                """INSERT INTO jobs(id,objective,max_pages,status,created_at,updated_at,profile,automotive_context)
-                   VALUES(?,?,?,?,?,?,?,?)""",
+                """INSERT INTO jobs(id,objective,max_pages,status,created_at,updated_at,profile,automotive_context,
+                                    automatic_follow_up_query)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
                 (
                     job_id,
                     clean_objective,
@@ -793,6 +823,7 @@ def start_research(
                     now,
                     selected_profile,
                     json.dumps(clean_context, ensure_ascii=False, sort_keys=True) if clean_context else "",
+                    follow_up_query,
                 ),
             )
             conn.executemany(
@@ -1111,6 +1142,43 @@ def _provider_coverage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, 
     ]
 
 
+def _public_query_counts(conn: sqlite3.Connection, job_id: str) -> dict[str, int]:
+    return dict(
+        conn.execute(
+            """SELECT COUNT(*) AS total,
+                      COALESCE(SUM(status='done'),0) AS done,
+                      COALESCE(SUM(status='failed'),0) AS failed,
+                      COALESCE(SUM(status='skipped'),0) AS skipped,
+                      COALESCE(SUM(status='partial'),0) AS partial,
+                      COALESCE(SUM(status IN ('done','failed','partial')),0) AS attempted,
+                      COALESCE(SUM(status='failed' AND error=?),0) AS empty,
+                      COALESCE(SUM(status='failed' AND error<>?),0) AS search_errors
+               FROM queries WHERE job_id=?""",
+            (_SEARCH_NO_RESULTS, _SEARCH_NO_RESULTS, job_id),
+        ).fetchone()
+    )
+
+
+def _collection_outcome(status: str, *, fetched: int, unavailable: int, queries: dict[str, int]) -> dict[str, str]:
+    if status in {"queued", "running"}:
+        return {"state": "in_progress", "reason": "collection_not_finished"}
+    if status in {"cancelled", "failed"}:
+        return {"state": status, "reason": f"job_{status}"}
+    if fetched:
+        return {"state": "retrieved", "reason": "public_documents_retrieved"}
+    if unavailable:
+        return {"state": "sources_unavailable", "reason": "known_sources_could_not_be_read"}
+    attempted = queries.get("attempted", 0)
+    errors = queries.get("search_errors", 0)
+    if attempted and errors == attempted:
+        return {"state": "search_failed", "reason": "all_recorded_searches_failed"}
+    empty = queries.get("empty", 0)
+    if empty and empty + errors == attempted:
+        reason = "search_no_results_with_failures" if errors else "search_no_results"
+        return {"state": "no_sources", "reason": reason}
+    return {"state": "no_sources", "reason": "no_public_documents_retrieved"}
+
+
 def _document_count(conn: sqlite3.Connection, job_id: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM documents WHERE job_id=?", (job_id,)).fetchone()[0]
 
@@ -1134,10 +1202,19 @@ def _search_failures(conn: sqlite3.Connection, job_id: str) -> list[dict[str, An
         for row in conn.execute(
             """SELECT error,COUNT(*) AS count FROM queries
                WHERE job_id=? AND (status='failed' OR (status='partial' AND error<>?))
+                 AND error<>?
                GROUP BY error ORDER BY count DESC, error LIMIT 5""",
-            (job_id, _SEARCH_INTERRUPTED),
+            (job_id, _SEARCH_INTERRUPTED, _SEARCH_NO_RESULTS),
         )
     ]
+
+
+def _search_attempts(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    counts: Counter[str] = Counter()
+    for row in conn.execute("SELECT search_attempts FROM queries WHERE job_id=? AND search_attempts<>'[]'", (job_id,)):
+        for attempt in json.loads(row["search_attempts"]):
+            counts[json.dumps(attempt, sort_keys=True, separators=(",", ":"))] += 1
+    return [{**json.loads(attempt), "count": count} for attempt, count in sorted(counts.items())]
 
 
 def _vin_api(job_id: str) -> Any:
@@ -1176,18 +1253,12 @@ def research_status(job_id: str) -> dict[str, Any]:
                    FROM documents WHERE job_id=?""",
                 (job_id,),
             ).fetchone()
-            queries: sqlite3.Row | dict[str, int]
             query_plan: list[dict[str, str]]
             if sources_only:
                 queries = {"total": 0, "done": 0, "failed": 0}
                 query_plan = []
             else:
-                queries = conn.execute(
-                    """SELECT COUNT(*) AS total, SUM(status='done') AS done, SUM(status='failed') AS failed,
-                              SUM(status='skipped') AS skipped, SUM(status='partial') AS partial
-                       FROM queries WHERE job_id=?""",
-                    (job_id,),
-                ).fetchone()
+                queries = _public_query_counts(conn, job_id)
                 query_plan = [
                     {"query": item["query"], "intent": item["intent"] or "manual"}
                     for item in conn.execute("SELECT query,intent FROM queries WHERE job_id=? ORDER BY id", (job_id,))
@@ -1213,6 +1284,12 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "schema": SCHEMA,
                 "job_id": job_id,
                 "status": row["status"],
+                "collection_outcome": _collection_outcome(
+                    row["status"],
+                    fetched=counts["fetched"] or 0,
+                    unavailable=counts["unavailable"] or 0,
+                    queries=queries,
+                ),
                 "objective": row["objective"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -1236,6 +1313,7 @@ def research_status(job_id: str) -> dict[str, Any]:
                 "queries_failed": queries["failed"] or 0,
                 "page_failures": failures,
                 "search_failures": [] if sources_only else _search_failures(conn, job_id),
+                "search_attempts": [] if sources_only else _search_attempts(conn, job_id),
                 "coverage": {
                     "languages": _coverage_rows(conn, job_id, "language", "language"),
                     "source_classes": _coverage_rows(conn, job_id, "source_class", "source_class"),
@@ -1674,7 +1752,8 @@ def _report_excerpt(value: str) -> str:
     return _clean_input(redact_sensitive(value, limit=320), limit=280)
 
 
-_REPORT_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|[\r\n\f]+")
+# Keep spaced dotted leaders together so they remain visible to evidence checks.
+_REPORT_SENTENCE_BOUNDARY = re.compile(r"(?<=[!?])\s+|(?<=\.)(?![ \t]+[.·])\s+|[\r\n\f]+")
 _PDF_SCOPE_WRAP = re.compile(
     r"^(?P<indent> *)(?:this|the) (?:service |workshop )?(?:bulletin|manual|procedure|document) "
     r"(?:applies to|is applicable to|covers) "
@@ -1902,6 +1981,20 @@ def _overall_confidence(sources: list[dict[str, Any]], confidence_sources: list[
     return "insufficient"
 
 
+def _evidence_outcome(sources: list[dict[str, Any]], *, has_automotive_context: bool) -> dict[str, str]:
+    if not sources:
+        return {"state": "not_retrieved", "reason": "no_public_documents_retrieved"}
+    if not has_automotive_context:
+        return {"state": "not_assessed", "reason": "no_automotive_context"}
+    exact = [source for source in sources if source["applicability"] == "exact"]
+    if any(source["source_tier"] in {"A", "B"} for source in exact):
+        return {"state": "relevant", "reason": "qualified_source_with_exact_context"}
+    return {
+        "state": "weak",
+        "reason": "no_qualified_exact_source" if exact else "no_exact_context_match",
+    }
+
+
 def _source_domains(sources: list[dict[str, Any]]) -> int:
     domains: set[str] = set()
     for source in sources:
@@ -1970,16 +2063,8 @@ def research_report(job_id: str) -> dict[str, Any]:
             context = _stored_automotive_context(job["automotive_context"])
             sources_only = job["acquisition_mode"] == SOURCES_ONLY_MODE
             search_failures = [] if sources_only else _search_failures(conn, job_id)
-            query_outcomes = (
-                {}
-                if sources_only
-                else dict(
-                    conn.execute(
-                        "SELECT status,COUNT(*) FROM queries WHERE job_id=? AND status IN ('skipped','partial') GROUP BY status",
-                        (job_id,),
-                    ).fetchall()
-                )
-            )
+            search_attempts = [] if sources_only else _search_attempts(conn, job_id)
+            query_outcomes = {} if sources_only else _public_query_counts(conn, job_id)
             rows = conn.execute(
                 """SELECT id,url,canonical_url,title,CASE WHEN ? THEN body ELSE '' END AS body,
                           source_class,source_basis,source_tier,
@@ -2081,9 +2166,13 @@ def research_report(job_id: str) -> dict[str, Any]:
         "schema": REPORT_SCHEMA,
         "job_id": job_id,
         "status": job["status"],
+        "collection_outcome": _collection_outcome(
+            job["status"], fetched=len(all_sources), unavailable=len(unavailable), queries=query_outcomes
+        ),
         "profile": job["profile"] or GENERAL_PROFILE,
         "automotive_context": context or None,
         "report": {
+            "evidence_outcome": _evidence_outcome(all_sources, has_automotive_context=bool(context)),
             "evidence_confidence": {
                 "level": _overall_confidence(all_sources, confidence_sources),
                 "retrieved_sources": len(all_sources),
@@ -2098,6 +2187,7 @@ def research_report(job_id: str) -> dict[str, Any]:
             "duplicates": duplicates,
             "unavailable": unavailable[:20],
             "search_failures": search_failures,
+            "search_attempts": search_attempts,
             "limitations": limitations,
             "read_only": True,
             "fitment_confirmed": False,
@@ -2337,19 +2427,35 @@ def _work_job(job_id: str) -> None:
 
 
 def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
-    try:
-        results, provider = search_public(
-            query,
-            searxng_url=os.environ.get("AUTOSTOP_J1_SEARXNG_URL", ""),
-            stop_requested=lambda: _STOP,
-        )
-    except Exception:  # noqa: BLE001 - one provider error must not fail the corpus.
-        results, provider = [], "search_failed"
+    with capture_search_attempts() as attempts:
+        try:
+            results, provider = search_public(
+                query,
+                searxng_url=os.environ.get("AUTOSTOP_J1_SEARXNG_URL", ""),
+                stop_requested=lambda: _STOP,
+            )
+        except Exception:  # noqa: BLE001 - one provider error must not fail the corpus.
+            results, provider = [], "search_failed"
     if _STOP and not results:
         return False
+    reason = provider
+    if (
+        provider == "search_unavailable"
+        and attempts
+        and all(
+            attempt["outcome"] in {"empty", "no_relevant_results"} and not attempt.get("upstream_failures")
+            for attempt in attempts
+        )
+    ):
+        reason = _SEARCH_NO_RESULTS
     with _db() as conn:
         if not _lock_running_job(conn, job_id):
             return False
+        if attempts:
+            conn.execute(
+                "UPDATE queries SET search_attempts=? WHERE id=?",
+                (json.dumps(attempts, separators=(",", ":")), query_id),
+            )
         query_state = conn.execute(
             "SELECT primary_admitted,provider,error FROM queries WHERE id=?", (query_id,)
         ).fetchone()
@@ -2375,11 +2481,11 @@ def _work_query(job_id: str, query_id: int, query: str, max_pages: int) -> bool:
                     "UPDATE queries SET provider=?,error=? WHERE id=?", (source, _SEARCH_INTERRUPTED, query_id)
                 )
         elif not results and (query_state["error"] == _SEARCH_INTERRUPTED or query_state["primary_admitted"]):
-            conn.execute("UPDATE queries SET status='partial',error=? WHERE id=?", (provider[:80], query_id))
+            conn.execute("UPDATE queries SET status='partial',error=? WHERE id=?", (reason[:80], query_id))
         else:
             conn.execute(
                 "UPDATE queries SET status=?,provider=?,error=? WHERE id=?",
-                ("done" if results else "failed", provider[:40], "" if results else provider[:80], query_id),
+                ("done" if results else "failed", provider[:40], "" if results else reason[:80], query_id),
             )
         conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (_utcnow(), job_id))
         conn.commit()
@@ -2578,9 +2684,92 @@ def _reserve_mixed_ocr_page(job_id: str, document_id: str) -> str | None:
     return None
 
 
+def _has_exact_technical_evidence(conn: sqlite3.Connection, job_id: str, context: dict[str, str]) -> bool:
+    rows = conn.execute(
+        """SELECT id,url,body,source_tier,source_class,source_basis
+           FROM documents WHERE job_id=? AND status='fetched'""",
+        (job_id,),
+    )
+    for row in rows:
+        if _STOP:
+            return False
+        tier, _ = _report_source_tier(row["source_tier"], row["source_class"], row["source_basis"])
+        if tier in {"A", "B"} and (
+            assess_applicability(context, _source_passages(conn, row["id"], row["url"], row["body"])).label == "exact"
+        ):
+            return True
+    return False
+
+
+def _pending_explicit_query(conn: sqlite3.Connection, job_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """SELECT id,query,intent FROM queries WHERE job_id=? AND status='pending'
+           AND intent IN ('manual','manual_follow_up') ORDER BY id LIMIT 1""",
+        (job_id,),
+    ).fetchone()
+
+
+def _pending_public_query(conn: sqlite3.Connection, job_id: str, *, allow_generated: bool) -> sqlite3.Row | None:
+    pending = None
+    if allow_generated:
+        pending = conn.execute(
+            """SELECT id,query,intent FROM queries WHERE job_id=? AND status='pending'
+               ORDER BY (intent='automatic_follow_up') DESC,id LIMIT 1""",
+            (job_id,),
+        ).fetchone()
+        if pending is None or pending["intent"] != "automatic_follow_up":
+            return pending
+    return _pending_explicit_query(conn, job_id) or pending
+
+
+def _automatic_follow_up_has_room(conn: sqlite3.Connection, job_id: str, query: str, max_pages: int) -> bool:
+    if _document_count(conn, job_id) >= max_pages:
+        return False
+    existing = [row[0].casefold() for row in conn.execute("SELECT query FROM queries WHERE job_id=?", (job_id,))]
+    return len(existing) < AUTOMOTIVE_MAX_QUERIES and query.casefold() not in existing
+
+
+def _finish_public_phase(conn: sqlite3.Connection, job_id: str, job: sqlite3.Row) -> bool:
+    """Complete the job, or atomically consider its one remaining search."""
+    if _STOP:
+        return True
+    query = job["automatic_follow_up_query"]
+    if not query:
+        if job["acquisition_mode"] != SOURCES_ONLY_MODE:
+            _clear_query_candidates(conn, job_id)
+        conn.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (_utcnow(), job_id))
+        conn.commit()
+        return True
+
+    if _input_is_safe(query) and _automatic_follow_up_has_room(conn, job_id, query, job["max_pages"]):
+        # This worker owns the retained documents. A WAL read snapshot lets
+        # cancellation and query additions proceed while it assesses them.
+        conn.commit()
+        conn.execute("BEGIN")
+        exact = _has_exact_technical_evidence(conn, job_id, _stored_automotive_context(job["automotive_context"]))
+        conn.commit()
+        if _STOP or not _lock_running_job(conn, job_id):
+            return True
+        current = conn.execute("SELECT automatic_follow_up_query,max_pages FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if _STOP:
+            return True
+        if current["automatic_follow_up_query"] != query or _pending_explicit_query(conn, job_id):
+            # A newly submitted query can use the last page; defer the offer
+            # until this query has had a chance to run.
+            return False
+        if not exact and _automatic_follow_up_has_room(conn, job_id, query, current["max_pages"]):
+            conn.execute("INSERT INTO queries(job_id,query,intent) VALUES(?,?,'automatic_follow_up')", (job_id, query))
+    # Consume the offer together with insertion so a restart can retry the
+    # inserted query, but can never schedule another one for the same job.
+    conn.execute("UPDATE jobs SET automatic_follow_up_query='',updated_at=? WHERE id=?", (_utcnow(), job_id))
+    conn.commit()
+    return False
+
+
 def _work_public_job(job_id: str) -> None:
     # Alternate discovery and reading when both queues have work.
     prefer_document = True
+    holdoffs: dict[str, str] = {}
     while not _STOP:
         from .j1_vin_store import prune as prune_vin
 
@@ -2589,17 +2778,22 @@ def _work_public_job(job_id: str) -> None:
             # Serialize claims and completion with cancellation/query additions.
             conn.execute("BEGIN IMMEDIATE")
             job = conn.execute(
-                "SELECT status,max_pages,acquisition_mode,profile FROM jobs WHERE id=?", (job_id,)
+                """SELECT status,max_pages,acquisition_mode,profile,automotive_context,automatic_follow_up_query
+                   FROM jobs WHERE id=?""",
+                (job_id,),
             ).fetchone()
             if job is None or job["status"] != "running":
                 return
             sources_only = job["acquisition_mode"] == SOURCES_ONLY_MODE
+            automotive = job["profile"] == AUTOMOTIVE_PROFILE
+            max_pages = job["max_pages"]
+            pages_used = 0 if sources_only else _document_count(conn, job_id)
+            follow_up_query = job["automatic_follow_up_query"]
+            page_limit = max_pages - int(bool(follow_up_query) and max_pages >= 4)
             pending_query = None
-            can_admit_pages = not sources_only and _document_count(conn, job_id) < job["max_pages"]
-            if can_admit_pages:
-                pending_query = conn.execute(
-                    "SELECT id,query FROM queries WHERE job_id=? AND status='pending' ORDER BY id LIMIT 1", (job_id,)
-                ).fetchone()
+            can_admit_pages = not sources_only and pages_used < page_limit
+            if not sources_only and pages_used < max_pages:
+                pending_query = _pending_public_query(conn, job_id, allow_generated=can_admit_pages)
             elif not sources_only:
                 _close_queries_at_page_limit(conn, job_id)
             # Submission order for supplied URLs, ranked admission order for queries.
@@ -2613,6 +2807,9 @@ def _work_public_job(job_id: str) -> None:
                 conn.execute("UPDATE queries SET status='running' WHERE id=?", (pending_query["id"],))
                 conn.commit()
                 query_id, query = pending_query["id"], pending_query["query"]
+                query_page_limit = (
+                    max_pages if pending_query["intent"] in {"manual", "manual_follow_up"} else page_limit
+                )
                 phase = "query"
             elif pending_doc:
                 browser_attempts = conn.execute(
@@ -2630,21 +2827,20 @@ def _work_public_job(job_id: str) -> None:
                 allow_browser = browser_attempts < MAX_BROWSER_PAGES
                 phase = "document"
             else:
-                if not sources_only:
-                    _clear_query_candidates(conn, job_id)
-                conn.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (_utcnow(), job_id))
-                conn.commit()
-                return
+                if _finish_public_phase(conn, job_id, job):
+                    return
+                continue
         if _STOP:
             return
         prefer_document = phase == "query"
         if phase == "query":
-            if not _work_query(job_id, query_id, query, job["max_pages"]):
-                return
+            with automotive_search_routing(holdoffs) if automotive else nullcontext():
+                if not _work_query(job_id, query_id, query, query_page_limit):
+                    return
         else:
             try:
                 with mixed_ocr_budget(partial(_reserve_mixed_ocr_page, job_id, doc_id)):
-                    fetch_result = fetch_document(url, allow_browser=allow_browser)
+                    fetch_result = fetch_document(url, allow_browser=allow_browser, allow_large_pdf=True)
             except Exception:  # noqa: BLE001 - one malformed page must not fail the corpus.
                 fetch_result = {"ok": False, "error": "fetch_failed"}
             with _db() as conn:

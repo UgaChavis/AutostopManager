@@ -108,6 +108,27 @@ def test_scope_requires_a_cited_vehicle_and_requested_subject(sentences, classif
 
 
 @pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("– P1A27", "analog"),
+        ("DTC P1A27", "analog"),
+        ("DTCs: P1A27, P1A28", "analog"),
+        ("P1A27 – Connector feedback fault ................ 81", "analog"),
+        ("P1A27 – Connector feedback fault … 81", "analog"),
+        ("P1A27 – Connector feedback fault …", "exact"),
+        ("P1A27 – Connector feedback fault", "exact"),
+        (SCOPE.removesuffix(".") + " for DTC P1A27.", "exact"),
+    ],
+)
+def test_dtc_navigation_markers_do_not_prove_subject(text, expected):
+    result = assess_applicability(CONTEXT, [Passage(text, 1, URL, is_heading=True), Passage(SCOPE, 2, URL)])
+    assert result.label == expected and "dtc" in result.fields
+    assert [item["quote"] for item in result.evidence if item["kind"] == "subject"] == (
+        [text] if expected == "exact" else []
+    )
+
+
+@pytest.mark.parametrize(
     ("overrides", "sentences", "classification"),
     [
         (

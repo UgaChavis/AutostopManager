@@ -103,6 +103,13 @@ _DTC_MENTION = re.compile(r"(?<!\w)[PBCU][0-3A-F][0-9A-F]{3}(?:\s*[-‐‑‒–
 _BARE_DTC_HEADING = re.compile(
     r"(?:DTC|code|код)\s*[:#]?\s*[PBCU][0-3A-F][0-9A-F]{3}(?:\s*[-‐‑–]\s*[0-9A-F]{2})?", re.I
 )
+_DTC_ENTRY = rf"(?:(?:DTCs?|codes?|коды?)\s*[:#]?\s*)?{_DTC_MENTION.pattern}"
+_DTC_NAVIGATION = re.compile(
+    rf"^(?:[-‐‑‒–—−•▪]\s*)?{_DTC_ENTRY}(?:\s*[,;/]\s*{_DTC_ENTRY})*\s*[.:]?$"
+    r"|(?:(?:[.·][ \t]*){4,}|…{2,}[ \t]*)\d{0,4}$"
+    r"|…[ \t]*(?:(?:page|p|стр)[ \t]+)?\d{1,4}$",
+    re.I,
+)
 _PART_MENTION = re.compile(
     r"\b(?:part\s+(?:number|no\.?)|(?:OE|OEM)\s+(?:number|no\.?)|артикул\w*|номер\s+детали)"
     r"\s*[:#]?\s*(?:[A-Z]{1,8}[ \t‐‑‒–—-]+)?[A-Z0-9-]*[0-9]",
@@ -452,6 +459,8 @@ def _topic_evidence(
         if not _quote_usable(text):
             continue
         for subject in sorted(subjects & entry.subjects):
+            if subject[0] == "dtc" and _DTC_NAVIGATION.search(text):
+                continue
             prior = subject_evidence.get(subject)
             if prior is None or (_SUBJECT_DESCRIPTION.search(text) and not _SUBJECT_DESCRIPTION.search(prior.text)):
                 subject_evidence[subject] = entry.passage

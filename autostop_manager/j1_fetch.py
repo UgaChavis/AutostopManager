@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 from urllib.parse import (
     SplitResult,
     parse_qs,
@@ -51,6 +51,7 @@ from .j1_text import decode_http_text
 USER_AGENT = "AutoStop-J1/1.0 (+public research; respects robots.txt)"
 MAX_HTML_BYTES = 2_000_000
 MAX_PDF_BYTES = 8_000_000
+MAX_RESEARCH_PDF_BYTES = 12_000_000
 MAX_TEXT_CHARS = 50_000
 MAX_PUBLIC_PDF_TEXT_CHARS = 250_000
 MAX_PUBLIC_FRAGMENTS = 1_000
@@ -447,6 +448,46 @@ def _request_target(parsed: SplitResult) -> str:
     return quote_http_target(target)
 
 
+def _read_public_response_body(
+    response: http.client.HTTPResponse,
+    headers: dict[str, str],
+    max_bytes: int,
+    *,
+    read_body: bool,
+    allow_large_pdf: bool,
+) -> bytes:
+    size_header = headers.get("content-length", "")
+    size = int(size_header) if size_header.isascii() and size_header.isdigit() else 0
+    if size > max_bytes:
+        # Check the full header values so duplicate framing and content
+        # headers cannot qualify for the larger research-only budget.
+        content_type = headers.get("content-type", "")
+        if not (
+            allow_large_pdf
+            and size <= MAX_RESEARCH_PDF_BYTES
+            and response.getheader("content-length") == size_header
+            and "transfer-encoding" not in headers
+            and response.getheader("content-type") == content_type
+            and content_type.partition(";")[0].strip().casefold() == "application/pdf"
+            and response.getheader("content-encoding", "identity").casefold() == "identity"
+        ):
+            raise ValueError("document_too_large")
+        signature = b"%PDF-"
+        prefix = response.read(len(signature))
+        if prefix != signature:
+            raise ValueError("document_too_large")
+        body = prefix + response.read(size + 1 - len(prefix))
+        if len(body) != size:
+            raise ValueError("document_too_large")
+        return body
+    if headers.get("content-encoding", "identity").casefold() != "identity":
+        raise ValueError("unsupported_content_encoding")
+    body = response.read(max_bytes + 1) if read_body else b""
+    if len(body) > max_bytes:
+        raise ValueError("document_too_large")
+    return body
+
+
 def _request_public(
     url: str,
     *,
@@ -454,11 +495,13 @@ def _request_public(
     timeout: float = 10.0,
     check_redirect_robots: bool = False,
     read_body: bool = True,
+    allow_large_pdf: bool = False,
 ) -> tuple[int, dict[str, str], bytes, str]:
     current = public_url(url)
     if not current:
         raise ValueError("unsafe_url")
     search_deadline = _SEARCH_DEADLINE.get()
+    research_pdf = allow_large_pdf and read_body and max_bytes == MAX_PDF_BYTES and check_redirect_robots
     for _ in range(4):
         deadline = time.monotonic() + timeout
         if search_deadline is not None:
@@ -499,14 +542,16 @@ def _request_public(
                     _rate_limit(f"{next_parsed.scheme}://{next_parsed.netloc}", delay)
                 current = next_url
                 continue
-            size_header = headers.get("content-length", "")
-            if size_header.isdigit() and int(size_header) > max_bytes:
-                raise ValueError("document_too_large")
-            if headers.get("content-encoding", "identity").casefold() != "identity":
-                raise ValueError("unsupported_content_encoding")
-            body = response.read(max_bytes + 1) if read_body else b""
-            if len(body) > max_bytes:
-                raise ValueError("document_too_large")
+            body = _read_public_response_body(
+                response,
+                headers,
+                max_bytes,
+                read_body=read_body,
+                allow_large_pdf=research_pdf
+                and status == 200
+                and parsed.scheme == "https"
+                and parsed.path.casefold().endswith(".pdf"),
+            )
             return status, headers, body, current
         finally:
             try:
@@ -1024,7 +1069,7 @@ def _bounded_retry_delay(value: object) -> float:
     return min(3.0, max(_RETRY_DELAY_SECONDS, retry_after))
 
 
-def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
+def _fetch_document_once(url: str, *, allow_browser: bool = True, allow_large_pdf: bool = False) -> dict[str, Any]:
     """Run one fail-closed document retrieval attempt."""
 
     safe_url = public_url(url)
@@ -1035,9 +1080,10 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
         return {"ok": False, "error": "robots_disallowed"}
     parsed = urlsplit(safe_url)
     _rate_limit(f"{parsed.scheme}://{parsed.netloc}", delay)
+    research_options = {"allow_large_pdf": True} if allow_large_pdf else {}
     try:
         status, headers, body, final_url = _request_public(
-            safe_url, max_bytes=MAX_PDF_BYTES, check_redirect_robots=True
+            safe_url, max_bytes=MAX_PDF_BYTES, check_redirect_robots=True, **research_options
         )
     except (OSError, TimeoutError, ssl.SSLError, http.client.HTTPException):
         return {"ok": False, "error": "fetch_failed"}
@@ -1121,20 +1167,21 @@ def _fetch_document_once(url: str, *, allow_browser: bool = True) -> dict[str, A
     return result
 
 
-def fetch_document(url: str, *, allow_browser: bool = True) -> dict[str, Any]:
+def fetch_document(url: str, *, allow_browser: bool = True, allow_large_pdf: bool = False) -> dict[str, Any]:
     """Return bounded public text with at most one transient-error retry.
 
     Robots, privacy, authentication, CAPTCHA and validation failures never
     retry.  The retry starts a new complete guarded request, so DNS and robots
-    controls are re-applied before any second connection.
+    controls are re-applied before any second connection. Public research
+    jobs may opt into the larger download budget for verified PDF responses.
     """
 
-    first = _fetch_document_once(url, allow_browser=allow_browser)
+    first = _fetch_document_once(url, allow_browser=allow_browser, allow_large_pdf=allow_large_pdf)
     if first.get("ok") is True or str(first.get("error") or "") not in _RETRYABLE_DOCUMENT_ERRORS:
         return first
     if first.get("error") == "rate_limited":
         time.sleep(_bounded_retry_delay(first.get("retry_after_seconds")))
-    second = _fetch_document_once(url, allow_browser=allow_browser)
+    second = _fetch_document_once(url, allow_browser=allow_browser, allow_large_pdf=allow_large_pdf)
     if first.get("browser_attempted") is True:
         second["browser_attempted"] = True
     # Retry timing is internal: preserve the original public result contract
@@ -1242,8 +1289,126 @@ def parse_searxng_endpoint(base_url: str) -> tuple[str, int, str]:
     return host, port or 80, parsed.path.rstrip("/")
 
 
+class SearchAttempt(TypedDict):
+    provider: str
+    engine: str
+    outcome: str
+    http_status: NotRequired[int]
+    received: NotRequired[int]
+    candidates: NotRequired[int]
+    holdoff_reason: NotRequired[str]
+    upstream_failures: NotRequired[list[dict[str, str]]]
+
+
+MAX_SEARCH_ATTEMPTS = 6
+_MAX_UPSTREAM_FAILURES = 8
+_KNOWN_UPSTREAM_ENGINES = frozenset({"bing", "yahoo", "google", "google cse", "duckduckgo", "wikipedia", "vuhuv"})
+_SEARCH_ATTEMPTS: ContextVar[list[SearchAttempt] | None] = ContextVar("j1_search_attempts", default=None)
+_SEARXNG_ATTEMPT: ContextVar[SearchAttempt | None] = ContextVar("j1_searxng_attempt", default=None)
+_SEARCH_HOLDOFFS: ContextVar[dict[str, str] | None] = ContextVar("j1_search_holdoffs", default=None)
+_SEARCH_HOLDOFF_REASONS = frozenset({"access_challenge", "access_restricted", "rate_limited"})
+
+
+@contextmanager
+def capture_search_attempts() -> Iterator[list[SearchAttempt]]:
+    """Capture bounded search diagnostics in this call context.
+
+    Direct URLs and rejected inputs do not make a provider attempt. Records
+    hold fixed outcomes and counts, never queries, URLs, response text or errors.
+    Empty and no_relevant_results are clean only without upstream_failures.
+    """
+    attempts: list[SearchAttempt] = []
+    token = _SEARCH_ATTEMPTS.set(attempts)
+    try:
+        yield attempts
+    finally:
+        _SEARCH_ATTEMPTS.reset(token)
+
+
+@contextmanager
+def automotive_search_routing(holdoffs: dict[str, str]) -> Iterator[None]:
+    """Prefer default SearXNG and share terminal route failures within one job run."""
+    token = _SEARCH_HOLDOFFS.set(holdoffs)
+    try:
+        yield
+    finally:
+        _SEARCH_HOLDOFFS.reset(token)
+
+
+def _record_search_attempt(attempt: SearchAttempt) -> None:
+    attempts = _SEARCH_ATTEMPTS.get()
+    if attempts is not None and len(attempts) < MAX_SEARCH_ATTEMPTS:
+        attempts.append(attempt)
+    holdoffs = _SEARCH_HOLDOFFS.get()
+    if holdoffs is not None and attempt["outcome"] in _SEARCH_HOLDOFF_REASONS:
+        holdoffs.setdefault(attempt["provider"], attempt["outcome"])
+
+
+def _search_route_held_off(attempt: SearchAttempt) -> bool:
+    holdoffs = _SEARCH_HOLDOFFS.get()
+    reason = holdoffs.get(attempt["provider"]) if holdoffs is not None else None
+    if reason is None or reason not in _SEARCH_HOLDOFF_REASONS:
+        return False
+    attempt["outcome"] = "held_off"
+    attempt["holdoff_reason"] = reason
+    _record_search_attempt(attempt)
+    return True
+
+
+def _search_http_outcome(status: int) -> str:
+    if status in (401, 403):
+        return "access_restricted"
+    if status == 429:
+        return "rate_limited"
+    if 500 <= status <= 599:
+        return "http_server_error"
+    return "http_error"
+
+
+def _upstream_failure_reason(detail: str) -> str:
+    message = detail[:128].casefold()
+    if "too many requests" in message or "rate limit" in message:
+        return "rate_limited"
+    if "captcha" in message:
+        return "access_challenge"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if "access denied" in message or "forbidden" in message:
+        return "access_restricted"
+    if "http error" in message:
+        return "http_error"
+    if "network" in message or "connection" in message:
+        return "transport_error"
+    if "suspended" in message:
+        return "suspended"
+    return "upstream_unavailable"
+
+
+def _searxng_upstream_failures(payload: dict[str, Any]) -> list[dict[str, str]]:
+    unresponsive = payload.get("unresponsive_engines")
+    if not isinstance(unresponsive, list):
+        return []
+    failures: dict[tuple[str, str], dict[str, str]] = {}
+    for item in unresponsive[:32]:
+        if not isinstance(item, list) or len(item) != 2 or not all(isinstance(field, str) for field in item):
+            continue
+        engine_name = item[0][:32].casefold()
+        engine = engine_name if engine_name in _KNOWN_UPSTREAM_ENGINES else "other"
+        reason = _upstream_failure_reason(item[1])
+        failures[(engine, reason)] = {"engine": engine, "reason": reason}
+        if len(failures) >= _MAX_UPSTREAM_FAILURES:
+            break
+    return list(failures.values())
+
+
 def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
-    host, port, prefix = parse_searxng_endpoint(base_url)
+    attempt = _SEARXNG_ATTEMPT.get()
+    try:
+        host, port, prefix = parse_searxng_endpoint(base_url)
+    except ValueError:
+        if attempt is not None:
+            attempt["outcome"] = "configuration_invalid"
+        raise
     target = prefix + "/search?q=" + quote_plus(query) + "&format=json"
     search_deadline = _SEARCH_DEADLINE.get()
     started = time.monotonic()
@@ -1254,7 +1419,11 @@ def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
     try:
         conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
         response = conn.getresponse()
+        if attempt is not None and 100 <= response.status <= 599:
+            attempt["http_status"] = response.status
         if response.status != 200:
+            if attempt is not None:
+                attempt["outcome"] = _search_http_outcome(response.status)
             raise ValueError("searxng_failed")
         body = response.read(1_000_001)
         if len(body) > 1_000_000:
@@ -1266,9 +1435,19 @@ def _search_searxng(query: str, base_url: str) -> list[dict[str, str]]:
                 response.close()
         finally:
             conn.close()
-    rows = payload.get("results", []) if isinstance(payload, dict) else []
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if attempt is not None and isinstance(payload, dict):
+        failures = _searxng_upstream_failures(payload)
+        if failures:
+            attempt["upstream_failures"] = failures
+    if not isinstance(rows, list):
+        if attempt is not None:
+            attempt["outcome"] = "invalid_response"
+        return []
+    if attempt is not None:
+        attempt["received"] = min(len(rows), 30)
     found: list[dict[str, str]] = []
-    for row in rows[:30] if isinstance(rows, list) else []:
+    for row in rows[:30]:
         if not isinstance(row, dict):
             continue
         url = public_url(str(row.get("url") or ""))
@@ -1315,6 +1494,7 @@ _SEARCH_FILLER = {
 # Explicit SearXNG bangs may use engines excluded from default searches.
 # Bing and Yahoo provide separate candidates; failures are isolated below.
 _SEARXNG_ENGINES = ("bing", "yahoo")
+_SEARXNG_DEFAULT = "searxng_default"
 _SEARCH_TIER_SCORE = {"A": 400, "B": 300, "C": 200, "D": 100, "unclassified": 0}
 _SEARCH_TRACKING_PARAMETERS = frozenset(
     {"fbclid", "gclid", "dclid", "msclkid", "yclid", "ysclid", "mc_cid", "mc_eid", "_ga", "_gl"}
@@ -1345,6 +1525,27 @@ def _relevant_search_results(query: str, rows: list[dict[str, Any]]) -> list[dic
         return rows
     required = 2 if len(terms) >= 3 else 1
     return [row for row in rows if sum(term in _search_haystack(row) for term in terms) >= required]
+
+
+_SEARCH_WORD = re.compile(r"[^\W_]+(?:[-‐‑‒–—−][^\W_]+)*")
+
+
+def _has_qualified_search_lead(query: str, rows: list[dict[str, Any]]) -> bool:
+    """Require more topic coverage to skip a search than to retain a lead."""
+    terms = _search_terms(query)
+    minimum = (2 * len(terms) + 2) // 3
+    anchors = {
+        word
+        for word in _SEARCH_WORD.findall(query.casefold())
+        if any(char.isdigit() for char in word) and (len(word) >= 5 or any(char.isalpha() for char in word))
+    }
+    if not terms and not anchors:
+        return False
+    for row in rows:
+        haystack = _search_haystack(row)
+        if sum(term in haystack for term in terms) >= minimum and anchors.issubset(_SEARCH_WORD.findall(haystack)):
+            return True
+    return False
 
 
 def _discovery_url_key(url: str) -> str:
@@ -1460,6 +1661,8 @@ class _DDGLinks(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.rows: list[dict[str, str]] = []
+        self.no_results = False
+        self.saw_result_link = False
         self._href = ""
         self._title: list[str] = []
         self._snippet_tag = ""
@@ -1468,12 +1671,16 @@ class _DDGLinks(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = dict(attrs)
-        if "result__snippet" in str(attrs_map.get("class") or ""):
+        classes = str(attrs_map.get("class") or "")
+        if {"result--no-result", "no-results"}.intersection(classes.split()):
+            self.no_results = True
+        if "result__snippet" in classes:
             self._snippet_tag = tag
             self._snippet = []
-        if tag == "a" and "result__a" in str(attrs_map.get("class") or ""):
+        if tag == "a" and "result__a" in classes:
             self._snippet_owner = None
             self._href = str(attrs_map.get("href") or "")
+            self.saw_result_link |= bool(self._href)
             self._title = []
 
     def handle_endtag(self, tag: str) -> None:
@@ -1530,36 +1737,59 @@ def search_public(
         _SEARCH_DEADLINE.reset(token)
 
 
+def _try_searxng(query: str, searxng_url: str, engine: str) -> list[dict[str, str]]:
+    attempt = SearchAttempt(provider="searxng", engine=engine, outcome="search_error")
+    if _search_route_held_off(attempt):
+        return []
+    capture_details = _SEARCH_ATTEMPTS.get() is not None or _SEARCH_HOLDOFFS.get() is not None
+    token = _SEARXNG_ATTEMPT.set(attempt if capture_details else None)
+    try:
+        engine_query = query if engine == _SEARXNG_DEFAULT else f"!{engine} {query}"
+        rows = _search_searxng(engine_query, searxng_url)
+        if attempt["outcome"] == "search_error":
+            found = _relevant_search_results(query, rows)
+            attempt["candidates"] = len(found)
+            if found:
+                attempt["outcome"] = "results"
+            else:
+                attempt["outcome"] = "no_relevant_results" if rows or attempt.get("received") else "empty"
+            return found
+    except TimeoutError:
+        attempt["outcome"] = "timeout"
+    except (OSError, http.client.HTTPException):
+        attempt["outcome"] = "transport_error"
+    except ValueError:
+        if attempt["outcome"] == "search_error":
+            attempt["outcome"] = "invalid_response"
+    finally:
+        _SEARXNG_ATTEMPT.reset(token)
+        _record_search_attempt(attempt)
+    return []
+
+
 def _search_discovery(
     query: str, searxng_url: str, deadline: float, stop_requested: Callable[[], bool]
 ) -> tuple[list[dict[str, Any]], str]:
     if stop_requested():
         return [], "search_interrupted"
     if searxng_url:
-        # Collect results from the configured local engines before falling back.
+        default = (_SEARXNG_DEFAULT,)
+        automotive = _SEARCH_HOLDOFFS.get() is not None
+        engine_groups = (default, _SEARXNG_ENGINES) if automotive else (_SEARXNG_ENGINES, default)
         discovered: list[dict[str, Any]] = []
-        for engine in _SEARXNG_ENGINES:
-            if stop_requested():
-                return _rank_discovered_results(query, discovered), "search_interrupted"
-            if time.monotonic() >= deadline:
-                break
-            try:
-                found = _relevant_search_results(query, _search_searxng("!" + engine + " " + query, searxng_url))
+        ranked: list[dict[str, Any]] = []
+        for group in engine_groups:
+            for engine in group:
+                if stop_requested():
+                    return _rank_discovered_results(query, discovered), "search_interrupted"
+                if time.monotonic() >= deadline:
+                    break
+                found = _try_searxng(query, searxng_url, engine)
                 discovered.extend({**row, "engine": engine} for row in found)
-            except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
-                continue
-        ranked = _rank_discovered_results(query, discovered)
-        if ranked:
-            return ranked, "searxng"
-        if stop_requested():
-            return [], "search_interrupted"
-        if time.monotonic() >= deadline:
-            return [], "search_timeout"
-        try:
-            found = _relevant_search_results(query, _search_searxng(query, searxng_url))
-        except (OSError, TimeoutError, ValueError, json.JSONDecodeError, http.client.HTTPException):
-            found = []
-        ranked = _rank_discovered_results(query, [{**row, "engine": "searxng_default"} for row in found])
+            ranked = _rank_discovered_results(query, discovered)
+            qualified = [row for row in ranked if row["source_tier"] in {"A", "B", "C"}]
+            if qualified and (not automotive or _has_qualified_search_lead(query, qualified)):
+                break
         if ranked:
             return ranked, "searxng"
     return _search_duckduckgo(query, deadline, stop_requested)
@@ -1572,26 +1802,59 @@ def _search_duckduckgo(
         return [], "search_interrupted"
     if time.monotonic() >= deadline:
         return [], "search_timeout"
+    attempt = SearchAttempt(provider="duckduckgo", engine="duckduckgo", outcome="interrupted")
+    if _search_route_held_off(attempt):
+        return [], "search_unavailable"
     url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
     try:
         allowed, delay = _robots_policy(url)
         if not allowed:
+            attempt["outcome"] = "robots_denied"
             return [], "search_unavailable"
         if stop_requested():
             return [], "search_interrupted"
         if time.monotonic() >= deadline:
+            attempt["outcome"] = "timeout"
             return [], "search_timeout"
         _rate_limit("https://html.duckduckgo.com", delay)
         if stop_requested():
             return [], "search_interrupted"
         status, _, body, _ = _request_public(url, max_bytes=MAX_HTML_BYTES)
+        if 100 <= status <= 599:
+            attempt["http_status"] = status
+        # Challenge forms also appear in HTTP 200/202 responses. They are an
+        # access denial, and no result parsing or follow-on request is made.
+        prefix = body[:256_000].lower()
+        if (
+            b'id="challenge-form"' in prefix
+            or b'class="anomaly-modal' in prefix
+            or (status == 202 and b"captcha" in prefix)
+        ):
+            attempt["outcome"] = "access_challenge"
+            return [], "search_unavailable"
         if status != 200:
+            attempt["outcome"] = _search_http_outcome(status)
             return [], "search_unavailable"
         parser = _DDGLinks()
         parser.feed(body.decode("utf-8", "replace"))
         ranked = _rank_discovered_results(query, [{**row, "engine": "duckduckgo"} for row in parser.rows])
-        return (ranked, "duckduckgo") if ranked else ([], "search_unavailable")
-    except TimeoutError:
-        return [], "search_timeout"
-    except (OSError, ValueError, http.client.HTTPException):
+        attempt["candidates"] = len(ranked)
+        if ranked:
+            attempt["outcome"] = "results"
+            return ranked, "duckduckgo"
+        if parser.saw_result_link:
+            attempt["outcome"] = "no_relevant_results"
+        else:
+            attempt["outcome"] = "empty" if parser.no_results else "invalid_response"
         return [], "search_unavailable"
+    except TimeoutError:
+        attempt["outcome"] = "timeout"
+        return [], "search_timeout"
+    except (OSError, http.client.HTTPException):
+        attempt["outcome"] = "transport_error"
+        return [], "search_unavailable"
+    except ValueError:
+        attempt["outcome"] = "invalid_response"
+        return [], "search_unavailable"
+    finally:
+        _record_search_attempt(attempt)

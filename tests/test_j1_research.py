@@ -1183,7 +1183,7 @@ def test_search_searxng_filters_private_results_then_falls_back(monkeypatch: pyt
     assert rows[0]["title"] == "Public report"
     assert rows[0]["snippet"] == ""
     assert rows[0]["source"] == "searxng"
-    assert rows[0]["engines"] == ["bing", "yahoo"]
+    assert rows[0]["engines"] == ["bing", "searxng_default", "yahoo"]
     assert (rows[0]["source_class"], rows[0]["source_tier"], rows[0]["search_rank"]) == (
         "unknown",
         "unclassified",
@@ -1277,9 +1277,7 @@ def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: py
     def engine_results(query: str, _base_url: str) -> list[dict[str, str]]:
         calls.append(query)
         if query.startswith("!bing "):
-            return [
-                {"url": "https://bing.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
-            ]
+            return [{"url": "https://www.ford.com/brake-pads", "title": "Brake pads operation", "source": "searxng"}]
         if query.startswith("!yahoo "):
             return [
                 {"url": "https://yahoo.example.org/brake-pads", "title": "Brake pads operation", "source": "searxng"}
@@ -1295,7 +1293,7 @@ def test_search_aggregates_bing_and_yahoo_without_legacy_engines(monkeypatch: py
     rows, source = j1_fetch.search_public("brake pads operation technical guide", searxng_url="http://127.0.0.1:8080")
     assert source == "searxng"
     assert {row["url"]: row["engines"] for row in rows} == {
-        "https://bing.example.org/brake-pads": ["bing"],
+        "https://www.ford.com/brake-pads": ["bing"],
         "https://yahoo.example.org/brake-pads": ["yahoo"],
     }
     assert calls == [
@@ -1319,6 +1317,8 @@ def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest
             return [
                 {"url": "https://example.org/rfc-2606", "title": "RFC 2606 reserved DNS names", "source": "searxng"}
             ]
+        if query == "RFC 2606 reserved DNS names":
+            return []
         pytest.fail("legacy SearXNG engine was queried")
 
     monkeypatch.setattr(j1_fetch, "_search_searxng", engine_results)
@@ -1331,7 +1331,11 @@ def test_search_uses_yahoo_when_bing_has_no_relevant_results(monkeypatch: pytest
     assert source == "searxng"
     assert [row["url"] for row in rows] == ["https://example.org/rfc-2606"]
     assert rows[0]["engines"] == ["yahoo"]
-    assert calls == ["!bing RFC 2606 reserved DNS names", "!yahoo RFC 2606 reserved DNS names"]
+    assert calls == [
+        "!bing RFC 2606 reserved DNS names",
+        "!yahoo RFC 2606 reserved DNS names",
+        "RFC 2606 reserved DNS names",
+    ]
 
 
 def test_search_uses_searxng_defaults_then_filters_and_ranks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1425,7 +1429,8 @@ def test_browser_attempt_budget_is_enforced_per_job(monkeypatch: pytest.MonkeyPa
         ),
     )
 
-    def dynamic_fetch(_url: str, *, allow_browser: bool) -> dict[str, object]:
+    def dynamic_fetch(_url: str, *, allow_browser: bool, allow_large_pdf: bool) -> dict[str, object]:
+        assert allow_large_pdf
         attempts.append(allow_browser)
         return {
             "ok": False,

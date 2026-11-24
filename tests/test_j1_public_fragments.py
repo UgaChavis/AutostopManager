@@ -380,6 +380,32 @@ def test_pdf_search_keeps_physical_page_number_across_a_blank_page(monkeypatch):
 
 
 @pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
+@pytest.mark.parametrize("diagnostic_page", [False, True])
+def test_pdf_dtc_toc_is_retrievable_but_only_diagnostic_content_is_cited(monkeypatch, diagnostic_page):
+    code = "P1765"
+    toc = (
+        "Table of contents\n- P1765\nDTC P1765, P1766\n"
+        "P1765: pressure sensor circuit ................ 81\n"
+        "P1765: pressure sensor circuit . . . . . . 81\n"
+        r"P1765: pressure sensor circuit \274 81"  # Ellipsis in the fixture's PDF font encoding.
+    )
+    scope = "This bulletin applies to model year 2022 Arden Vale vehicles with engine EV19."
+    procedure = "DTC P1765 indicates a pressure sensor signal fault."
+    pages = [toc, scope, procedure] if diagnostic_page else [toc, scope]
+    url = "https://static.nhtsa.gov/odi/tsbs/synthetic/contents.pdf"
+    context = {"make": "Arden", "model": "Vale", "year": 2022, "engine": "EV19", "dtc": code}
+    job = _collect(monkeypatch, {url: ("application/pdf", _pdf(*pages))}, automotive_context=context)
+    hits = j1.research_results(job, query=code, query_mode="dtc")["results"]
+    assert [hit["page"] for hit in hits] == ([1, 3] if diagnostic_page else [1])
+    report = j1.research_report(job)["report"]
+    assert bool(report["confirmed"]) == diagnostic_page
+    subjects = [item for item in report["sources"][0]["applicability_evidence"] if item["kind"] == "subject"]
+    assert subjects == (
+        [{"kind": "subject", "page": 3, "source_url": url + "#page=3", "quote": procedure}] if diagnostic_page else []
+    )
+
+
+@pytest.mark.skipif(not shutil.which("pdftotext"), reason="pdftotext unavailable")
 @pytest.mark.parametrize("case", ["wrapped-scope", "page-break", "column", "heading", "other-engine", "blank-line"])
 def test_pdf_report_combines_prose_scope_wrap_but_not_structural_boundaries(monkeypatch, case):
     base = "This bulletin applies to model year 2022 Arden Vale vehicles"

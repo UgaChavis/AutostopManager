@@ -1,5 +1,7 @@
 """Exercise public query planning and document admission with disposable state."""
 
+from contextlib import nullcontext
+
 import pytest
 
 from autostop_manager import j1_fetch, j1_research as j1
@@ -330,6 +332,59 @@ def test_automotive_first_pass_keeps_room_for_followups():
     assert j1.research_add_queries(job_id, ["more evidence"])["error"]["code"] == "query_limit_reached"
 
 
+def test_dtc_plan_searches_system_and_vehicle_before_using_the_full_symptom():
+    created = j1.start_research(
+        "Synthetic transmission pressure diagnosis",
+        automotive_context={
+            "make": "Astra Demo",
+            "model": "Alpha",
+            "year": 2024,
+            "engine": "Demo Turbo",
+            "system": "Example CVT",
+            "symptom": "secondary pressure drops on launch",
+            "dtc": "P1765",
+        },
+    )
+    plan = j1.research_status(created["job_id"])["query_plan"]
+    assert plan[:2] == [
+        {"intent": "dtc_system", "query": "P1765, Example CVT"},
+        {"intent": "dtc_vehicle", "query": "P1765, Astra Demo Alpha"},
+    ]
+    assert len(plan) == 4
+    assert all("2024 Demo Turbo Example CVT secondary pressure drops on launch" in item["query"] for item in plan[2:])
+
+
+@pytest.mark.parametrize(
+    ("attempt", "reason"),
+    [
+        ({"provider": "searxng", "engine": "default", "outcome": "empty"}, "search_no_results"),
+        (
+            {
+                "provider": "searxng",
+                "engine": "default",
+                "outcome": "empty",
+                "upstream_failures": [{"engine": "yahoo", "reason": "http_error"}],
+            },
+            "search_unavailable",
+        ),
+        ({"provider": "duckduckgo", "outcome": "access_challenge", "http_status": 202}, "search_unavailable"),
+    ],
+)
+def test_search_attempts_distinguish_empty_results_from_provider_failure(monkeypatch, attempt, reason):
+    monkeypatch.setattr(j1, "capture_search_attempts", lambda: nullcontext([attempt]))
+    monkeypatch.setattr(j1, "search_public", lambda *_args, **_kwargs: ([], "search_unavailable"))
+    job_id = j1.start_research("Synthetic search coverage", ["first query", "second query"])["job_id"]
+    _work(job_id)
+
+    status = j1.research_status(job_id)
+    report = j1.research_report(job_id)["report"]
+    assert status["search_attempts"] == report["search_attempts"] == [{**attempt, "count": 2}]
+    failures = [] if reason == "search_no_results" else [{"reason": reason, "count": 2}]
+    assert status["search_failures"] == report["search_failures"] == failures
+    with j1._db(readonly=True) as connection:
+        assert [row["error"] for row in connection.execute("SELECT error FROM queries ORDER BY id")] == [reason, reason]
+
+
 @pytest.mark.parametrize("sources_only", [False, True])
 def test_blank_optional_automotive_fields_are_treated_as_absent(sources_only):
     base = {"make": "Astra Demo", "model": "Alpha", "part_number": "D-424242"}
@@ -392,9 +447,12 @@ def test_query_schema_migrates_previous_cache_and_keeps_pending_jobs(monkeypatch
     with j1._db() as connection:
         connection.execute("DROP TABLE query_candidates")
         connection.execute("ALTER TABLE queries DROP COLUMN primary_admitted")
+        connection.execute("ALTER TABLE queries DROP COLUMN search_attempts")
         connection.commit()
 
-    assert j1.research_status(job_id)["queries_skipped"] == 0
+    retained = j1.research_status(job_id)
+    assert retained["queries_skipped"] == 0
+    assert retained["search_attempts"] == []
     _work(job_id)
     status = j1.research_status(job_id)
     assert (status["status"], status["queries_done"], status["pages_fetched"]) == ("completed", 1, 2)

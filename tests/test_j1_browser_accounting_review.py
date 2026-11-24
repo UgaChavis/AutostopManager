@@ -109,7 +109,7 @@ def boundaries(monkeypatch, http_steps, render_steps=("timeout",), *, stop_after
     monkeypatch.setattr(j1_fetch.time, "sleep", seen.waits.append)
     monkeypatch.setattr(j1_browser, "isolation_verified", lambda: True)
 
-    def request(url, *, max_bytes, check_redirect_robots):
+    def request(url, *, max_bytes, check_redirect_robots, allow_large_pdf=False):
         assert max_bytes == j1_fetch.MAX_PDF_BYTES and check_redirect_robots is True
         index = seen.http[url]
         seen.http[url] += 1

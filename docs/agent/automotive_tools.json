@@ -3665,7 +3665,8 @@
       "limitations": [
         "Writes a durable local public-research job; a background worker later searches/fetches public pages.",
         "queued is not completed evidence. Supply nonempty queries or a valid automotive profile/context; starting a second active job is refused.",
-        "Автомобильный профиль добавляет до четырёх начальных запросов. Уточнения расходуют общий лимит в 12 запросов."
+        "Автомобильный профиль добавляет до четырёх начальных запросов. Уточнения расходуют общий лимит в 12 запросов.",
+        "Для DTC без артикула профиль добавляет короткий запрос по модели и, если известен узел, по его названию. Подробный контекст остаётся в уточняющих запросах и в проверке применимости источника."
       ],
       "example": {
         "objective": "Открытые источники по замене тормозных колодок",
@@ -3863,7 +3864,8 @@
         "pages_total/pages_fetched/pages_failed/pages_unavailable/pages_duplicates/browser_pages_attempted/browser_pages_remaining/queries_total/queries_done/queries_failed/page_failures/search_failures/coverage/query_suggestions/error.",
         "Статус задания по ссылкам включает `acquisition_mode=sources_only`, `queries_remaining=0`, `pages_remaining` и `pages_pending`. План, предложения запросов и ошибки поисковых провайдеров пусты",
         "VIN jobs: schema=autostop.j1.vin_research.v1; collection_status/analysis_status/revision/expiry, budget and counts. Collection completion is separate from finalized analysis.",
-        "queries_skipped учитывает поиски, пропущенные из-за лимита документов. queries_partial учитывает прерванные поиски с сохранённой частью результатов. mixed_pdf_ocr_pages_attempted и mixed_pdf_ocr_pages_remaining показывают бюджет OCR смешанных PDF"
+        "queries_skipped учитывает поиски, пропущенные из-за лимита документов. queries_partial учитывает прерванные поиски с сохранённой частью результатов. mixed_pdf_ocr_pages_attempted и mixed_pdf_ocr_pages_remaining показывают бюджет OCR смешанных PDF",
+        "Публичное collection_outcome содержит state и reason. Состояния in_progress, retrieved, sources_unavailable, search_failed, no_sources, failed и cancelled отделяют ход задания от результата сбора. search_attempts показывает сводку сохранённых попыток поиска"
       ],
       "errors": [
         "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable; worker errors remain in job status/error.",
@@ -4027,7 +4029,8 @@
         "report contains evidence_confidence/frequency/confirmed/hypotheses/alternative_causes/sources/duplicates/unavailable/limitations/read_only/fitment_confirmed/crm_written.",
         "Публичный отчёт учитывает все прочитанные источники и показывает до 20 по рангу. Цитаты из размеченных текстов содержат URL страницы или раздела. В режиме `sources_only` отчёт указывает `acquisition_mode`, а `search_failures` пуст",
         "VIN jobs: schema=autostop.j1.vin_report.v1; collection_status/analysis_status/revision/finalized_revision/claims/conflicts/unknown_fields/sources/budget/stop_reason.",
-        "applicability_basis и applicability_evidence объясняют совпадения, ограничения и исключения цитатами из сохранённых документов"
+        "applicability_basis и applicability_evidence объясняют совпадения, ограничения и исключения цитатами из сохранённых документов",
+        "Публичное collection_outcome содержит state и reason, как в статусе задания. report.evidence_outcome различает not_retrieved, not_assessed, weak и relevant. Для relevant нужен хотя бы один источник уровня A/B с exact. report.search_attempts показывает сводку сохранённых попыток поиска"
       ],
       "errors": [
         "ok=false/error.code: job_id_invalid/job_not_found/j1_store_unavailable, using report schema; unavailable/duplicate documents remain report limitations.",
