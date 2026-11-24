@@ -350,6 +350,15 @@ def test_original_unknown_ack_prevents_new_effects_research_or_completion(oracle
     assert result["hard_pass"] is False and "forbidden planned action: " + action in result["failures"]
 
 
+@pytest.mark.parametrize("reply_kind", ["ack", "result", "clarification", "handoff"])
+def test_unknown_ack_rejects_client_reply_missing_from_action_trace(oracle, reply_kind):
+    fixture, cases, score = oracle
+    observation = unknown_ack_plan()
+    observation["client_replies"] = [{"kind": reply_kind, "text": "Синтетический ответ клиенту."}]
+    result = score(fixture, cases["C35"], observation)
+    assert result["hard_pass"] is False
+
+
 @pytest.mark.parametrize("required", ["reply.readback", "job.needs_review"])
 def test_unknown_ack_must_preserve_readback_and_review(oracle, required):
     fixture, cases, score = oracle

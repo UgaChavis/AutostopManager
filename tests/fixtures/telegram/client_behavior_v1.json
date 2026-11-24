@@ -2438,6 +2438,7 @@
         ]
       },
       "hard_assertions": {
+        "max_client_replies": 0,
         "no_blind_retry": true,
         "no_research_before_verified_ack": true
       },
