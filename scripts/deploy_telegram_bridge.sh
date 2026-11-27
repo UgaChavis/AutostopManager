@@ -458,7 +458,18 @@ restore_media_wrapper() {
 }
 
 durable_inbox_compatible() {
-  local candidate="${1}"
+  local candidate="${1}" marker
+  for marker in "${monitor_env}.off.d/"*; do
+    [[ -e "${marker}" || -L "${marker}" ]] || continue
+    # An older bridge can open the database while silently ignoring pending
+    # OFF boundaries. Keep the capable release until those are reconciled.
+    if ! grep -q '^WORK_DUTY_CUTOFF_DIRECTORY_SUFFIX = "\.off\.d"$' \
+      "${candidate}/autostop_manager/telegram_bridge.py" 2>/dev/null; then
+      echo "work_telegram_duty_cutoffs_pending=true" >&2
+      return 1
+    fi
+    break
+  done
   [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 ]] && return 0
   /usr/bin/python3 -I - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
 import ast

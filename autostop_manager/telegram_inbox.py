@@ -2676,8 +2676,14 @@ class TelegramInbox:
             return None
         direction = "1" if enabled else "0"
         pending = self._db.execute("SELECT value FROM metadata WHERE key='duty_startup_boundary'").fetchone()
-        if pending is not None and pending[0].startswith(direction + "|"):
-            previous = _timestamp(pending[0][2:])
+        boundary = pending[0][2:] if pending is not None and pending[0].startswith(direction + "|") else None
+        if pending is None:
+            # The old key meant the inverse of the committed mode. Only
+            # consider it for a transition, and apply the same window bounds.
+            legacy = self._db.execute("SELECT value FROM metadata WHERE key='duty_pending_at'").fetchone()
+            boundary = legacy[0] if legacy is not None else None
+        if boundary is not None:
+            previous = _timestamp(boundary)
             if previous <= now and (earliest is None or previous >= earliest):
                 return previous
         with self._write():

@@ -92,15 +92,22 @@ durable_release() {
 }
 
 durable_duty_cutoffs() {
-  durable_release && grep -q '^def _work_duty_cutoffs(' "${release_link}/autostop_manager/telegram_bridge.py" 2>/dev/null
+  durable_release && grep -Fxq 'WORK_DUTY_CUTOFF_DIRECTORY_SUFFIX = ".off.d"' \
+    "${release_link}/autostop_manager/telegram_bridge.py" 2>/dev/null
+}
+
+valid_duty_off_directory() {
+  [[ -d "$1" && ! -L "$1" && "$(stat -c '%U:%G:%a' "$1")" == "root:root:755" ]]
 }
 
 duty_off_markers() {
   local -n result="$1"
-  local marker stamp
-  for marker in "${monitor_env}".off.*; do
+  local marker stamp directory="${monitor_env}.off.d"
+  [[ -e "${directory}" || -L "${directory}" ]] || return 0
+  valid_duty_off_directory "${directory}" || return 1
+  for marker in "${directory}"/*; do
     [[ -e "${marker}" || -L "${marker}" ]] || continue
-    stamp="${marker#"${monitor_env}.off."}"
+    stamp="${marker##*/}"
     if [[ ! "${stamp}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ \
       || ! -f "${marker}" || -L "${marker}" \
       || "$(stat -c '%U:%G:%a' "${marker}")" != "root:root:644" ]]; then
@@ -118,14 +125,18 @@ prune_duty_off_markers() {
 }
 
 withdraw_duty_intent() {
-  local stamp marker
+  local stamp marker directory="${monitor_env}.off.d"
   [[ -e "${monitor_env}" || -L "${monitor_env}" ]] || return 0
   if ! durable_duty_cutoffs; then
     unlink -- "${monitor_env}"
     return
   fi
+  if [[ ! -e "${directory}" && ! -L "${directory}" ]]; then
+    install -d -o root -g root -m 0755 -- "${directory}" || return 1
+  fi
+  valid_duty_off_directory "${directory}" || return 1
   stamp="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)" || return 1
-  marker="${monitor_env}.off.${stamp}"
+  marker="${directory}/${stamp}"
   [[ ! -e "${marker}" && ! -L "${marker}" ]] || return 1
   mv -T -- "${monitor_env}" "${marker}"
 }
@@ -153,13 +164,9 @@ disable_duty() {
   local workers load_state stop_before_withdrawal=0 outbound_ready=0 manage_wake="${1:-1}"
   local -a off_markers=()
   if durable_duty_cutoffs; then
-    if systemctl is-active --quiet "${service_unit}"; then
-      if ! bridge_control duty-set --disabled >/dev/null; then
-        [[ -f "${monitor_env}" ]] || return 1
-        stop_before_withdrawal=1
-      fi
-    elif [[ -f "${monitor_env}" ]]; then
-      stop_before_withdrawal=1
+    if [[ -f "${monitor_env}" ]]; then stop_before_withdrawal=1; fi
+    if systemctl is-active --quiet "${service_unit}" && ! bridge_control duty-set --disabled >/dev/null; then
+      [[ "${stop_before_withdrawal}" -eq 1 ]] || return 1
     fi
   elif durable_release && systemctl is-active --quiet "${service_unit}"; then
     bridge_control duty-set --disabled >/dev/null || return 1
@@ -171,8 +178,12 @@ disable_duty() {
     systemctl disable --now "${wake_unit}" || return 1
   fi
   if [[ "${stop_before_withdrawal}" -eq 1 ]]; then
-    load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
-    if [[ "${load_state}" == "loaded" ]]; then systemctl stop "${service_unit}" || return 1; fi
+    load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null)" || return 1
+    case "${load_state}" in
+      loaded) systemctl stop "${service_unit}" || return 1 ;;
+      not-found) ;;
+      *) return 1 ;;
+    esac
   fi
   withdraw_duty_intent || return 1
   if durable_duty_cutoffs; then
@@ -255,9 +266,14 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   mv -T -- "${pending_monitor_env}" "${monitor_env}" || return 1
   pending_monitor_env=""
   published_duty_intent=1
-  if systemctl is-active --quiet "${service_unit}"; then
+  if [[ "${#off_markers[@]}" -gt 0 ]] || { [[ "${intent_changed}" -eq 1 ]] && durable_duty_cutoffs; }; then
+    # An auto-restart can race an inactive status check. Force a boot after
+    # publishing a changed intent or when OFF markers still need a fresh boot.
     systemctl enable "${service_unit}" || return 1
-    if [[ "${intent_changed}" -eq 1 || "${#off_markers[@]}" -gt 0 ]]; then
+    systemctl restart "${service_unit}" || return 1
+  elif systemctl is-active --quiet "${service_unit}"; then
+    systemctl enable "${service_unit}" || return 1
+    if [[ "${intent_changed}" -eq 1 ]]; then
       systemctl restart "${service_unit}" || return 1
     fi
   else
