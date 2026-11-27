@@ -508,6 +508,17 @@ class TelegramInbox:
             raise InboxError("inbound_event_not_open")
         return event
 
+    def bind_work_account(self, peer_id: int) -> None:
+        """Bind the durable inbox to the authenticated work account."""
+        value = str(_positive(peer_id, "inbox_work_account_invalid"))
+        row = self._db.execute("SELECT value FROM metadata WHERE key='work_account_peer_id'").fetchone()
+        if row is not None:
+            if row[0] != value:
+                raise InboxError("inbox_work_account_changed")
+            return
+        with self._write():
+            self._db.execute("INSERT INTO metadata VALUES ('work_account_peer_id', ?)", (value,))
+
     def configure_owner_route(self, peer_id: int | None) -> None:
         """Startup cutover: old client test refs never acquire owner authority."""
         if peer_id is None:

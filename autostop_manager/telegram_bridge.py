@@ -105,6 +105,7 @@ TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
 PHONE_RESOLVE_INTERVAL_SECONDS = 3.0
+WORK_TEXT_COOLDOWN_FILENAME = "work-text-cooldown.json"
 MAX_INBOUND_MONITOR_EVENTS = 32
 MAX_INBOUND_MONITOR_CONTEXT_MESSAGES = 5
 INBOUND_MONITOR_CONTEXT_WINDOW_SECONDS = 5 * 60
@@ -1530,6 +1531,15 @@ def normalize_phone(value: str) -> str:
     if not 8 <= len(digits) <= 15 or digits.startswith("0"):
         raise BridgeError("phone_invalid")
     return f"+{digits}"
+
+
+def _normalize_work_direct_phone(value: str) -> str:
+    normalized = normalize_phone(value)
+    if value.strip().startswith("+") or (len(normalized) == 12 and normalized.startswith("+7")):
+        return normalized
+    if len(normalized) == 11 and normalized.startswith("+9"):
+        return "+7" + normalized[1:]
+    raise BridgeError("work_direct_phone_country_required")
 
 
 def _validate_mode(mode: str, idempotency_key: str) -> None:
@@ -3594,16 +3604,23 @@ async def _handle_download(
     }
 
 
-def _work_text_retry_at(client: Any) -> float:
+def _work_text_retry_at(client: Any, state_dir: Path) -> float:
+    path = state_dir / WORK_TEXT_COOLDOWN_FILENAME
+    stored = _load_idempotency(path).get("send_message", {}).get("retry_at", 0.0)
+    if type(stored) not in {int, float} or not math.isfinite(stored) or stored < 0:
+        raise BridgeError("work_text_cooldown_invalid")
     waits = getattr(client, "_flood_waited_requests", {})
     if not waits:
-        return 0.0
+        return float(stored)
     functions, _ = _load_telegram_functions()
-    return float(waits.get(functions.messages.SendMessageRequest.CONSTRUCTOR_ID, 0))
+    live = float(waits.get(functions.messages.SendMessageRequest.CONSTRUCTOR_ID, 0))
+    if live > max(stored, time.time()):
+        _save_idempotency(path, {"send_message": {"retry_at": live}})
+    return max(float(stored), live)
 
 
-def _require_work_text_cooldown(client: Any) -> None:
-    retry_at = _work_text_retry_at(client)
+def _require_work_text_cooldown(client: Any, state_dir: Path) -> None:
+    retry_at = _work_text_retry_at(client, state_dir)
     if retry_at > time.time():
         raise _WorkTextCooldown(retry_at)
 
@@ -3621,24 +3638,42 @@ def _job_time_remaining() -> float:
     return (datetime.fromisoformat(current["deadline_at"]) - datetime.now(UTC)).total_seconds()
 
 
-async def _require_current_text_send_history(
-    client: Any, entity: Any, last_message_id: int, contract: dict[str, Any], *, job_bound: bool
+async def _revalidate_text_send_before_intent(
+    client: Any,
+    entity: Any,
+    last_message_id: int,
+    contract: dict[str, Any],
+    *,
+    config: TelegramConfig,
+    monitor: InboundMonitor | None,
+    effect: dict[str, Any] | None,
+    handoff: bool,
 ) -> None:
     if contract["last_message_id"] != last_message_id:
         raise BridgeError("conversation_changed_since_dry_run")
-    if not job_bound:
+    if effect is None:
         return
-    retry_at = _work_text_retry_at(client)
-    remaining = retry_at - time.time()
-    if remaining <= 0:
-        return
-    if remaining > min(60, client.flood_sleep_threshold, effect_time_remaining(), _job_time_remaining()):
-        raise _WorkTextCooldown(retry_at)
-    # This wait is inside the existing effect deadline and before any intent.
-    await asyncio.sleep(remaining)
-    _check_effect_authority()
-    if await _last_message_id(client, entity) != last_message_id:
-        raise BridgeError("conversation_changed_since_dry_run")
+
+    wait_budget = min(60.0, float(getattr(client, "flood_sleep_threshold", 60)))
+    for attempt in range(3):
+        retry_at = _work_text_retry_at(client, config.state_dir)
+        remaining = retry_at - time.time()
+        if remaining > 0:
+            if attempt == 2 or remaining > min(wait_budget, effect_time_remaining(), _job_time_remaining()):
+                raise _WorkTextCooldown(retry_at)
+            started = asyncio.get_running_loop().time()
+            await asyncio.sleep(remaining)
+            wait_budget -= asyncio.get_running_loop().time() - started
+            _check_effect_authority()
+            if not handoff and await _last_message_id(client, entity) != last_message_id:
+                raise BridgeError("conversation_changed_since_dry_run")
+        await _revalidate_job_effect(client, entity, monitor, effect)
+        # A handoff rereads the client's history but sends to the owner.
+        if handoff and await _last_message_id(client, entity) != last_message_id:
+            raise BridgeError("conversation_changed_since_dry_run")
+        if _work_text_retry_at(client, config.state_dir) <= time.time():
+            return
+    _require_work_text_cooldown(client, config.state_dir)
 
 
 def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
@@ -3648,7 +3683,7 @@ def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
     return functions.messages.SendMessageRequest(peer=peer, message=text)
 
 
-async def _send_work_direct_text(client: Any, monitor: DurableInboundMonitor, request: Any) -> int:
+async def _send_work_direct_text(client: Any, monitor: DurableInboundMonitor, request: Any, state_dir: Path) -> int:
     from telethon import errors, types
 
     # Use one RPC invocation so an application-level resend cannot turn an
@@ -3664,6 +3699,7 @@ async def _send_work_direct_text(client: Any, monitor: DurableInboundMonitor, re
             waits = client._flood_waited_requests
             method_id = request.CONSTRUCTOR_ID
             waits[method_id] = max(waits.get(method_id, 0), time.time() + max(1, exc.seconds))
+            _work_text_retry_at(client, state_dir)
         code = WORK_DIRECT_REJECTION_CODES.get(type(exc).__name__) or WORK_DIRECT_REJECTION_CODES.get(exc.message)
         if code is None and re.fullmatch(r"ALLOW_PAYMENT_REQUIRED_[0-9]+", exc.message or ""):
             code = "telegram_payment_required"
@@ -3786,21 +3822,27 @@ async def _send_new_text(
     entry: dict[str, Any],
     *,
     group_reply: bool,
+    work_state_dir: Path | None,
     direct_monitor: DurableInboundMonitor | None,
     direct_request: Any,
 ) -> int:
     if direct_monitor is None:
         reply_to_message_id = entry["reply_to_message_id"]
-        sent = await client.send_message(
-            entity,
-            text,
-            parse_mode=None,
-            **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
-            **({"link_preview": False} if group_reply else {}),
-        )
+        try:
+            sent = await client.send_message(
+                entity,
+                text,
+                parse_mode=None,
+                **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
+                **({"link_preview": False} if group_reply else {}),
+            )
+        except Exception:
+            if work_state_dir is not None:
+                _work_text_retry_at(client, work_state_dir)
+            raise
         return int(sent.id)
     try:
-        return await _send_work_direct_text(client, direct_monitor, direct_request)
+        return await _send_work_direct_text(client, direct_monitor, direct_request, ledger_path.parent)
     except _WorkDirectSendRejected as exc:
         latest = _load_idempotency(ledger_path)
         if latest.get(key) != entry:
@@ -3983,15 +4025,21 @@ async def _handle_send_text_to_entity(
     if previous is not None:
         _require_text_send_replay(previous, entry, target_binding, owner_notification=owner_notification)
     else:
-        await _require_current_text_send_history(
-            client, entity, last_message_id, contract, job_bound=job_effect is not None
-        )
         if group_reply:
             _require_personal_group_reply(config, request, target, reply_to_message_id)
         _require_direct_send_allowed(
             config, inbound_monitor, request, target["id"], idempotency_key, bound_handoff=bound_handoff
         )
-        await _revalidate_job_effect(client, entity, inbound_monitor, job_effect)
+        await _revalidate_text_send_before_intent(
+            client,
+            entity,
+            last_message_id,
+            contract,
+            config=config,
+            monitor=inbound_monitor,
+            effect=job_effect,
+            handoff=bound_handoff is not None,
+        )
         # Different client jobs can share the owner recipient. Its unknown
         # effects or routing may have changed during client-context RPCs.
         _require_direct_send_allowed(
@@ -4002,8 +4050,11 @@ async def _handle_send_text_to_entity(
         idempotency = _load_idempotency(idempotency_path)
         if idempotency_key in idempotency:
             raise BridgeError("idempotency_key_conflict")
-        if config.account == "work" or isinstance(inbound_monitor, DurableInboundMonitor):
-            _require_work_text_cooldown(client)
+        work_state_dir = (
+            config.state_dir if config.account == "work" or isinstance(inbound_monitor, DurableInboundMonitor) else None
+        )
+        if work_state_dir is not None:
+            _require_work_text_cooldown(client, work_state_dir)
         _verify_contract_age(contract, None)
         direct_request = _prepare_work_direct_request(client, entity, text) if direct_monitor is not None else None
         _mark_job_effect_intent(inbound_monitor, job_effect)
@@ -4023,6 +4074,7 @@ async def _handle_send_text_to_entity(
                 idempotency_key,
                 entry,
                 group_reply=group_reply,
+                work_state_dir=work_state_dir,
                 direct_monitor=direct_monitor,
                 direct_request=direct_request,
             )
@@ -4083,6 +4135,9 @@ async def _handle_work_direct_send(
     request: dict[str, Any],
     monitor: DurableInboundMonitor,
 ) -> dict[str, Any]:
+    sender_peer_id = monitor.self_peer_id
+    if type(sender_peer_id) is not int or sender_peer_id < 1:
+        raise BridgeError("work_account_identity_unavailable")
     if set(request) - {
         "operation",
         "work_direct",
@@ -4098,7 +4153,7 @@ async def _handle_work_direct_send(
     phone = request.get("phone")
     if phone is not None and (not isinstance(phone, str) or request.get("peer")):
         raise BridgeError("work_direct_target_invalid")
-    raw_target = normalize_phone(phone) if phone is not None else request.get("peer")
+    raw_target = _normalize_work_direct_phone(phone) if phone is not None else request.get("peer")
     peer, text, mode, key, reply_to = validate_send_request(request | {"peer": raw_target})
     if reply_to:
         raise BridgeError("work_direct_request_invalid")
@@ -4141,7 +4196,7 @@ async def _handle_work_direct_send(
         mode=mode,
         idempotency_key=key,
         inbound_monitor=monitor,
-        idempotency_target={"peer_id": target["id"], "work_direct": True},
+        idempotency_target={"peer_id": target["id"], "work_direct": True, "sender_peer_id": sender_peer_id},
         contract_target_role="work_direct",
     )
     if mode == "dry_run":
@@ -4184,6 +4239,11 @@ async def _handle_work_direct_readback(
         or record.get("work_direct") is not True
     ):
         raise BridgeError("idempotency_key_conflict")
+    sender_peer_id = monitor.self_peer_id
+    if type(sender_peer_id) is not int or sender_peer_id < 1:
+        raise BridgeError("work_account_identity_unavailable")
+    if record.get("sender_peer_id") != sender_peer_id:
+        raise BridgeError("work_direct_account_mismatch")
     peer_id, message_id = record.get("peer_id"), record.get("message_id")
     if type(peer_id) is not int or peer_id < 1 or type(message_id) is not int or message_id < 0:
         raise BridgeError("idempotency_state_invalid")
@@ -6665,6 +6725,28 @@ def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundM
     client.add_event_handler(deleted, events.MessageDeleted())
 
 
+async def _start_durable_account(
+    client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, events: Any, *, monitor_incoming: bool
+) -> None:
+    me = await client.get_me()
+    self_id = getattr(me, "id", None)
+    if type(self_id) is not int or self_id < 1:
+        raise BridgeError("work_account_identity_unavailable")
+    try:
+        monitor.inbox.bind_work_account(self_id)
+    except InboxError as exc:
+        raise BridgeError(str(exc)) from exc
+    _configure_durable_instructions(monitor.inbox)
+    monitor.inbox.configure_client_only(_owner_peer_id(config))
+    monitor.inbox.duty_set(enabled=monitor_incoming)
+    client._autostop_cached_me = me
+    monitor.self_peer_id = self_id
+    _install_context_handlers(client, events, monitor)
+    monitor.transport_ready = True
+    monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+    monitor.request_reconciliation()
+
+
 async def run_daemon(
     config: TelegramConfig, *, monitor_incoming: bool = False, _cleanup_watchdog: threading.Timer | None = None
 ) -> None:
@@ -6690,9 +6772,6 @@ async def run_daemon(
     inbound_monitor: InboundMonitor | None = None
     try:
         if inbox is not None:
-            _configure_durable_instructions(inbox)
-            inbox.configure_client_only(_owner_peer_id(config))
-            inbox.duty_set(enabled=monitor_incoming)
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
             inbound_monitor = InboundMonitor() if monitor_incoming else None
@@ -6705,11 +6784,12 @@ async def run_daemon(
             events = _load_telegram_events()
 
             async def capture(event: Any) -> None:
+                if isinstance(inbound_monitor, DurableInboundMonitor) and inbound_monitor.self_peer_id is None:
+                    # Startup reconciliation picks up updates before binding.
+                    return
                 await _capture_incoming_event(inbound_monitor, event)
 
             client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
-            if isinstance(inbound_monitor, DurableInboundMonitor):
-                _install_context_handlers(client, events, inbound_monitor)
         await client.connect()
         if not await client.is_user_authorized():
             raise BridgeError("account_not_authorized")
@@ -6718,15 +6798,7 @@ async def run_daemon(
         # Telegram RPC while an effect is slow or the transport is unavailable.
         client._autostop_cached_me = None
         if isinstance(inbound_monitor, DurableInboundMonitor):
-            me = await client.get_me()
-            self_id = getattr(me, "id", None)
-            if type(self_id) is not int or self_id < 1:
-                raise BridgeError("work_account_identity_unavailable")
-            client._autostop_cached_me = me
-            inbound_monitor.self_peer_id = self_id
-            inbound_monitor.transport_ready = True
-            inbound_monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
-            inbound_monitor.request_reconciliation()
+            await _start_durable_account(client, config, inbound_monitor, events, monitor_incoming=monitor_incoming)
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
