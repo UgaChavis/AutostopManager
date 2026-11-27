@@ -152,8 +152,15 @@ current_link="${release_root}/current"
 previous_release="$(readlink -e "${current_link}" 2>/dev/null || true)"
 work_service_was_active=0
 work_inbound_expected=0
+work_activation_published=0
+work_activation_requested=0
 
 if [[ "${account}" == "work" ]]; then
+  work_activation_marker="${monitor_env%/*}/release-activation.pending"
+  if [[ -e "${work_activation_marker}" || -L "${work_activation_marker}" ]]; then
+    echo "work_telegram_release_activation_marker_exists=true" >&2
+    exit 1
+  fi
   work_load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${work_load_state}" == "not-found" ]]; then
     [[ -z "${previous_release}" && ! -e "${current_link}" && ! -L "${current_link}" ]] || {
@@ -382,6 +389,14 @@ work_bridge_status() {
     "$@" "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work status
 }
 
+work_bridge_ready_from_status() {
+  local status="$1"
+  grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
+    && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
+    && grep -Eq "\"inbound_enabled\":[[:space:]]*$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)" \
+      <<<"${status}"
+}
+
 bridge_ready() {
   local status
   systemctl is-active --quiet "${service_unit}" || return 1
@@ -392,10 +407,7 @@ bridge_ready() {
     return
   fi
   status="$(work_bridge_status)" || return 1
-  grep -Eq '"authorized":[[:space:]]*true' <<<"${status}" \
-    && grep -Eq '"transport_ready":[[:space:]]*true' <<<"${status}" \
-    && grep -Eq "\"inbound_enabled\":[[:space:]]*$([[ "${work_inbound_expected}" -eq 1 ]] && echo true || echo false)" \
-      <<<"${status}"
+  work_bridge_ready_from_status "${status}"
 }
 
 work_inbound_receipt() {
@@ -438,6 +450,93 @@ start_work_bridge() {
   for _attempt in $(seq 1 15); do
     if bridge_ready; then
       return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+publish_work_release_activation() {
+  local marker_dir="${work_activation_marker%/*}" temporary
+  [[ -d "${marker_dir}" && ! -L "${marker_dir}" ]] || return 1
+  temporary="$(mktemp "${marker_dir}/.release-activation.XXXXXX")" || return 1
+  if ! {
+    printf '%s\n' "${release_dir}" > "${temporary}" \
+      && chown root:root "${temporary}" && chmod 0644 "${temporary}" \
+      && sync -- "${temporary}" \
+      && ln -T -- "${temporary}" "${work_activation_marker}"
+  }; then
+    unlink -- "${temporary}" || true
+    return 1
+  fi
+  work_activation_published=1
+  unlink -- "${temporary}" || return 1
+  sync -- "${marker_dir}"
+}
+
+clear_work_release_activation() {
+  [[ "${work_activation_published}" -eq 1 ]] || return 0
+  if [[ -e "${work_activation_marker}" || -L "${work_activation_marker}" ]]; then
+    [[ -f "${work_activation_marker}" && ! -L "${work_activation_marker}" \
+      && "$(stat -c '%U:%G:%a' "${work_activation_marker}")" == "root:root:644" ]] || return 1
+    printf '%s\n' "${release_dir}" | cmp -s - "${work_activation_marker}" || return 1
+    unlink -- "${work_activation_marker}" || return 1
+  fi
+  sync -- "${work_activation_marker%/*}" || return 1
+  work_activation_published=0
+}
+
+work_bridge_prepared() {
+  /usr/bin/python3 -I -c '
+import json
+import sys
+
+try:
+    status = json.load(sys.stdin)
+except (ValueError, RecursionError):
+    raise SystemExit(1) from None
+sys.exit(not (
+    isinstance(status, dict)
+    and status.get("ok") is True
+    and status.get("authorized") is True
+    and status.get("release_prepared_for") == sys.argv[1]
+    and status.get("release_transport_ready") is True
+    and status.get("release_inbound_enabled") is (sys.argv[2] == "1")
+))
+' "${release_dir}" "${work_inbound_expected}" <<<"$1"
+}
+
+candidate_owns_work_bridge() {
+  local pid
+  pid="$(systemctl show --property=MainPID --value "${service_unit}")" || return 1
+  [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(readlink -e -- "/proc/${pid}/cwd")" == "${release_dir}" ]]
+}
+
+start_candidate_work_bridge() {
+  local status
+  systemctl enable --now "${service_unit}" || return 1
+  for _attempt in $(seq 1 15); do
+    if systemctl is-active --quiet "${service_unit}" \
+      && status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)"; then
+      if work_bridge_ready_from_status "${status}"; then
+        return 0
+      fi
+      if work_bridge_prepared "${status}" && candidate_owns_work_bridge; then
+        # A lost activation response cannot authorize a second write.
+        work_activation_requested=1
+        /usr/bin/timeout --kill-after=1s 8s env PYTHONSAFEPATH=1 PYTHONPATH="${release_dir}" \
+          "${venv_root}/bin/python" -m autostop_manager.telegram_bridge --account work \
+          release-activate --release-dir "${release_dir}" >/dev/null || true
+        for _activation_attempt in $(seq 1 15); do
+          if systemctl is-active --quiet "${service_unit}" \
+            && status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)" \
+            && work_bridge_ready_from_status "${status}" && candidate_owns_work_bridge; then
+            return 0
+          fi
+          sleep 1
+        done
+        return 1
+      fi
     fi
     sleep 1
   done
@@ -589,11 +688,25 @@ activate_new_release_assets() {
 
 rollback() {
   if [[ "${account}" == "work" ]]; then
+    if [[ -z "${previous_release}" && "${work_activation_requested:-0}" -eq 1 ]]; then
+      # With no previous release, preserve the candidate that may own the pin.
+      echo "work_telegram_release_activation_unverified=true" >&2
+      return 1
+    fi
     if [[ -n "${previous_release}" ]] && ! durable_inbox_compatible "${previous_release}"; then
       echo "durable_inbox_rollback_incompatible=true" >&2
       return 1
     fi
     systemctl stop "${service_unit}" || return 1
+    if [[ "${work_activation_published:-0}" -eq 1 ]]; then
+      # A lost activation reply may commit between the first check and stop.
+      if [[ -n "${previous_release}" ]] && ! durable_inbox_compatible "${previous_release}"; then
+        echo "durable_inbox_rollback_incompatible=true" >&2
+        systemctl start "${service_unit}" || true
+        return 1
+      fi
+      clear_work_release_activation || return 1
+    fi
   fi
   restore_previous_release_assets || return 1
   if ! systemctl enable --now "${service_unit}"; then
@@ -638,6 +751,11 @@ if ! backup_initial_release_assets; then
 fi
 mv -- "${staging_dir}" "${release_dir}"
 
+if [[ "${account}" == "work" && "$(readlink -e -- "${release_dir}")" != "${release_dir}" ]]; then
+  echo "work_telegram_release_path_not_physical=true" >&2
+  exit 1
+fi
+
 if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
   if ! systemctl stop "${service_unit}"; then
     echo "ERROR: work Telegram transport did not enter the bounded release stop" >&2
@@ -645,51 +763,43 @@ if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
   fi
 fi
 
-if ! activate_new_release_assets; then
-  restore_succeeded=0
-  if restore_previous_release_assets; then
-    restore_succeeded=1
-  fi
-  if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
-    start_work_bridge || restore_succeeded=0
-  fi
-  if [[ "${restore_succeeded}" -eq 1 ]]; then
-    echo "ERROR: Telegram release activation failed; previous release assets restored" >&2
-  else
-    echo "ERROR: Telegram release activation failed; previous runtime was not fully restored" >&2
-  fi
-  exit 1
-fi
-
-media_prestart_error=""
-if ! install_current_media_wrapper; then
-  media_prestart_error="work media sandbox wrapper install failed"
+prestart_error=""
+if [[ "${account}" == "work" ]] && ! publish_work_release_activation; then
+  prestart_error="work Telegram activation marker publication failed"
+elif ! activate_new_release_assets; then
+  prestart_error="Telegram release activation failed"
+elif ! install_current_media_wrapper; then
+  prestart_error="work media sandbox wrapper install failed"
 elif [[ "${account}" == "work" ]] && ! transcription_runtime_ready; then
-  media_prestart_error="local Telegram transcription runtime failed"
+  prestart_error="local Telegram transcription runtime failed"
 fi
-if [[ -n "${media_prestart_error}" ]]; then
+if [[ -n "${prestart_error}" ]]; then
   restore_succeeded=0
-  if restore_previous_release_assets; then
+  if clear_work_release_activation && restore_previous_release_assets; then
     restore_succeeded=1
   fi
   if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
     start_work_bridge || restore_succeeded=0
   fi
   if [[ "${restore_succeeded}" -eq 1 ]]; then
-    echo "ERROR: ${media_prestart_error}; previous release assets restored" >&2
+    echo "ERROR: ${prestart_error}; previous release assets restored" >&2
   else
-    echo "ERROR: ${media_prestart_error}; previous runtime was not fully restored" >&2
+    echo "ERROR: ${prestart_error}; previous runtime was not fully restored" >&2
   fi
   exit 1
 fi
 
 if [[ "${account}" == "work" ]]; then
-  if ! start_work_bridge; then
+  if ! start_candidate_work_bridge; then
     if rollback; then
       echo "ERROR: work Telegram bridge readiness failed; previous release restored" >&2
     else
       echo "ERROR: work Telegram bridge readiness failed; automatic rollback did not restore service" >&2
     fi
+    exit 1
+  fi
+  if ! clear_work_release_activation; then
+    echo "work_telegram_release_activation_cleanup_failed=true" >&2
     exit 1
   fi
   echo "telegram_bridge_deployed=true"

@@ -24,7 +24,7 @@ import threading
 import time
 import weakref
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import closing, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field as dataclass_field
@@ -63,6 +63,7 @@ DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
 DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
 WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
 WORK_MONITOR_CONFIG_PATH = Path("/etc/autostop-work-telegram/monitor.env")
+WORK_RELEASE_PREPARATION_PATH = WORK_MONITOR_CONFIG_PATH.with_name("release-activation.pending")
 WORK_DUTY_CUTOFF_DIRECTORY_SUFFIX = ".off.d"
 WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
 WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
@@ -742,6 +743,7 @@ class DurableInboundMonitor(InboundMonitor):
         self.notification_requested = asyncio.Event()
         self.notification_task: asyncio.Task[None] | None = None
         self.self_peer_id: int | None = None
+        self.release_activation: tuple[str, Callable[[], Awaitable[None]]] | None = None
         self.config = config
         self.prepared_work_sends: dict[tuple[str, str], _PreparedWorkSend] = {}
         # Internal Codex guidance is transient; only its revision/pause state
@@ -5236,6 +5238,27 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
     inbound_monitor: InboundMonitor | None = None,
 ) -> dict[str, Any]:
     operation = str(request.get("operation") or "")
+    preparation = inbound_monitor.release_activation if isinstance(inbound_monitor, DurableInboundMonitor) else None
+    if operation == "release_activate":
+        if (
+            preparation is None
+            or set(request) != {"operation", "release_dir"}
+            or request["release_dir"] != preparation[0]
+        ):
+            raise BridgeError("work_release_activation_invalid")
+        await preparation[1]()
+        return {"ok": True}
+    if operation == "status" and preparation is not None:
+        assert isinstance(inbound_monitor, DurableInboundMonitor)
+        return {
+            "ok": True,
+            "authorized": True,
+            "transport_ready": False,
+            "inbound_enabled": False,
+            "release_prepared_for": preparation[0],
+            "release_transport_ready": _local_transport_ready(client),
+            "release_inbound_enabled": inbound_monitor.capture_enabled,
+        }
     if operation.startswith("job_") or operation == "duty_set":
         if not isinstance(inbound_monitor, DurableInboundMonitor):
             raise BridgeError("durable_inbox_disabled")
@@ -6437,10 +6460,17 @@ async def _serve_client_request(
             or request.get("operation") == "monitor_voice_cleanup"
             or request.get("operation") == "monitor_reclassify"
             or request.get("operation") == "send_readback"
+            or request.get("operation") == "release_activate"
             or (request.get("operation") == "send" and request.get("work_direct") is True)
             or request.get("job_id")
         ):
             _require_root_client(writer)
+        if (
+            isinstance(inbound_monitor, DurableInboundMonitor)
+            and inbound_monitor.release_activation is not None
+            and request.get("operation") not in ("status", "release_activate")
+        ):
+            raise BridgeError("work_release_activation_pending")
         if request.get("operation") == "job_subscribe":
             if not isinstance(inbound_monitor, DurableInboundMonitor):
                 raise BridgeError("durable_inbox_disabled")
@@ -6728,6 +6758,8 @@ class _DaemonRpcHandlers:
 
 def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundMonitor) -> None:
     async def edited(event: Any) -> None:
+        if monitor.release_activation is not None:
+            return
         # The callback itself proves a change, even after restart when no
         # previous RAM fingerprint exists. It never creates an inbound event.
         peer_id, message_id = getattr(event, "chat_id", None), getattr(event, "id", None)
@@ -6742,6 +6774,8 @@ def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundM
         monitor.changed()
 
     async def deleted(event: Any) -> None:
+        if monitor.release_activation is not None:
+            return
         peer_id = getattr(event, "chat_id", None)
         # Channel-local message IDs do not identify private messages. Only a
         # genuinely unknown peer may use the account-wide private ID lookup.
@@ -6761,6 +6795,31 @@ def _work_account_peer_id(me: Any) -> int:
     if type(peer_id) is not int or peer_id < 1:
         raise BridgeError("work_account_identity_unavailable")
     return peer_id
+
+
+def _work_release_preparation(config: TelegramConfig, *, durable: bool) -> str | None:
+    if config.account != "work":
+        return None
+    try:
+        descriptor = os.open(WORK_RELEASE_PREPARATION_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise BridgeError("work_release_preparation_invalid") from exc
+    try:
+        info = os.fstat(descriptor)
+        release = str(Path(__file__).resolve().parents[1])
+        expected = (release + "\n").encode()
+        if (
+            not durable
+            or not stat.S_ISREG(info.st_mode)
+            or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o644)
+            or os.read(descriptor, len(expected) + 1) != expected
+        ):
+            raise BridgeError("work_release_preparation_invalid")
+        return release
+    finally:
+        os.close(descriptor)
 
 
 def _work_duty_cutoffs() -> tuple[str, ...]:
@@ -6797,25 +6856,55 @@ async def _start_durable_account(
     *,
     monitor_incoming: bool,
     duty_at: str | None,
+    release_preparation: str | None = None,
 ) -> None:
     me = await client.get_me()
     self_id = _work_account_peer_id(me)
-    try:
-        monitor.inbox.bind_work_account(self_id)
-    except InboxError as exc:
-        raise BridgeError(str(exc)) from exc
     _configure_durable_instructions(monitor.inbox)
-    monitor.inbox.configure_client_only(_owner_peer_id(config))
+    owner_peer_id = _owner_peer_id(config)
     stops = _work_duty_cutoffs() if config.account == "work" else ()
-    monitor.inbox.apply_duty_startup(
-        monitor_incoming, at=duty_at, stops=stops, requested_at=os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
-    )
-    client._autostop_cached_me = me
-    monitor.self_peer_id = self_id
+    requested_at = os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
     _install_context_handlers(client, events, monitor)
-    monitor.transport_ready = True
-    monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
-    monitor.request_reconciliation()
+
+    def write_startup(*, verify_only: bool) -> None:
+        try:
+            with monitor.inbox.work_startup(verify_only=verify_only):
+                monitor.inbox.bind_work_account(self_id)
+                monitor.inbox.configure_client_only(owner_peer_id)
+                monitor.inbox.apply_duty_startup(monitor_incoming, at=duty_at, stops=stops, requested_at=requested_at)
+                monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+        except InboxError as exc:
+            raise BridgeError(str(exc)) from exc
+
+    def finish_startup(identity: Any) -> None:
+        write_startup(verify_only=False)
+        client._autostop_cached_me = identity
+        monitor.self_peer_id = self_id
+        monitor.transport_ready = True
+        monitor.release_activation = None
+        monitor.request_reconciliation()
+
+    if release_preparation is None or monitor.inbox.has_work_account_binding():
+        finish_startup(me)
+        return
+
+    write_startup(verify_only=True)
+
+    async def activate() -> None:
+        if not _local_transport_ready(client):
+            raise BridgeError("telegram_transport_disconnected")
+        identity = await client.get_me()
+        if monitor.release_activation is None:
+            return
+        if _work_account_peer_id(identity) != self_id:
+            raise BridgeError("inbox_work_account_changed")
+        if _work_release_preparation(config, durable=True) != release_preparation:
+            raise BridgeError("work_release_preparation_invalid")
+        if not _local_transport_ready(client):
+            raise BridgeError("telegram_transport_disconnected")
+        finish_startup(identity)
+
+    monitor.release_activation = (release_preparation, activate)
 
 
 async def run_daemon(
@@ -6836,6 +6925,7 @@ async def run_daemon(
         os.environ.get(WORK_DURABLE_ENVIRONMENT, "").strip() == "1"
         and config.owner_config_path == WORK_OWNER_CONFIG_PATH
     )
+    release_preparation = _work_release_preparation(config, durable=durable)
     # Claim the durable writer before opening a session or touching a listener
     # belonging to another process, even when incoming capture is disabled.
     inbox = TelegramInbox(config.state_dir / "inbound.sqlite3") if durable else None
@@ -6874,7 +6964,13 @@ async def run_daemon(
         client._autostop_cached_me = None
         if isinstance(inbound_monitor, DurableInboundMonitor):
             await _start_durable_account(
-                client, config, inbound_monitor, events, monitor_incoming=monitor_incoming, duty_at=duty_at
+                client,
+                config,
+                inbound_monitor,
+                events,
+                monitor_incoming=monitor_incoming,
+                duty_at=duty_at,
+                release_preparation=release_preparation,
             )
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
@@ -6938,7 +7034,7 @@ async def run_daemon(
                 task.cancel()
             await asyncio.gather(*_BACKGROUND_NOTIFICATIONS, return_exceptions=True)
             await _effect_executor().close()
-            if isinstance(inbound_monitor, DurableInboundMonitor):
+            if isinstance(inbound_monitor, DurableInboundMonitor) and inbound_monitor.release_activation is None:
                 inbound_monitor.transport_ready = False
                 with suppress(sqlite3.Error, InboxError, OSError):
                     inbound_monitor.inbox.set_health(
@@ -6982,6 +7078,8 @@ async def _reconcile_incoming_loop(client: Any, config: TelegramConfig, monitor:
     while True:
         await monitor.reconcile_requested.wait()
         monitor.reconcile_requested.clear()
+        if monitor.release_activation is not None:
+            continue
         if monitor.capture_enabled:
             signal_revision = monitor.reconciliation_signal_revision
             monitor.reconciliation_running = True
@@ -7771,6 +7869,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("code-login")
     subparsers.add_parser("probe")
     subparsers.add_parser("status")
+    release_activate = subparsers.add_parser("release-activate")
+    release_activate.add_argument("--release-dir", required=True)
     subparsers.add_parser("owner-status")
     subparsers.add_parser("owner-target")
     owner_configure = subparsers.add_parser("owner-configure")
@@ -8168,6 +8268,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
             request: dict[str, Any] = {"operation": args.command}
             if args.command.startswith("job-") or args.command == "duty-set":
                 request = _job_cli_request(args)
+            elif args.command == "release-activate":
+                request = {"operation": "release_activate", "release_dir": args.release_dir}
             elif args.command in {"owner-status", "owner-target", "monitor-status", "monitor-events"}:
                 request["operation"] = args.command.replace("-", "_")
                 if args.command == "monitor-events" and (args.limit != 100 or args.after_event_id is not None):

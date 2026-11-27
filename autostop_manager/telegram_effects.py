@@ -20,6 +20,8 @@ def effect_time_remaining() -> float:
 
 def server_budget(request: dict[str, Any]) -> float:
     operation = str(request.get("operation") or "")
+    if operation == "release_activate":
+        return 6.0
     pages = request.get("history_pages", 1)
     if request.get("job_id") and operation in {"send", "send_photo", "send_document", "job_handoff"}:
         if type(pages) is not int or pages < 1:

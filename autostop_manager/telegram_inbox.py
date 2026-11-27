@@ -271,6 +271,7 @@ class TelegramInbox:
         self._instruction_pair: tuple[str, str] | None = None
         self._lock_fd: int | None = None
         self._closed = False
+        self._startup_writing = False
         self._secure_directory()
         self._acquire_writer(writer_lock_fd)
         try:
@@ -600,17 +601,37 @@ class TelegramInbox:
         return int(self._meta("generation"))
 
     @contextmanager
-    def _write(self, *, changed_only: bool = False) -> Iterator[None]:
+    def _write(self, *, changed_only: bool = False, startup: bool = False, verify_only: bool = False) -> Iterator[None]:
+        if self._startup_writing:
+            yield
+            return
         try:
             with self._db:
                 self._db.execute("BEGIN IMMEDIATE")
                 before = self._db.total_changes
-                yield
-                if not changed_only or self._db.total_changes != before:
+                self._startup_writing = startup
+                try:
+                    yield
+                finally:
+                    self._startup_writing = False
+                if not verify_only and (not changed_only or self._db.total_changes != before):
                     self._db.execute("UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='generation'")
-            self._secure_files()
+                if startup:
+                    self._secure_files()
+                if verify_only:
+                    self._db.rollback()
+            if not startup:
+                self._secure_files()
         except sqlite3.Error:
             raise InboxError("inbox_storage_failed") from None
+
+    @contextmanager
+    def work_startup(self, *, verify_only: bool) -> Iterator[None]:
+        with self._write(changed_only=True, startup=True, verify_only=verify_only):
+            yield
+
+    def has_work_account_binding(self) -> bool:
+        return self._db.execute("SELECT 1 FROM metadata WHERE key='work_account_peer_id'").fetchone() is not None
 
     @staticmethod
     def _event_sequence(event_id: Any) -> str:
