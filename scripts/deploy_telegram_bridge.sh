@@ -661,7 +661,13 @@ if ! activate_new_release_assets; then
   exit 1
 fi
 
+media_prestart_error=""
 if ! install_current_media_wrapper; then
+  media_prestart_error="work media sandbox wrapper install failed"
+elif [[ "${account}" == "work" ]] && ! transcription_runtime_ready; then
+  media_prestart_error="local Telegram transcription runtime failed"
+fi
+if [[ -n "${media_prestart_error}" ]]; then
   restore_succeeded=0
   if restore_previous_release_assets; then
     restore_succeeded=1
@@ -670,9 +676,9 @@ if ! install_current_media_wrapper; then
     start_work_bridge || restore_succeeded=0
   fi
   if [[ "${restore_succeeded}" -eq 1 ]]; then
-    echo "ERROR: work media sandbox wrapper install failed; previous release assets restored" >&2
+    echo "ERROR: ${media_prestart_error}; previous release assets restored" >&2
   else
-    echo "ERROR: work media sandbox wrapper install failed; previous runtime was not fully restored" >&2
+    echo "ERROR: ${media_prestart_error}; previous runtime was not fully restored" >&2
   fi
   exit 1
 fi
@@ -682,15 +688,7 @@ if [[ "${account}" == "work" ]]; then
     if rollback; then
       echo "ERROR: work Telegram bridge readiness failed; previous release restored" >&2
     else
-      echo "ERROR: work Telegram bridge readiness failed; no previous Telegram release exists" >&2
-    fi
-    exit 1
-  fi
-  if ! transcription_runtime_ready; then
-    if rollback; then
-      echo "ERROR: local Telegram transcription runtime failed; previous release assets restored" >&2
-    else
-      echo "ERROR: local Telegram transcription runtime failed; previous runtime was not fully restored" >&2
+      echo "ERROR: work Telegram bridge readiness failed; automatic rollback did not restore service" >&2
     fi
     exit 1
   fi
