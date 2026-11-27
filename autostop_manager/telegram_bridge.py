@@ -14,6 +14,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import stat
@@ -6739,7 +6740,13 @@ def _work_account_peer_id(me: Any) -> int:
 
 
 async def _start_durable_account(
-    client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, events: Any, *, monitor_incoming: bool
+    client: Any,
+    config: TelegramConfig,
+    monitor: DurableInboundMonitor,
+    events: Any,
+    *,
+    monitor_incoming: bool,
+    duty_at: str,
 ) -> None:
     me = await client.get_me()
     self_id = _work_account_peer_id(me)
@@ -6749,7 +6756,7 @@ async def _start_durable_account(
         raise BridgeError(str(exc)) from exc
     _configure_durable_instructions(monitor.inbox)
     monitor.inbox.configure_client_only(_owner_peer_id(config))
-    monitor.inbox.duty_set(enabled=monitor_incoming)
+    monitor.inbox.duty_set(enabled=monitor_incoming, at=duty_at)
     client._autostop_cached_me = me
     monitor.self_peer_id = self_id
     _install_context_handlers(client, events, monitor)
@@ -6782,6 +6789,8 @@ async def run_daemon(
     client: Any = None
     inbound_monitor: InboundMonitor | None = None
     try:
+        # Use the pre-connect duty boundary once the account is verified.
+        duty_at = datetime.now(UTC).isoformat()
         if inbox is not None:
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
@@ -6809,7 +6818,9 @@ async def run_daemon(
         # Telegram RPC while an effect is slow or the transport is unavailable.
         client._autostop_cached_me = None
         if isinstance(inbound_monitor, DurableInboundMonitor):
-            await _start_durable_account(client, config, inbound_monitor, events, monitor_incoming=monitor_incoming)
+            await _start_durable_account(
+                client, config, inbound_monitor, events, monitor_incoming=monitor_incoming, duty_at=duty_at
+            )
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
@@ -7450,31 +7461,57 @@ def _work_session_file_exists(path: Path) -> bool:
     return True
 
 
-def _work_session_has_sidecars(path: Path) -> bool:
-    present = [_work_session_file_exists(path.with_name(path.name + suffix)) for suffix in ("-journal", "-wal", "-shm")]
-    return any(present)
+def _work_session_sidecars(path: Path) -> dict[str, Path]:
+    sidecars = {}
+    for suffix in ("-journal", "-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if _work_session_file_exists(sidecar):
+            sidecars[suffix] = sidecar
+    return sidecars
 
 
-async def _existing_work_session_matches(
-    config: TelegramConfig, session: Path, probe: Path, expected_peer_id: int | None
-) -> bool:
-    # Telethon can write to a session while connecting. Probe a private copy and
-    # leave its shared authorization key on the server when discarding the copy.
-    with (
-        closing(sqlite3.connect(session.as_uri() + "?mode=ro", uri=True)) as source,
-        closing(sqlite3.connect(probe)) as copy,
-    ):
-        source.backup(copy)
+async def _existing_work_session_matches(config: TelegramConfig, probe: Path, expected_peer_id: int | None) -> bool:
     TelegramClient, _, _ = _load_telethon()
+    from telethon.errors import AuthKeyDuplicatedError, AuthKeyNotFound
+
     client = TelegramClient(str(probe), config.api_id, config.api_hash, receive_updates=False)
     try:
         await client.connect()
-        if expected_peer_id is None:
-            return bool(await client.is_user_authorized())
         me = await client.get_me()
-        return me is not None and _work_account_peer_id(me) == expected_peer_id
+        if me is None:
+            return False
+        peer_id = _work_account_peer_id(me)
+        return expected_peer_id is None or peer_id == expected_peer_id
+    except (AuthKeyDuplicatedError, AuthKeyNotFound):
+        return False
     finally:
         await client.disconnect()
+
+
+def _settle_work_session_sidecars(session: Path, stage: Path) -> None:
+    if not _work_session_sidecars(session):
+        return
+    # Recover any hot rollback journal, then fold committed WAL pages into the
+    # old main file. Only inert files can remain once SQLite closes in DELETE mode.
+    try:
+        with closing(sqlite3.connect(session.as_uri() + "?mode=rw", uri=True, isolation_level=None)) as db:
+            db.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is None or checkpoint[0] != 0:
+                raise BridgeError("work_session_recovery_failed")
+            if db.execute("PRAGMA journal_mode=DELETE").fetchone() != ("delete",):
+                raise BridgeError("work_session_recovery_failed")
+    except sqlite3.Error as exc:
+        raise BridgeError("work_session_recovery_failed") from exc
+    for sidecar in _work_session_sidecars(session).values():
+        os.replace(sidecar, stage / sidecar.name)
+
+
+def _read_previous_work_account_id(read_secret: Callable[[str], str]) -> int:
+    value = read_secret("Independently verified ID of the previous work Telegram account: ").strip()
+    if re.fullmatch(r"[1-9][0-9]{0,18}", value) is None or int(value) >= 2**63:
+        raise BridgeError("work_previous_account_id_invalid")
+    return int(value)
 
 
 async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[[str], str]) -> dict[str, Any]:
@@ -7492,25 +7529,35 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
     inbox_path = state / "inbound.sqlite3"
     lock_fd = acquire_inbox_writer_lock(inbox_path)
     try:
-        expected_peer_id = read_work_account_binding(inbox_path)
+        expected_peer_id, has_legacy_state = read_work_account_binding(inbox_path)
         with TemporaryDirectory(prefix=".telegram-login-", dir=state) as temporary:
             stage = Path(temporary)
-            has_sidecars = _work_session_has_sidecars(session)
-            if _work_session_file_exists(session) and await _existing_work_session_matches(
-                config, session, stage / "probe.session", expected_peer_id
-            ):
-                raise BridgeError("account_already_authorized")
-            if has_sidecars or _work_session_has_sidecars(session):
-                raise BridgeError("work_session_sidecars_present")
+            sidecars = _work_session_sidecars(session)
+            if _work_session_file_exists(session):
+                # Let SQLite recover a private copy of the old session. The
+                # transient WAL index can be rebuilt locally from the copied WAL.
+                probe = stage / "probe.session"
+                shutil.copyfile(session, probe)
+                for suffix, sidecar in sidecars.items():
+                    if suffix != "-shm":
+                        shutil.copyfile(sidecar, stage / (probe.name + suffix))
+                if await _existing_work_session_matches(config, probe, expected_peer_id):
+                    raise BridgeError("account_already_authorized")
+            elif sidecars:
+                raise BridgeError("work_session_recovery_failed")
+
+            if expected_peer_id is None and (has_legacy_state or _load_idempotency(state / "idempotency.json")):
+                expected_peer_id = _read_previous_work_account_id(read_secret)
 
             candidate = stage / "candidate.session"
             result = await _code_login_session(
                 config, candidate, read_secret=read_secret, expected_peer_id=expected_peer_id
             )
-            if not _work_session_file_exists(candidate) or _work_session_has_sidecars(candidate):
+            if not _work_session_file_exists(candidate) or _work_session_sidecars(candidate):
                 raise BridgeError("work_session_unverified")
-            if _work_session_has_sidecars(session):
-                raise BridgeError("work_session_sidecars_present")
+            _settle_work_session_sidecars(session, stage)
+            if _work_session_sidecars(session):
+                raise BridgeError("work_session_recovery_failed")
             os.replace(candidate, session)
             return result
     finally:

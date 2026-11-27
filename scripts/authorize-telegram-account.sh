@@ -197,6 +197,11 @@ if [[ "${login_status}" -ne 0 ]]; then
     echo "work_telegram_account_mismatch=true" >&2
     exit 1
   fi
+  if [[ "${account}" == "work" \
+    && "${login_output}" =~ \"error\":[[:space:]]*\"(work_previous_account_id_invalid|work_session_recovery_failed)\" ]]; then
+    printf '%s=true\n' "${BASH_REMATCH[1]}" >&2
+    exit 1
+  fi
   echo "${account}_telegram_login_failed=true" >&2
   exit 1
 fi

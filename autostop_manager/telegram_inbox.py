@@ -29,6 +29,25 @@ WORKER_PROTOCOL_VERSION = 3
 REQUEST_DEADLINE_SECONDS = 1200
 MAX_PENDING_GUIDANCE = 32
 _ADMISSION_GAP_REASONS = ("capacity", "inbound_capture_failed")
+_LEGACY_ACCOUNT_STATE_TABLES = frozenset(
+    {
+        "boundary_holds",
+        "checkpoints",
+        "client_controls",
+        "effects",
+        "events",
+        "gaps",
+        "global_slot",
+        "jobs",
+        "nonclient_sources",
+        "outgoing_observations",
+        "owner_role_epochs",
+        "owner_routes",
+        "peer_threads",
+        "peers",
+        "reconciliation_cursor",
+    }
+)
 
 EVENT_PATTERN = re.compile(r"inbound-([1-9][0-9]{0,39})")
 JOB_PATTERN = re.compile(r"job-[a-f0-9]{32}")
@@ -135,8 +154,8 @@ def acquire_inbox_writer_lock(path: Path) -> int:
         raise InboxError("inbox_writer_active") from None
 
 
-def read_work_account_binding(path: Path) -> int | None:
-    """Read the account binding in read-only mode under the caller's writer lock."""
+def read_work_account_binding(path: Path) -> tuple[int | None, bool]:
+    """Read the account binding and detect unbound account state under the writer lock."""
     path = Path(path).absolute()
     _require_private_inbox_parent(path)
     file_sizes: dict[str, int] = {}
@@ -152,24 +171,55 @@ def read_work_account_binding(path: Path) -> int | None:
         if file_sizes.get("-journal") or (not file_sizes.get("") and file_sizes.get("-wal")):
             raise InboxError("inbox_open_failed")
         if not file_sizes.get(""):
-            return None
+            return None, False
         # A committed binding may still be in the WAL, so use SQLite's
         # regular read-only mode rather than treating the database as immutable.
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
-            metadata = db.execute("SELECT type FROM sqlite_master WHERE name='metadata'").fetchone()
-            if metadata is None:
-                return None
-            if metadata[0] != "table":
-                raise InboxError("inbox_open_failed")
-            row = db.execute("SELECT value FROM metadata WHERE key='work_account_peer_id'").fetchone()
+            return _read_work_account_binding(db)
     except (OSError, sqlite3.Error):
         raise InboxError("inbox_open_failed") from None
-    if row is None:
-        return None
-    value = row[0]
-    if not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]{0,18}", value) is None:
-        raise InboxError("inbox_work_account_invalid")
-    return _positive(int(value), "inbox_work_account_invalid")
+
+
+def _read_work_account_binding(db: sqlite3.Connection) -> tuple[int | None, bool]:
+    tables = {
+        name: kind
+        for name, kind in db.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view')")
+        if not name.startswith("sqlite_")
+    }
+    if not tables:
+        return None, False
+    if tables.get("metadata") != "table":
+        raise InboxError("inbox_schema_unsupported")
+    rows = db.execute(
+        "SELECT key,value FROM metadata WHERE key IN ('schema_version','work_account_peer_id')"
+    ).fetchall()
+    metadata = dict(rows)
+    if len(metadata) != len(rows) or metadata.get("schema_version") not in {
+        str(value) for value in SUPPORTED_INBOX_SCHEMA_VERSIONS
+    }:
+        raise InboxError("inbox_schema_unsupported")
+    if "work_account_peer_id" in metadata:
+        value = metadata["work_account_peer_id"]
+        if not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]{0,18}", value) is None:
+            raise InboxError("inbox_work_account_invalid")
+        return _positive(int(value), "inbox_work_account_invalid"), False
+
+    if any(kind != "table" for kind in tables.values()):
+        return None, True
+    state_tables = tables.keys() - {"metadata", "health", "duty_windows", "incidents"}
+    if state_tables - _LEGACY_ACCOUNT_STATE_TABLES:
+        return None, True
+    # Only the whitelisted table names above can reach this query.
+    if any(db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None for table in state_tables):
+        return None, True
+    has_incident_receipts = (
+        "incidents" in tables
+        and db.execute(
+            "SELECT 1 FROM incidents WHERE opened_receipt IS NOT NULL OR recovery_receipt IS NOT NULL LIMIT 1"
+        ).fetchone()
+        is not None
+    )
+    return None, has_incident_receipts
 
 
 class TelegramInbox:
