@@ -171,7 +171,7 @@ if bridge_authorized; then
 fi
 
 # Only the selected daemon may be stopped for this bounded login.
-if [[ "${was_active}" -eq 1 ]]; then
+if [[ "${account}" == "work" || "${was_active}" -eq 1 ]]; then
   systemctl stop "${service_unit}"
 fi
 
@@ -193,16 +193,18 @@ if [[ "${login_status}" -ne 0 ]]; then
     trap - EXIT
     exit 0
   fi
+  if [[ "${account}" == "work" ]] && grep -Eq '"error": "inbox_work_account_changed"' <<<"${login_output}"; then
+    echo "work_telegram_account_mismatch=true" >&2
+    exit 1
+  fi
   echo "${account}_telegram_login_failed=true" >&2
   exit 1
 fi
 
 if ! verify_private_session_files; then
-  rm -f -- \
-    "${session_base}" \
-    "${session_base}-journal" \
-    "${session_base}-shm" \
-    "${session_base}-wal"
+  if [[ "${account}" == "personal" ]]; then
+    rm -f -- "${session_files[@]}"
+  fi
   echo "${account}_session_permissions_invalid=true" >&2
   exit 1
 fi

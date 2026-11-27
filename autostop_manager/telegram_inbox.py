@@ -15,8 +15,9 @@ import os
 import re
 import secrets
 import sqlite3
+import stat
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -99,6 +100,78 @@ def _timestamp(value: str | datetime) -> str:
         raise InboxError("inbox_timestamp_invalid") from exc
 
 
+def _require_private_inbox_parent(path: Path) -> None:
+    parent = path.parent
+    try:
+        info = parent.lstat()
+        if (
+            parent in {Path("/"), Path("/tmp"), Path("/var/lib")}
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700
+            or parent.resolve(strict=True) != parent
+        ):
+            raise InboxError("inbox_directory_invalid")
+    except (OSError, RuntimeError):
+        raise InboxError("inbox_directory_invalid") from None
+
+
+def acquire_inbox_writer_lock(path: Path) -> int:
+    """Open the shared writer lock. The caller owns the returned descriptor."""
+    path = Path(path).absolute()
+    _require_private_inbox_parent(path)
+    fd = None
+    try:
+        fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+            raise InboxError("inbox_writer_active")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.fchmod(fd, 0o600)
+        return fd
+    except (OSError, InboxError):
+        if fd is not None:
+            os.close(fd)
+        raise InboxError("inbox_writer_active") from None
+
+
+def read_work_account_binding(path: Path) -> int | None:
+    """Read the account binding in read-only mode under the caller's writer lock."""
+    path = Path(path).absolute()
+    _require_private_inbox_parent(path)
+    file_sizes: dict[str, int] = {}
+    try:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            try:
+                info = Path(str(path) + suffix).lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+                raise InboxError("inbox_file_invalid")
+            file_sizes[suffix] = info.st_size
+        if file_sizes.get("-journal") or (not file_sizes.get("") and file_sizes.get("-wal")):
+            raise InboxError("inbox_open_failed")
+        if not file_sizes.get(""):
+            return None
+        # A committed binding may still be in the WAL, so use SQLite's
+        # regular read-only mode rather than treating the database as immutable.
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+            metadata = db.execute("SELECT type FROM sqlite_master WHERE name='metadata'").fetchone()
+            if metadata is None:
+                return None
+            if metadata[0] != "table":
+                raise InboxError("inbox_open_failed")
+            row = db.execute("SELECT value FROM metadata WHERE key='work_account_peer_id'").fetchone()
+    except (OSError, sqlite3.Error):
+        raise InboxError("inbox_open_failed") from None
+    if row is None:
+        return None
+    value = row[0]
+    if not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]{0,18}", value) is None:
+        raise InboxError("inbox_work_account_invalid")
+    return _positive(int(value), "inbox_work_account_invalid")
+
+
 class TelegramInbox:
     """One writer, persisted event identities, and one global execution lease."""
 
@@ -145,22 +218,17 @@ class TelegramInbox:
 
     def _acquire_writer(self) -> None:
         flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
+        lock_fd = acquire_inbox_writer_lock(self.path)
+        self._lock_fd = lock_fd
         try:
-            fd = os.open(str(self.path) + ".lock", flags, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._lock_fd = fd
-            os.fchmod(fd, 0o600)
             db_fd = os.open(self.path, flags, 0o600)
             try:
                 os.fchmod(db_fd, 0o600)
             finally:
                 os.close(db_fd)
-        except (OSError, BlockingIOError):
-            if self._lock_fd is not None:
-                os.close(self._lock_fd)
-                self._lock_fd = None
-            elif "fd" in locals():
-                os.close(fd)
+        except OSError:
+            os.close(lock_fd)
+            self._lock_fd = None
             raise InboxError("inbox_writer_active") from None
 
     def _secure_files(self) -> None:

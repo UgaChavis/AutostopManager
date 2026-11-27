@@ -24,12 +24,13 @@ import time
 import weakref
 from collections import deque
 from collections.abc import Callable
-from contextlib import nullcontext, suppress
+from contextlib import closing, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from autostop_manager.config import reject_obsolete_runtime_config
@@ -39,7 +40,12 @@ from autostop_manager.telegram_owner import (
     configure_owner_peer_id,
     load_owner_peer_id,
 )
-from autostop_manager.telegram_inbox import InboxError, TelegramInbox
+from autostop_manager.telegram_inbox import (
+    InboxError,
+    TelegramInbox,
+    acquire_inbox_writer_lock,
+    read_work_account_binding,
+)
 from autostop_manager.telegram_effects import (
     EffectExecutor,
     EffectQueueError,
@@ -6725,13 +6731,18 @@ def _install_context_handlers(client: Any, events: Any, monitor: DurableInboundM
     client.add_event_handler(deleted, events.MessageDeleted())
 
 
+def _work_account_peer_id(me: Any) -> int:
+    peer_id = getattr(me, "id", None)
+    if type(peer_id) is not int or peer_id < 1:
+        raise BridgeError("work_account_identity_unavailable")
+    return peer_id
+
+
 async def _start_durable_account(
     client: Any, config: TelegramConfig, monitor: DurableInboundMonitor, events: Any, *, monitor_incoming: bool
 ) -> None:
     me = await client.get_me()
-    self_id = getattr(me, "id", None)
-    if type(self_id) is not int or self_id < 1:
-        raise BridgeError("work_account_identity_unavailable")
+    self_id = _work_account_peer_id(me)
     try:
         monitor.inbox.bind_work_account(self_id)
     except InboxError as exc:
@@ -6802,14 +6813,16 @@ async def run_daemon(
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
         try:
-            if inbox is not None:
-                inbox.close()
             if client is not None:
                 with suppress(Exception):
                     await client.disconnect()
         finally:
-            if _cleanup_watchdog is None:
-                watchdog.cancel()
+            try:
+                if inbox is not None:
+                    inbox.close()
+            finally:
+                if _cleanup_watchdog is None:
+                    watchdog.cancel()
         raise
     tasks: list[asyncio.Task[Any]] = []
     handlers = _DaemonRpcHandlers(client, config, inbound_monitor)
@@ -6861,17 +6874,20 @@ async def run_daemon(
             await _effect_executor().close()
             if isinstance(inbound_monitor, DurableInboundMonitor):
                 inbound_monitor.transport_ready = False
-                try:
-                    with suppress(sqlite3.Error, InboxError, OSError):
-                        inbound_monitor.inbox.set_health(
-                            component="telegram", state="offline", error_code="telegram_transport_disconnected"
-                        )
-                finally:
-                    inbound_monitor.inbox.close()
-            await client.disconnect()
+                with suppress(sqlite3.Error, InboxError, OSError):
+                    inbound_monitor.inbox.set_health(
+                        component="telegram", state="offline", error_code="telegram_transport_disconnected"
+                    )
         finally:
-            if _cleanup_watchdog is None:
-                watchdog.cancel()
+            try:
+                await client.disconnect()
+            finally:
+                try:
+                    if inbox is not None:
+                        inbox.close()
+                finally:
+                    if _cleanup_watchdog is None:
+                        watchdog.cancel()
 
 
 def _history_transport_failure(error: Exception) -> bool:
@@ -7404,14 +7420,117 @@ async def run_code_login(
     only. This deliberately takes no secret-bearing CLI arguments or files.
     """
 
-    TelegramClient, utils, SessionPasswordNeededError = _load_telethon()
     previous_umask = os.umask(0o077)
+    try:
+        if config.account == "work":
+            return await _run_work_code_login(config, read_secret=read_secret)
+        return await _code_login_session(config, config.session_path, read_secret=read_secret)
+    except InboxError as exc:
+        raise BridgeError(str(exc)) from exc
+    except BridgeError:
+        raise
+    except Exception as exc:  # never leak provider errors or secret-bearing context.
+        raise BridgeError("code_login_failed") from exc
+    finally:
+        os.umask(previous_umask)
+
+
+def _work_session_file_exists(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_gid != os.getegid()
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        raise BridgeError("work_session_permissions_invalid")
+    return True
+
+
+def _work_session_has_sidecars(path: Path) -> bool:
+    present = [_work_session_file_exists(path.with_name(path.name + suffix)) for suffix in ("-journal", "-wal", "-shm")]
+    return any(present)
+
+
+async def _existing_work_session_matches(
+    config: TelegramConfig, session: Path, probe: Path, expected_peer_id: int | None
+) -> bool:
+    # Telethon can write to a session while connecting. Probe a private copy and
+    # leave its shared authorization key on the server when discarding the copy.
+    with (
+        closing(sqlite3.connect(session.as_uri() + "?mode=ro", uri=True)) as source,
+        closing(sqlite3.connect(probe)) as copy,
+    ):
+        source.backup(copy)
+    TelegramClient, _, _ = _load_telethon()
+    client = TelegramClient(str(probe), config.api_id, config.api_hash, receive_updates=False)
+    try:
+        await client.connect()
+        if expected_peer_id is None:
+            return bool(await client.is_user_authorized())
+        me = await client.get_me()
+        return me is not None and _work_account_peer_id(me) == expected_peer_id
+    finally:
+        await client.disconnect()
+
+
+async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[[str], str]) -> dict[str, Any]:
+    state = config.state_dir
+    if not state.is_absolute() or state.resolve() != state or config.session_path.parent != state:
+        raise BridgeError("work_session_permissions_invalid")
+    state.mkdir(mode=0o700, exist_ok=True)
+    info = state.stat()
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise BridgeError("work_session_permissions_invalid")
+
+    session = config.session_path
+    if not session.name.endswith(".session"):
+        session = session.with_name(session.name + ".session")
+    inbox_path = state / "inbound.sqlite3"
+    lock_fd = acquire_inbox_writer_lock(inbox_path)
+    try:
+        expected_peer_id = read_work_account_binding(inbox_path)
+        with TemporaryDirectory(prefix=".telegram-login-", dir=state) as temporary:
+            stage = Path(temporary)
+            has_sidecars = _work_session_has_sidecars(session)
+            if _work_session_file_exists(session) and await _existing_work_session_matches(
+                config, session, stage / "probe.session", expected_peer_id
+            ):
+                raise BridgeError("account_already_authorized")
+            if has_sidecars or _work_session_has_sidecars(session):
+                raise BridgeError("work_session_sidecars_present")
+
+            candidate = stage / "candidate.session"
+            result = await _code_login_session(
+                config, candidate, read_secret=read_secret, expected_peer_id=expected_peer_id
+            )
+            if not _work_session_file_exists(candidate) or _work_session_has_sidecars(candidate):
+                raise BridgeError("work_session_unverified")
+            if _work_session_has_sidecars(session):
+                raise BridgeError("work_session_sidecars_present")
+            os.replace(candidate, session)
+            return result
+    finally:
+        os.close(lock_fd)
+
+
+async def _code_login_session(
+    config: TelegramConfig,
+    session_path: Path,
+    *,
+    read_secret: Callable[[str], str],
+    expected_peer_id: int | None = None,
+) -> dict[str, Any]:
+    TelegramClient, utils, SessionPasswordNeededError = _load_telethon()
     client: Any | None = None
     phone = ""
     code = ""
     password = ""
     try:
-        client = TelegramClient(str(config.session_path), config.api_id, config.api_hash)
+        client = TelegramClient(str(session_path), config.api_id, config.api_hash)
         await client.connect()
         if await client.is_user_authorized():
             raise BridgeError("account_already_authorized")
@@ -7435,22 +7554,23 @@ async def run_code_login(
             except Exception as exc:  # never leak provider errors or secret-bearing context.
                 raise BridgeError("two_factor_password_invalid") from exc
 
-        if not await client.get_me():
+        me = await client.get_me()
+        if not me:
             raise BridgeError("account_not_authorized")
+        if config.account == "work":
+            peer_id = _work_account_peer_id(me)
+            if expected_peer_id is not None and peer_id != expected_peer_id:
+                # This client owns a new, unpublished authorization key.
+                with suppress(Exception):
+                    await client.log_out()
+                raise BridgeError("inbox_work_account_changed")
         return {"ok": True, "authorized": True, "already_authorized": False, "verified": True}
-    except BridgeError:
-        raise
-    except Exception as exc:  # never leak provider errors or secret-bearing context.
-        raise BridgeError("code_login_failed") from exc
     finally:
         phone = ""
         code = ""
         password = ""
-        try:
-            if client is not None:
-                await client.disconnect()
-        finally:
-            os.umask(previous_umask)
+        if client is not None:
+            await client.disconnect()
 
 
 def send_local_request(
