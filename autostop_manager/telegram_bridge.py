@@ -2673,6 +2673,23 @@ def _require_direct_send_allowed(
         raise BridgeError("job_binding_required")
 
 
+def _publish_synced_file(source: Path, destination: Path) -> None:
+    """Publish an already synced file and persist the rename before acknowledging it."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    directory_fd = os.open(destination.parent, flags)
+    try:
+        os.replace(source, destination)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    if source.parent != destination.parent:
+        source_directory_fd = os.open(source.parent, flags)
+        try:
+            os.fsync(source_directory_fd)
+        finally:
+            os.close(source_directory_fd)
+
+
 def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
@@ -2688,12 +2705,7 @@ def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
             os.fsync(stream.fileno())
         # A synced file is not durable under its new name until the directory
         # is synced too. The send intent relies on this barrier before RPC.
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
-        try:
-            os.replace(temp_path, path)
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _publish_synced_file(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -7599,6 +7611,8 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
             )
             if not _work_session_file_exists(candidate) or _work_session_sidecars(candidate):
                 raise BridgeError("work_session_unverified")
+            with candidate.open("rb") as session_file:
+                os.fsync(session_file.fileno())
             _settle_work_session_sidecars(session, stage)
             if _work_session_sidecars(session):
                 raise BridgeError("work_session_recovery_failed")
@@ -7607,7 +7621,7 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
                 # binding even if publication or the next daemon start fails.
                 with TelegramInbox(inbox_path, writer_lock_fd=lock_fd) as inbox:
                     inbox.bind_work_account(expected_peer_id)
-            os.replace(candidate, session)
+            _publish_synced_file(candidate, session)
             return result
     finally:
         os.close(lock_fd)

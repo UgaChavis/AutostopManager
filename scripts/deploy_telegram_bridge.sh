@@ -478,7 +478,8 @@ import sqlite3
 import sys
 
 try:
-    source = Path(sys.argv[1]) / "autostop_manager/telegram_inbox.py"
+    package = Path(sys.argv[1]) / "autostop_manager"
+    source = package / "telegram_inbox.py"
     versions = None
     for node in ast.parse(source.read_text()).body:
         if isinstance(node, ast.Assign) and any(
@@ -495,11 +496,29 @@ try:
     database = Path(sys.argv[2])
     connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
     try:
-        row = connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+        metadata = dict(connection.execute(
+            "SELECT key,value FROM metadata WHERE key IN ('schema_version','work_account_peer_id')"
+        ))
     finally:
         connection.close()
-    if row is None or row[0] not in {str(version) for version in versions}:
+    if metadata.get("schema_version") not in {str(version) for version in versions}:
         raise ValueError("unsupported_inbox_contract")
+    if "work_account_peer_id" in metadata:
+        bridge = ast.parse((package / "telegram_bridge.py").read_text())
+        starts_bound_account = any(
+            isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_start_durable_account"
+            and any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "bind_work_account"
+                for child in ast.walk(node)
+            )
+            for node in bridge.body
+        )
+        if not starts_bound_account:
+            print("work_telegram_account_binding_unsupported=true", file=sys.stderr)
+            raise SystemExit(1)
 except (OSError, ValueError, TypeError, SyntaxError, sqlite3.Error):
     raise SystemExit(1) from None
 PY
