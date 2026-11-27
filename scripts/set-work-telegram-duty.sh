@@ -124,6 +124,14 @@ prune_duty_off_markers() {
   done
 }
 
+sync_duty_off_markers() {
+  if [[ "$#" -gt 0 ]]; then
+    # OFF renames the original config across two directories. Persist both
+    # directory entries before a new daemon can rely on the recorded boundary.
+    sync -- "$@" "${monitor_env}.off.d" "${monitor_env%/*}"
+  fi
+}
+
 withdraw_duty_intent() {
   local stamp marker directory="${monitor_env}.off.d"
   [[ -e "${monitor_env}" || -L "${monitor_env}" ]] || return 0
@@ -175,7 +183,9 @@ disable_duty() {
     cutoff_capable=1
     if [[ -f "${monitor_env}" ]]; then stop_before_withdrawal=1; fi
     if systemctl is-active --quiet "${service_unit}" && ! bridge_control duty-set --disabled >/dev/null; then
-      [[ "${stop_before_withdrawal}" -eq 1 ]] || return 1
+      # A previous OFF may already be on disk while a starting unit still
+      # reports active before it has a usable bridge socket.
+      stop_before_withdrawal=1
     fi
   elif durable_release && systemctl is-active --quiet "${service_unit}"; then
     bridge_control duty-set --disabled >/dev/null || return 1
@@ -198,6 +208,7 @@ disable_duty() {
   withdraw_duty_intent || return 1
   if [[ "${cutoff_capable}" -eq 1 ]]; then
     duty_off_markers off_markers || return 1
+    sync_duty_off_markers "${off_markers[@]}" || return 1
   fi
   load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${load_state}" == "loaded" ]]; then
@@ -282,7 +293,10 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
     [[ "${wake_ready}" -eq 1 ]] || return 1
   fi
   if durable_release; then
-    if durable_duty_cutoffs; then duty_off_markers off_markers || return 1; fi
+    if durable_duty_cutoffs; then
+      duty_off_markers off_markers || return 1
+      sync_duty_off_markers "${off_markers[@]}" || return 1
+    fi
     if [[ "${preserve_existing_duty}" -eq 1 ]]; then
       duty_requested_at="$(sed -n 's/^AUTOSTOP_WORK_TELEGRAM_DUTY_REQUESTED_AT=//p' "${monitor_env}")" || return 1
     else
@@ -294,12 +308,14 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   fi
   chown root:root "${pending_monitor_env}" || return 1
   chmod 0644 "${pending_monitor_env}" || return 1
+  if durable_duty_cutoffs; then sync -- "${pending_monitor_env}" || return 1; fi
   if [[ ! -f "${monitor_env}" ]] || ! cmp -s "${pending_monitor_env}" "${monitor_env}"; then
     intent_changed=1
   fi
   mv -T -- "${pending_monitor_env}" "${monitor_env}" || return 1
   pending_monitor_env=""
   published_duty_intent=1
+  if durable_duty_cutoffs; then sync -- "${monitor_env_dir}" || return 1; fi
   if [[ "${#off_markers[@]}" -gt 0 ]] || { [[ "${intent_changed}" -eq 1 ]] && durable_duty_cutoffs; }; then
     # An auto-restart can race an inactive status check. Force a boot after
     # publishing a changed intent or when OFF markers still need a fresh boot.
