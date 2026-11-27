@@ -62,6 +62,7 @@ DEFAULT_SESSION_PATH = Path("/var/lib/autostop-telegram/account")
 DEFAULT_STATE_DIR = Path("/var/lib/autostop-telegram")
 DEFAULT_SOCKET_PATH = Path("/run/autostop-telegram/bridge.sock")
 WORK_CREDENTIALS_PATH = Path("/etc/autostop-work-telegram/credentials")
+WORK_MONITOR_CONFIG_PATH = Path("/etc/autostop-work-telegram/monitor.env")
 WORK_SESSION_PATH = Path("/var/lib/autostop-work-telegram/account")
 WORK_STATE_DIR = Path("/var/lib/autostop-work-telegram")
 WORK_SOCKET_PATH = Path("/run/autostop-work-telegram/bridge.sock")
@@ -6740,6 +6741,20 @@ def _work_account_peer_id(me: Any) -> int:
     return peer_id
 
 
+def _work_duty_cutoffs() -> tuple[str, ...]:
+    prefix = WORK_MONITOR_CONFIG_PATH.name + ".off."
+    cutoffs = []
+    for marker in WORK_MONITOR_CONFIG_PATH.parent.glob(prefix + "*"):
+        timestamp = marker.name.removeprefix(prefix)
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z", timestamp):
+            continue
+        info = marker.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o644:
+            raise BridgeError("work_duty_cutoff_invalid")
+        cutoffs.append(timestamp)
+    return tuple(cutoffs)
+
+
 async def _start_durable_account(
     client: Any,
     config: TelegramConfig,
@@ -6757,7 +6772,8 @@ async def _start_durable_account(
         raise BridgeError(str(exc)) from exc
     _configure_durable_instructions(monitor.inbox)
     monitor.inbox.configure_client_only(_owner_peer_id(config))
-    monitor.inbox.duty_set(enabled=monitor_incoming, at=duty_at)
+    stops = _work_duty_cutoffs() if config.account == "work" else ()
+    monitor.inbox.apply_duty_startup(monitor_incoming, at=duty_at, stops=stops)
     client._autostop_cached_me = me
     monitor.self_peer_id = self_id
     _install_context_handlers(client, events, monitor)

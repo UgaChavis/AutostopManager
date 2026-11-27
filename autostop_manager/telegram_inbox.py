@@ -2662,25 +2662,59 @@ class TelegramInbox:
 
     def prepare_duty_startup(self, enabled: bool, *, requested_at: str | None = None) -> str | None:
         """Keep the transition boundary without opening a window before account verification."""
-        pending = self._db.execute("SELECT value FROM metadata WHERE key='duty_pending_at'").fetchone()
-        if enabled == (self._meta("duty_enabled") == "1"):
-            if pending is not None:
-                with self._write():
-                    self._db.execute("DELETE FROM metadata WHERE key='duty_pending_at'")
-            return None
-
         now = self._now()
+        current = self._meta("duty_enabled") == "1"
+        last = self._db.execute(
+            "SELECT opened_at,closed_at FROM duty_windows ORDER BY window_id DESC LIMIT 1"
+        ).fetchone()
+        earliest = last["closed_at" if enabled else "opened_at"] if last is not None else None
         if enabled and requested_at:
             requested = _timestamp(requested_at)
-            last = self._db.execute("SELECT MAX(closed_at) FROM duty_windows").fetchone()
-            closed_at = last[0] if last is not None else None
-            if requested <= now and (closed_at is None or requested >= closed_at):
+            if requested <= now and (earliest is None or requested >= earliest):
                 return requested
-        if pending is not None:
-            return _timestamp(pending[0])
+        if enabled == current:
+            return None
+        direction = "1" if enabled else "0"
+        pending = self._db.execute("SELECT value FROM metadata WHERE key='duty_startup_boundary'").fetchone()
+        if pending is not None and pending[0].startswith(direction + "|"):
+            previous = _timestamp(pending[0][2:])
+            if previous <= now and (earliest is None or previous >= earliest):
+                return previous
         with self._write():
-            self._db.execute("INSERT INTO metadata VALUES ('duty_pending_at', ?)", (now,))
+            self._db.execute(
+                "INSERT INTO metadata VALUES ('duty_startup_boundary', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"{direction}|{now}",),
+            )
         return now
+
+    def apply_duty_startup(self, enabled: bool, *, at: str | None, stops: tuple[str, ...]) -> None:
+        """Close the old window at the first applicable OFF, then apply the current mode."""
+        now = self._now()
+        at = now if at is None else _timestamp(at)
+        cutoffs = sorted({_timestamp(stop) for stop in stops})
+        if cutoffs and cutoffs[-1] > now:
+            raise InboxError("inbox_duty_cutoff_invalid")
+        current = self._meta("duty_enabled") == "1"
+        opened = self._db.execute("SELECT opened_at FROM duty_windows WHERE closed_at IS NULL").fetchone()
+        cutoff = next((stop for stop in cutoffs if opened is not None and stop > opened[0]), None)
+        with self._write(changed_only=True):
+            if current and cutoff is not None:
+                self._set_duty_window(False, at=cutoff)
+                current = False
+            if enabled != current:
+                self._set_duty_window(enabled, at=max(at, cutoffs[-1]) if enabled and cutoffs else at)
+            self._clear_duty_startup_boundary()
+
+    def _set_duty_window(self, enabled: bool, *, at: str) -> None:
+        if enabled:
+            self._db.execute("INSERT INTO duty_windows(opened_at) VALUES (?)", (at,))
+        else:
+            self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (at,))
+        self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
+
+    def _clear_duty_startup_boundary(self) -> None:
+        self._db.execute("DELETE FROM metadata WHERE key IN ('duty_pending_at', 'duty_startup_boundary')")
 
     def duty_set(self, enabled: bool, *, at: str | None = None) -> dict[str, Any]:
         if type(enabled) is not bool:
@@ -2689,12 +2723,8 @@ class TelegramInbox:
         if enabled == (self._meta("duty_enabled") == "1"):
             return self.status()
         with self._write():
-            if enabled:
-                self._db.execute("INSERT INTO duty_windows(opened_at) VALUES (?)", (now,))
-            else:
-                self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (now,))
-            self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
-            self._db.execute("DELETE FROM metadata WHERE key='duty_pending_at'")
+            self._set_duty_window(enabled, at=now)
+            self._clear_duty_startup_boundary()
         return self.status()
 
     def set_execution_paused(self, *, paused: bool, expected_revision: int) -> dict[str, Any]:

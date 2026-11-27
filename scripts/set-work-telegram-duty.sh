@@ -13,6 +13,9 @@ published_duty_intent=0
 wake_unit="autostop-codex-wake.service"
 wake_config="/etc/autostop-work-telegram/wake.json"
 wake_python=""
+wake_activation_attempted=0
+wake_was_active=0
+wake_was_enabled=0
 export PYTHONSAFEPATH=1
 
 usage() { echo "usage: $0 --enable|--disable|--status [--expected-release-dir DIR]" >&2; }
@@ -88,6 +91,45 @@ durable_release() {
   [[ -f "${release_link}/autostop_manager/telegram_inbox.py" ]]
 }
 
+durable_duty_cutoffs() {
+  durable_release && grep -q '^def _work_duty_cutoffs(' "${release_link}/autostop_manager/telegram_bridge.py" 2>/dev/null
+}
+
+duty_off_markers() {
+  local -n result="$1"
+  local marker stamp
+  for marker in "${monitor_env}".off.*; do
+    [[ -e "${marker}" || -L "${marker}" ]] || continue
+    stamp="${marker#"${monitor_env}.off."}"
+    if [[ ! "${stamp}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$ \
+      || ! -f "${marker}" || -L "${marker}" \
+      || "$(stat -c '%U:%G:%a' "${marker}")" != "root:root:644" ]]; then
+      return 1
+    fi
+    result+=("${marker}")
+  done
+}
+
+prune_duty_off_markers() {
+  local marker
+  for marker in "$@"; do
+    unlink -- "${marker}" || return 1
+  done
+}
+
+withdraw_duty_intent() {
+  local stamp marker
+  [[ -e "${monitor_env}" || -L "${monitor_env}" ]] || return 0
+  if ! durable_duty_cutoffs; then
+    unlink -- "${monitor_env}"
+    return
+  fi
+  stamp="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)" || return 1
+  marker="${monitor_env}.off.${stamp}"
+  [[ ! -e "${marker}" && ! -L "${marker}" ]] || return 1
+  mv -T -- "${monitor_env}" "${marker}"
+}
+
 bridge_control() {
   load_bridge_python || return 1
   PYTHONPATH="${release_link}" "${venv_python}" -m autostop_manager.telegram_bridge --account work "$@"
@@ -108,17 +150,34 @@ wait_for_outbound_only() {
 }
 
 disable_duty() {
-  local workers load_state
-  if durable_release && systemctl is-active --quiet "${service_unit}"; then
+  local workers load_state stop_before_withdrawal=0 outbound_ready=0 manage_wake="${1:-1}"
+  local -a off_markers=()
+  if durable_duty_cutoffs; then
+    if systemctl is-active --quiet "${service_unit}"; then
+      if ! bridge_control duty-set --disabled >/dev/null; then
+        [[ -f "${monitor_env}" ]] || return 1
+        stop_before_withdrawal=1
+      fi
+    elif [[ -f "${monitor_env}" ]]; then
+      stop_before_withdrawal=1
+    fi
+  elif durable_release && systemctl is-active --quiet "${service_unit}"; then
     bridge_control duty-set --disabled >/dev/null || return 1
   fi
-  if [[ -f "${wake_config}" ]]; then
+  if [[ "${manage_wake}" -eq 1 && -f "${wake_config}" ]]; then
     if systemctl is-active --quiet "${wake_unit}"; then
       wake_control pause || return 1
     fi
     systemctl disable --now "${wake_unit}" || return 1
   fi
-  [[ ! -e "${monitor_env}" && ! -L "${monitor_env}" ]] || unlink -- "${monitor_env}" || return 1
+  if [[ "${stop_before_withdrawal}" -eq 1 ]]; then
+    load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
+    if [[ "${load_state}" == "loaded" ]]; then systemctl stop "${service_unit}" || return 1; fi
+  fi
+  withdraw_duty_intent || return 1
+  if durable_duty_cutoffs; then
+    duty_off_markers off_markers || return 1
+  fi
   load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${load_state}" == "loaded" ]]; then
     # Duty controls inbound event handling only. The bridge remains enabled so
@@ -126,16 +185,19 @@ disable_duty() {
     systemctl enable "${service_unit}" || return 1
     systemctl restart "${service_unit}" || return 1
     wait_for_outbound_only || return 1
+    outbound_ready=1
   elif [[ "${load_state}" != "not-found" ]]; then
     return 1
   fi
   stop_active_media_workers || return 1
   workers="$(active_media_workers)" || return 1
   [[ -z "${workers}" ]] || return 1
+  if [[ "${outbound_ready}" -eq 1 ]]; then prune_duty_off_markers "${off_markers[@]}" || return 1; fi
 }
 
 enable_duty() {
   local monitor_env_dir monitor_status release_dir duty_requested_at="" intent_changed=0 wake_ready=0
+  local -a off_markers=()
   load_bridge_python || return 1
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   [[ -L "${release_link}" && ( "${release_dir}" == /opt/autostop-work-telegram-releases/* \
@@ -147,6 +209,11 @@ enable_duty() {
   if [[ -f "${wake_config}" ]]; then
     printf '%s\n' 'AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock' >> "${pending_monitor_env}" || return 1
     systemctl start autostop-codex-start.service || return 1
+    if durable_duty_cutoffs && [[ "${preserve_existing_duty}" -eq 0 ]]; then
+      if systemctl is-active --quiet "${wake_unit}"; then wake_was_active=1; fi
+      if systemctl is-enabled --quiet "${wake_unit}"; then wake_was_enabled=1; fi
+      wake_activation_attempted=1
+    fi
     systemctl enable --now "${wake_unit}" || return 1
     for _attempt in {1..15}; do
       if durable_release; then
@@ -170,6 +237,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
     [[ "${wake_ready}" -eq 1 ]] || return 1
   fi
   if durable_release; then
+    if durable_duty_cutoffs; then duty_off_markers off_markers || return 1; fi
     if [[ "${preserve_existing_duty}" -eq 1 ]]; then
       duty_requested_at="$(sed -n 's/^AUTOSTOP_WORK_TELEGRAM_DUTY_REQUESTED_AT=//p' "${monitor_env}")" || return 1
     else
@@ -189,7 +257,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   published_duty_intent=1
   if systemctl is-active --quiet "${service_unit}"; then
     systemctl enable "${service_unit}" || return 1
-    if [[ "${intent_changed}" -eq 1 ]]; then
+    if [[ "${intent_changed}" -eq 1 || "${#off_markers[@]}" -gt 0 ]]; then
       systemctl restart "${service_unit}" || return 1
     fi
   else
@@ -206,6 +274,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
         if [[ -f "${wake_config}" ]]; then
           wake_control resume >/dev/null || return 1
         fi
+        prune_duty_off_markers "${off_markers[@]}" || return 1
       fi
       return 0
     fi
@@ -214,11 +283,28 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   return 1
 }
 
+restore_wake_after_incomplete_enable() {
+  local failed=0
+  [[ "${wake_activation_attempted}" -eq 1 ]] || return 0
+  if [[ "${wake_was_active}" -eq 0 ]]; then
+    systemctl stop "${wake_unit}" || failed=1
+  fi
+  if [[ "${wake_was_enabled}" -eq 0 ]]; then
+    systemctl disable "${wake_unit}" || failed=1
+  fi
+  return "${failed}"
+}
+
 cleanup_incomplete_enable() {
   local exit_code="$?"
   if [[ -n "${pending_monitor_env}" && -f "${pending_monitor_env}" && ! -L "${pending_monitor_env}" ]]; then unlink -- "${pending_monitor_env}" || true; fi
   # A failed repeated enable must preserve an existing queue or blocked turn.
-  if [[ "${preserve_existing_duty}" -eq 0 ]] && ! disable_duty; then
+  if [[ "${preserve_existing_duty}" -eq 0 ]] && durable_duty_cutoffs; then
+    restore_wake_after_incomplete_enable || echo "work_telegram_wake_rollback_incomplete=true" >&2
+    if [[ "${published_duty_intent}" -eq 1 ]]; then
+      disable_duty 0 || echo "work_telegram_duty_rollback_incomplete=true" >&2
+    fi
+  elif [[ "${preserve_existing_duty}" -eq 0 ]] && ! disable_duty; then
     # A starting bridge may have no socket yet. Withdraw the new intent and
     # reload the service environment even when the normal RPC rollback failed.
     if [[ "${published_duty_intent}" -eq 1 ]]; then
