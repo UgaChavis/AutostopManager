@@ -2686,7 +2686,14 @@ def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
             json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp_path, path)
+        # A synced file is not durable under its new name until the directory
+        # is synced too. The send intent relies on this barrier before RPC.
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            os.replace(temp_path, path)
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -3688,7 +3695,9 @@ async def _revalidate_text_send_before_intent(
 
 def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
     functions, _ = _load_telegram_functions()
-    if not client._sender.is_connected():
+    sender = client._sender
+    transport_connected = getattr(sender, "_transport_connected", None)
+    if not callable(transport_connected) or not sender.is_connected() or not transport_connected():
         raise BridgeError("telegram_transport_disconnected")
     return functions.messages.SendMessageRequest(peer=peer, message=text)
 

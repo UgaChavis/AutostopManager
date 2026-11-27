@@ -34,6 +34,7 @@ _LEGACY_ACCOUNT_STATE_TABLES = frozenset(
         "boundary_holds",
         "checkpoints",
         "client_controls",
+        "duty_windows",
         "effects",
         "events",
         "gaps",
@@ -233,7 +234,7 @@ def _read_work_account_binding(db: sqlite3.Connection) -> tuple[int | None, bool
 
     if any(kind != "table" for kind in tables.values()):
         return None, True
-    state_tables = tables.keys() - {"metadata", "health", "duty_windows", "incidents"}
+    state_tables = tables.keys() - {"metadata", "health", "incidents"}
     if state_tables - _LEGACY_ACCOUNT_STATE_TABLES:
         return None, True
     # Only the whitelisted table names above can reach this query.

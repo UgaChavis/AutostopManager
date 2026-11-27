@@ -160,10 +160,19 @@ wait_for_outbound_only() {
   return 1
 }
 
+disable_wake_for_duty() {
+  if systemctl is-active --quiet "${wake_unit}"; then
+    wake_control pause || return 1
+  fi
+  systemctl disable --now "${wake_unit}"
+}
+
 disable_duty() {
   local workers load_state stop_before_withdrawal=0 outbound_ready=0 manage_wake="${1:-1}"
+  local cutoff_capable=0 wake_shutdown_failed=0
   local -a off_markers=()
   if durable_duty_cutoffs; then
+    cutoff_capable=1
     if [[ -f "${monitor_env}" ]]; then stop_before_withdrawal=1; fi
     if systemctl is-active --quiet "${service_unit}" && ! bridge_control duty-set --disabled >/dev/null; then
       [[ "${stop_before_withdrawal}" -eq 1 ]] || return 1
@@ -171,11 +180,12 @@ disable_duty() {
   elif durable_release && systemctl is-active --quiet "${service_unit}"; then
     bridge_control duty-set --disabled >/dev/null || return 1
   fi
-  if [[ "${manage_wake}" -eq 1 && -f "${wake_config}" ]]; then
-    if systemctl is-active --quiet "${wake_unit}"; then
-      wake_control pause || return 1
-    fi
-    systemctl disable --now "${wake_unit}" || return 1
+  if [[ "${manage_wake}" -eq 1 && -f "${wake_config}" ]] && ! disable_wake_for_duty; then
+    [[ "${cutoff_capable}" -eq 1 ]] || return 1
+    # Wake needs the bridge to prove its pause. Still withdraw intake intent
+    # without retrying that control or treating its outcome as confirmed.
+    echo "work_telegram_wake_shutdown_unverified=true" >&2
+    wake_shutdown_failed=1
   fi
   if [[ "${stop_before_withdrawal}" -eq 1 ]]; then
     load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null)" || return 1
@@ -186,7 +196,7 @@ disable_duty() {
     esac
   fi
   withdraw_duty_intent || return 1
-  if durable_duty_cutoffs; then
+  if [[ "${cutoff_capable}" -eq 1 ]]; then
     duty_off_markers off_markers || return 1
   fi
   load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
@@ -204,6 +214,7 @@ disable_duty() {
   workers="$(active_media_workers)" || return 1
   [[ -z "${workers}" ]] || return 1
   if [[ "${outbound_ready}" -eq 1 ]]; then prune_duty_off_markers "${off_markers[@]}" || return 1; fi
+  return "${wake_shutdown_failed}"
 }
 
 enable_wake_for_duty() {
