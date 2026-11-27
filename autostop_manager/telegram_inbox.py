@@ -2694,29 +2694,45 @@ class TelegramInbox:
             )
         return now
 
-    def apply_duty_startup(self, enabled: bool, *, at: str | None, stops: tuple[str, ...]) -> None:
+    def apply_duty_startup(
+        self, enabled: bool, *, at: str | None, stops: tuple[str, ...], requested_at: str | None = None
+    ) -> None:
         """Close the old window at the first applicable OFF, then apply the current mode."""
         now = self._now()
         at = now if at is None else _timestamp(at)
         cutoffs = sorted({_timestamp(stop) for stop in stops})
-        if cutoffs and cutoffs[-1] > now:
+        latest = cutoffs[-1] if cutoffs else None
+        if latest is not None and latest > now:
             raise InboxError("inbox_duty_cutoff_invalid")
+        if enabled and latest is not None:
+            if requested_at and _timestamp(requested_at) <= latest:
+                raise InboxError("inbox_duty_start_before_stop")
+            if at <= latest:
+                at = now
+            if at <= latest:
+                raise InboxError("inbox_duty_start_before_stop")
         current = self._meta("duty_enabled") == "1"
         opened = self._db.execute("SELECT opened_at FROM duty_windows WHERE closed_at IS NULL").fetchone()
-        cutoff = next((stop for stop in cutoffs if opened is not None and stop > opened[0]), None)
+        # A new window always starts strictly after the last saved OFF, so
+        # an equal cutoff belongs to the old window and is safe to apply once.
+        cutoff = next((stop for stop in cutoffs if opened is not None and stop >= opened[0]), None)
         with self._write(changed_only=True):
             if current and cutoff is not None:
                 self._set_duty_window(False, at=cutoff)
                 current = False
             if enabled != current:
-                self._set_duty_window(enabled, at=max(at, cutoffs[-1]) if enabled and cutoffs else at)
+                self._set_duty_window(enabled, at=at)
             self._clear_duty_startup_boundary()
 
     def _set_duty_window(self, enabled: bool, *, at: str) -> None:
         if enabled:
             self._db.execute("INSERT INTO duty_windows(opened_at) VALUES (?)", (at,))
         else:
-            self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (at,))
+            self._db.execute(
+                "UPDATE duty_windows SET closed_at=?, "
+                "recovered_at=CASE WHEN opened_at=? THEN ? ELSE recovered_at END WHERE closed_at IS NULL",
+                (at, at, at),
+            )
         self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
 
     def _clear_duty_startup_boundary(self) -> None:
@@ -2798,7 +2814,7 @@ class TelegramInbox:
         windows = list(
             self._db.execute(
                 "SELECT opened_at,closed_at FROM duty_windows WHERE opened_at<? "
-                "AND (closed_at IS NULL OR closed_at>?) ORDER BY opened_at",
+                "AND (closed_at IS NULL OR (closed_at>opened_at AND closed_at>?)) ORDER BY opened_at",
                 (_timestamp(end), _timestamp(start)),
             )
         )

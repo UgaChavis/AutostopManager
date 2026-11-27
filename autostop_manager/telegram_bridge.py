@@ -6756,7 +6756,12 @@ def _work_duty_cutoffs() -> tuple[str, ...]:
         timestamp = marker.name
         if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z", timestamp):
             raise BridgeError("work_duty_cutoff_invalid")
-        info = marker.lstat()
+        try:
+            info = marker.lstat()
+        except FileNotFoundError:
+            # The controller may prune an already applied marker after a
+            # ready daemon exits and this replacement daemon begins scanning.
+            continue
         if not stat.S_ISREG(info.st_mode) or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o644):
             raise BridgeError("work_duty_cutoff_invalid")
         cutoffs.append(timestamp)
@@ -6781,7 +6786,9 @@ async def _start_durable_account(
     _configure_durable_instructions(monitor.inbox)
     monitor.inbox.configure_client_only(_owner_peer_id(config))
     stops = _work_duty_cutoffs() if config.account == "work" else ()
-    monitor.inbox.apply_duty_startup(monitor_incoming, at=duty_at, stops=stops)
+    monitor.inbox.apply_duty_startup(
+        monitor_incoming, at=duty_at, stops=stops, requested_at=os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
+    )
     client._autostop_cached_me = me
     monitor.self_peer_id = self_id
     _install_context_handlers(client, events, monitor)

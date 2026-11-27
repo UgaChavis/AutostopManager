@@ -206,6 +206,34 @@ disable_duty() {
   if [[ "${outbound_ready}" -eq 1 ]]; then prune_duty_off_markers "${off_markers[@]}" || return 1; fi
 }
 
+enable_wake_for_duty() {
+  local active_state unit_state
+  if ! durable_duty_cutoffs; then
+    systemctl enable --now "${wake_unit}"
+    return
+  fi
+  unit_state="$(systemctl show --property=UnitFileState --value "${wake_unit}")" || return 1
+  case "${unit_state}" in
+    enabled|enabled-runtime|static) wake_was_enabled=1 ;;
+    disabled|disabled-runtime) ;;
+    *) return 1 ;;
+  esac
+  if [[ "${preserve_existing_duty}" -eq 0 ]]; then
+    active_state="$(systemctl show --property=ActiveState --value "${wake_unit}")" || return 1
+    case "${active_state}" in
+      active|activating|reloading|refreshing) wake_was_active=1 ;;
+      inactive|failed|deactivating) ;;
+      *) return 1 ;;
+    esac
+    wake_activation_attempted=1
+  fi
+  if [[ "${wake_was_enabled}" -eq 1 ]]; then
+    systemctl start "${wake_unit}"
+  else
+    systemctl enable --now "${wake_unit}"
+  fi
+}
+
 enable_duty() {
   local monitor_env_dir monitor_status release_dir duty_requested_at="" intent_changed=0 wake_ready=0
   local -a off_markers=()
@@ -220,12 +248,7 @@ enable_duty() {
   if [[ -f "${wake_config}" ]]; then
     printf '%s\n' 'AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET=/run/autostop-codex-wake/wake.sock' >> "${pending_monitor_env}" || return 1
     systemctl start autostop-codex-start.service || return 1
-    if durable_duty_cutoffs && [[ "${preserve_existing_duty}" -eq 0 ]]; then
-      if systemctl is-active --quiet "${wake_unit}"; then wake_was_active=1; fi
-      if systemctl is-enabled --quiet "${wake_unit}"; then wake_was_enabled=1; fi
-      wake_activation_attempted=1
-    fi
-    systemctl enable --now "${wake_unit}" || return 1
+    enable_wake_for_duty || return 1
     for _attempt in {1..15}; do
       if durable_release; then
         # Intake and execution are independent. A held job must not prevent
