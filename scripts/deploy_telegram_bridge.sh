@@ -157,10 +157,6 @@ work_activation_requested=0
 
 if [[ "${account}" == "work" ]]; then
   work_activation_marker="${monitor_env%/*}/release-activation.pending"
-  if [[ -e "${work_activation_marker}" || -L "${work_activation_marker}" ]]; then
-    echo "work_telegram_release_activation_marker_exists=true" >&2
-    exit 1
-  fi
   work_load_state="$(systemctl show --property=LoadState --value "${service_unit}" 2>/dev/null || true)"
   if [[ "${work_load_state}" == "not-found" ]]; then
     [[ -z "${previous_release}" && ! -e "${current_link}" && ! -L "${current_link}" ]] || {
@@ -474,16 +470,50 @@ publish_work_release_activation() {
   sync -- "${marker_dir}"
 }
 
+prepare_work_release_activation() {
+  local database="/var/lib/autostop-work-telegram/inbound.sqlite3" binding=unbound
+  if [[ -e "${database}" || -L "${database}" ]]; then
+    binding="$(sudo -u "${service_user}" /usr/bin/python3 -I - "${database}" <<'PY'
+from pathlib import Path
+import sqlite3
+import sys
+
+try:
+    database = Path(sys.argv[1])
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1) as connection:
+        row = connection.execute("SELECT 1 FROM metadata WHERE key='work_account_peer_id'").fetchone()
+except (OSError, sqlite3.Error):
+    raise SystemExit(1) from None
+print("bound" if row else "unbound")
+PY
+)" || return 1
+  fi
+  if [[ "${binding}" == "unbound" ]]; then publish_work_release_activation; fi
+}
+
 clear_work_release_activation() {
+  local marker_release="${1:-${release_dir}}"
   [[ "${work_activation_published}" -eq 1 ]] || return 0
   if [[ -e "${work_activation_marker}" || -L "${work_activation_marker}" ]]; then
     [[ -f "${work_activation_marker}" && ! -L "${work_activation_marker}" \
       && "$(stat -c '%U:%G:%a' "${work_activation_marker}")" == "root:root:644" ]] || return 1
-    printf '%s\n' "${release_dir}" | cmp -s - "${work_activation_marker}" || return 1
+    printf '%s\n' "${marker_release}" | cmp -s - "${work_activation_marker}" || return 1
     unlink -- "${work_activation_marker}" || return 1
   fi
   sync -- "${work_activation_marker%/*}" || return 1
   work_activation_published=0
+}
+
+sync_work_release_selection() {
+  local path
+  local -a paths=("${release_root}")
+  for path in "${unit_path}" "${media_wrapper_path}"; do
+    if [[ -f "${path}" ]]; then paths+=("${path}"); fi
+  done
+  for path in "${unit_path%/*}" "${venv_root%/*}" "${work_model_link%/*}" "${media_wrapper_path%/*}"; do
+    if [[ -d "${path}" ]]; then paths+=("${path}"); fi
+  done
+  sync -- "${paths[@]}"
 }
 
 work_bridge_prepared() {
@@ -507,9 +537,39 @@ sys.exit(not (
 }
 
 candidate_owns_work_bridge() {
-  local pid
+  local pid expected_release="${1:-${release_dir}}"
   pid="$(systemctl show --property=MainPID --value "${service_unit}")" || return 1
-  [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(readlink -e -- "/proc/${pid}/cwd")" == "${release_dir}" ]]
+  [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(readlink -e -- "/proc/${pid}/cwd")" == "${expected_release}" ]]
+}
+
+work_bridge_activated_for() {
+  /usr/bin/python3 -I -c '
+import json
+import sys
+
+try:
+    status = json.load(sys.stdin)
+except (ValueError, RecursionError):
+    raise SystemExit(1) from None
+sys.exit(not (isinstance(status, dict) and status.get("ok") is True and status.get("release_activated_for") == sys.argv[1]))
+' "$2" <<<"$1"
+}
+
+recover_work_release_activation() {
+  local status
+  [[ -e "${work_activation_marker}" || -L "${work_activation_marker}" ]] || return 0
+  [[ -n "${previous_release}" && "${work_service_was_active}" -eq 1 ]] || return 1
+  status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)" || return 1
+  work_bridge_ready_from_status "${status}" && candidate_owns_work_bridge "${previous_release}" || return 1
+  work_bridge_activated_for "${status}" "${previous_release}" || return 1
+  sync_work_release_selection || return 1
+  work_activation_published=1
+  clear_work_release_activation "${previous_release}"
+}
+
+candidate_work_bridge_ready() {
+  work_bridge_ready_from_status "$1" && candidate_owns_work_bridge || return 1
+  [[ "${work_activation_published}" -eq 0 ]] || work_bridge_activated_for "$1" "${release_dir}"
 }
 
 start_candidate_work_bridge() {
@@ -518,7 +578,7 @@ start_candidate_work_bridge() {
   for _attempt in $(seq 1 15); do
     if systemctl is-active --quiet "${service_unit}" \
       && status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)"; then
-      if work_bridge_ready_from_status "${status}"; then
+      if candidate_work_bridge_ready "${status}"; then
         return 0
       fi
       if work_bridge_prepared "${status}" && candidate_owns_work_bridge; then
@@ -530,7 +590,7 @@ start_candidate_work_bridge() {
         for _activation_attempt in $(seq 1 15); do
           if systemctl is-active --quiet "${service_unit}" \
             && status="$(work_bridge_status /usr/bin/timeout --kill-after=1s 5s)" \
-            && work_bridge_ready_from_status "${status}" && candidate_owns_work_bridge; then
+            && candidate_work_bridge_ready "${status}"; then
             return 0
           fi
           sleep 1
@@ -557,7 +617,7 @@ restore_media_wrapper() {
 }
 
 durable_inbox_compatible() {
-  local candidate="${1}" marker
+  local candidate="${1}" required_schema_from="${2:-}" marker
   for marker in "${monitor_env}.off.d/"*; do
     [[ -e "${marker}" || -L "${marker}" ]] || continue
     # An older bridge can open the database while silently ignoring pending
@@ -569,8 +629,8 @@ durable_inbox_compatible() {
     fi
     break
   done
-  [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 ]] && return 0
-  /usr/bin/python3 -I - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 <<'PY'
+  if [[ ! -e /var/lib/autostop-work-telegram/inbound.sqlite3 && -z "${required_schema_from}" ]]; then return 0; fi
+  /usr/bin/python3 -I - "${candidate}" /var/lib/autostop-work-telegram/inbound.sqlite3 "${required_schema_from}" <<'PY'
 import ast
 from pathlib import Path
 import sqlite3
@@ -592,7 +652,19 @@ try:
         or any(type(version) is not int or version < 1 for version in versions)
     ):
         raise ValueError("unsupported_inbox_contract")
+    if sys.argv[3]:
+        candidate_inbox = Path(sys.argv[3]) / "autostop_manager/telegram_inbox.py"
+        target_schema = next((
+            ast.literal_eval(node.value)
+            for node in ast.parse(candidate_inbox.read_text()).body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "INBOX_SCHEMA_VERSION" for target in node.targets)
+        ), None)
+        if type(target_schema) is not int or target_schema not in versions:
+            raise ValueError("unsupported_candidate_inbox_schema")
     database = Path(sys.argv[2])
+    if not database.exists():
+        raise SystemExit(0)
     connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
     try:
         metadata = dict(connection.execute(
@@ -705,10 +777,17 @@ rollback() {
         systemctl start "${service_unit}" || true
         return 1
       fi
-      clear_work_release_activation || return 1
+    fi
+    if [[ "${work_service_was_active:-1}" -eq 0 ]]; then
+      systemctl disable "${service_unit}" || return 1
+      sync -f -- "${unit_path%/*}" || return 1
     fi
   fi
   restore_previous_release_assets || return 1
+  if [[ "${account}" == "work" && -n "${work_service_was_active+x}" ]]; then
+    sync_work_release_selection && clear_work_release_activation || return 1
+    [[ "${work_service_was_active}" -eq 1 ]] || return 0
+  fi
   if ! systemctl enable --now "${service_unit}"; then
     return 1
   fi
@@ -741,9 +820,19 @@ transcription_runtime_ready() {
     "${venv_root}/bin/python" -m autostop_manager.telegram_transcribe --account personal --self-check
 }
 
-if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${staging_dir}"; then
-  echo "durable_inbox_candidate_incompatible=true" >&2
-  exit 1
+if [[ "${account}" == "work" ]]; then
+  if ! recover_work_release_activation; then
+    echo "work_telegram_release_activation_marker_exists=true" >&2
+    exit 1
+  fi
+  if ! durable_inbox_compatible "${staging_dir}"; then
+    echo "durable_inbox_candidate_incompatible=true" >&2
+    exit 1
+  fi
+  if [[ -n "${previous_release}" ]] && ! durable_inbox_compatible "${previous_release}" "${staging_dir}"; then
+    echo "durable_inbox_rollback_preflight_incompatible=true" >&2
+    exit 1
+  fi
 fi
 if ! backup_initial_release_assets; then
   echo "ERROR: existing Telegram release assets cannot be safely backed up" >&2
@@ -755,6 +844,10 @@ if [[ "${account}" == "work" && "$(readlink -e -- "${release_dir}")" != "${relea
   echo "work_telegram_release_path_not_physical=true" >&2
   exit 1
 fi
+if [[ "${account}" == "work" ]] && ! sync -f -- "${release_dir}"; then
+  echo "work_telegram_release_files_sync_failed=true" >&2
+  exit 1
+fi
 
 if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
   if ! systemctl stop "${service_unit}"; then
@@ -764,18 +857,22 @@ if [[ "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then
 fi
 
 prestart_error=""
-if [[ "${account}" == "work" ]] && ! publish_work_release_activation; then
-  prestart_error="work Telegram activation marker publication failed"
+if [[ "${account}" == "work" ]] && ! prepare_work_release_activation; then
+  prestart_error="work Telegram activation marker preparation failed"
 elif ! activate_new_release_assets; then
   prestart_error="Telegram release activation failed"
 elif ! install_current_media_wrapper; then
   prestart_error="work media sandbox wrapper install failed"
 elif [[ "${account}" == "work" ]] && ! transcription_runtime_ready; then
   prestart_error="local Telegram transcription runtime failed"
+elif [[ "${account}" == "work" ]] && ! sync_work_release_selection; then
+  prestart_error="work Telegram release selection sync failed"
 fi
 if [[ -n "${prestart_error}" ]]; then
   restore_succeeded=0
-  if clear_work_release_activation && restore_previous_release_assets; then
+  if restore_previous_release_assets \
+    && { [[ "${account}" != "work" ]] || sync_work_release_selection; } \
+    && clear_work_release_activation; then
     restore_succeeded=1
   fi
   if [[ "${restore_succeeded}" -eq 1 && "${account}" == "work" && "${work_service_was_active}" -eq 1 ]]; then

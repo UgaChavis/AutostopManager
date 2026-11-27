@@ -630,8 +630,17 @@ class TelegramInbox:
         with self._write(changed_only=True, startup=True, verify_only=verify_only):
             yield
 
-    def has_work_account_binding(self) -> bool:
-        return self._db.execute("SELECT 1 FROM metadata WHERE key='work_account_peer_id'").fetchone() is not None
+    def work_release_activation_target(self) -> str | None:
+        row = self._db.execute("SELECT value FROM metadata WHERE key='work_release_activation_target'").fetchone()
+        return str(row[0]) if row is not None else None
+
+    def record_work_release_activation(self, release: str) -> None:
+        with self._write():
+            self._db.execute(
+                "INSERT INTO metadata VALUES ('work_release_activation_target', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (release,),
+            )
 
     @staticmethod
     def _event_sequence(event_id: Any) -> str:

@@ -744,6 +744,7 @@ class DurableInboundMonitor(InboundMonitor):
         self.notification_task: asyncio.Task[None] | None = None
         self.self_peer_id: int | None = None
         self.release_activation: tuple[str, Callable[[], Awaitable[None]]] | None = None
+        self.release_started = asyncio.Event()
         self.config = config
         self.prepared_work_sends: dict[tuple[str, str], _PreparedWorkSend] = {}
         # Internal Codex guidance is transient; only its revision/pause state
@@ -5256,7 +5257,7 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
             "transport_ready": False,
             "inbound_enabled": False,
             "release_prepared_for": preparation[0],
-            "release_transport_ready": _local_transport_ready(client),
+            "release_transport_ready": True,
             "release_inbound_enabled": inbound_monitor.capture_enabled,
         }
     if operation.startswith("job_") or operation == "duty_set":
@@ -5293,6 +5294,11 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
 
     if operation == "status":
         me = getattr(client, "_autostop_cached_me", None)
+        activated_release = (
+            inbound_monitor.inbox.work_release_activation_target()
+            if isinstance(inbound_monitor, DurableInboundMonitor)
+            else None
+        )
         return {
             "ok": True,
             "authorized": bool(getattr(client, "_autostop_authorized", me is not None)),
@@ -5306,6 +5312,7 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
                 if isinstance(inbound_monitor, DurableInboundMonitor)
                 else inbound_monitor is not None
             ),
+            **({"release_activated_for": activated_release} if activated_release is not None else {}),
             "intake_health": (
                 inbound_monitor.inbox.health().get("intake")
                 if isinstance(inbound_monitor, DurableInboundMonitor)
@@ -6857,8 +6864,9 @@ async def _start_durable_account(
     monitor_incoming: bool,
     duty_at: str | None,
     release_preparation: str | None = None,
+    prepared_identity: Any = None,
 ) -> None:
-    me = await client.get_me()
+    me = await client.get_me() if prepared_identity is None else prepared_identity
     self_id = _work_account_peer_id(me)
     _configure_durable_instructions(monitor.inbox)
     owner_peer_id = _owner_peer_id(config)
@@ -6866,45 +6874,124 @@ async def _start_durable_account(
     requested_at = os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
     _install_context_handlers(client, events, monitor)
 
-    def write_startup(*, verify_only: bool) -> None:
+    def write_startup(*, verify_only: bool, activated_release: str | None = None) -> None:
         try:
             with monitor.inbox.work_startup(verify_only=verify_only):
                 monitor.inbox.bind_work_account(self_id)
                 monitor.inbox.configure_client_only(owner_peer_id)
                 monitor.inbox.apply_duty_startup(monitor_incoming, at=duty_at, stops=stops, requested_at=requested_at)
                 monitor.inbox.set_health(component="telegram", state="ready", error_code=None)
+                if activated_release is not None:
+                    monitor.inbox.record_work_release_activation(activated_release)
         except InboxError as exc:
             raise BridgeError(str(exc)) from exc
 
-    def finish_startup(identity: Any) -> None:
-        write_startup(verify_only=False)
+    def finish_startup(identity: Any, *, activated_release: str | None = None) -> None:
+        write_startup(verify_only=False, activated_release=activated_release)
         client._autostop_cached_me = identity
         monitor.self_peer_id = self_id
         monitor.transport_ready = True
         monitor.release_activation = None
+        monitor.release_started.set()
         monitor.request_reconciliation()
 
-    if release_preparation is None or monitor.inbox.has_work_account_binding():
+    if release_preparation is None:
         finish_startup(me)
         return
 
     write_startup(verify_only=True)
+    activation_lock = asyncio.Lock()
 
     async def activate() -> None:
-        if not _local_transport_ready(client):
-            raise BridgeError("telegram_transport_disconnected")
-        identity = await client.get_me()
-        if monitor.release_activation is None:
-            return
-        if _work_account_peer_id(identity) != self_id:
-            raise BridgeError("inbox_work_account_changed")
-        if _work_release_preparation(config, durable=True) != release_preparation:
-            raise BridgeError("work_release_preparation_invalid")
-        if not _local_transport_ready(client):
-            raise BridgeError("telegram_transport_disconnected")
-        finish_startup(identity)
+        async with activation_lock:
+            if monitor.release_activation is None:
+                return
+            if not client.is_connected():
+                await _connect_authorized_client(client)
+            if not _local_transport_ready(client):
+                raise BridgeError("telegram_transport_disconnected")
+            identity = await client.get_me()
+            if _work_account_peer_id(identity) != self_id:
+                raise BridgeError("inbox_work_account_changed")
+            if _work_release_preparation(config, durable=True) != release_preparation:
+                raise BridgeError("work_release_preparation_invalid")
+            if not _local_transport_ready(client):
+                raise BridgeError("telegram_transport_disconnected")
+            finish_startup(identity, activated_release=release_preparation)
 
     monitor.release_activation = (release_preparation, activate)
+
+
+async def _connect_authorized_client(client: Any) -> None:
+    await client.connect()
+    if not await client.is_user_authorized():
+        raise BridgeError("account_not_authorized")
+    client._autostop_authorized = True
+    client._autostop_cached_me = None
+
+
+async def _probe_work_release_identity(config: TelegramConfig, telegram_client: Any) -> Any:
+    session = _work_sqlite_session_path(config.session_path)
+    if not _work_session_file_exists(session):
+        raise BridgeError("account_not_authorized")
+    with TemporaryDirectory(prefix=".telegram-release-", dir=config.state_dir) as temporary:
+        probe = Path(temporary) / "probe.session"
+        _copy_work_session(session, probe, _work_session_sidecars(session))
+        client = telegram_client(str(probe), config.api_id, config.api_hash, receive_updates=False)
+        try:
+            await _connect_authorized_client(client)
+            identity = await client.get_me()
+            _work_account_peer_id(identity)
+            return identity
+        finally:
+            await client.disconnect()
+
+
+def _defer_work_update_state(client: Any, monitor: DurableInboundMonitor) -> None:
+    save = client.session.set_update_state
+
+    def save_if_active(entity_id: Any, state: Any) -> Any:
+        # An activation that stops before the SQLite commit cannot advance
+        # the previous release's saved Telegram update position.
+        if monitor.release_started.is_set():
+            return save(entity_id, state)
+        return None
+
+    client.session.set_update_state = save_if_active
+
+
+async def _initialize_daemon_client(
+    config: TelegramConfig, inbox: TelegramInbox | None, monitor: InboundMonitor | None, release: str | None
+) -> tuple[Any, Any]:
+    TelegramClient, _, _ = _load_telethon()
+    prepared_identity = await _probe_work_release_identity(config, TelegramClient) if release is not None else None
+    client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=inbox is not None)
+    if release is not None and isinstance(monitor, DurableInboundMonitor):
+        _defer_work_update_state(client, monitor)
+    return client, prepared_identity
+
+
+def _daemon_disconnected(client: Any, monitor: InboundMonitor | None) -> Awaitable[Any] | None:
+    if isinstance(monitor, DurableInboundMonitor) and monitor.release_activation is not None:
+
+        async def wait_for_activation_and_disconnect() -> None:
+            await monitor.release_started.wait()
+            await asyncio.shield(client.disconnected)
+
+        return wait_for_activation_and_disconnect()
+    disconnected = getattr(client, "disconnected", None)
+    return asyncio.shield(disconnected) if disconnected is not None else None
+
+
+def _prepare_durable_daemon_duty(
+    inbox: TelegramInbox, monitor_incoming: bool, release: str | None
+) -> tuple[str | None, str | None]:
+    pending = release if release != inbox.work_release_activation_target() else None
+    with inbox.work_startup(verify_only=True) if pending is not None else nullcontext():
+        duty_at = inbox.prepare_duty_startup(
+            monitor_incoming, requested_at=os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
+        )
+    return duty_at, pending
 
 
 async def run_daemon(
@@ -6912,7 +6999,6 @@ async def run_daemon(
 ) -> None:
     reject_obsolete_runtime_config()
     watchdog = _cleanup_watchdog or _daemon_cleanup_watchdog()
-    TelegramClient, _, _ = _load_telethon()
     config.state_dir.mkdir(parents=True, exist_ok=True)
     config.socket_path.parent.mkdir(parents=True, exist_ok=True)
     outbox_dir = config.socket_path.parent / "outbox"
@@ -6934,13 +7020,11 @@ async def run_daemon(
     duty_at: str | None = None
     try:
         if inbox is not None:
-            duty_at = inbox.prepare_duty_startup(
-                monitor_incoming, requested_at=os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
-            )
+            duty_at, release_preparation = _prepare_durable_daemon_duty(inbox, monitor_incoming, release_preparation)
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
             inbound_monitor = InboundMonitor() if monitor_incoming else None
-        client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=durable)
+        client, prepared_identity = await _initialize_daemon_client(config, inbox, inbound_monitor, release_preparation)
         if isinstance(inbound_monitor, DurableInboundMonitor):
             _install_reconnect_signal(client, inbound_monitor)
         if inbound_monitor is not None:
@@ -6955,13 +7039,8 @@ async def run_daemon(
                 await _capture_incoming_event(inbound_monitor, event)
 
             client.add_event_handler(capture, events.NewMessage(incoming=None if durable else True))
-        await client.connect()
-        if not await client.is_user_authorized():
-            raise BridgeError("account_not_authorized")
-        client._autostop_authorized = True
-        # Identity is optional diagnostic metadata; status never starts a new
-        # Telegram RPC while an effect is slow or the transport is unavailable.
-        client._autostop_cached_me = None
+        if release_preparation is None:
+            await _connect_authorized_client(client)
         if isinstance(inbound_monitor, DurableInboundMonitor):
             await _start_durable_account(
                 client,
@@ -6971,6 +7050,7 @@ async def run_daemon(
                 monitor_incoming=monitor_incoming,
                 duty_at=duty_at,
                 release_preparation=release_preparation,
+                prepared_identity=prepared_identity,
             )
     except BaseException:
         _start_daemon_cleanup_watchdog(watchdog)
@@ -7008,9 +7088,9 @@ async def run_daemon(
                     tasks.append(asyncio.create_task(_reconcile_incoming_loop(client, config, inbound_monitor)))
                     tasks.append(asyncio.create_task(_await_intake_failure(inbound_monitor)))
                 tasks.append(asyncio.create_task(_await_effect_failure()))
-                disconnected = getattr(client, "disconnected", None)
+                disconnected = _daemon_disconnected(client, inbound_monitor)
                 if disconnected is not None:
-                    tasks.append(asyncio.ensure_future(asyncio.shield(disconnected)))
+                    tasks.append(asyncio.ensure_future(disconnected))
                     done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                     for finished in done:
                         await _await_daemon_task(finished)
@@ -7623,6 +7703,18 @@ def _work_session_sidecars(path: Path) -> dict[str, Path]:
     return sidecars
 
 
+def _work_sqlite_session_path(path: Path) -> Path:
+    return path if path.name.endswith(".session") else path.with_name(path.name + ".session")
+
+
+def _copy_work_session(session: Path, probe: Path, sidecars: dict[str, Path]) -> None:
+    # SQLite reconstructs the transient WAL index in the private copy.
+    shutil.copyfile(session, probe)
+    for suffix, sidecar in sidecars.items():
+        if suffix != "-shm":
+            shutil.copyfile(sidecar, probe.with_name(probe.name + suffix))
+
+
 async def _existing_work_session_matches(config: TelegramConfig, probe: Path, expected_peer_id: int | None) -> bool:
     TelegramClient, _, _ = _load_telethon()
     from telethon.errors import AuthKeyDuplicatedError, AuthKeyNotFound
@@ -7676,9 +7768,7 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
     if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
         raise BridgeError("work_session_permissions_invalid")
 
-    session = config.session_path
-    if not session.name.endswith(".session"):
-        session = session.with_name(session.name + ".session")
+    session = _work_sqlite_session_path(config.session_path)
     inbox_path = state / "inbound.sqlite3"
     lock_fd = acquire_inbox_writer_lock(inbox_path)
     try:
@@ -7691,10 +7781,7 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
                 # Let SQLite recover a private copy of the old session. The
                 # transient WAL index can be rebuilt locally from the copied WAL.
                 probe = stage / "probe.session"
-                shutil.copyfile(session, probe)
-                for suffix, sidecar in sidecars.items():
-                    if suffix != "-shm":
-                        shutil.copyfile(sidecar, stage / (probe.name + suffix))
+                _copy_work_session(session, probe, sidecars)
                 if await _existing_work_session_matches(config, probe, expected_peer_id):
                     raise BridgeError("account_already_authorized")
             elif sidecars:
