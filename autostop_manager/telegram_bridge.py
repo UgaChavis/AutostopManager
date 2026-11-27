@@ -64,6 +64,7 @@ MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 MAX_VOICE_BYTES = 10 * 1024 * 1024
 MAX_VOICE_DURATION_SECONDS = 10 * 60
 CONTRACT_TTL_SECONDS = 15 * 60
+MAX_PREPARED_WORK_SENDS = 64
 TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
@@ -645,6 +646,14 @@ class _NonPrivateDialogOffset:
     input_peer: Any = dataclass_field(compare=False, repr=False)
 
 
+@dataclass(frozen=True)
+class _PreparedWorkSend:
+    selector: tuple[str, str]
+    entity: Any
+    target: dict[str, Any]
+    expiry: asyncio.TimerHandle
+
+
 class DurableInboundMonitor(InboundMonitor):
     """Bridge-owned durable locators, with voice files and subscribers kept transient."""
 
@@ -677,6 +686,7 @@ class DurableInboundMonitor(InboundMonitor):
         self.notification_task: asyncio.Task[None] | None = None
         self.self_peer_id: int | None = None
         self.config = config
+        self.prepared_work_sends: dict[tuple[str, str], _PreparedWorkSend] = {}
         # Internal Codex guidance is transient; only its revision/pause state
         # survives restart. Missing guidance then blocks new sends safely.
         self.trusted_guidance: dict[int, list[dict[str, Any]]] = {}
@@ -1466,10 +1476,10 @@ def verify_download_contract(
 
 def normalize_phone(value: str) -> str:
     raw = str(value or "").strip()
-    if not raw or len(raw) > 32 or re.fullmatch(r"[+\d\s().-]+", raw) is None:
+    if not raw or len(raw) > 32 or re.fullmatch(r"\+?[0-9\s().-]+", raw) is None:
         raise BridgeError("phone_invalid")
     digits = re.sub(r"\D", "", raw)
-    if len(digits) == 11 and digits.startswith("8"):
+    if not raw.startswith("+") and len(digits) == 11 and digits.startswith("8"):
         digits = "7" + digits[1:]
     if not 8 <= len(digits) <= 15 or digits.startswith("0"):
         raise BridgeError("phone_invalid")
@@ -2549,12 +2559,13 @@ def _require_direct_send_allowed(
         _check_effect_authority()
         monitor.inbox.require_client_send_allowed(job["peer_id"])
         _require_current_guidance(monitor, job)
-    # The recipient's client pause/guidance belongs to their own case. Its
-    # unknown/review holds and native outgoing ledger still guard this send.
-    monitor.inbox.require_client_send_allowed(peer_id, include_client_control=bound_handoff is None)
+    work_direct = request.get("operation") == "send" and request.get("work_direct") is True
+    # A direct owner instruction is independent of automatic client replies.
+    # Unknown effects still guard this recipient even during a manual takeover.
+    monitor.inbox.require_client_send_allowed(peer_id, include_client_control=bound_handoff is None and not work_direct)
     if _native_outgoing_origin(config, peer_id, -1) == "unresolved":
         raise BridgeError("send_outcome_uncertain")
-    if bound_handoff is not None:
+    if bound_handoff is not None or work_direct:
         return
     control = monitor.inbox.client_control(peer_id)
     if control["guidance_pending"]:
@@ -3658,6 +3669,119 @@ async def _handle_send_text_to_entity(
     if monitor_event_closed is not None:
         response["monitor_event_closed"] = monitor_event_closed
     return _job_send_response(response, request, job_effect, idempotency_key)
+
+
+async def _handle_work_direct_send(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    monitor: DurableInboundMonitor,
+) -> dict[str, Any]:
+    if set(request) - {
+        "operation",
+        "work_direct",
+        "peer",
+        "phone",
+        "text",
+        "mode",
+        "contract_token",
+        "idempotency_key",
+        "reply_to_message_id",
+    }:
+        raise BridgeError("work_direct_request_invalid")
+    phone = request.get("phone")
+    if phone is not None and (not isinstance(phone, str) or request.get("peer")):
+        raise BridgeError("work_direct_target_invalid")
+    raw_target = normalize_phone(phone) if phone is not None else request.get("peer")
+    peer, text, mode, key, reply_to = validate_send_request(request | {"peer": raw_target})
+    if reply_to:
+        raise BridgeError("work_direct_request_invalid")
+    if not key:
+        raise BridgeError("idempotency_key_required")
+
+    selector = ("phone" if phone is not None else "peer", peer)
+    prepared_sends = monitor.prepared_work_sends
+    if mode == "dry_run":
+        resolve = _resolve_phone if phone is not None else _resolve_peer
+        entity, target = await resolve(client, peer)
+        if (
+            target["kind"] != "private"
+            or target["id"] == monitor.self_peer_id
+            or getattr(entity, "is_self", False)
+            or getattr(entity, "deleted", False)
+        ):
+            raise BridgeError("work_direct_target_invalid")
+    else:
+        token = str(request.get("contract_token") or "")
+        if not token:
+            raise BridgeError("contract_required")
+        prepared = prepared_sends.get((token, key))
+        if prepared is None:
+            raise BridgeError("work_direct_prepare_required")
+        if prepared.selector != selector:
+            raise BridgeError("contract_target_changed")
+        entity, target = prepared.entity, prepared.target
+
+    result = await _handle_send_text_to_entity(
+        client,
+        config,
+        request,
+        entity=entity,
+        target=target,
+        text=text,
+        mode=mode,
+        idempotency_key=key,
+        inbound_monitor=monitor,
+        idempotency_target={"peer_id": target["id"], "work_direct": True},
+        contract_target_role="work_direct",
+    )
+    if mode == "dry_run":
+        binding = (result["contract_token"], key)
+        previous = prepared_sends.pop(binding, None)
+        if previous is not None:
+            previous.expiry.cancel()
+        if len(prepared_sends) >= MAX_PREPARED_WORK_SENDS:
+            prepared_sends.pop(next(iter(prepared_sends))).expiry.cancel()
+        expiry = asyncio.get_running_loop().call_later(CONTRACT_TTL_SECONDS, prepared_sends.pop, binding, None)
+        prepared_sends[binding] = _PreparedWorkSend(selector, entity, target, expiry)
+    else:
+        monitor.reconcile_outgoing(int(target["id"]))
+    return result
+
+
+async def _handle_work_direct_readback(
+    client: Any,
+    config: TelegramConfig,
+    request: dict[str, Any],
+    monitor: DurableInboundMonitor,
+) -> dict[str, Any]:
+    key = str(request.get("idempotency_key") or "").strip()
+    if not key:
+        raise BridgeError("idempotency_key_required")
+    ledger_path = config.state_dir / "idempotency.json"
+    record = _load_idempotency(ledger_path).get(key)
+    if record is None:
+        return {"ok": True, "outcome": "not_found", "verified": False}
+    if record.get("operation") != "send_text" or record.get("work_direct") is not True:
+        raise BridgeError("idempotency_key_conflict")
+    peer_id, message_id = record.get("peer_id"), record.get("message_id")
+    if type(peer_id) is not int or peer_id < 1 or type(message_id) is not int or message_id < 0:
+        raise BridgeError("idempotency_state_invalid")
+    if not message_id:
+        return {"ok": True, "outcome": "unknown", "verified": False}
+
+    # Private message IDs are account-wide. Verify the exact recipient as
+    # well, since the prepare cache may be gone after a bridge restart.
+    message = await client.get_messages(None, ids=message_id)
+    if (
+        not _outgoing_message_matches(message, peer_id=peer_id, message_id=message_id)
+        or _message_reply_to_id(message)
+        or hashlib.sha256(str(message.message or "").encode("utf-8")).hexdigest() != record.get("text_sha256")
+    ):
+        raise BridgeError("send_readback_failed")
+    _persist_delivery(ledger_path, key, record, message_id=message_id, verified=True)
+    monitor.reconcile_outgoing(peer_id)
+    return {"ok": True, "outcome": "verified", "message_id": message_id, "verified": True}
 
 
 async def _prepare_job_send(
@@ -4812,6 +4936,12 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
         return result
 
     if operation == "send":
+        if request.get("work_direct") is True:
+            if not isinstance(inbound_monitor, DurableInboundMonitor):
+                raise BridgeError("work_direct_unavailable")
+            return await _handle_work_direct_send(client, config, request, inbound_monitor)
+        if "phone" in request:
+            raise BridgeError("work_direct_required")
         peer, text, mode, idempotency_key, reply_to_message_id = validate_send_request(request)
         entity, target = await _resolve_peer(client, peer)
         return await _handle_send_text_to_entity(
@@ -4826,6 +4956,11 @@ async def _dispatch_operation(  # noqa: C901 - bounded local RPC operation route
             reply_to_message_id=reply_to_message_id,
             inbound_monitor=inbound_monitor,
         )
+
+    if operation == "send_readback":
+        if not isinstance(inbound_monitor, DurableInboundMonitor):
+            raise BridgeError("work_direct_unavailable")
+        return await _handle_work_direct_readback(client, config, request, inbound_monitor)
 
     if operation == "send_photo":
         return await _handle_send_photo(client, config, request, inbound_monitor=inbound_monitor)
@@ -5774,6 +5909,8 @@ async def _serve_client_request(
             or request.get("operation") == "duty_set"
             or request.get("operation") == "monitor_voice_cleanup"
             or request.get("operation") == "monitor_reclassify"
+            or request.get("operation") == "send_readback"
+            or (request.get("operation") == "send" and request.get("work_direct") is True)
             or request.get("job_id")
         ):
             _require_root_client(writer)
@@ -7075,7 +7212,10 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--revision", type=int)
     read.add_argument("--history-receipt")
     send = subparsers.add_parser("send")
-    send.add_argument("--peer", required=True)
+    send_target = send.add_mutually_exclusive_group(required=True)
+    send_target.add_argument("--peer")
+    send_target.add_argument("--phone")
+    send.add_argument("--work-direct", action="store_true")
     send.add_argument("--text", required=True)
     send.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
     send.add_argument("--contract-token", default="")
@@ -7087,6 +7227,8 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--kind", choices=["ack", "result", "clarification", "handoff"], default=None)
     send.add_argument("--effect-slot", type=int, default=0)
     send.add_argument("--history-pages", type=int, default=1)
+    send_readback = subparsers.add_parser("send-readback")
+    send_readback.add_argument("--idempotency-key", required=True)
     send_owner_notification = subparsers.add_parser("send-owner-notification")
     send_owner_notification.add_argument("--text", required=True)
     send_owner_notification.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
@@ -7334,6 +7476,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                     if args.history_receipt:
                         request["history_receipt"] = args.history_receipt
             elif args.command == "send":
+                if args.phone is not None and not args.work_direct:
+                    raise BridgeError("work_direct_required")
                 request.update(
                     {
                         "peer": args.peer,
@@ -7344,6 +7488,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                         "reply_to_message_id": args.reply_to_message_id,
                     }
                 )
+                if args.work_direct:
+                    request["work_direct"] = True
+                    if args.phone is not None:
+                        request["phone"] = args.phone
                 if args.job_id:
                     request.update(
                         {
@@ -7355,6 +7503,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                             "history_pages": args.history_pages,
                         }
                     )
+            elif args.command == "send-readback":
+                request.update({"operation": "send_readback", "idempotency_key": args.idempotency_key})
             elif args.command == "send-owner-notification":
                 request.update(
                     {

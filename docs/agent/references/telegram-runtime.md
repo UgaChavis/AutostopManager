@@ -145,6 +145,8 @@ Root-only Bridge `job_status` возвращает `status.job_latency`. В ре
 | `monitor-reclassify` | Root-only повторная проверка типа отправителя точного `identity_pending` события по Telegram; подтверждённый клиент поступает в клиентскую очередь, бот — в `bot_pending`. |
 | `owner-event-read` | Исторический owner-контракт; новые рабочие входящие обрабатываются по B2 как клиентские. |
 | `send`, `send-photo`, `send-document` | Dry-run/apply, исходный ключ, независимый readback; рабочий ответ связан с заданием и версией. |
+| `send --work-direct` | Отдельная отправка текста точному личному адресату по поручению владельца в доверенном Codex. Сценарий по номеру или peer — [B1](../modules/B1.md#по-прямому-поручению-владельца). |
+| `send-readback --idempotency-key KEY` | Сверка прямой отправки рабочего аккаунта по исходному ключу. |
 | `send-voice` | Только personal: приватный outbox OGG/Opus, 10 MiB/10 минут, точный числовой private peer; dry-run/apply и идемпотентность, фактические voice/MIME/duration/size и скачанные байты. |
 | `job-read`, `job-refresh`, `job-result`, `job-handoff` | Прочитать или обновить контекст, завершить задание либо передать его владельцу. Привязка job/lease/revision остаётся внутренней. |
 | `job-effect-readback` | Перечитать точную прежнюю отправку. При успешной сверке Bridge сохраняет квитанцию в журнале идемпотентности и реестре заданий. Для проверки состояния очереди используй `job-status`. |

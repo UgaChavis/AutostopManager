@@ -33,6 +33,7 @@ def server_budget(request: dict[str, Any]) -> float:
         "search",
         "dialogs",
         "resolve_phone",
+        "send_readback",
         "monitor_read",
         "monitor_reclassify",
         "monitor_context",
