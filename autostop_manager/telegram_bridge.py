@@ -65,6 +65,26 @@ MAX_VOICE_BYTES = 10 * 1024 * 1024
 MAX_VOICE_DURATION_SECONDS = 10 * 60
 CONTRACT_TTL_SECONDS = 15 * 60
 MAX_PREPARED_WORK_SENDS = 64
+WORK_DIRECT_REJECTED_OPERATION = "work_direct_rejected"
+WORK_DIRECT_REJECTION_CODES = {
+    "ChatWriteForbiddenError": "telegram_chat_write_forbidden",
+    "InputUserDeactivatedError": "telegram_user_deactivated",
+    "PeerIdInvalidError": "telegram_peer_invalid",
+    "MessageTooLongError": "telegram_message_too_long",
+    "MessageEmptyError": "telegram_message_empty",
+    "UserIsBlockedError": "telegram_user_blocked",
+    "YouBlockedUserError": "telegram_user_blocked",
+    "UserPrivacyRestrictedError": "telegram_privacy_restricted",
+    "PrivacyPremiumRequiredError": "telegram_premium_required",
+    "PremiumAccountRequiredError": "telegram_premium_required",
+    "AllowPaymentRequiredError": "telegram_payment_required",
+    "FloodWaitError": "telegram_send_rate_limited",
+    "FloodPremiumWaitError": "telegram_send_rate_limited",
+    "PeerFloodError": "telegram_send_rate_limited",
+    "SlowModeWaitError": "telegram_send_rate_limited",
+    "PRIVACY_PREMIUM_REQUIRED": "telegram_premium_required",
+    "ALLOW_PAYMENT_REQUIRED": "telegram_payment_required",
+}
 TRANSCRIPTION_MODEL_NAME = "faster-whisper-small"
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_DURATION_SECONDS = 2 * 60
@@ -190,6 +210,10 @@ class BridgeError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class _WorkDirectSendRejected(BridgeError):
+    """Telegram explicitly refused the exact transport request."""
 
 
 @dataclass(frozen=True)
@@ -2461,6 +2485,19 @@ def _load_idempotency(path: Path) -> dict[str, dict[str, Any]]:
     return {str(key): value for key, value in payload.items() if isinstance(value, dict)}
 
 
+def _work_direct_rejection(entry: dict[str, Any]) -> str | None:
+    code = entry.get("rejection_code")
+    if (
+        entry.get("operation") == WORK_DIRECT_REJECTED_OPERATION
+        and entry.get("work_direct") is True
+        and entry.get("message_id") == 0
+        and isinstance(code, str)
+        and code in WORK_DIRECT_REJECTION_CODES.values()
+    ):
+        return code
+    return None
+
+
 def _native_outgoing_origins(config: TelegramConfig, peer_id: int) -> tuple[set[int], bool]:
     """One coherent, transient native ledger index for an exact peer/packet."""
     try:
@@ -2477,6 +2514,7 @@ def _native_outgoing_origins(config: TelegramConfig, peer_id: int) -> tuple[set[
                 "send_document",
                 "send_voice",
                 "send_owner_notification",
+                WORK_DIRECT_REJECTED_OPERATION,
             }:
                 continue
             exact_peer = type(entry.get("peer_id")) is int and entry["peer_id"] == peer_id
@@ -2503,7 +2541,7 @@ def _native_outgoing_origins(config: TelegramConfig, peer_id: int) -> tuple[set[
                     digest = hmac.new(key, f"owner\0{peer_id}".encode(), hashlib.sha256).digest()
                     fingerprint = f"{(int.from_bytes(digest[:8], 'big') or 1):016x}"
                 exact_peer = entry.get("target_fingerprint") == fingerprint
-            if not exact_peer:
+            if not exact_peer or _work_direct_rejection(entry) is not None:
                 continue
             if type(entry.get("message_id")) is int and entry["message_id"] > 0:
                 known.add(entry["message_id"])
@@ -2559,13 +2597,11 @@ def _require_direct_send_allowed(
         _check_effect_authority()
         monitor.inbox.require_client_send_allowed(job["peer_id"])
         _require_current_guidance(monitor, job)
-    work_direct = request.get("operation") == "send" and request.get("work_direct") is True
-    # A direct owner instruction is independent of automatic client replies.
-    # Unknown effects still guard this recipient even during a manual takeover.
-    monitor.inbox.require_client_send_allowed(peer_id, include_client_control=bound_handoff is None and not work_direct)
+    # A client-supplied RPC flag does not grant authority to override a pause.
+    monitor.inbox.require_client_send_allowed(peer_id, include_client_control=bound_handoff is None)
     if _native_outgoing_origin(config, peer_id, -1) == "unresolved":
         raise BridgeError("send_outcome_uncertain")
-    if bound_handoff is not None or work_direct:
+    if bound_handoff is not None:
         return
     control = monitor.inbox.client_control(peer_id)
     if control["guidance_pending"]:
@@ -3439,6 +3475,60 @@ async def _handle_download(
     }
 
 
+def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
+    functions, _ = _load_telegram_functions()
+    request = functions.messages.SendMessageRequest(peer=peer, message=text)
+    if client._flood_waited_requests.get(request.CONSTRUCTOR_ID, 0) > time.time():
+        raise BridgeError("telegram_send_rate_limited")
+    return request
+
+
+async def _send_work_direct_text(client: Any, monitor: DurableInboundMonitor, request: Any) -> int:
+    from telethon import errors, types
+
+    # Use one RPC invocation so an application-level resend cannot turn an
+    # earlier unknown outcome into a later apparent rejection.
+    sender = client._sender
+    hook = monitor.reconciliation_transport_hook
+    generation = monitor.reconciliation_transport_generation
+    tracked = hook is not None and hook() and not sender._reconnecting
+    try:
+        result = await sender.send(request)
+    except errors.RPCError as exc:
+        if isinstance(exc, (errors.FloodWaitError, errors.FloodPremiumWaitError)) and exc.request is request:
+            waits = client._flood_waited_requests
+            method_id = request.CONSTRUCTOR_ID
+            waits[method_id] = max(waits.get(method_id, 0), time.time() + max(1, exc.seconds))
+        code = WORK_DIRECT_REJECTION_CODES.get(type(exc).__name__) or WORK_DIRECT_REJECTION_CODES.get(exc.message)
+        if code is None and re.fullmatch(r"ALLOW_PAYMENT_REQUIRED_[0-9]+", exc.message or ""):
+            code = "telegram_payment_required"
+        if (
+            code
+            and exc.request is request
+            and tracked
+            and hook is not None
+            and hook()
+            and monitor.reconciliation_transport_generation == generation
+        ):
+            raise _WorkDirectSendRejected(code) from exc
+        raise BridgeError("send_outcome_uncertain") from exc
+    if isinstance(result, types.UpdateShortSentMessage):
+        message_id = result.id
+    else:
+        updates = (result.update,) if isinstance(result, types.UpdateShort) else getattr(result, "updates", ())
+        message_id = next(
+            (
+                update.id
+                for update in updates
+                if isinstance(update, types.UpdateMessageID) and update.random_id == request.random_id
+            ),
+            None,
+        )
+    if type(message_id) is not int or message_id < 1:
+        raise BridgeError("send_outcome_uncertain")
+    return message_id
+
+
 async def _handle_send_text_to_entity(
     client: Any,
     config: TelegramConfig,
@@ -3564,6 +3654,8 @@ async def _handle_send_text_to_entity(
     allowed_previous_operations: set[str | None] = {idempotency_operation}
     if idempotency_operation == "send_text":
         allowed_previous_operations.add(None)
+    if target_binding.get("work_direct") is True:
+        allowed_previous_operations.add(WORK_DIRECT_REJECTED_OPERATION)
     if previous is not None:
         if (
             previous.get("operation") not in allowed_previous_operations
@@ -3573,6 +3665,8 @@ async def _handle_send_text_to_entity(
             or previous.get("reply_message_sha256", "") != reply_message_sha256
         ):
             raise BridgeError("idempotency_key_conflict")
+        if rejection := _work_direct_rejection(previous):
+            raise BridgeError(rejection)
         if not previous.get("message_id"):
             error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
             raise BridgeError(error)
@@ -3599,6 +3693,9 @@ async def _handle_send_text_to_entity(
         idempotency = _load_idempotency(idempotency_path)
         if idempotency_key in idempotency:
             raise BridgeError("idempotency_key_conflict")
+        direct_request = (
+            _prepare_work_direct_request(client, entity, text) if target_binding.get("work_direct") is True else None
+        )
         _mark_job_effect_intent(inbound_monitor, job_effect)
         entry = {
             "operation": idempotency_operation,
@@ -3616,14 +3713,31 @@ async def _handle_send_text_to_entity(
         result_context = timed_monitor.context_jobs.get(job_id) if timed_monitor is not None else None
         context_revision = result_context["revision"] if result_context is not None else None
         with timings.measure("new", "send") if timings is not None else nullcontext():
-            sent = await client.send_message(
-                entity,
-                text,
-                parse_mode=None,
-                **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
-                **({"link_preview": False} if group_reply else {}),
-            )
-            entry["message_id"] = int(sent.id)
+            if direct_request is not None and isinstance(inbound_monitor, DurableInboundMonitor):
+                try:
+                    entry["message_id"] = await _send_work_direct_text(client, inbound_monitor, direct_request)
+                except _WorkDirectSendRejected as exc:
+                    latest = _load_idempotency(idempotency_path)
+                    if latest.get(idempotency_key) != entry:
+                        raise BridgeError("idempotency_key_conflict") from exc
+                    # Older bridges skip terminal rejections when scanning
+                    # for pending sends, including after a rollback.
+                    latest[idempotency_key] = entry | {
+                        "operation": WORK_DIRECT_REJECTED_OPERATION,
+                        "rejection_code": exc.code,
+                    }
+                    _save_idempotency(idempotency_path, latest)
+                    inbound_monitor.reconcile_outgoing(target["id"])
+                    raise
+            else:
+                sent = await client.send_message(
+                    entity,
+                    text,
+                    parse_mode=None,
+                    **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
+                    **({"link_preview": False} if group_reply else {}),
+                )
+                entry["message_id"] = int(sent.id)
     with timings.measure("new", "readback") if timings is not None else nullcontext():
         idempotency = (
             _persist_delivery(idempotency_path, idempotency_key, entry, message_id=entry["message_id"])
@@ -3711,6 +3825,9 @@ async def _handle_work_direct_send(
             or getattr(entity, "deleted", False)
         ):
             raise BridgeError("work_direct_target_invalid")
+        entity = await client.get_input_entity(entity)
+        if getattr(entity, "user_id", None) != target["id"]:
+            raise BridgeError("work_direct_target_invalid")
     else:
         token = str(request.get("contract_token") or "")
         if not token:
@@ -3762,11 +3879,16 @@ async def _handle_work_direct_readback(
     record = _load_idempotency(ledger_path).get(key)
     if record is None:
         return {"ok": True, "outcome": "not_found", "verified": False}
-    if record.get("operation") != "send_text" or record.get("work_direct") is not True:
+    if (
+        record.get("operation") not in {"send_text", WORK_DIRECT_REJECTED_OPERATION}
+        or record.get("work_direct") is not True
+    ):
         raise BridgeError("idempotency_key_conflict")
     peer_id, message_id = record.get("peer_id"), record.get("message_id")
     if type(peer_id) is not int or peer_id < 1 or type(message_id) is not int or message_id < 0:
         raise BridgeError("idempotency_state_invalid")
+    if rejection := _work_direct_rejection(record):
+        return {"ok": True, "outcome": "rejected", "verified": False, "rejection_code": rejection}
     if not message_id:
         return {"ok": True, "outcome": "unknown", "verified": False}
 
@@ -3839,7 +3961,10 @@ async def _prepare_job_media(
 def _mark_job_effect_intent(monitor: InboundMonitor | None, effect: dict[str, Any] | None) -> None:
     _check_effect_authority()
     if effect is not None and isinstance(monitor, DurableInboundMonitor):
-        monitor.inbox.mark_effect_intent(str(effect["effect_key"]))
+        effect_key = str(effect["effect_key"])
+        # Direct sends use a separate lane and may start during history RPCs.
+        _require_native_outcome_known(monitor, monitor.inbox.read_effect(effect_key)["peer_id"])
+        monitor.inbox.mark_effect_intent(effect_key)
         monitor.changed()
 
 
