@@ -9,6 +9,7 @@ monitor_env="/etc/autostop-work-telegram/monitor.env"
 control_lock="/run/autostop-work-telegram-control.lock"
 pending_monitor_env=""
 preserve_existing_duty=0
+published_duty_intent=0
 wake_unit="autostop-codex-wake.service"
 wake_config="/etc/autostop-work-telegram/wake.json"
 wake_python=""
@@ -134,7 +135,7 @@ disable_duty() {
 }
 
 enable_duty() {
-  local monitor_env_dir monitor_status release_dir intent_changed=0 wake_ready=0
+  local monitor_env_dir monitor_status release_dir duty_requested_at="" intent_changed=0 wake_ready=0
   load_bridge_python || return 1
   release_dir="$(readlink -f -- "${release_link}" 2>/dev/null || true)"
   [[ -L "${release_link}" && ( "${release_dir}" == /opt/autostop-work-telegram-releases/* \
@@ -168,6 +169,16 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
     done
     [[ "${wake_ready}" -eq 1 ]] || return 1
   fi
+  if durable_release; then
+    if [[ "${preserve_existing_duty}" -eq 1 ]]; then
+      duty_requested_at="$(sed -n 's/^AUTOSTOP_WORK_TELEGRAM_DUTY_REQUESTED_AT=//p' "${monitor_env}")" || return 1
+    else
+      duty_requested_at="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" || return 1
+    fi
+    if [[ -n "${duty_requested_at}" ]]; then
+      printf 'AUTOSTOP_WORK_TELEGRAM_DUTY_REQUESTED_AT=%s\n' "${duty_requested_at}" >> "${pending_monitor_env}" || return 1
+    fi
+  fi
   chown root:root "${pending_monitor_env}" || return 1
   chmod 0644 "${pending_monitor_env}" || return 1
   if [[ ! -f "${monitor_env}" ]] || ! cmp -s "${pending_monitor_env}" "${monitor_env}"; then
@@ -175,6 +186,7 @@ sys.exit(not(s.get("ok") and s.get("enabled") and (ready or recovering)))'; then
   fi
   mv -T -- "${pending_monitor_env}" "${monitor_env}" || return 1
   pending_monitor_env=""
+  published_duty_intent=1
   if systemctl is-active --quiet "${service_unit}"; then
     systemctl enable "${service_unit}" || return 1
     if [[ "${intent_changed}" -eq 1 ]]; then
@@ -206,7 +218,14 @@ cleanup_incomplete_enable() {
   local exit_code="$?"
   if [[ -n "${pending_monitor_env}" && -f "${pending_monitor_env}" && ! -L "${pending_monitor_env}" ]]; then unlink -- "${pending_monitor_env}" || true; fi
   # A failed repeated enable must preserve an existing queue or blocked turn.
-  if [[ "${preserve_existing_duty}" -eq 0 ]]; then disable_duty || true; fi
+  if [[ "${preserve_existing_duty}" -eq 0 ]] && ! disable_duty; then
+    # A starting bridge may have no socket yet. Withdraw the new intent and
+    # reload the service environment even when the normal RPC rollback failed.
+    if [[ "${published_duty_intent}" -eq 1 ]]; then
+      [[ ! -e "${monitor_env}" ]] || unlink -- "${monitor_env}" || true
+      systemctl restart "${service_unit}" || true
+    fi
+  fi
   return "${exit_code}"
 }
 

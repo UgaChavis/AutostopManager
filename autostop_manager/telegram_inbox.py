@@ -154,6 +154,33 @@ def acquire_inbox_writer_lock(path: Path) -> int:
         raise InboxError("inbox_writer_active") from None
 
 
+def _duplicate_inbox_writer_lock(path: Path, writer_lock_fd: int) -> int:
+    """Retain the caller's canonical lock without opening a second lock file."""
+    _require_private_inbox_parent(path)
+    fd = None
+    try:
+        if type(writer_lock_fd) is not int or writer_lock_fd < 0:
+            raise InboxError("inbox_writer_active")
+        fd = os.dup(writer_lock_fd)
+        info = os.fstat(fd)
+        canonical = Path(str(path) + ".lock").lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or not os.path.samestat(info, canonical)
+        ):
+            raise InboxError("inbox_writer_active")
+        # This checks the same open file description, so an already held
+        # exclusive flock stays in force for both descriptors.
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except (OSError, InboxError):
+        if fd is not None:
+            os.close(fd)
+        raise InboxError("inbox_writer_active") from None
+
+
 def read_work_account_binding(path: Path) -> tuple[int | None, bool]:
     """Read the account binding and detect unbound account state under the writer lock."""
     path = Path(path).absolute()
@@ -232,6 +259,7 @@ class TelegramInbox:
         max_open_events: int = 10000,
         retention_seconds: int = 7 * 24 * 3600,
         clock: Callable[[], datetime] | None = None,
+        writer_lock_fd: int | None = None,
     ) -> None:
         _positive(max_open_events, "inbox_limit_invalid")
         _positive(retention_seconds, "inbox_retention_invalid")
@@ -243,7 +271,7 @@ class TelegramInbox:
         self._lock_fd: int | None = None
         self._closed = False
         self._secure_directory()
-        self._acquire_writer()
+        self._acquire_writer(writer_lock_fd)
         try:
             self._db = sqlite3.connect(self.path, timeout=5)
             self._db.row_factory = sqlite3.Row
@@ -266,9 +294,13 @@ class TelegramInbox:
             raise InboxError("inbox_directory_invalid")
         parent.chmod(0o700)
 
-    def _acquire_writer(self) -> None:
+    def _acquire_writer(self, writer_lock_fd: int | None) -> None:
         flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
-        lock_fd = acquire_inbox_writer_lock(self.path)
+        lock_fd = (
+            acquire_inbox_writer_lock(self.path)
+            if writer_lock_fd is None
+            else _duplicate_inbox_writer_lock(self.path, writer_lock_fd)
+        )
         self._lock_fd = lock_fd
         try:
             db_fd = os.open(self.path, flags, 0o600)
@@ -2628,6 +2660,28 @@ class TelegramInbox:
                 self._db.execute("INSERT INTO global_slot VALUES (?,?,?,'manual')", (job_id, job["peer_id"], new_lease))
         return self.read_job(job_id)
 
+    def prepare_duty_startup(self, enabled: bool, *, requested_at: str | None = None) -> str | None:
+        """Keep the transition boundary without opening a window before account verification."""
+        pending = self._db.execute("SELECT value FROM metadata WHERE key='duty_pending_at'").fetchone()
+        if enabled == (self._meta("duty_enabled") == "1"):
+            if pending is not None:
+                with self._write():
+                    self._db.execute("DELETE FROM metadata WHERE key='duty_pending_at'")
+            return None
+
+        now = self._now()
+        if enabled and requested_at:
+            requested = _timestamp(requested_at)
+            last = self._db.execute("SELECT MAX(closed_at) FROM duty_windows").fetchone()
+            closed_at = last[0] if last is not None else None
+            if requested <= now and (closed_at is None or requested >= closed_at):
+                return requested
+        if pending is not None:
+            return _timestamp(pending[0])
+        with self._write():
+            self._db.execute("INSERT INTO metadata VALUES ('duty_pending_at', ?)", (now,))
+        return now
+
     def duty_set(self, enabled: bool, *, at: str | None = None) -> dict[str, Any]:
         if type(enabled) is not bool:
             raise InboxError("inbox_duty_invalid")
@@ -2640,6 +2694,7 @@ class TelegramInbox:
             else:
                 self._db.execute("UPDATE duty_windows SET closed_at=? WHERE closed_at IS NULL", (now,))
             self._db.execute("UPDATE metadata SET value=? WHERE key='duty_enabled'", ("1" if enabled else "0",))
+            self._db.execute("DELETE FROM metadata WHERE key='duty_pending_at'")
         return self.status()
 
     def set_execution_paused(self, *, paused: bool, expected_revision: int) -> dict[str, Any]:

@@ -129,6 +129,7 @@ DAEMON_CLEANUP_TIMEOUT_SECONDS = 15.0
 JOB_SUBSCRIPTION_HEARTBEAT_SECONDS = 10.0
 OWNER_NOTIFICATION_KINDS = ("help", "approval", "error", "completion")
 WORK_MONITOR_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_MONITOR_INCOMING"
+WORK_DUTY_REQUESTED_AT_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DUTY_REQUESTED_AT"
 WORK_WAKE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_WAKE_SOCKET"
 WORK_DURABLE_ENVIRONMENT = "AUTOSTOP_WORK_TELEGRAM_DURABLE_INBOX"
 PERSONAL_GROUP_REPLY_ENVIRONMENT = "AUTOSTOP_PERSONAL_TELEGRAM_REPLY_GROUP_IDS"
@@ -6746,7 +6747,7 @@ async def _start_durable_account(
     events: Any,
     *,
     monitor_incoming: bool,
-    duty_at: str,
+    duty_at: str | None,
 ) -> None:
     me = await client.get_me()
     self_id = _work_account_peer_id(me)
@@ -6788,10 +6789,12 @@ async def run_daemon(
     inbox = TelegramInbox(config.state_dir / "inbound.sqlite3") if durable else None
     client: Any = None
     inbound_monitor: InboundMonitor | None = None
+    duty_at: str | None = None
     try:
-        # Use the pre-connect duty boundary once the account is verified.
-        duty_at = datetime.now(UTC).isoformat()
         if inbox is not None:
+            duty_at = inbox.prepare_duty_startup(
+                monitor_incoming, requested_at=os.environ.get(WORK_DUTY_REQUESTED_AT_ENVIRONMENT)
+            )
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
             inbound_monitor = InboundMonitor() if monitor_incoming else None
@@ -7529,7 +7532,8 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
     inbox_path = state / "inbound.sqlite3"
     lock_fd = acquire_inbox_writer_lock(inbox_path)
     try:
-        expected_peer_id, has_legacy_state = read_work_account_binding(inbox_path)
+        bound_peer_id, has_legacy_state = read_work_account_binding(inbox_path)
+        expected_peer_id = bound_peer_id
         with TemporaryDirectory(prefix=".telegram-login-", dir=state) as temporary:
             stage = Path(temporary)
             sidecars = _work_session_sidecars(session)
@@ -7558,6 +7562,11 @@ async def _run_work_code_login(config: TelegramConfig, *, read_secret: Callable[
             _settle_work_session_sidecars(session, stage)
             if _work_session_sidecars(session):
                 raise BridgeError("work_session_recovery_failed")
+            if bound_peer_id is None and expected_peer_id is not None:
+                # The new session has verified the operator's ID. Keep that
+                # binding even if publication or the next daemon start fails.
+                with TelegramInbox(inbox_path, writer_lock_fd=lock_fd) as inbox:
+                    inbox.bind_work_account(expected_peer_id)
             os.replace(candidate, session)
             return result
     finally:
