@@ -1337,12 +1337,19 @@ class TelegramInbox:
             )
         ]
 
+    def outgoing_origin(self, peer_id: int, message_id: int) -> str | None:
+        row = self._db.execute(
+            "SELECT origin FROM outgoing_observations WHERE peer_id=? AND message_id=?", (peer_id, message_id)
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
     def observe_outgoing(
         self,
         peer_id: int,
         message_id: int,
         *,
         native_origin: str | None = None,
+        changes_context: bool = False,
         history_job_id: str | None = None,
         history_lease: str | None = None,
         history_revision: int | None = None,
@@ -1351,6 +1358,7 @@ class TelegramInbox:
 
         An unresolved agent effect prevents attributing an unmatched message to
         a person. Exact verification later reconciles it without fake receipts.
+        A verified direct send can change context while retaining agent origin.
         """
         _positive(peer_id, "inbound_peer_invalid")
         _positive(message_id, "inbound_message_invalid")
@@ -1373,7 +1381,11 @@ class TelegramInbox:
         existing = self._db.execute(
             "SELECT origin FROM outgoing_observations WHERE peer_id=? AND message_id=?", (peer_id, message_id)
         ).fetchone()
-        if native_origin not in {None, "agent", "unresolved"}:
+        if (
+            native_origin not in {None, "agent", "unresolved"}
+            or type(changes_context) is not bool
+            or (changes_context and native_origin != "agent")
+        ):
             raise InboxError("inbox_outgoing_origin_invalid")
         if existing is not None and existing[0] == "agent":
             return "agent"
@@ -1400,7 +1412,7 @@ class TelegramInbox:
                     "UPDATE outgoing_observations SET origin=? WHERE peer_id=? AND message_id=?",
                     (origin, peer_id, message_id),
                 )
-                if origin == "human" and not historical:
+                if (origin == "human" or changes_context) and not historical:
                     self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
             return origin
         with self._write():
@@ -1408,7 +1420,7 @@ class TelegramInbox:
             self._db.execute(
                 "INSERT INTO outgoing_observations VALUES (?,?,?,?)", (peer_id, message_id, self._now(), origin)
             )
-            if origin == "human" and not historical:
+            if (origin == "human" or changes_context) and not historical:
                 self._db.execute("UPDATE peers SET context_revision=context_revision+1 WHERE peer_id=?", (peer_id,))
         return origin
 

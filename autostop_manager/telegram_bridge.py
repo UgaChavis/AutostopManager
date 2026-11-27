@@ -66,6 +66,14 @@ MAX_VOICE_DURATION_SECONDS = 10 * 60
 CONTRACT_TTL_SECONDS = 15 * 60
 MAX_PREPARED_WORK_SENDS = 64
 WORK_DIRECT_REJECTED_OPERATION = "work_direct_rejected"
+OUTGOING_LEDGER_OPERATIONS = {
+    None,
+    "send_text",
+    "send_photo",
+    "send_document",
+    "send_voice",
+    "send_owner_notification",
+}
 WORK_DIRECT_REJECTION_CODES = {
     "ChatWriteForbiddenError": "telegram_chat_write_forbidden",
     "InputUserDeactivatedError": "telegram_user_deactivated",
@@ -2507,15 +2515,7 @@ def _native_outgoing_origins(config: TelegramConfig, peer_id: int) -> tuple[set[
         fingerprint = None
         for entry in entries.values():
             operation = entry.get("operation")
-            if operation not in {
-                None,
-                "send_text",
-                "send_photo",
-                "send_document",
-                "send_voice",
-                "send_owner_notification",
-                WORK_DIRECT_REJECTED_OPERATION,
-            }:
+            if operation not in OUTGOING_LEDGER_OPERATIONS and operation != WORK_DIRECT_REJECTED_OPERATION:
                 continue
             exact_peer = type(entry.get("peer_id")) is int and entry["peer_id"] == peer_id
             if operation == "send_owner_notification" and entry.get("target_role") == "owner":
@@ -2543,7 +2543,11 @@ def _native_outgoing_origins(config: TelegramConfig, peer_id: int) -> tuple[set[
                 exact_peer = entry.get("target_fingerprint") == fingerprint
             if not exact_peer or _work_direct_rejection(entry) is not None:
                 continue
-            if type(entry.get("message_id")) is int and entry["message_id"] > 0:
+            if (
+                type(entry.get("message_id")) is int
+                and entry["message_id"] > 0
+                and (entry.get("work_direct") is not True or entry.get("readback_verified") is True)
+            ):
                 known.add(entry["message_id"])
             if not entry.get("message_id") or entry.get("readback_verified") is False:
                 pending = True
@@ -2629,7 +2633,14 @@ def _save_idempotency(path: Path, payload: dict[str, dict[str, Any]]) -> None:
 
 
 def _persist_delivery(
-    path: Path, key: str, expected: dict[str, Any], *, message_id: int, verified: bool = False
+    path: Path,
+    key: str,
+    expected: dict[str, Any],
+    *,
+    message_id: int,
+    verified: bool = False,
+    direct_monitor: DurableInboundMonitor | None = None,
+    operator_reviewed: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Merge one exact receipt into the latest ledger after a network await."""
     latest = _load_idempotency(path)
@@ -2639,6 +2650,27 @@ def _persist_delivery(
         raise BridgeError("idempotency_key_conflict")
     if current.get("message_id") not in {0, message_id}:
         raise BridgeError("idempotency_key_conflict")
+    if verified and direct_monitor is not None and current.get("readback_verified") is not True:
+        if any(
+            other_key != key
+            and entry.get("operation") in OUTGOING_LEDGER_OPERATIONS
+            and entry.get("message_id") == message_id
+            for other_key, entry in latest.items()
+        ):
+            raise BridgeError("work_direct_message_already_claimed")
+        peer_id = current["peer_id"]
+        if operator_reviewed or current.get("operator_reviewed") is True:
+            if direct_monitor.inbox.outgoing_origin(peer_id, message_id) == "human":
+                raise BridgeError("work_direct_message_is_human")
+            if not current["message_id"]:
+                # Reserve the reviewed ID while the hold is still active.
+                # Recovery after an interruption must use the same evidence.
+                current["message_id"] = message_id
+                current["operator_reviewed"] = True
+                _save_idempotency(path, latest)
+        # Keep the native hold until the context change is durable. A replay
+        # after an interrupted journal write sees the same agent observation.
+        direct_monitor.inbox.observe_outgoing(peer_id, message_id, native_origin="agent", changes_context=True)
     current["message_id"] = message_id
     current["readback_verified"] = current.get("readback_verified") is True or verified
     _save_idempotency(path, latest)
@@ -2748,6 +2780,26 @@ async def _resolve_peer(client: Any, raw_peer: str) -> tuple[Any, dict[str, Any]
             raise BridgeError("peer_ambiguous")
         entity = matches[0]
     return entity, _target_from_entity(entity, utils)
+
+
+async def _resolve_work_direct_peer(client: Any, selector: str) -> tuple[Any, dict[str, Any]]:
+    if selector.startswith("@") or selector.lstrip("-").isdigit():
+        return await _resolve_peer(client, selector)
+    functions, utils = _load_telegram_functions()
+    contacts = await client(functions.contacts.GetContactsRequest(hash=0))
+    contact_ids = {contact.user_id for contact in getattr(contacts, "contacts", ())}
+    matches = []
+    for entity in getattr(contacts, "users", ()):
+        if entity.id not in contact_ids:
+            continue
+        target = _target_from_entity(entity, utils)
+        if target["kind"] == "private" and target["title"].casefold() == selector.casefold():
+            matches.append((entity, target))
+    if not matches:
+        raise BridgeError("peer_not_found")
+    if len(matches) != 1:
+        raise BridgeError("peer_ambiguous")
+    return matches[0]
 
 
 async def _last_message_id(client: Any, entity: Any) -> int:
@@ -3475,12 +3527,19 @@ async def _handle_download(
     }
 
 
+def _require_work_text_cooldown(client: Any) -> None:
+    waits = getattr(client, "_flood_waited_requests", {})
+    if waits:
+        functions, _ = _load_telegram_functions()
+        if waits.get(functions.messages.SendMessageRequest.CONSTRUCTOR_ID, 0) > time.time():
+            raise BridgeError("telegram_send_rate_limited")
+
+
 def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
     functions, _ = _load_telegram_functions()
-    request = functions.messages.SendMessageRequest(peer=peer, message=text)
-    if client._flood_waited_requests.get(request.CONSTRUCTOR_ID, 0) > time.time():
-        raise BridgeError("telegram_send_rate_limited")
-    return request
+    if not client._sender.is_connected():
+        raise BridgeError("telegram_transport_disconnected")
+    return functions.messages.SendMessageRequest(peer=peer, message=text)
 
 
 async def _send_work_direct_text(client: Any, monitor: DurableInboundMonitor, request: Any) -> int:
@@ -3659,6 +3718,7 @@ async def _handle_send_text_to_entity(
     if previous is not None:
         if (
             previous.get("operation") not in allowed_previous_operations
+            or (previous.get("work_direct") is True) != (target_binding.get("work_direct") is True)
             or any(previous.get(key) != value for key, value in target_binding.items())
             or previous.get("text_sha256") != text_sha256
             or previous.get("reply_to_message_id", 0) != reply_to_message_id
@@ -3693,6 +3753,8 @@ async def _handle_send_text_to_entity(
         idempotency = _load_idempotency(idempotency_path)
         if idempotency_key in idempotency:
             raise BridgeError("idempotency_key_conflict")
+        if isinstance(inbound_monitor, DurableInboundMonitor):
+            _require_work_text_cooldown(client)
         direct_request = (
             _prepare_work_direct_request(client, entity, text) if target_binding.get("work_direct") is True else None
         )
@@ -3707,6 +3769,8 @@ async def _handle_send_text_to_entity(
             "text_sha256": text_sha256,
             "readback_verified": False,
         }
+        if direct_request is not None:
+            entry["after_message_id"] = last_message_id
         # A lost response must leave a durable intent that blocks blind retries.
         idempotency[idempotency_key] = entry
         _save_idempotency(idempotency_path, idempotency)
@@ -3754,7 +3818,16 @@ async def _handle_send_text_to_entity(
         ):
             raise BridgeError("send_readback_failed")
         idempotency = _persist_delivery(
-            idempotency_path, idempotency_key, idempotency[idempotency_key], message_id=message_id, verified=True
+            idempotency_path,
+            idempotency_key,
+            idempotency[idempotency_key],
+            message_id=message_id,
+            verified=True,
+            direct_monitor=(
+                inbound_monitor
+                if target_binding.get("work_direct") is True and isinstance(inbound_monitor, DurableInboundMonitor)
+                else None
+            ),
         )
         _record_job_send_receipt(inbound_monitor, job_effect, idempotency_key, message_id)
     if (
@@ -3782,6 +3855,8 @@ async def _handle_send_text_to_entity(
     }
     if monitor_event_closed is not None:
         response["monitor_event_closed"] = monitor_event_closed
+    if idempotency[idempotency_key].get("operator_reviewed") is True:
+        response["operator_reviewed"] = True
     return _job_send_response(response, request, job_effect, idempotency_key)
 
 
@@ -3816,7 +3891,7 @@ async def _handle_work_direct_send(
     selector = ("phone" if phone is not None else "peer", peer)
     prepared_sends = monitor.prepared_work_sends
     if mode == "dry_run":
-        resolve = _resolve_phone if phone is not None else _resolve_peer
+        resolve = _resolve_phone if phone is not None else _resolve_work_direct_peer
         entity, target = await resolve(client, peer)
         if (
             target["kind"] != "private"
@@ -3872,9 +3947,17 @@ async def _handle_work_direct_readback(
     request: dict[str, Any],
     monitor: DurableInboundMonitor,
 ) -> dict[str, Any]:
+    if set(request) - {"operation", "idempotency_key", "message_id", "effects_reviewed"}:
+        raise BridgeError("work_direct_readback_request_invalid")
     key = str(request.get("idempotency_key") or "").strip()
     if not key:
         raise BridgeError("idempotency_key_required")
+    explicit_id = request.get("message_id")
+    if explicit_id is not None:
+        if type(explicit_id) is not int or not 0 < explicit_id <= 0x7FFFFFFF:
+            raise BridgeError("work_direct_message_id_invalid")
+        if request.get("effects_reviewed") is not True:
+            raise BridgeError("work_direct_manual_review_required")
     ledger_path = config.state_dir / "idempotency.json"
     record = _load_idempotency(ledger_path).get(key)
     if record is None:
@@ -3889,8 +3972,16 @@ async def _handle_work_direct_readback(
         raise BridgeError("idempotency_state_invalid")
     if rejection := _work_direct_rejection(record):
         return {"ok": True, "outcome": "rejected", "verified": False, "rejection_code": rejection}
-    if not message_id:
+    if not message_id and explicit_id is None:
         return {"ok": True, "outcome": "unknown", "verified": False}
+    if message_id and explicit_id not in {None, message_id}:
+        raise BridgeError("work_direct_message_id_conflict")
+    manual = not message_id
+    if manual:
+        boundary = record.get("after_message_id")
+        if type(explicit_id) is not int or type(boundary) is not int or not 0 <= boundary < explicit_id:
+            raise BridgeError("work_direct_readback_evidence_unavailable")
+        message_id = explicit_id
 
     # Private message IDs are account-wide. Verify the exact recipient as
     # well, since the prepare cache may be gone after a bridge restart.
@@ -3901,9 +3992,29 @@ async def _handle_work_direct_readback(
         or hashlib.sha256(str(message.message or "").encode("utf-8")).hexdigest() != record.get("text_sha256")
     ):
         raise BridgeError("send_readback_failed")
-    _persist_delivery(ledger_path, key, record, message_id=message_id, verified=True)
+    if manual and (
+        getattr(message, "fwd_from", None) is not None
+        or getattr(message, "via_bot_id", None) is not None
+        or type(getattr(message, "media", None)).__name__ not in {"NoneType", "MessageMediaEmpty", "MessageMediaWebPage"}
+    ):
+        raise BridgeError("send_readback_failed")
+    stored = _persist_delivery(
+        ledger_path,
+        key,
+        record,
+        message_id=message_id,
+        verified=True,
+        direct_monitor=monitor,
+        operator_reviewed=manual,
+    )
     monitor.reconcile_outgoing(peer_id)
-    return {"ok": True, "outcome": "verified", "message_id": message_id, "verified": True}
+    return {
+        "ok": True,
+        "outcome": "verified",
+        "message_id": message_id,
+        "verified": True,
+        "operator_reviewed": stored[key].get("operator_reviewed") is True,
+    }
 
 
 async def _prepare_job_send(
@@ -5946,6 +6057,7 @@ def _requires_mutation_lock(request: dict[str, Any]) -> bool:
     operation = request.get("operation")
     return (
         operation in {"job_handoff", "monitor_voice_stage", "owner_event_voice_stage"}
+        or (operation == "send_readback" and request.get("message_id") is not None)
         or (
             operation
             in {
@@ -7354,6 +7466,8 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--history-pages", type=int, default=1)
     send_readback = subparsers.add_parser("send-readback")
     send_readback.add_argument("--idempotency-key", required=True)
+    send_readback.add_argument("--message-id", type=int)
+    send_readback.add_argument("--effects-reviewed", action="store_true")
     send_owner_notification = subparsers.add_parser("send-owner-notification")
     send_owner_notification.add_argument("--text", required=True)
     send_owner_notification.add_argument("--mode", choices=["dry_run", "apply"], default="dry_run")
@@ -7630,6 +7744,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - bounded CLI-to-R
                     )
             elif args.command == "send-readback":
                 request.update({"operation": "send_readback", "idempotency_key": args.idempotency_key})
+                if args.message_id is not None:
+                    request.update({"message_id": args.message_id, "effects_reviewed": args.effects_reviewed})
             elif args.command == "send-owner-notification":
                 request.update(
                     {
