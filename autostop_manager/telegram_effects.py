@@ -5,8 +5,17 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
+
+
+_EFFECT_DEADLINE: ContextVar[float | None] = ContextVar("telegram_effect_deadline", default=None)
+
+
+def effect_time_remaining() -> float:
+    deadline = _EFFECT_DEADLINE.get()
+    return float("inf") if deadline is None else max(0.0, deadline - asyncio.get_running_loop().time())
 
 
 def server_budget(request: dict[str, Any]) -> float:
@@ -187,7 +196,11 @@ class _EffectLane:
             return
 
         async def invoke() -> Any:
-            return await item.factory()
+            token = _EFFECT_DEADLINE.set(item.deadline)
+            try:
+                return await item.factory()
+            finally:
+                _EFFECT_DEADLINE.reset(token)
 
         operation: asyncio.Task[Any] = asyncio.create_task(invoke(), name="telegram-effect")
         operation.add_done_callback(_observe)

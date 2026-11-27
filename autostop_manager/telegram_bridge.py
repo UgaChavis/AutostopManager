@@ -40,7 +40,13 @@ from autostop_manager.telegram_owner import (
     load_owner_peer_id,
 )
 from autostop_manager.telegram_inbox import InboxError, TelegramInbox
-from autostop_manager.telegram_effects import EffectExecutor, EffectQueueError, rpc_budget, server_budget
+from autostop_manager.telegram_effects import (
+    EffectExecutor,
+    EffectQueueError,
+    effect_time_remaining,
+    rpc_budget,
+    server_budget,
+)
 from autostop_manager.telegram_timings import StageTimings
 
 
@@ -224,6 +230,12 @@ class BridgeError(RuntimeError):
 
 class _WorkDirectSendRejected(BridgeError):
     """Telegram explicitly refused the exact transport request."""
+
+
+class _WorkTextCooldown(BridgeError):
+    def __init__(self, retry_at: float) -> None:
+        super().__init__("telegram_send_rate_limited")
+        self.retry_at = retry_at
 
 
 @dataclass(frozen=True)
@@ -2687,12 +2699,16 @@ def _persist_delivery(
         raise BridgeError("idempotency_key_conflict")
     if current.get("message_id") not in {0, message_id}:
         raise BridgeError("idempotency_key_conflict")
-    if message_id > 0 and current.get("operation") in OUTGOING_LEDGER_OPERATIONS and any(
-        other_key != key
-        and entry.get("operation") in OUTGOING_LEDGER_OPERATIONS
-        and entry.get("message_id") == message_id
-        and (current.get("work_direct") is True or entry.get("work_direct") is True)
-        for other_key, entry in latest.items()
+    if (
+        message_id > 0
+        and current.get("operation") in OUTGOING_LEDGER_OPERATIONS
+        and any(
+            other_key != key
+            and entry.get("operation") in OUTGOING_LEDGER_OPERATIONS
+            and entry.get("message_id") == message_id
+            and (current.get("work_direct") is True or entry.get("work_direct") is True)
+            for other_key, entry in latest.items()
+        )
     ):
         raise BridgeError("work_direct_message_already_claimed")
     if accepted_unverified and (direct_monitor is None or not _work_direct_provider_receipt(current, message_id)):
@@ -3578,12 +3594,51 @@ async def _handle_download(
     }
 
 
-def _require_work_text_cooldown(client: Any) -> None:
+def _work_text_retry_at(client: Any) -> float:
     waits = getattr(client, "_flood_waited_requests", {})
-    if waits:
-        functions, _ = _load_telegram_functions()
-        if waits.get(functions.messages.SendMessageRequest.CONSTRUCTOR_ID, 0) > time.time():
-            raise BridgeError("telegram_send_rate_limited")
+    if not waits:
+        return 0.0
+    functions, _ = _load_telegram_functions()
+    return float(waits.get(functions.messages.SendMessageRequest.CONSTRUCTOR_ID, 0))
+
+
+def _require_work_text_cooldown(client: Any) -> None:
+    retry_at = _work_text_retry_at(client)
+    if retry_at > time.time():
+        raise _WorkTextCooldown(retry_at)
+
+
+def _job_time_remaining() -> float:
+    authority = _EFFECT_AUTHORITY.get()
+    if authority is None:
+        return float("inf")
+    snapshot = dict(authority.snapshot)
+    current = authority.inbox.execution_authority(
+        job_id=snapshot["job_id"], lease=snapshot["lease"], expected_revision=snapshot["revision"]
+    )
+    if current["manual_recovery"]:
+        return float("inf")
+    return (datetime.fromisoformat(current["deadline_at"]) - datetime.now(UTC)).total_seconds()
+
+
+async def _require_current_text_send_history(
+    client: Any, entity: Any, last_message_id: int, contract: dict[str, Any], *, job_bound: bool
+) -> None:
+    if contract["last_message_id"] != last_message_id:
+        raise BridgeError("conversation_changed_since_dry_run")
+    if not job_bound:
+        return
+    retry_at = _work_text_retry_at(client)
+    remaining = retry_at - time.time()
+    if remaining <= 0:
+        return
+    if remaining > min(60, client.flood_sleep_threshold, effect_time_remaining(), _job_time_remaining()):
+        raise _WorkTextCooldown(retry_at)
+    # This wait is inside the existing effect deadline and before any intent.
+    await asyncio.sleep(remaining)
+    _check_effect_authority()
+    if await _last_message_id(client, entity) != last_message_id:
+        raise BridgeError("conversation_changed_since_dry_run")
 
 
 def _prepare_work_direct_request(client: Any, peer: Any, text: str) -> Any:
@@ -3653,20 +3708,22 @@ def _persist_work_direct_readback(
         _outgoing_message_matches(message, peer_id=record["peer_id"], message_id=message_id)
         and _message_reply_to_id(message) == 0
     )
-    verified = (
-        envelope_matches
-        and hashlib.sha256(str(message.message or "").encode("utf-8")).hexdigest() == record.get("text_sha256")
-    )
+    verified = envelope_matches and hashlib.sha256(
+        str(message.message or "").encode("utf-8")
+    ).hexdigest() == record.get("text_sha256")
     missing = message is None or (type(message).__name__ == "MessageEmpty" and message.id == message_id)
-    accepted_unverified = not verified and _work_direct_provider_receipt(record, message_id) and (
-        missing or (envelope_matches and getattr(message, "edit_date", None) is not None)
+    accepted_unverified = (
+        not verified
+        and _work_direct_provider_receipt(record, message_id)
+        and (missing or (envelope_matches and getattr(message, "edit_date", None) is not None))
     )
     if not verified and not accepted_unverified:
         raise BridgeError("send_readback_failed")
     if manual and (
         getattr(message, "fwd_from", None) is not None
         or getattr(message, "via_bot_id", None) is not None
-        or type(getattr(message, "media", None)).__name__ not in {"NoneType", "MessageMediaEmpty", "MessageMediaWebPage"}
+        or type(getattr(message, "media", None)).__name__
+        not in {"NoneType", "MessageMediaEmpty", "MessageMediaWebPage"}
     ):
         raise BridgeError("send_readback_failed")
     return _persist_delivery(
@@ -3689,6 +3746,101 @@ def _work_direct_readback_status(record: dict[str, Any]) -> dict[str, Any]:
     if record.get("operator_reviewed") is True:
         status["operator_reviewed"] = True
     return status
+
+
+def _require_text_send_replay(
+    previous: dict[str, Any], entry: dict[str, Any], target_binding: dict[str, Any], *, owner_notification: bool
+) -> None:
+    allowed_operations = {entry["operation"]}
+    if entry["operation"] == "send_text":
+        allowed_operations.add(None)
+    if entry.get("work_direct") is True:
+        allowed_operations.update({WORK_DIRECT_REJECTED_OPERATION, WORK_DIRECT_ACCEPTED_OPERATION})
+    reply_to_message_id = entry["reply_to_message_id"]
+    if (
+        previous.get("operation") not in allowed_operations
+        or (previous.get("work_direct") is True) != (entry.get("work_direct") is True)
+        or any(previous.get(key) != value for key, value in target_binding.items())
+        or previous.get("text_sha256") != entry["text_sha256"]
+        or previous.get("reply_to_message_id", 0) != reply_to_message_id
+        or previous.get("reply_message_sha256", "") != entry["reply_message_sha256"]
+    ):
+        raise BridgeError("idempotency_key_conflict")
+    if rejection := _work_direct_rejection(previous):
+        raise BridgeError(rejection)
+    if not previous.get("message_id"):
+        error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
+        raise BridgeError(error)
+    if _reply_source_media_fields(
+        reply_to_message_id, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
+    ) != _reply_source_media_fields(reply_to_message_id, entry.get("reply_source_media")):
+        raise BridgeError("idempotency_key_conflict")
+
+
+async def _send_new_text(
+    client: Any,
+    entity: Any,
+    text: str,
+    ledger_path: Path,
+    key: str,
+    entry: dict[str, Any],
+    *,
+    group_reply: bool,
+    direct_monitor: DurableInboundMonitor | None,
+    direct_request: Any,
+) -> int:
+    if direct_monitor is None:
+        reply_to_message_id = entry["reply_to_message_id"]
+        sent = await client.send_message(
+            entity,
+            text,
+            parse_mode=None,
+            **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
+            **({"link_preview": False} if group_reply else {}),
+        )
+        return int(sent.id)
+    try:
+        return await _send_work_direct_text(client, direct_monitor, direct_request)
+    except _WorkDirectSendRejected as exc:
+        latest = _load_idempotency(ledger_path)
+        if latest.get(key) != entry:
+            raise BridgeError("idempotency_key_conflict") from exc
+        # Older bridges skip terminal rejections during rollback.
+        latest[key] = entry | {"operation": WORK_DIRECT_REJECTED_OPERATION, "rejection_code": exc.code}
+        _save_idempotency(ledger_path, latest)
+        direct_monitor.reconcile_outgoing(entry["peer_id"])
+        raise
+
+
+async def _read_text_send_receipt(
+    client: Any,
+    entity: Any,
+    text: str,
+    peer_id: int,
+    ledger_path: Path,
+    key: str,
+    record: dict[str, Any],
+    *,
+    reply_to_message_id: int,
+    group_reply: bool,
+    direct_monitor: DurableInboundMonitor | None,
+    inbound_monitor: InboundMonitor | None,
+    job_effect: dict[str, Any] | None,
+) -> dict[str, Any]:
+    message_id = int(record["message_id"])
+    readback = await client.get_messages(None if direct_monitor is not None else entity, ids=message_id)
+    if direct_monitor is not None:
+        return _persist_work_direct_readback(ledger_path, key, record, direct_monitor, readback, message_id)
+    matches_target = _outgoing_group_text_matches if group_reply else _outgoing_message_matches
+    if (
+        not matches_target(readback, peer_id=peer_id, message_id=message_id)
+        or str(readback.message or "") != text
+        or _message_reply_to_id(readback) != reply_to_message_id
+    ):
+        raise BridgeError("send_readback_failed")
+    stored = _persist_delivery(ledger_path, key, record, message_id=message_id, verified=True)
+    _record_job_send_receipt(inbound_monitor, job_effect, key, message_id)
+    return stored[key]
 
 
 async def _handle_send_text_to_entity(
@@ -3813,38 +3965,27 @@ async def _handle_send_text_to_entity(
     job_id = str(request.get("job_id") or "")
     result_context = None
     context_revision = None
-    allowed_previous_operations: set[str | None] = {idempotency_operation}
-    if idempotency_operation == "send_text":
-        allowed_previous_operations.add(None)
-    if target_binding.get("work_direct") is True:
-        allowed_previous_operations.update({WORK_DIRECT_REJECTED_OPERATION, WORK_DIRECT_ACCEPTED_OPERATION})
     direct_monitor = (
         inbound_monitor
         if target_binding.get("work_direct") is True and isinstance(inbound_monitor, DurableInboundMonitor)
         else None
     )
+    entry = {
+        "operation": idempotency_operation,
+        "message_id": 0,
+        **target_binding,
+        "reply_message_sha256": reply_message_sha256,
+        **_reply_source_media_fields(reply_to_message_id, reply_source_media),
+        "reply_to_message_id": reply_to_message_id,
+        "text_sha256": text_sha256,
+        "readback_verified": False,
+    }
     if previous is not None:
-        if (
-            previous.get("operation") not in allowed_previous_operations
-            or (previous.get("work_direct") is True) != (target_binding.get("work_direct") is True)
-            or any(previous.get(key) != value for key, value in target_binding.items())
-            or previous.get("text_sha256") != text_sha256
-            or previous.get("reply_to_message_id", 0) != reply_to_message_id
-            or previous.get("reply_message_sha256", "") != reply_message_sha256
-        ):
-            raise BridgeError("idempotency_key_conflict")
-        if rejection := _work_direct_rejection(previous):
-            raise BridgeError(rejection)
-        if not previous.get("message_id"):
-            error = "owner_notification_outcome_uncertain" if owner_notification else "send_outcome_uncertain"
-            raise BridgeError(error)
-        if _reply_source_media_fields(
-            reply_to_message_id, previous.get("reply_source_media"), error_code="idempotency_key_conflict"
-        ) != _reply_source_media_fields(reply_to_message_id, reply_source_media):
-            raise BridgeError("idempotency_key_conflict")
+        _require_text_send_replay(previous, entry, target_binding, owner_notification=owner_notification)
     else:
-        if contract["last_message_id"] != last_message_id:
-            raise BridgeError("conversation_changed_since_dry_run")
+        await _require_current_text_send_history(
+            client, entity, last_message_id, contract, job_bound=job_effect is not None
+        )
         if group_reply:
             _require_personal_group_reply(config, request, target, reply_to_message_id)
         _require_direct_send_allowed(
@@ -3863,20 +4004,9 @@ async def _handle_send_text_to_entity(
             raise BridgeError("idempotency_key_conflict")
         if config.account == "work" or isinstance(inbound_monitor, DurableInboundMonitor):
             _require_work_text_cooldown(client)
-        direct_request = (
-            _prepare_work_direct_request(client, entity, text) if target_binding.get("work_direct") is True else None
-        )
+        _verify_contract_age(contract, None)
+        direct_request = _prepare_work_direct_request(client, entity, text) if direct_monitor is not None else None
         _mark_job_effect_intent(inbound_monitor, job_effect)
-        entry = {
-            "operation": idempotency_operation,
-            "message_id": 0,
-            **target_binding,
-            "reply_message_sha256": reply_message_sha256,
-            **_reply_source_media_fields(reply_to_message_id, reply_source_media),
-            "reply_to_message_id": reply_to_message_id,
-            "text_sha256": text_sha256,
-            "readback_verified": False,
-        }
         if direct_request is not None:
             entry["after_message_id"] = last_message_id
         # A lost response must leave a durable intent that blocks blind retries.
@@ -3885,31 +4015,17 @@ async def _handle_send_text_to_entity(
         result_context = timed_monitor.context_jobs.get(job_id) if timed_monitor is not None else None
         context_revision = result_context["revision"] if result_context is not None else None
         with timings.measure("new", "send") if timings is not None else nullcontext():
-            if direct_request is not None and isinstance(inbound_monitor, DurableInboundMonitor):
-                try:
-                    entry["message_id"] = await _send_work_direct_text(client, inbound_monitor, direct_request)
-                except _WorkDirectSendRejected as exc:
-                    latest = _load_idempotency(idempotency_path)
-                    if latest.get(idempotency_key) != entry:
-                        raise BridgeError("idempotency_key_conflict") from exc
-                    # Older bridges skip terminal rejections when scanning
-                    # for pending sends, including after a rollback.
-                    latest[idempotency_key] = entry | {
-                        "operation": WORK_DIRECT_REJECTED_OPERATION,
-                        "rejection_code": exc.code,
-                    }
-                    _save_idempotency(idempotency_path, latest)
-                    inbound_monitor.reconcile_outgoing(target["id"])
-                    raise
-            else:
-                sent = await client.send_message(
-                    entity,
-                    text,
-                    parse_mode=None,
-                    **({"reply_to": reply_to_message_id} if reply_to_message_id else {}),
-                    **({"link_preview": False} if group_reply else {}),
-                )
-                entry["message_id"] = int(sent.id)
+            entry["message_id"] = await _send_new_text(
+                client,
+                entity,
+                text,
+                idempotency_path,
+                idempotency_key,
+                entry,
+                group_reply=group_reply,
+                direct_monitor=direct_monitor,
+                direct_request=direct_request,
+            )
     with timings.measure("new", "readback") if timings is not None else nullcontext():
         idempotency = (
             _persist_delivery(idempotency_path, idempotency_key, entry, message_id=entry["message_id"])
@@ -3917,22 +4033,20 @@ async def _handle_send_text_to_entity(
             else idempotency
         )
         message_id = int(idempotency[idempotency_key]["message_id"])
-        record = idempotency[idempotency_key]
-        readback = await client.get_messages(None if direct_monitor is not None else entity, ids=message_id)
-        if direct_monitor is not None:
-            record = _persist_work_direct_readback(
-                idempotency_path, idempotency_key, record, direct_monitor, readback, message_id
-            )
-        else:
-            matches_target = _outgoing_group_text_matches if group_reply else _outgoing_message_matches
-            if (
-                not matches_target(readback, peer_id=int(target["id"]), message_id=message_id)
-                or str(readback.message or "") != text
-                or _message_reply_to_id(readback) != reply_to_message_id
-            ):
-                raise BridgeError("send_readback_failed")
-            _persist_delivery(idempotency_path, idempotency_key, record, message_id=message_id, verified=True)
-            _record_job_send_receipt(inbound_monitor, job_effect, idempotency_key, message_id)
+        record = await _read_text_send_receipt(
+            client,
+            entity,
+            text,
+            int(target["id"]),
+            idempotency_path,
+            idempotency_key,
+            idempotency[idempotency_key],
+            reply_to_message_id=reply_to_message_id,
+            group_reply=group_reply,
+            direct_monitor=direct_monitor,
+            inbound_monitor=inbound_monitor,
+            job_effect=job_effect,
+        )
     if (
         timed_monitor is not None
         and result_context is not None
@@ -4089,9 +4203,7 @@ async def _handle_work_direct_readback(
     # Private message IDs are account-wide. Verify the exact recipient as
     # well, since the prepare cache may be gone after a bridge restart.
     message = await client.get_messages(None, ids=message_id)
-    stored = _persist_work_direct_readback(
-        ledger_path, key, record, monitor, message, message_id, manual=manual
-    )
+    stored = _persist_work_direct_readback(ledger_path, key, record, monitor, message, message_id, manual=manual)
     monitor.reconcile_outgoing(peer_id)
     status = _work_direct_readback_status(stored)
     status.setdefault("operator_reviewed", False)
@@ -6040,6 +6152,10 @@ async def _deliver_incident_notifications(
         more = await executor.submit(
             lambda: _deliver_incident_notifications_locked(client, config, monitor), timeout=60.0
         )
+    except _WorkTextCooldown as exc:
+        retry = asyncio.Event()
+        asyncio.get_running_loop().call_later(max(0.0, exc.retry_at - time.time()), retry.set)
+        return retry
     except EffectQueueError as exc:
         if str(exc) not in {"bridge_busy", "bridge_queue_timeout"}:
             raise
@@ -6108,6 +6224,8 @@ async def _deliver_incident_notifications_locked(
             applied = await _handle_notify_owner(
                 client, config, request | {"mode": "apply", "contract_token": dry["contract_token"]}
             )
+        except _WorkTextCooldown:
+            raise
         except Exception:  # noqa: BLE001 - keep an intent for recovery, never repeat a business action.
             return False
         if applied.get("verified") is not True:
