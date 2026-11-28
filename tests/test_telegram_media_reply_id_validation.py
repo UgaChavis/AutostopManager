@@ -29,6 +29,8 @@ def test_media_rejects_invalid_reply_before_io(monkeypatch, operation, reply_id,
         "reply_to_message_id": reply_id,
     }
     monitor = object.__new__(bridge.DurableInboundMonitor) if durable else None
+    if monitor is not None:
+        monitor.release_activation = None
     config = SimpleNamespace(account="work")
     with pytest.raises(bridge.BridgeError, match="reply_to_message_id_invalid"):
         asyncio.run(bridge._handle_operation(None, config, request, inbound_monitor=monitor))

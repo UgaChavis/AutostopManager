@@ -256,6 +256,8 @@ async def serve_through_native_factory(config, request):
     """Exercise the published factory registration and RPC without a listener."""
 
     class Inbox:
+        generation = 0
+
         def __init__(self):
             self.imports = []
 
@@ -285,9 +287,8 @@ async def serve_through_native_factory(config, request):
             return SimpleNamespace(getsockopt=lambda *_args: struct.pack("3i", 1, 0, 0))
 
     inbox = Inbox()
-    monitor = object.__new__(bridge.DurableInboundMonitor)
-    monitor.inbox = inbox
-    monitor.changed = lambda: None
+    monitor = bridge.DurableInboundMonitor(inbox, enabled=True, config=config)
+    monitor.release_started.set()
     payload = bridge._canonical_json(request) + b"\n"
     factory_default = inspect.signature(asyncio.start_unix_server).parameters["limit"].default
 

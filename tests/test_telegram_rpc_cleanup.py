@@ -12,6 +12,7 @@ import pytest
 
 from autostop_manager import telegram_bridge as bridge
 from autostop_manager.telegram_effects import EffectExecutor
+from autostop_manager.telegram_inbox import TelegramInbox
 
 
 class MemoryWriter:
@@ -67,6 +68,14 @@ def local_only(monkeypatch):
     monkeypatch.setattr(bridge, "_require_root_client", lambda writer: None)
 
 
+@pytest.fixture
+def active_monitor(tmp_path):
+    with TelegramInbox(tmp_path / "inbox" / "inbound.sqlite3") as inbox:
+        monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+        monitor.generation = 17
+        yield monitor
+
+
 @pytest.mark.parametrize("failure", ["timeout", "io_error"])
 def test_close_is_bounded_idempotent_and_has_no_detached_waiter(monkeypatch, failure):
     async def scenario():
@@ -101,10 +110,10 @@ def test_normal_read_response_closes_once_without_abort(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_subscription_return_still_uses_outer_rpc_cleanup(monkeypatch):
+def test_subscription_return_still_uses_outer_rpc_cleanup(monkeypatch, active_monitor):
     async def scenario():
         writer = MemoryWriter()
-        monitor = object.__new__(bridge.DurableInboundMonitor)
+        monitor = active_monitor
         calls = []
 
         async def subscription(reader, actual_writer, actual_monitor, *, heartbeat=False):
@@ -125,13 +134,11 @@ def test_subscription_return_still_uses_outer_rpc_cleanup(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_real_subscription_eof_releases_waiters_before_bounded_close(monkeypatch):
+def test_real_subscription_eof_releases_waiters_before_bounded_close(monkeypatch, active_monitor):
     async def scenario():
         monkeypatch.setattr(bridge, "LOCAL_RPC_CLOSE_TIMEOUT_SECONDS", 0.01)
         writer = MemoryWriter(blocked=True)
-        monitor = object.__new__(bridge.DurableInboundMonitor)
-        monitor.subscribers = set()
-        monitor.generation = 17
+        monitor = active_monitor
         reader = request_reader({"operation": "job_subscribe", "heartbeat": True})
         reader.feed_eof()
         before = asyncio.all_tasks()
@@ -146,7 +153,9 @@ def test_real_subscription_eof_releases_waiters_before_bounded_close(monkeypatch
 
 
 @pytest.mark.parametrize("read_cleanup_error", [False, True])
-def test_real_subscription_cancellation_releases_owned_waiters_and_propagates(monkeypatch, read_cleanup_error):
+def test_real_subscription_cancellation_releases_owned_waiters_and_propagates(
+    monkeypatch, read_cleanup_error, active_monitor
+):
     async def scenario():
         class Reader(asyncio.StreamReader):
             async def read(self, n=-1):
@@ -167,9 +176,7 @@ def test_real_subscription_cancellation_releases_owned_waiters_and_propagates(mo
             frame_sent.set()
 
         writer.drain = drain
-        monitor = object.__new__(bridge.DurableInboundMonitor)
-        monitor.subscribers = set()
-        monitor.generation = 17
+        monitor = active_monitor
         reader = Reader()
         reader.feed_data(b'{"operation":"job_subscribe","heartbeat":true}\n')
         before = asyncio.all_tasks()

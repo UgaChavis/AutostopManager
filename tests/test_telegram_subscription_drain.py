@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from autostop_manager import telegram_bridge as bridge
+from autostop_manager.telegram_inbox import TelegramInbox
 
 
 @pytest.fixture(autouse=True)
@@ -27,11 +28,12 @@ def local_only(monkeypatch):
     monkeypatch.setattr(bridge, "_require_root_client", lambda writer: None)
 
 
-def synthetic_monitor():
-    monitor = object.__new__(bridge.DurableInboundMonitor)
-    monitor.subscribers = set()
-    monitor.generation = 17
-    return monitor
+@pytest.fixture
+def active_monitor(tmp_path):
+    with TelegramInbox(tmp_path / "inbox" / "inbound.sqlite3") as inbox:
+        monitor = bridge.DurableInboundMonitor(inbox, enabled=True)
+        monitor.generation = 17
+        yield monitor
 
 
 @asynccontextmanager
@@ -85,11 +87,11 @@ async def backpressured_subscription(monitor):
 
 
 @pytest.mark.parametrize("half_close", [False, True])
-def test_nonreading_subscription_releases_handler_while_peer_remains_open(monkeypatch, half_close):
+def test_nonreading_subscription_releases_handler_while_peer_remains_open(monkeypatch, half_close, active_monitor):
     async def scenario():
         monkeypatch.setattr(bridge, "LOCAL_RPC_DRAIN_TIMEOUT_SECONDS", 0.05)
         monkeypatch.setattr(bridge, "LOCAL_RPC_CLOSE_TIMEOUT_SECONDS", 0.02)
-        monitor = synthetic_monitor()
+        monitor = active_monitor
         before = asyncio.all_tasks()
         async with backpressured_subscription(monitor) as connection:
             if half_close:
@@ -109,11 +111,11 @@ def test_nonreading_subscription_releases_handler_while_peer_remains_open(monkey
     asyncio.run(scenario())
 
 
-def test_backpressured_subscription_cancellation_releases_owned_tasks(monkeypatch):
+def test_backpressured_subscription_cancellation_releases_owned_tasks(monkeypatch, active_monitor):
     async def scenario():
         monkeypatch.setattr(bridge, "LOCAL_RPC_DRAIN_TIMEOUT_SECONDS", 1.0)
         monkeypatch.setattr(bridge, "LOCAL_RPC_CLOSE_TIMEOUT_SECONDS", 0.02)
-        monitor = synthetic_monitor()
+        monitor = active_monitor
         before = asyncio.all_tasks()
         async with backpressured_subscription(monitor) as connection:
             assert monitor.subscribers and connection.reader._waiter is not None
@@ -130,11 +132,11 @@ def test_backpressured_subscription_cancellation_releases_owned_tasks(monkeypatc
     asyncio.run(scenario())
 
 
-def test_normal_subscription_frames_and_heartbeats_outlive_frame_budget(monkeypatch):
+def test_normal_subscription_frames_and_heartbeats_outlive_frame_budget(monkeypatch, active_monitor):
     async def scenario():
         monkeypatch.setattr(bridge, "LOCAL_RPC_DRAIN_TIMEOUT_SECONDS", 0.01)
         monkeypatch.setattr(bridge, "JOB_SUBSCRIPTION_HEARTBEAT_SECONDS", 0.04)
-        monitor = synthetic_monitor()
+        monitor = active_monitor
         connected = asyncio.get_running_loop().create_future()
         before = asyncio.all_tasks()
         with TemporaryDirectory(prefix="tg-sub-frame-", dir="/tmp") as directory:

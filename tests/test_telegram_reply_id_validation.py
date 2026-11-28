@@ -34,6 +34,7 @@ def test_work_send_rejects_invalid_reply_before_resolving_peer(monkeypatch, repl
         "reply_to_message_id": reply_id,
     }
     monitor = object.__new__(DurableInboundMonitor)
+    monitor.release_activation = None
     with pytest.raises(BridgeError, match="reply_to_message_id_invalid"):
         asyncio.run(telegram_bridge._handle_operation(None, None, request, inbound_monitor=monitor))
 
