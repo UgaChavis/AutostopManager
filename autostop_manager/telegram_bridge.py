@@ -6906,18 +6906,26 @@ async def _start_durable_account(
         async with activation_lock:
             if monitor.release_activation is None:
                 return
-            if not client.is_connected():
-                await _connect_authorized_client(client)
-            if not _local_transport_ready(client):
-                raise BridgeError("telegram_transport_disconnected")
-            identity = await client.get_me()
-            if _work_account_peer_id(identity) != self_id:
-                raise BridgeError("inbox_work_account_changed")
-            if _work_release_preparation(config, durable=True) != release_preparation:
-                raise BridgeError("work_release_preparation_invalid")
-            if not _local_transport_ready(client):
-                raise BridgeError("telegram_transport_disconnected")
-            finish_startup(identity, activated_release=release_preparation)
+            if monitor.failure_event.is_set():
+                raise BridgeError("work_release_activation_failed")
+            try:
+                if not client.is_connected():
+                    await _connect_authorized_client(client)
+                if not _local_transport_ready(client):
+                    raise BridgeError("telegram_transport_disconnected")
+                identity = await client.get_me()
+                if _work_account_peer_id(identity) != self_id:
+                    raise BridgeError("inbox_work_account_changed")
+                if _work_release_preparation(config, durable=True) != release_preparation:
+                    raise BridgeError("work_release_preparation_invalid")
+                if not _local_transport_ready(client):
+                    raise BridgeError("telegram_transport_disconnected")
+                finish_startup(identity, activated_release=release_preparation)
+            finally:
+                if not monitor.release_started.is_set():
+                    # Let daemon shutdown own disconnect, including if this RPC was cancelled.
+                    monitor.failure_code = "work_release_activation_failed"
+                    monitor.failure_event.set()
 
     monitor.release_activation = (release_preparation, activate)
 
@@ -6947,17 +6955,24 @@ async def _probe_work_release_identity(config: TelegramConfig, telegram_client: 
             await client.disconnect()
 
 
-def _defer_work_update_state(client: Any, monitor: DurableInboundMonitor) -> None:
-    save = client.session.set_update_state
+def _defer_work_updates(client: Any, monitor: DurableInboundMonitor) -> None:
+    update_loop = client._update_loop
+    save_update_state = client.session.set_update_state
 
-    def save_if_active(entity_id: Any, state: Any) -> Any:
-        # An activation that stops before the SQLite commit cannot advance
-        # the previous release's saved Telegram update position.
+    async def update_loop_after_activation() -> None:
+        # Telethon 1.44 starts this loop in connect(), before account binding.
+        # Keep catch-up and dispatch waiting until the bridge can accept events.
+        await monitor.release_started.wait()
+        await update_loop()
+
+    def save_update_state_after_activation(entity_id: Any, state: Any) -> Any:
+        # Telethon also saves on disconnect, even if activation never finished.
         if monitor.release_started.is_set():
-            return save(entity_id, state)
+            return save_update_state(entity_id, state)
         return None
 
-    client.session.set_update_state = save_if_active
+    client._update_loop = update_loop_after_activation
+    client.session.set_update_state = save_update_state_after_activation
 
 
 async def _initialize_daemon_client(
@@ -6967,7 +6982,7 @@ async def _initialize_daemon_client(
     prepared_identity = await _probe_work_release_identity(config, TelegramClient) if release is not None else None
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=inbox is not None)
     if release is not None and isinstance(monitor, DurableInboundMonitor):
-        _defer_work_update_state(client, monitor)
+        _defer_work_updates(client, monitor)
     return client, prepared_identity
 
 
