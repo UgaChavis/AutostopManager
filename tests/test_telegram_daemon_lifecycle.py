@@ -97,10 +97,13 @@ async def stubborn(stage=None, started=None):
 class Client:
     def __init__(self, *_args, **_kwargs):
         self.disconnected = asyncio.get_running_loop().create_future()
-        self.session = SimpleNamespace(save_entities=True)
+        self.session = SimpleNamespace(save_entities=True, set_update_state=lambda *_args: None)
         self._sender = SimpleNamespace(_auto_reconnect_callback=self.reconnect)
 
     async def reconnect(self):
+        pass
+
+    async def _update_loop(self):
         pass
 
     def add_event_handler(self, *_args):
@@ -375,7 +378,10 @@ def test_startup_failure_releases_writer_and_preserves_old_socket(tmp_path, monk
                     pass
             if failure == "constructor":
                 raise OSError("synthetic startup failure")
-            self.session = SimpleNamespace(save_entities=True)
+            self.session = SimpleNamespace(save_entities=True, set_update_state=lambda *_args: None)
+
+        async def _update_loop(self):
+            pass
 
         def add_event_handler(self, *_args):
             raise OSError("synthetic startup failure")

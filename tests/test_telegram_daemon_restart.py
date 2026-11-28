@@ -46,7 +46,7 @@ class RestartClient(TelegramClient):
         self.root = root
         self.interrupt = interrupt
         self.disconnected = asyncio.get_running_loop().create_future()
-        self.session = SimpleNamespace(save_entities=True)
+        self.session = SimpleNamespace(save_entities=True, set_update_state=lambda *_args: None)
         self._sender = SimpleNamespace(_auto_reconnect_callback=self.connect, _start_reconnect=lambda _error: None)
         received_at = datetime.fromisoformat((root / "received-at").read_text())
         for peer, identifier in REQUESTS.items():
@@ -64,6 +64,9 @@ class RestartClient(TelegramClient):
         return message
 
     async def connect(self):
+        pass
+
+    async def _update_loop(self):
         pass
 
     async def disconnect(self):

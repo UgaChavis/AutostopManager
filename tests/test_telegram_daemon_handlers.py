@@ -34,18 +34,25 @@ class Client:
     def __init__(self, runtime):
         self.runtime = runtime
         self.disconnected = asyncio.get_running_loop().create_future()
-        self.session = SimpleNamespace(save_entities=True)
+        self.session = SimpleNamespace(save_entities=True, set_update_state=lambda *_args: None)
         self._sender = SimpleNamespace(_auto_reconnect_callback=self.reconnect)
+        self.handler_count = 0
+        self.updates_task = None
         runtime.client = self
 
     async def reconnect(self):
         pass
 
     def add_event_handler(self, *_args):
-        pass
+        self.handler_count += 1
 
     async def connect(self):
-        pass
+        self.updates_task = asyncio.create_task(self._update_loop())
+        await asyncio.sleep(0)
+
+    async def _update_loop(self):
+        assert self.runtime.monitor.self_peer_id == 900001
+        assert self.handler_count == 3
 
     async def is_user_authorized(self):
         return True
@@ -54,6 +61,10 @@ class Client:
         return SimpleNamespace(id=900001)
 
     async def disconnect(self):
+        if self.updates_task is not None:
+            self.updates_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.updates_task
         if self.runtime.receipt_required:
             assert self.runtime.receipt_saved.is_set()
         self.runtime.events.append("client_disconnect")
@@ -167,6 +178,7 @@ def daemon_runtime(tmp_path, monkeypatch):
         )
         try:
             await asyncio.wait_for(runtime.listening.wait(), 2)
+            await asyncio.wait_for(runtime.client.updates_task, 2)
             yield runtime
         finally:
             for writer in runtime.peers:
@@ -207,7 +219,7 @@ def test_shutdown_closes_healthy_subscription_and_only_owned_handlers(daemon_run
         async with daemon_runtime() as runtime:
             reader, writer = await runtime.open_peer({"operation": "job_subscribe", "heartbeat": True})
             frame = json.loads(await asyncio.wait_for(reader.readline(), 2))
-            assert frame == {"ok": True, "generation": 1, "heartbeat": False}
+            assert frame == {"ok": True, "generation": runtime.monitor.generation, "heartbeat": False}
             assert len(runtime.monitor.subscribers) == 1
             unrelated = asyncio.create_task(asyncio.Event().wait())
             try:
@@ -329,7 +341,7 @@ def test_shutdown_preserves_issued_receipt_cleanup_before_inbox_and_client(daemo
             assert json.loads(receipt.read_text()) == {"verified": True}
             positions = [
                 runtime.events.index(name)
-                for name in ("handler_cancelled", "effect_cleanup", "inbox_close", "client_disconnect")
+                for name in ("handler_cancelled", "effect_cleanup", "client_disconnect", "inbox_close")
             ]
             assert positions == sorted(positions)
             assert not bridge._effect_executor().active

@@ -6959,30 +6959,28 @@ def _defer_work_updates(client: Any, monitor: DurableInboundMonitor) -> None:
     update_loop = client._update_loop
     save_update_state = client.session.set_update_state
 
-    async def update_loop_after_activation() -> None:
+    async def update_loop_after_startup() -> None:
         # Telethon 1.44 starts this loop in connect(), before account binding.
         # Keep catch-up and dispatch waiting until the bridge can accept events.
         await monitor.release_started.wait()
         await update_loop()
 
-    def save_update_state_after_activation(entity_id: Any, state: Any) -> Any:
-        # Telethon also saves on disconnect, even if activation never finished.
+    def save_update_state_after_startup(entity_id: Any, state: Any) -> Any:
+        # Telethon also saves on disconnect, even if startup never finished.
         if monitor.release_started.is_set():
             return save_update_state(entity_id, state)
         return None
 
-    client._update_loop = update_loop_after_activation
-    client.session.set_update_state = save_update_state_after_activation
+    client._update_loop = update_loop_after_startup
+    client.session.set_update_state = save_update_state_after_startup
 
 
 async def _initialize_daemon_client(
-    config: TelegramConfig, inbox: TelegramInbox | None, monitor: InboundMonitor | None, release: str | None
+    config: TelegramConfig, inbox: TelegramInbox | None, release: str | None
 ) -> tuple[Any, Any]:
     TelegramClient, _, _ = _load_telethon()
     prepared_identity = await _probe_work_release_identity(config, TelegramClient) if release is not None else None
     client = TelegramClient(str(config.session_path), config.api_id, config.api_hash, catch_up=inbox is not None)
-    if release is not None and isinstance(monitor, DurableInboundMonitor):
-        _defer_work_updates(client, monitor)
     return client, prepared_identity
 
 
@@ -7039,8 +7037,9 @@ async def run_daemon(
             inbound_monitor = DurableInboundMonitor(inbox, enabled=monitor_incoming, config=config)
         else:
             inbound_monitor = InboundMonitor() if monitor_incoming else None
-        client, prepared_identity = await _initialize_daemon_client(config, inbox, inbound_monitor, release_preparation)
+        client, prepared_identity = await _initialize_daemon_client(config, inbox, release_preparation)
         if isinstance(inbound_monitor, DurableInboundMonitor):
+            _defer_work_updates(client, inbound_monitor)
             _install_reconnect_signal(client, inbound_monitor)
         if inbound_monitor is not None:
             # Telethon otherwise persists entity names, phones and usernames while processing updates.

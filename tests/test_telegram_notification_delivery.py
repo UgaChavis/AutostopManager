@@ -148,11 +148,14 @@ def test_daemon_stays_live_for_healthy_lane_but_stops_for_actual_failed_executor
 
                 def __init__(self, *_args, **_kwargs):
                     super().__init__([])
-                    self.session = SimpleNamespace(save_entities=True)
+                    self.session = SimpleNamespace(save_entities=True, set_update_state=lambda *_args: None)
                     self._sender = SimpleNamespace(_auto_reconnect_callback=self.reconnect)
                     self.disconnected = asyncio.get_running_loop().create_future()
 
                 async def reconnect(self):
+                    pass
+
+                async def _update_loop(self):
                     pass
 
                 def add_event_handler(self, *_args):

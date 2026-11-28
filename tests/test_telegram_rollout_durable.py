@@ -86,8 +86,10 @@ def test_existing_work_release_requires_previous_runtime_before_side_effects(tmp
 
 def test_work_bridge_ready_uses_release_not_cwd_after_sudo_environment_reset(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
-    functions = re.findall(r"(?ms)^(?:work_bridge_status|bridge_ready)\(\) \{\n.*?^\}", source)
-    assert len(functions) == 2
+    functions = re.findall(
+        r"(?ms)^(?:work_bridge_status|work_bridge_ready_from_status|bridge_ready)\(\) \{\n.*?^\}", source
+    )
+    assert len(functions) == 3
     release = tmp_path / "release"
     package = release / "autostop_manager"
     package.mkdir(parents=True)
@@ -339,9 +341,9 @@ def test_status_sanitizes_non_string_execution_states(tmp_path):
 def test_explicit_downgrade_is_rejected_before_current_service_stops(tmp_path):
     source = (ROOT / "scripts/deploy_telegram_bridge.sh").read_text()
     helper = re.search(r"(?ms)^durable_inbox_compatible\(\) \{\n.*?^\}", source)
-    assert helper is not None
-    start = source.index('if [[ "${account}" == "work" ]] && ! durable_inbox_compatible "${staging_dir}"; then')
-    stop = source.index("if ! activate_new_release_assets; then", start)
+    prestart = re.search(r"(?ms)^transcription_runtime_ready\(\) \{\n.*?^\}\n(.*?)^prestart_error=", source)
+    assert helper is not None and prestart is not None
+    assert 'systemctl stop "${service_unit}"' in prestart[1]
     database = tmp_path / "inbound.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
@@ -350,10 +352,14 @@ def test_explicit_downgrade_is_rejected_before_current_service_stops(tmp_path):
     candidate.mkdir(parents=True)
     (candidate / "telegram_inbox.py").write_text("SUPPORTED_INBOX_SCHEMA_VERSIONS = (1,)\n")
     shell = (
-        "systemctl() { echo unexpected_service_mutation; };\n"
+        "set -eu\n"
+        "systemctl() { echo unexpected_service_mutation; return 1; };\n"
+        "recover_work_release_activation() { return 0; };\n"
+        "backup_initial_release_assets() { return 0; };\n"
+        "sync() { return 0; };\n"
         + helper[0].replace("/var/lib/autostop-work-telegram/inbound.sqlite3", str(database))
         + "\n"
-        + source[start:stop]
+        + prestart[1]
     )
     result = subprocess.run(
         ["bash", "-c", shell],
@@ -361,11 +367,15 @@ def test_explicit_downgrade_is_rejected_before_current_service_stops(tmp_path):
             **os.environ,
             "account": "work",
             "staging_dir": str(candidate.parent),
+            "release_dir": str(tmp_path / "release"),
+            "previous_release": "",
+            "monitor_env": str(tmp_path / "monitor.env"),
             "work_service_was_active": "1",
             "service_unit": "fake.service",
         },
         capture_output=True,
         text=True,
+        timeout=10,
     )
     assert result.returncode == 1 and "durable_inbox_candidate_incompatible=true" in result.stderr
     assert "unexpected_service_mutation" not in result.stdout
